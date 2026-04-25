@@ -49,7 +49,7 @@ node bin/cli.js
 The first run creates a Python virtualenv, installs backend + frontend dependencies, then launches:
 
 - Dashboard → http://localhost:3000
-- API → http://localhost:8000
+- API → http://127.0.0.1:8000
 
 Press `Ctrl+C` to stop both.
 
@@ -103,7 +103,7 @@ Restart the backend (or hit `POST /cache/invalidate`). Both sets of sessions now
 The CLI probes `python3` then `python`. If both fail, install Python 3.9+ from https://www.python.org/downloads/.
 
 **Dashboard shows no sessions.**
-`GET http://localhost:8000/sessions` — if that returns `[]`, none of the supported agent log directories exist on your machine yet. Run any agent once, then refresh.
+`GET http://127.0.0.1:8000/sessions` — if that returns `[]`, none of the supported agent log directories exist on your machine yet. Run any agent once, then refresh.
 
 ---
 

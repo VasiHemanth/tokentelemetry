@@ -15,7 +15,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/agents")
+    fetch("http://127.0.0.1:8000/agents")
       .then(res => res.json())
       .then(data => setAvailableAgents(data))
       .catch(() => {});

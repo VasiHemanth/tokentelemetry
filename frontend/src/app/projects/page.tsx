@@ -47,7 +47,7 @@ export default function ProjectsPage() {
   const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
-    fetch("http://localhost:8000/projects")
+    fetch("http://127.0.0.1:8000/projects")
       .then((res) => res.json())
       .then((data) => {
         setProjects(data.sort((a: Project, b: Project) => b.session_count - a.session_count));

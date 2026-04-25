@@ -32,8 +32,14 @@ app = FastAPI(title="Agent Observability Harness API")
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    # Allow any local dev port (Next.js auto-bumps to 3001/3002 when 3000 is busy).
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,7 +84,7 @@ def _load_project_aliases() -> Dict[str, str]:
     PROJECT_ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
     if PROJECT_ALIASES_FILE.exists():
         try:
-            with open(PROJECT_ALIASES_FILE, "r") as f:
+            with open(PROJECT_ALIASES_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except: pass
     return {}
@@ -536,7 +542,7 @@ def _scan_sessions_sync():
     if VIBE_DIR.exists():
         for cf in (VIBE_DIR / "logs" / "session").glob("*.json"):
             try:
-                with open(cf, "r") as f:
+                with open(cf, "r", encoding="utf-8", errors="replace") as f:
                     data = json.load(f); meta = data.get("metadata", {}); sid = meta.get("session_id")
                     if not sid: continue
                     ts = _aware(datetime.fromisoformat(meta.get("start_time"))) if meta.get("start_time") else _now()
@@ -647,7 +653,7 @@ def _scan_sessions_sync():
                         if folder_url: project_path = unquote(folder_url.replace("file://", ""))
                 for cf in ws_folder.glob("*.json"):
                     try:
-                        with open(cf, "r") as f:
+                        with open(cf, "r", encoding="utf-8", errors="replace") as f:
                             data = json.load(f); sid = cf.stem; tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                             first_msg = ""; plans = []; model = None
                             
@@ -876,7 +882,7 @@ async def get_session_detail(session_id: str, agent: str):
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
         events = []
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     data = json.loads(line)
@@ -893,7 +899,7 @@ async def get_session_detail(session_id: str, agent: str):
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
         events = []
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     data = json.loads(line)
@@ -942,7 +948,7 @@ async def get_session_detail(session_id: str, agent: str):
             }
         files = list((GEMINI_DIR / "tmp").glob(f"**/chats/session-*{session_id[:8]}*.json")) or list((GEMINI_DIR / "tmp").glob(f"**/chats/*{session_id}*.json"))
         if not files: return {"error": "Not found"}
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             data = json.load(f)
             # Add normalized_timestamp to messages
             for msg in data.get("messages", []):
@@ -956,7 +962,7 @@ async def get_session_detail(session_id: str, agent: str):
         files = list(QWEN_DIR.glob(f"projects/**/chats/{session_id}.jsonl"))
         if not files: return {"error": "Not found"}
         events = []
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     data = json.loads(line)
@@ -976,12 +982,12 @@ async def get_session_detail(session_id: str, agent: str):
         if not files:
             for cf in (VIBE_DIR / "logs" / "session").glob("*.json"):
                 try:
-                    with open(cf, "r") as f:
+                    with open(cf, "r", encoding="utf-8", errors="replace") as f:
                         if json.load(f).get("metadata", {}).get("session_id") == session_id:
                             files = [cf]; break
                 except: continue
         if not files: return {"error": "Not found"}
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             data = json.load(f)
             events = []
             for m in data.get("messages", []):
@@ -1000,7 +1006,7 @@ async def get_session_detail(session_id: str, agent: str):
         base_ts = None
         try: base_ts = files[0].stat().st_mtime * 1000
         except: base_ts = 0
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             idx = 0
             for line in f:
                 try:
@@ -1018,7 +1024,7 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent == "copilot":
         files = list(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
-        with open(files[0], "r") as f:
+        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
             data = json.load(f)
             events = []
             for req in data.get("requests", []):
@@ -1506,4 +1512,4 @@ async def get_config(project: Optional[str] = None):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

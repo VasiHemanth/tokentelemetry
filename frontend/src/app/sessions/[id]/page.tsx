@@ -55,6 +55,26 @@ interface Step {
   ts?: number;
 }
 
+// Helper to extract text from content (Used by multiple agents and summary)
+const extractText = (content: any): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c: any) => {
+        if (typeof c === "string") return c;
+        if (c.type === "text" || c.type === "input_text") return c.text || c.input_text || "";
+        if (c.text || c.input_text || c.value) return c.text || c.input_text || c.value || "";
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (content && typeof content === "object") {
+    return content.text || content.input_text || content.value || content.content || "";
+  }
+  return "";
+};
+
 function eventKind(evt: Event): StepKind {
   const type = evt.type;
   const role = evt.role || evt.message?.role;
@@ -65,7 +85,7 @@ function eventKind(evt: Event): StepKind {
   if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "thinking" || c.type === "thought")) return "reasoning";
   if (evt.toolCalls || evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return "tool";
   if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_use")) return "tool";
-  if ((type === "user" || role === "user") && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_result")) return "tool_result";
+  if ((type === "user" || role === "user") && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.tool_use_id)) return "tool_result";
   if (type === "user" || role === "user" || (type === "response_item" && evt.payload?.role === "user") || type === "request_item") return "user";
   if (type === "assistant" || role === "assistant" || role === "model" || role === "gemini" || type === "model" || type === "gemini" || (type === "response_item" && evt.payload?.role === "assistant" && evt.payload?.type === "message")) return "assistant";
   return "other";
@@ -134,7 +154,7 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (id && agent) {
       // 1. Fetch Session Metadata (for tokens/insights)
-      fetch(`http://localhost:8000/sessions`)
+      fetch(`http://127.0.0.1:8000/sessions`)
         .then(res => res.json())
         .then(data => {
            const info = data.find((s: any) => s.id === id);
@@ -142,7 +162,7 @@ export default function SessionDetailPage() {
         });
 
       // 2. Fetch Detailed Trace
-      fetch(`http://localhost:8000/sessions/${id}?agent=${agent}`)
+      fetch(`http://127.0.0.1:8000/sessions/${id}?agent=${agent}`)
         .then((res) => res.json())
         .then((data) => {
           let evts = [];
@@ -272,7 +292,8 @@ export default function SessionDetailPage() {
   const context = useMemo(() => {
     const meta = events.find((e) => e.type === "session_meta")?.payload;
     const turnCtx = events.find((e) => e.type === "turn_context")?.payload;
-    const firstSystem = events.find((e) => e.type === "user" && typeof e.message?.content === "string")?.message?.content;
+    const firstUserEvent = events.find((e) => e.type === "user" || e.role === "user" || e.message?.role === "user");
+    const firstSystem = firstUserEvent ? extractText(firstUserEvent.message?.content || firstUserEvent.payload?.content || firstUserEvent.content) : undefined;
     return {
       sessionId: id,
       agent: sessionInfo?.agent,
@@ -294,7 +315,7 @@ export default function SessionDetailPage() {
   useEffect(() => {
     const cwd = events.find((e) => e.type === "session_meta")?.payload?.cwd || sessionInfo?.project;
     if (!cwd) return;
-    fetch(`http://localhost:8000/config?project=${encodeURIComponent(cwd)}`)
+    fetch(`http://127.0.0.1:8000/config?project=${encodeURIComponent(cwd)}`)
       .then((r) => r.json())
       .then(setProjectConfig)
       .catch(() => {});
@@ -895,7 +916,7 @@ function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
                   <span className="text-[10px] font-mono text-slate-300 truncate" title={a.name}>{a.name}</span>
                </div>
                <a 
-                 href={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
+                 href={`http://127.0.0.1:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
                  download={a.name}
                  className="text-[8px] font-black uppercase text-slate-500 hover:text-white transition-colors"
                >
@@ -906,13 +927,13 @@ function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
             <div className="p-3">
                {a.type === 'video' && (
                  <video controls className="w-full rounded-lg shadow-inner bg-black aspect-video">
-                   <source src={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} type="video/mp4" />
+                   <source src={`http://127.0.0.1:8000/artifacts?path=${encodeURIComponent(a.path)}`} type="video/mp4" />
                    Your browser does not support the video tag.
                  </video>
                )}
                {a.type === 'image' && (
                  <img 
-                    src={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
+                    src={`http://127.0.0.1:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
                     alt={a.name} 
                     className="w-full rounded-lg shadow-inner bg-slate-950" 
                  />
@@ -935,7 +956,7 @@ function ArtifactViewer({ path }: { path: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://localhost:8000/artifacts?path=${encodeURIComponent(path)}`)
+    fetch(`http://127.0.0.1:8000/artifacts?path=${encodeURIComponent(path)}`)
       .then(res => res.text())
       .then(t => {
         setContent(t);
@@ -1249,11 +1270,13 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
   }
 
   // 8. CLAUDE / CURSOR (Multi-part support: thinkingArr + text + tool_result)
-  if ((type === "user" || role === "user") && message?.role === "user") {
-    const toolResults = Array.isArray(message.content) ? message.content.filter((c: any) => c.type === "tool_result") : [];
+  const isClaudeOrCursor = agent === "claude" || agent === "cursor";
+  if (isClaudeOrCursor && (type === "user" || role === "user" || message?.role === "user")) {
+    const m = message || payload || event;
+    const toolResults = Array.isArray(m.content) ? m.content.filter((c: any) => c.type === "tool_result" || c.tool_use_id) : [];
     if (toolResults.length > 0 && mode !== "dialogue") {
       parts.push(
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl ml-8 group hover:border-emerald-500/30 transition-all">
+        <div key="tool-results" className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl ml-8 group hover:border-emerald-500/30 transition-all">
           <div className="flex justify-between items-start mb-4">
             <div className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase tracking-widest group-hover:text-emerald-500">
               <Terminal size={16} /> Tool Output
@@ -1264,17 +1287,17 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
             <div key={i} className="space-y-3 mb-6 last:mb-0">
                <div className="text-[9px] font-mono text-slate-600 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 w-fit">ID: {c.tool_use_id}</div>
               <pre className="bg-slate-950 text-emerald-400 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
-                {typeof c.content === 'string' ? c.content : JSON.stringify(c.content, null, 2)}
+                {typeof c.content === 'string' ? c.content : (c.text || JSON.stringify(c.content || c, null, 2))}
               </pre>
             </div>
           ))}
         </div>
       );
     }
-    const textContent = Array.isArray(message.content) ? extractText(message.content) : (typeof message.content === 'string' ? message.content : "");
+    const textContent = extractText(m.content || m.text || m.payload?.content);
     if (textContent && mode !== "brain") {
       parts.push(
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+        <div key="user-prompt" className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
           <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
           <div className="flex justify-between items-start mb-4">
             <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
@@ -1288,15 +1311,16 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     }
   }
 
-  if ((type === "assistant" || role === "assistant") && (message?.role === "assistant" || role === "assistant")) {
-    const contentArr = Array.isArray(message?.content) ? message.content : [];
-    const toolCallsArr = contentArr.filter((c: any) => c.type === "tool_use");
-    const thinkingArr = contentArr.filter((c: any) => c.type === "thinking");
-    const text = extractText(contentArr);
+  if (isClaudeOrCursor && (type === "assistant" || role === "assistant" || message?.role === "assistant")) {
+    const m = message || payload || event;
+    const contentArr = Array.isArray(m?.content) ? m.content : [];
+    const toolCallsArr = contentArr.filter((c: any) => c.type === "tool_use" || c.name);
+    const thinkingArr = contentArr.filter((c: any) => c.type === "thinking" || c.thinking);
+    const text = extractText(m?.content || m?.text);
 
     if (thinkingArr.length > 0 && mode !== "dialogue") {
        thinkingArr.forEach((t: any, i: number) => {
-         const body = t.thinking || t.text || t.content || "";
+         const body = t.thinking || t.text || t.content || (typeof t === 'string' ? t : "");
          const isEncrypted = !body && (t.signature || t.type === "redacted_thinking");
          parts.push(
             <div key={`think-${i}`} className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-amber-500/50 group">
@@ -1321,7 +1345,7 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
 
     if (text && mode !== "brain") {
       parts.push(
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+        <div key="assistant-response" className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
           <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
           <div className="flex justify-between items-start mb-4">
             <div className="flex items-center gap-2 text-emerald-400 font-black text-[10px] uppercase tracking-[0.2em]">
@@ -1345,7 +1369,7 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
               {renderTimestamp()}
             </div>
             <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
-              {JSON.stringify(toolUse.input || toolUse.args || toolUse.payload, null, 2)}
+              {JSON.stringify(toolUse.input || toolUse.args || toolUse.payload || toolUse.parameters, null, 2)}
             </pre>
           </div>
         );
@@ -1354,13 +1378,13 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
   }
 
   // 9. CODEX (request_item / response_item)
-  if (type === "response_item" || type === "request_item") {
-    const role = payload?.role || (type === "request_item" ? "user" : "assistant");
-    const itemType = payload?.type;
+  if (agent === "codex" || type === "response_item" || type === "request_item") {
+    const r = payload?.role || (type === "request_item" ? "user" : "assistant") || role;
+    const itemType = payload?.type || type;
     
-    if (itemType === "reasoning" && mode !== "dialogue") {
+    if ((itemType === "reasoning" || itemType === "thought" || itemType === "thinking") && mode !== "dialogue") {
        parts.push(
-          <div className="bg-purple-500/5 border border-purple-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-purple-500/50 group">
+          <div key="codex-reasoning" className="bg-purple-500/5 border border-purple-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-purple-500/50 group">
             <div className="flex justify-between items-start mb-3">
               <div className="flex items-center gap-2 text-purple-400 font-bold mb-3 text-xs uppercase tracking-widest">
                 <Brain size={16} /> Reasoning
@@ -1368,44 +1392,36 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
               {renderTimestamp()}
             </div>
             <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{
-              Array.isArray(payload.content)
-                ? payload.content.map((c: any) => c?.text ?? c?.summary ?? c?.content ?? (typeof c === 'string' ? c : "")).filter(Boolean).join("\n\n")
-                : (typeof payload.content === 'string' ? payload.content : (payload.summary ?? payload.text ?? ""))
+              extractText(payload?.content || payload?.text || payload?.thinking || payload?.summary || payload?.value)
             }</div>
           </div>
        );
     }
 
-    if ((itemType === "function_call" || itemType === "tool_use") && mode !== "dialogue") {
+    if ((itemType === "function_call" || itemType === "tool_use" || itemType === "tool_call") && mode !== "dialogue") {
        parts.push(
-          <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50 group">
+          <div key="codex-tool" className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50 group">
             <div className="flex justify-between items-start mb-4">
               <div className="flex items-center gap-2 text-blue-400 font-bold mb-4 text-xs uppercase tracking-widest">
-                <Code size={16} /> Tool Call: {payload.name}
+                <Code size={16} /> Tool Call: {payload?.name || payload?.tool}
               </div>
               {renderTimestamp()}
             </div>
             <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
-              {JSON.stringify(payload.arguments || payload.input || payload.parameters, null, 2)}
+              {JSON.stringify(payload?.arguments || payload?.input || payload?.parameters || payload?.payload, null, 2)}
             </pre>
           </div>
        );
     }
 
-    if (itemType === "message") {
-       const content = payload.content;
-       let text = "";
-       if (Array.isArray(content)) {
-          text = content.map((c: any) => c.text || c.input_text).filter(Boolean).join("\n");
-       } else if (typeof content === 'string') {
-          text = content;
-       }
+    if (itemType === "message" || type === "user" || type === "assistant" || payload?.content) {
+       const text = extractText(payload?.content || payload?.text || content || event.text);
 
        if (text) {
-         const isAssistant = role === "assistant";
+         const isAssistant = r === "assistant" || r === "model" || r === "bot";
          if (mode !== "brain") {
            parts.push(
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+              <div key="codex-message" className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
                 <div className={`absolute top-0 left-0 w-1 h-full ${isAssistant ? 'bg-emerald-600' : 'bg-blue-600'}`}></div>
                 <div className="flex justify-between items-start mb-4">
                   <div className={`flex items-center gap-2 ${isAssistant ? 'text-emerald-400' : 'text-blue-400'} font-black text-[10px] uppercase tracking-[0.2em]`}>

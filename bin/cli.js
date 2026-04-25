@@ -179,7 +179,7 @@ async function start() {
 
   const dashUrl = 'http://localhost:3000';
   console.log(`\nDashboard:  ${dashUrl}`);
-  console.log('API:        http://localhost:8000');
+  console.log('API:        http://127.0.0.1:8000');
   console.log('Press Ctrl+C to stop.\n');
 
   // Auto-launch the dashboard once Next.js is actually responding.

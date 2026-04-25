@@ -15,7 +15,7 @@ export default function LocalLabPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("http://localhost:8000/local-runtime")
+    fetch("http://127.0.0.1:8000/local-runtime")
       .then(res => res.json())
       .then(d => {
         setData(data); // Wait, I should set d

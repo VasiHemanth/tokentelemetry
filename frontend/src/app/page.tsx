@@ -48,9 +48,9 @@ export default function Home() {
 
   useEffect(() => {
     const load = () => Promise.all([
-      fetch("http://localhost:8000/sessions").then(res => res.json()),
-      fetch("http://localhost:8000/agents").then(res => res.json()),
-      fetch("http://localhost:8000/analytics").then(res => res.json()).catch(() => ({}))
+      fetch("http://127.0.0.1:8000/sessions").then(res => res.json()),
+      fetch("http://127.0.0.1:8000/agents").then(res => res.json()),
+      fetch("http://127.0.0.1:8000/analytics").then(res => res.json()).catch(() => ({}))
     ]).then(([sessionsData, agentsData, analyticsData]) => {
       const ts = (s: Session) => {
         const t = s.timestamp ? new Date(s.timestamp).getTime() : NaN;

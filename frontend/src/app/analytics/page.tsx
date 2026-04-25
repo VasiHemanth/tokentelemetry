@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("http://localhost:8000/analytics")
+    fetch("http://127.0.0.1:8000/analytics")
       .then((res) => res.json())
       .then((data) => {
         setData(data);
