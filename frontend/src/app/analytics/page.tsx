@@ -13,6 +13,7 @@ interface AnalyticsData {
     output: number;
     cached: number;
     total: number;
+    cost: number;
     session_count: number;
   }>;
   by_day: {
@@ -21,12 +22,14 @@ interface AnalyticsData {
     input: number;
     output: number;
     cached: number;
+    cost: number;
   }[];
   by_model?: Record<string, {
     input: number;
     output: number;
     cached: number;
     total: number;
+    cost: number;
     session_count: number;
     agent: string;
   }>;
@@ -35,7 +38,9 @@ interface AnalyticsData {
     output: number;
     cached: number;
     total: number;
+    cost: number;
   };
+  pricing_updated?: string;
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -45,7 +50,9 @@ const AGENT_COLORS: Record<string, string> = {
   antigravity: "#10b981",  // Emerald
   qwen: "#3b82f6",         // Blue
   vibe: "#f472b6",         // Pink
-  copilot: "#6366f1"       // Indigo
+  copilot: "#6366f1",      // Indigo
+  cursor: "#3b82f6",       // Blue
+  opencode: "#f59e0b"      // Amber
 };
 
 export default function AnalyticsPage() {
@@ -105,7 +112,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
          <MetricCard title="Total Tokens" value={data.total.total.toLocaleString()} subValue="Overall across all agents" icon={<TrendingUp className="text-blue-400" />} />
          <MetricCard title="Input Tokens" value={data.total.input.toLocaleString()} subValue={`${((data.total.input / Math.max(1, data.total.total)) * 100).toFixed(1)}% of total`} icon={<MousePointer2 className="text-emerald-400" />} />
-         <MetricCard title="Est. Lifetime Cost" value={`$${((data.total.total / 1000000) * 10).toFixed(2)}`} subValue="Based on blended pricing" icon={<DollarSign className="text-amber-400" />} />
+         <MetricCard title="Est. Lifetime Cost" value={`$${data.total.cost.toFixed(2)}`} subValue={data.pricing_updated ? `Rates updated ${data.pricing_updated}` : "Based on actual model rates"} icon={<DollarSign className="text-amber-400" />} />
          <MetricCard title="Cache Efficiency" value={`${((data.total.cached / Math.max(1, (data.total.input + data.total.cached))) * 100).toFixed(1)}%`} subValue="Tokens saved via caching" icon={<Zap className="text-cyan-400" />} />
       </div>
 
@@ -184,6 +191,7 @@ export default function AnalyticsPage() {
                 <th className="px-6 py-4 font-semibold text-right">Output</th>
                 <th className="px-6 py-4 font-semibold text-right">Cached</th>
                 <th className="px-6 py-4 font-semibold text-right">Total Tokens</th>
+                <th className="px-6 py-4 font-semibold text-right text-amber-500">Cost</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -207,6 +215,7 @@ export default function AnalyticsPage() {
                   <td className="px-6 py-4 text-sm text-slate-400 text-right font-mono">{stats.output.toLocaleString()}</td>
                   <td className="px-6 py-4 text-sm text-cyan-400/70 text-right font-mono">{stats.cached.toLocaleString()}</td>
                   <td className="px-6 py-4 text-sm text-white text-right font-bold font-mono group-hover:text-blue-400 transition-colors">{stats.total.toLocaleString()}</td>
+                  <td className="px-6 py-4 text-sm text-amber-400 text-right font-bold font-mono group-hover:text-amber-300 transition-colors">${stats.cost.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -223,16 +232,41 @@ export default function AnalyticsPage() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl overflow-hidden">
               <h3 className="text-sm font-bold text-white mb-4">Tokens per Model</h3>
-              <div className="h-72 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={modelData} layout="vertical" margin={{ left: 40 }}>
+              <div className="h-[500px] w-full min-h-[500px]">
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart 
+                    data={modelData} 
+                    layout="vertical" 
+                    margin={{ left: 10, right: 40, top: 10, bottom: 10 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-                    <XAxis type="number" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                    <YAxis type="category" dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} width={140} />
-                    <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} itemStyle={{ fontSize: '12px' }} />
-                    <Bar dataKey="total" radius={[0, 6, 6, 0]}>
+                    <XAxis 
+                      type="number" 
+                      stroke="#64748b" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} 
+                    />
+                    <YAxis 
+                      type="category" 
+                      dataKey="name" 
+                      stroke="#94a3b8" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      width={220}
+                      interval={0}
+                      tick={{ fill: '#94a3b8', fontSize: 10, width: 220 }}
+                    />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} 
+                      itemStyle={{ fontSize: '12px' }}
+                      cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                    />
+                    <Bar dataKey="total" radius={[0, 4, 4, 0]} barSize={20}>
                       {modelData.map((m, i) => <Cell key={i} fill={m.color} />)}
                     </Bar>
                   </BarChart>
@@ -246,7 +280,14 @@ export default function AnalyticsPage() {
                 <div className="w-1/2 h-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <RePieChart>
-                      <Pie data={modelData} innerRadius={55} outerRadius={85} paddingAngle={3} dataKey="total">
+                      <Pie 
+                        data={modelData} 
+                        innerRadius={55} 
+                        outerRadius={85} 
+                        paddingAngle={3} 
+                        dataKey="total"
+                        nameKey="name"
+                      >
                         {modelData.map((m, i) => <Cell key={i} fill={m.color} />)}
                       </Pie>
                       <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} />
@@ -283,6 +324,7 @@ export default function AnalyticsPage() {
                     <th className="px-6 py-4 font-semibold text-right">Output</th>
                     <th className="px-6 py-4 font-semibold text-right">Cached</th>
                     <th className="px-6 py-4 font-semibold text-right">Total</th>
+                    <th className="px-6 py-4 font-semibold text-right text-amber-500">Cost</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
@@ -301,6 +343,7 @@ export default function AnalyticsPage() {
                       <td className="px-6 py-4 text-sm text-slate-400 text-right font-mono">{m.output.toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm text-cyan-400/70 text-right font-mono">{m.cached.toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm text-white text-right font-bold font-mono group-hover:text-blue-400 transition-colors">{m.total.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-sm text-amber-400 text-right font-bold font-mono group-hover:text-amber-300 transition-colors">${m.cost.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>

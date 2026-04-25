@@ -312,8 +312,8 @@ export default function ProjectSessionsPage() {
                                  </td>
                                  <td className="px-6 py-4">
                                     <div className="flex gap-2 opacity-40 group-hover:opacity-100 transition-opacity">
-                                       {session.has_plan && <ClipboardList size={14} className="text-emerald-400" title="Plan Detected" />}
-                                       {(session.mcp_tools?.length > 0) && <Cpu size={14} className="text-blue-400" title={`${session.mcp_tools.length} Tools Used`} />}
+                                       {session.has_plan && <span title="Plan Detected"><ClipboardList size={14} className="text-emerald-400" /></span>}
+                                       {(session.mcp_tools?.length > 0) && <span title={`${session.mcp_tools.length} Tools Used`}><Cpu size={14} className="text-blue-400" /></span>}
                                     </div>
                                  </td>
                                  <td className="px-6 py-4 text-[10px] text-slate-500 group-hover:text-blue-400 transition-colors text-right font-mono tabular-nums leading-tight">

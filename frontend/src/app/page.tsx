@@ -13,8 +13,12 @@ interface Session {
   display?: string;
   text?: string;
   tokens?: {
+    input: number;
+    output: number;
+    cached: number;
     total: number;
   };
+  cost?: number;
 }
 
 const AGENT_CONFIG: Record<string, { label: string, color: string, icon: any }> = {
@@ -39,6 +43,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
   const [byModel, setByModel] = useState<Record<string, { total: number; session_count: number; agent: string }>>({});
+  const [pricingUpdated, setPricingUpdated] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -54,6 +59,7 @@ export default function Home() {
       setSessions(sessionsData.sort((a: Session, b: Session) => ts(b) - ts(a)));
       setAvailableAgents(agentsData);
       setByModel(analyticsData?.by_model || {});
+      setPricingUpdated(analyticsData?.pricing_updated || "");
       setLoading(false);
     }).catch(err => {
       console.error("Failed to fetch dashboard data:", err);
@@ -70,6 +76,7 @@ export default function Home() {
   const totalModelSessions = modelRows.reduce((a, r) => a + r.session_count, 0) || 1;
 
   const totalTokens = sessions.reduce((acc, s) => acc + (s.tokens?.total || 0), 0);
+  const totalCost = sessions.reduce((acc, s) => acc + (s.cost || 0), 0);
 
   return (
     <div className="p-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -94,7 +101,7 @@ export default function Home() {
         <StatCard title="Total Sessions" value={sessions.length} icon={<Clock className="text-blue-400" />} color="blue" />
         <StatCard title="Total Tokens" value={totalTokens > 1000000 ? `${(totalTokens / 1000000).toFixed(1)}M` : totalTokens.toLocaleString()} icon={<TrendingUp className="text-emerald-400" />} color="emerald" />
         <StatCard title="Active Projects" value={new Set(sessions.map(s => s.project)).size} icon={<Activity className="text-blue-400" />} color="blue" />
-        <StatCard title="Cost Estimate" value={`$${((totalTokens / 1000000) * 10).toFixed(2)}`} icon={<Zap className="text-amber-400" />} color="amber" />
+        <StatCard title="Cost Estimate" value={totalCost < 0.01 && totalCost > 0 ? "<$0.01" : `$${totalCost.toFixed(2)}`} subValue={pricingUpdated ? `Rates updated ${pricingUpdated}` : undefined} icon={<Zap className="text-amber-400" />} color="amber" />
       </div>
 
       {/* Dynamic Agent Roster */}
@@ -271,7 +278,7 @@ export default function Home() {
   );
 }
 
-function StatCard({ title, value, icon, color }: { title: string; value: string | number; icon: React.ReactNode; color: string }) {
+function StatCard({ title, value, icon, color, subValue }: { title: string; value: string | number; icon: React.ReactNode; color: string; subValue?: string }) {
   const colorMap: Record<string, string> = {
     blue: "border-blue-500/20 bg-blue-500/5",
     emerald: "border-emerald-500/20 bg-emerald-500/5",
@@ -284,6 +291,7 @@ function StatCard({ title, value, icon, color }: { title: string; value: string 
       <div>
         <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2">{title}</p>
         <p className="text-3xl font-black text-white tracking-tighter">{value}</p>
+        {subValue && <p className="text-[9px] font-mono text-slate-500 mt-1.5 italic">{subValue}</p>}
       </div>
       <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 shadow-inner">{icon}</div>
     </div>

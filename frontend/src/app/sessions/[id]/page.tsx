@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,9 +8,32 @@ import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, FileText, Activi
 import Link from "next/link";
 import { format } from "date-fns";
 
+interface Artifact {
+  name: string;
+  path: string;
+  type: 'video' | 'image' | 'document' | 'terminal';
+}
+
+interface Session {
+  id: string;
+  agent: string;
+  project: string;
+  timestamp: string;
+  display?: string;
+  text?: string;
+  mcp_tools: string[];
+  subagents: string[];
+  has_plan: boolean;
+  plans: any[];
+  model?: string;
+  tokens?: { input: number; output: number; cached: number; total: number };
+  artifacts?: Artifact[];
+}
+
 interface Event {
   id?: string;
   type: string;
+  role?: string;
   timestamp?: string;
   normalized_timestamp?: number;
   payload?: any;
@@ -33,14 +56,18 @@ interface Step {
 }
 
 function eventKind(evt: Event): StepKind {
-  if (evt.type === "session_meta" || evt.type === "event_msg" || evt.type === "turn_context") return "meta";
-  if (evt.type === "agent_reasoning" || evt.thoughts || evt.payload?.type === "reasoning") return "reasoning";
-  if (evt.message?.role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "thinking")) return "reasoning";
+  const type = evt.type;
+  const role = evt.role || evt.message?.role;
+  
+  if (type === "session_meta" || type === "event_msg" || type === "turn_context") return "meta";
+  if (type === "agent_reasoning" || evt.thoughts || evt.payload?.type === "reasoning" || type === "assistant_thinking") return "reasoning";
+  if (Array.isArray(evt.payload) && evt.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking")) return "reasoning";
+  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "thinking" || c.type === "thought")) return "reasoning";
   if (evt.toolCalls || evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return "tool";
-  if (evt.message?.role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_use")) return "tool";
-  if (evt.type === "user" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_result")) return "tool_result";
-  if (evt.type === "user" || (evt.type === "response_item" && evt.payload?.role === "user") || evt.type === "request_item") return "user";
-  if (evt.type === "assistant" || (evt.type === "response_item" && evt.payload?.role === "assistant" && evt.payload?.type === "message")) return "assistant";
+  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_use")) return "tool";
+  if ((type === "user" || role === "user") && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_result")) return "tool_result";
+  if (type === "user" || role === "user" || (type === "response_item" && evt.payload?.role === "user") || type === "request_item") return "user";
+  if (type === "assistant" || role === "assistant" || role === "model" || role === "gemini" || type === "model" || type === "gemini" || (type === "response_item" && evt.payload?.role === "assistant" && evt.payload?.type === "message")) return "assistant";
   return "other";
 }
 
@@ -52,6 +79,16 @@ function normalizeTs(evt: Event): number | undefined {
   }
   return undefined;
 }
+
+const stepRingClass: Record<StepKind, string> = {
+  user: "ring-2 ring-blue-500/70",
+  assistant: "ring-2 ring-emerald-500/70",
+  reasoning: "ring-2 ring-amber-500/70",
+  tool: "ring-2 ring-sky-500/70",
+  tool_result: "ring-2 ring-slate-500/70",
+  meta: "ring-2 ring-slate-600/60",
+  other: "ring-2 ring-slate-600/60",
+};
 
 function stepLabel(evt: Event, kind: StepKind): string {
   if (kind === "tool") {
@@ -66,7 +103,7 @@ function stepLabel(evt: Event, kind: StepKind): string {
     return (text || "User Query").slice(0, 40);
   }
   if (kind === "assistant") return "Response";
-  if (kind === "reasoning") return "Thinking";
+  if (kind === "reasoning") return "Reasoning";
   if (kind === "tool_result") return "Tool output";
   if (kind === "meta") return evt.type;
   return evt.type || "event";
@@ -81,13 +118,13 @@ export default function SessionDetailPage() {
   
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sessionInfo, setSessionInfo] = useState<any>(null);
+  const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
   
   // Trace View States
   const [splitView, setSplitView] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(1000);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "raw">("context");
+  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "raw">("context");
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -380,6 +417,7 @@ export default function SessionDetailPage() {
                <div className="flex items-center gap-1.5 flex-wrap">
                   <StatPill icon={<Hash size={12} />} label="Steps" value={stats.total} />
                   <StatPill icon={<Wrench size={12} />} label="Tools" value={stats.toolCalls} tone="blue" />
+                  {sessionInfo?.artifacts && sessionInfo.artifacts.length > 0 && <StatPill icon={<LayoutPanelLeft size={12} />} label="Arts" value={sessionInfo.artifacts.length} tone="emerald" />}
                   <StatPill icon={<Brain size={12} />} label="Reason" value={stats.reasoning} tone="amber" />
                   <StatPill icon={<User size={12} />} label="Turns" value={stats.userTurns} />
                   <StatPill icon={<Clock size={12} />} label="Dur" value={stats.duration} />
@@ -485,23 +523,25 @@ export default function SessionDetailPage() {
                 <div className="space-y-8">
                    {splitView && <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-2 mb-2 flex items-center gap-2"><User size={14}/> User & Agent Dialogue</h3>}
                    {visibleEvents.map((event, idx) => {
-                      const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && hasContentType(event, "thinking")) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
+                      const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
                       const isTool = event.toolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call";
                       
                       // Check for thinking inside Copilot assistant payload array
-                      const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking");
+                      const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
                       
                       // For Cursor/Claude/Codex/Copilot: If it's an message with BOTH text and tools/reasoning, 
                       // we want the text to show up in the dialogue column.
                       const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: any) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) || 
                                       (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: any) => c.text || c.input_text)) ||
                                       (event.type === "assistant" && Array.isArray(event.payload) && event.payload.some((p: any) => p.value && p.kind !== "thinking")) ||
-                                      (event.type === "user" && (event.payload?.text || typeof event.payload === 'string'));
+                                      (event.type === "user" && (event.payload?.text || typeof event.payload === 'string')) ||
+                                      (typeof event.content === 'string' && event.content.trim().length > 0);
                       
                       if (splitView && ((isReasoning || hasThinkingPart) && !hasText)) return null;
+                      const kind = eventKind(event);
                       return (
-                         <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? "ring-2 ring-blue-500/60 rounded-3xl" : ""}>
-                            <EventCard event={event} mode="dialogue" agent={agent} />
+                         <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-3xl` : ""}>
+                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} />
                          </div>
                       );
                    })}
@@ -510,14 +550,15 @@ export default function SessionDetailPage() {
                    <div className="space-y-8 border-l border-slate-800/50 pl-8">
                       <h3 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 flex items-center gap-2"><Brain size={14}/> Internal Reasoning & Tools</h3>
                       {visibleEvents.map((event, idx) => {
-                         const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && hasContentType(event, "thinking")) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
+                         const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
                          const isTool = event.toolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call";
                          
-                         const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking");
+                         const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
 
                          if (!isReasoning && !isTool && !hasThinkingPart) return null;
+                         const kind = eventKind(event);
                          return (
-                            <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? "ring-2 ring-blue-500/60 rounded-3xl" : ""}>
+                            <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-3xl` : ""}>
                                <EventCard event={event} mode="brain" agent={agent} />
                             </div>
                          );
@@ -543,6 +584,7 @@ export default function SessionDetailPage() {
              <div className="flex border-b border-slate-800 text-[10px] font-black uppercase tracking-[0.2em]">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
+                {sessionInfo?.artifacts && sessionInfo.artifacts.length > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
                 <TabBtn active={sidebarTab === "raw"} onClick={() => setSidebarTab("raw")} icon={<FileCode size={12} />}>Raw</TabBtn>
                 <button
                    onClick={() => setSidebarOpen(false)}
@@ -562,6 +604,7 @@ export default function SessionDetailPage() {
                    });
                    if (idx >= 0) jumpTo(idx);
                 }} />}
+                {sidebarTab === "artifacts" && <ArtifactsPanel artifacts={sessionInfo?.artifacts || []} />}
                 {sidebarTab === "raw" && (
                    <pre className="text-[9px] font-mono text-slate-400 whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
                       {JSON.stringify(activeStep !== null ? events[activeStep] : events[0], null, 2)}
@@ -633,8 +676,14 @@ export default function SessionDetailPage() {
   );
 }
 
-function StatPill({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number | string; tone?: "blue" | "amber" | "red" }) {
-  const toneCls = tone === "blue" ? "text-blue-400" : tone === "amber" ? "text-amber-400" : tone === "red" ? "text-red-400" : "text-slate-300";
+function StatPill({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number | string; tone?: "blue" | "amber" | "red" | "emerald" | "cyan" }) {
+  const toneCls = 
+    tone === "blue" ? "text-blue-400" : 
+    tone === "amber" ? "text-amber-400" : 
+    tone === "red" ? "text-red-400" : 
+    tone === "emerald" ? "text-emerald-400" :
+    tone === "cyan" ? "text-cyan-400" :
+    "text-slate-300";
   return (
     <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 shadow-inner">
       <span className="text-slate-600">{icon}</span>
@@ -826,8 +875,100 @@ function ToolsPanel({ summary, onJump }: { summary: { name: string; count: numbe
   );
 }
 
+function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
+  if (!artifacts.length) return <div className="text-slate-600 text-[10px] italic">No artifacts for this session.</div>;
+  
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+        <LayoutPanelLeft size={12} /> Session Artifacts
+      </div>
+      <div className="space-y-4">
+        {artifacts.map((a, i) => (
+          <div key={i} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden shadow-lg group text-[11px]">
+            <div className="px-3 py-2 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between">
+               <div className="flex items-center gap-2 min-w-0">
+                  {a.type === 'video' ? <Play size={10} className="text-blue-400" /> : 
+                   a.type === 'image' ? <LayoutPanelLeft size={10} className="text-emerald-400" /> :
+                   a.type === 'terminal' ? <Terminal size={10} className="text-purple-400" /> :
+                   <FileText size={10} className="text-slate-400" />}
+                  <span className="text-[10px] font-mono text-slate-300 truncate" title={a.name}>{a.name}</span>
+               </div>
+               <a 
+                 href={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
+                 download={a.name}
+                 className="text-[8px] font-black uppercase text-slate-500 hover:text-white transition-colors"
+               >
+                 DL
+               </a>
+            </div>
+            
+            <div className="p-3">
+               {a.type === 'video' && (
+                 <video controls className="w-full rounded-lg shadow-inner bg-black aspect-video">
+                   <source src={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} type="video/mp4" />
+                   Your browser does not support the video tag.
+                 </video>
+               )}
+               {a.type === 'image' && (
+                 <img 
+                    src={`http://localhost:8000/artifacts?path=${encodeURIComponent(a.path)}`} 
+                    alt={a.name} 
+                    className="w-full rounded-lg shadow-inner bg-slate-950" 
+                 />
+               )}
+               {(a.type === 'terminal' || a.type === 'document') && (
+                 <div className="max-h-48 overflow-y-auto scrollbar-thin">
+                    <ArtifactViewer path={a.path} />
+                 </div>
+               )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ArtifactViewer({ path }: { path: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`http://localhost:8000/artifacts?path=${encodeURIComponent(path)}`)
+      .then(res => res.text())
+      .then(t => {
+        setContent(t);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [path]);
+
+  if (loading) return <div className="animate-pulse h-4 bg-slate-800 rounded w-1/2"></div>;
+  return (
+    <pre className="text-[9px] font-mono text-slate-400 whitespace-pre-wrap break-all leading-relaxed">
+      {content || "Failed to load content."}
+    </pre>
+  );
+}
+
 function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null }) {
   const { type, timestamp, message, attachment, toolUseResult, payload, content, thoughts, toolCalls } = event;
+
+  // Render a tiny timestamp badge if available
+  const renderTimestamp = () => {
+    const ts = timestamp || event.normalized_timestamp;
+    if (!ts) return null;
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return null;
+    const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    return (
+      <div className="flex items-center gap-1 text-[9px] font-mono text-slate-500 mb-2 opacity-60 group-hover:opacity-100 transition-opacity">
+        <Clock size={10} />
+        {timeStr}
+      </div>
+    );
+  };
 
   // Helper to extract text from content array (Used by Claude and Cursor)
   const extractText = (contentArr: any[]) => {
@@ -839,122 +980,141 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
       .join("\n");
   };
 
-  // --- OLLAMA ---
+  const parts: React.ReactNode[] = [];
+
+  // 1. OLLAMA
   if (agent === "ollama") {
-     return (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
+     parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
           <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
-          <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-              <User size={16} strokeWidth={3} /> Ollama History
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <User size={16} strokeWidth={3} /> Ollama History
+            </div>
+            {renderTimestamp()}
           </div>
           <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{content}</div>
         </div>
      );
   }
 
-  // --- COPILOT ---
-  if (agent === "copilot" && type === "user" && payload) {
-    const text = typeof payload === "string" ? payload : (payload.text || (Array.isArray(payload.parts) ? payload.parts.map((p: any) => typeof p === 'string' ? p : (p.text || "")).join("") : ""));
-    if (text) {
-      if (mode === "brain") return null;
-      return (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
+  // 2. COPILOT (Separate blocks for user/assistant parts)
+  if (agent === "copilot") {
+    if (type === "user" && payload?.text) {
+       parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
           <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
-          <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-              <User size={16} strokeWidth={3} /> User Prompt
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <User size={16} strokeWidth={3} /> User Prompt
+            </div>
+            {renderTimestamp()}
           </div>
-          <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{text}</div>
+          <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.text}</div>
         </div>
-      );
+       );
+    }
+    if (type === "assistant_thinking" && payload?.text && mode !== "dialogue") {
+       parts.push(
+        <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-indigo-500/50 group">
+          <div className="flex justify-between items-start mb-3">
+            <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-widest">
+              <Brain size={16} /> Copilot Reasoning
+            </div>
+            {renderTimestamp()}
+          </div>
+          <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{payload.text}</div>
+        </div>
+       );
+    }
+    if (type === "assistant" && Array.isArray(payload)) {
+       const thinkingParts = payload.filter((p: any) => p.kind === "thinking" || p.type === "thinking");
+       const textParts = payload.filter((p: any) => p.kind !== "thinking" && p.type !== "thinking" && (p.value || typeof p === 'string'));
+       const combinedText = textParts.map((p: any) => typeof p === 'string' ? p : (p.value || "")).join("");
+
+       if (thinkingParts.length > 0 && mode !== "dialogue") {
+         thinkingParts.forEach((p: any, i: number) => {
+           parts.push(
+             <div key={`copilot-think-${i}`} className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-indigo-500/50 group">
+               <div className="flex justify-between items-start mb-3">
+                 <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-widest">
+                   <Brain size={16} /> Reasoning
+                 </div>
+                 {renderTimestamp()}
+               </div>
+               <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{p.value}</div>
+             </div>
+           );
+         });
+       }
+       if (combinedText && mode !== "brain") {
+         parts.push(
+           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
+             <div className="absolute top-0 left-0 w-1 h-full bg-indigo-600"></div>
+             <div className="flex justify-between items-start mb-4">
+               <div className="flex items-center gap-2 text-indigo-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                   <GitBranch size={16} strokeWidth={3} /> Response
+               </div>
+               {renderTimestamp()}
+             </div>
+             <ResponseBody text={combinedText} />
+           </div>
+         );
+       }
     }
   }
 
-  if (type === "assistant_thinking" && payload?.text) {
-     if (mode === "dialogue") return null;
-     return (
-      <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-indigo-500/50">
-        <div className="flex items-center gap-2 text-indigo-400 font-bold mb-3 text-xs uppercase tracking-widest">
-          <Brain size={16} /> Copilot Reasoning
-        </div>
-        <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{payload.text}</div>
-      </div>
-    );
-  }
-
-  if (type === "assistant" && Array.isArray(payload)) {
-    const thinkingParts = payload.filter((p: any) => p.kind === "thinking" || p.type === "thinking");
-    const textParts = payload.filter((p: any) => p.kind !== "thinking" && p.type !== "thinking" && (p.value || typeof p === 'string'));
-    const combinedText = textParts.map((p: any) => typeof p === 'string' ? p : (p.value || "")).join("");
-
-    return (
-      <div className="space-y-6 w-full">
-        {thinkingParts.length > 0 && (mode === "all" || mode === "brain") && (
-           <div className="space-y-4">
-              {thinkingParts.map((p: any, i: number) => (
-                <div key={i} className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-indigo-500/50">
-                  <div className="flex items-center gap-2 text-indigo-400 font-bold mb-3 text-xs uppercase tracking-widest">
-                    <Brain size={16} /> Copilot Reasoning
-                  </div>
-                  <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{p.value}</div>
-                </div>
-              ))}
-           </div>
-        )}
-        {combinedText && (mode === "all" || mode === "dialogue") && (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-            <div className="absolute top-0 left-0 w-1 h-full bg-indigo-600"></div>
-            <div className="flex items-center gap-2 text-indigo-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-                <GitBranch size={16} strokeWidth={3} /> Copilot Response
-            </div>
-            <ResponseBody text={combinedText} />
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // --- VIBE ---
+  // 3. VIBE / OPENCODE Common User Prompt
   if (type === "user" && payload?.content && !message) {
-     return (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
+     parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
           <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
-          <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-              <User size={16} strokeWidth={3} /> User Prompt
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <User size={16} strokeWidth={3} /> User Prompt
+            </div>
+            {renderTimestamp()}
           </div>
           <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.content}</div>
         </div>
      );
   }
 
+  // 4. VIBE / OPENCODE Assistant Response
   if (type === "assistant" && payload?.content && !message) {
     const isOpencode = agent === "opencode";
     const accent = isOpencode ? "bg-amber-600" : "bg-pink-600";
     const textColor = isOpencode ? "text-amber-400" : "text-pink-400";
-    const label = isOpencode ? "OpenCode Response" : "Vibe Response";
-    return (
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
+    parts.push(
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
         <div className={`absolute top-0 left-0 w-1 h-full ${accent}`}></div>
-        <div className={`flex items-center gap-2 ${textColor} font-black text-[10px] uppercase tracking-[0.2em] mb-4`}>
-            <Zap size={16} strokeWidth={3} /> {label}
+        <div className="flex justify-between items-start mb-4">
+          <div className={`flex items-center gap-2 ${textColor} font-black text-[10px] uppercase tracking-[0.2em]`}>
+              <Zap size={16} strokeWidth={3} /> Thinking
+          </div>
+          {renderTimestamp()}
         </div>
         <ResponseBody text={payload.content} />
       </div>
     );
   }
 
-  // --- OPENCODE tool_call ---
-  if (agent === "opencode" && type === "tool_call" && payload) {
+  // 5. OPENCODE tool_call
+  if (agent === "opencode" && type === "tool_call" && payload && mode !== "dialogue") {
     const state = payload.state || {};
     const status = state.status;
     const input = state.input;
     const output = state.output;
-    return (
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-lg">
+    parts.push(
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-lg group">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 text-amber-400 font-black text-[10px] uppercase tracking-[0.2em]">
             <Wrench size={14} strokeWidth={3} /> Tool · {payload.tool || "unknown"}
           </div>
-          {status && <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{status}</span>}
+          <div className="flex items-center gap-3">
+             {renderTimestamp()}
+             {status && <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{status}</span>}
+          </div>
         </div>
         {input && (
           <details className="mt-1">
@@ -972,42 +1132,17 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     );
   }
 
-  // --- GEMINI ---
-  if (type === "user" && content) {
-    const textContent = Array.isArray(content) ? content.map((c: any) => c.text).filter(Boolean).join("\n") : (typeof content === 'string' ? content : "");
-    if (textContent) {
-      return (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-          <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
-          <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-              <User size={16} strokeWidth={3} /> User Prompt
-          </div>
-          <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{textContent}</div>
-        </div>
-      );
-    }
-  }
-
-  if (type === "assistant" && typeof content === 'string' && content.trim()) {
-    return (
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-        <div className="absolute top-0 left-0 w-1 h-full bg-cyan-600"></div>
-        <div className="flex items-center gap-2 text-cyan-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-            <Sparkles size={16} strokeWidth={3} /> Gemini Response
-        </div>
-        <ResponseBody text={content} />
-      </div>
-    );
-  }
-  
-  if (thoughts && Array.isArray(thoughts)) {
-    if (mode === "dialogue") return null;
-    return (
+  // 6. GEMINI / ANTIGRAVITY (Multi-part support: thoughts + content + toolCalls)
+  if (thoughts && Array.isArray(thoughts) && mode !== "dialogue") {
+    parts.push(
       <div className="space-y-4">
         {thoughts.map((thought: any, i: number) => (
-          <div key={i} className="bg-cyan-500/5 border border-cyan-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-cyan-500/50">
-            <div className="flex items-center gap-2 text-cyan-400 font-bold mb-3 text-xs uppercase tracking-widest">
-              <Brain size={16} /> {thought.subject || "Reasoning Step"}
+          <div key={i} className="bg-cyan-500/5 border border-cyan-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-cyan-500/50 group">
+            <div className="flex justify-between items-start mb-3">
+              <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs uppercase tracking-widest">
+                <Brain size={16} /> {thought.subject || "Reasoning"}
+              </div>
+              {renderTimestamp()}
             </div>
             <div className="text-slate-400 whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{thought.description}</div>
           </div>
@@ -1016,15 +1151,17 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     );
   }
 
-  if (toolCalls && Array.isArray(toolCalls)) {
-    if (mode === "dialogue") return null;
-    return (
+  if (toolCalls && Array.isArray(toolCalls) && mode !== "dialogue") {
+    parts.push(
       <div className="space-y-4">
         {toolCalls.map((call: any, i: number) => (
           <div key={i} className="space-y-4">
-            <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50">
-              <div className="flex items-center gap-2 text-blue-400 font-bold mb-4 text-xs uppercase tracking-widest">
-                <Code size={16} /> Tool Call: {call.name}
+            <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50 group">
+              <div className="flex justify-between items-start mb-4">
+                <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-widest">
+                  <Code size={16} /> Tool Call: {call.name}
+                </div>
+                {renderTimestamp()}
               </div>
               <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
                 {JSON.stringify(call.args, null, 2)}
@@ -1032,8 +1169,11 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
             </div>
             {call.result && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl ml-8 group hover:border-emerald-500/30 transition-all">
-                <div className="flex items-center gap-2 text-slate-500 font-bold mb-4 text-xs uppercase tracking-widest group-hover:text-emerald-500">
-                  <Terminal size={16} /> Tool Output
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase tracking-widest group-hover:text-emerald-500">
+                    <Terminal size={16} /> Tool Output
+                  </div>
+                  {renderTimestamp()}
                 </div>
                 <pre className="bg-slate-950 text-emerald-400 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
                   {typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)}
@@ -1046,31 +1186,81 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     );
   }
 
-  // --- CLAUDE / CURSOR ---
-  if (type === "agent_reasoning" || (message?.role === "assistant" && Array.isArray(message?.content) && message.content.some((c: any) => c.type === "thinking"))) {
-    if (mode === "dialogue") return null;
-    const text = payload?.text || message?.content?.find((c: any) => c.type === "thinking")?.thinking;
-    if (!text) return null;
-    return (
-      <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-amber-500/50">
-        <div className="flex items-center gap-2 text-amber-500 font-bold mb-3 text-xs uppercase tracking-widest">
-          <Brain size={16} /> Reasoning Step
+  if (type === "user" && content && (agent === "gemini" || agent === "antigravity")) {
+    const textContent = Array.isArray(content) ? content.map((c: any) => c.text).filter(Boolean).join("\n") : (typeof content === 'string' ? content : "");
+    if (textContent) {
+      parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+          <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <User size={16} strokeWidth={3} /> User Prompt
+            </div>
+            {renderTimestamp()}
+          </div>
+          <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{textContent}</div>
         </div>
-        <div className="text-slate-400 whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{text}</div>
+      );
+    }
+  }
+
+  const role = event.role || event.message?.role;
+  if ((type === "assistant" || role === "assistant" || role === "model" || role === "gemini" || type === "model" || type === "gemini") && typeof content === 'string' && content.trim() && mode !== "brain") {
+    parts.push(
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+        <div className="absolute top-0 left-0 w-1 h-full bg-cyan-600"></div>
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex items-center gap-2 text-cyan-400 font-black text-[10px] uppercase tracking-[0.2em]">
+              <Sparkles size={16} strokeWidth={3} /> Response
+          </div>
+          {renderTimestamp()}
+        </div>
+        <ResponseBody text={content} />
       </div>
     );
   }
 
-  if (type === "user" && message?.role === "user") {
-    const isToolResult = Array.isArray(message.content) && message.content.some((c: any) => c.type === "tool_result");
-    if (isToolResult) {
-      if (mode === "dialogue") return null;
-      return (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl ml-8 group hover:border-emerald-500/30 transition-all">
-          <div className="flex items-center gap-2 text-slate-500 font-bold mb-4 text-xs uppercase tracking-widest group-hover:text-emerald-500">
-            <Terminal size={16} /> Tool Output
+  // 7. CATCH-ALL for separate reasoning events (Claude/Cursor/Copilot/Qwen)
+  if ((type === "agent_reasoning" || type === "assistant_thinking" || type === "reasoning" || payload?.type === "reasoning") && mode !== "dialogue") {
+    const rawReasoning = payload?.text ?? payload?.content ?? payload?.thinking ?? payload?.summary ?? payload?.value ?? payload?.message ?? event.thoughts ?? (typeof payload === 'string' ? payload : payload);
+    let text = "";
+    if (typeof rawReasoning === 'string') text = rawReasoning;
+    else if (Array.isArray(rawReasoning)) text = rawReasoning.map((p: any) => (typeof p === 'string' ? p : (p?.text ?? p?.thinking ?? p?.content ?? p?.value ?? ""))).filter(Boolean).join("\n\n");
+    else if (rawReasoning && typeof rawReasoning === 'object') text = rawReasoning.text ?? rawReasoning.thinking ?? rawReasoning.content ?? rawReasoning.value ?? JSON.stringify(rawReasoning, null, 2);
+    if (text) {
+      const isCopilot = agent === "copilot" || type === "assistant_thinking";
+      const accent = isCopilot ? "border-l-indigo-500/50" : "border-l-amber-500/50";
+      const textColor = isCopilot ? "text-indigo-400" : "text-amber-500";
+      const bg = isCopilot ? "bg-indigo-500/5" : "bg-amber-500/5";
+      const border = isCopilot ? "border-indigo-500/20" : "border-amber-500/20";
+
+      parts.push(
+        <div className={`${bg} border ${border} rounded-2xl p-6 shadow-sm ml-4 border-l-4 ${accent} group`}>
+          <div className="flex justify-between items-start mb-3">
+            <div className={`flex items-center gap-2 ${textColor} font-bold text-xs uppercase tracking-widest`}>
+              <Brain size={16} /> Reasoning
+            </div>
+            {renderTimestamp()}
           </div>
-          {message.content.map((c: any, i: number) => c.type === "tool_result" && (
+          <div className="text-slate-400 whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{text}</div>
+        </div>
+      );
+    }
+  }
+
+  // 8. CLAUDE / CURSOR (Multi-part support: thinkingArr + text + tool_result)
+  if ((type === "user" || role === "user") && message?.role === "user") {
+    const toolResults = Array.isArray(message.content) ? message.content.filter((c: any) => c.type === "tool_result") : [];
+    if (toolResults.length > 0 && mode !== "dialogue") {
+      parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl ml-8 group hover:border-emerald-500/30 transition-all">
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase tracking-widest group-hover:text-emerald-500">
+              <Terminal size={16} /> Tool Output
+            </div>
+            {renderTimestamp()}
+          </div>
+          {toolResults.map((c: any, i: number) => (
             <div key={i} className="space-y-3 mb-6 last:mb-0">
                <div className="text-[9px] font-mono text-slate-600 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 w-fit">ID: {c.tool_use_id}</div>
               <pre className="bg-slate-950 text-emerald-400 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
@@ -1082,75 +1272,118 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
       );
     }
     const textContent = Array.isArray(message.content) ? extractText(message.content) : (typeof message.content === 'string' ? message.content : "");
-    if (!textContent) return null;
-    return (
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-        <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
-        <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-            <User size={16} strokeWidth={3} /> User Prompt
+    if (textContent && mode !== "brain") {
+      parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+          <div className="absolute top-0 left-0 w-1 h-full bg-blue-600"></div>
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <User size={16} strokeWidth={3} /> User Prompt
+            </div>
+            {renderTimestamp()}
+          </div>
+          <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{textContent}</div>
         </div>
-        <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{textContent}</div>
-      </div>
-    );
+      );
+    }
   }
 
-  if (type === "assistant" && message?.role === "assistant") {
-    const contentArr = Array.isArray(message.content) ? message.content : [];
+  if ((type === "assistant" || role === "assistant") && (message?.role === "assistant" || role === "assistant")) {
+    const contentArr = Array.isArray(message?.content) ? message.content : [];
     const toolCallsArr = contentArr.filter((c: any) => c.type === "tool_use");
+    const thinkingArr = contentArr.filter((c: any) => c.type === "thinking");
     const text = extractText(contentArr);
 
-    return (
-      <div className="space-y-6 w-full">
-        {text && (mode === "all" || mode === "dialogue") && (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-            <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
-            <div className="flex items-center gap-2 text-emerald-400 font-black text-[10px] uppercase tracking-[0.2em] mb-4">
-                <MessageSquare size={16} strokeWidth={3} /> Agent Response
-            </div>
-            <ResponseBody text={text} />
-          </div>
-        )}
-        {toolCallsArr.length > 0 && (mode === "all" || mode === "brain") && (
-          <div className="space-y-4">
-            {toolCallsArr.map((toolUse: any, i: number) => (
-              <div key={i} className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50">
-                <div className="flex items-center gap-2 text-blue-400 font-bold mb-4 text-xs uppercase tracking-widest">
-                  <Code size={16} /> Tool Call: {toolUse.name}
+    if (thinkingArr.length > 0 && mode !== "dialogue") {
+       thinkingArr.forEach((t: any, i: number) => {
+         const body = t.thinking || t.text || t.content || "";
+         const isEncrypted = !body && (t.signature || t.type === "redacted_thinking");
+         parts.push(
+            <div key={`think-${i}`} className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-amber-500/50 group">
+              <div className="flex justify-between items-start mb-3">
+                <div className="flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-widest">
+                  <Brain size={16} /> Reasoning {isEncrypted && <span className="text-[9px] font-mono normal-case tracking-normal text-amber-500/70 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">encrypted</span>}
                 </div>
-                <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
-                  {JSON.stringify(toolUse.input || toolUse.args || toolUse.payload, null, 2)}
-                </pre>
+                {renderTimestamp()}
               </div>
-            ))}
+              {isEncrypted ? (
+                <div className="text-slate-500 italic text-[11px] leading-relaxed">
+                  Extended thinking is sealed by the API — the local log stores only the cryptographic signature, not the reasoning text.
+                  <div className="mt-2 text-[9px] font-mono text-slate-600 break-all opacity-60">sig: {String(t.signature || "").slice(0, 64)}…</div>
+                </div>
+              ) : (
+                <div className="text-slate-400 whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{body || JSON.stringify(t)}</div>
+              )}
+            </div>
+         );
+       });
+    }
+
+    if (text && mode !== "brain") {
+      parts.push(
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+          <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-2 text-emerald-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                <MessageSquare size={16} strokeWidth={3} /> Response
+            </div>
+            {renderTimestamp()}
           </div>
-        )}
-      </div>
-    );
+          <ResponseBody text={text} />
+        </div>
+      );
+    }
+
+    if (toolCallsArr.length > 0 && mode !== "dialogue") {
+      toolCallsArr.forEach((toolUse: any, i: number) => {
+        parts.push(
+          <div key={`tool-${i}`} className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50 group">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-widest">
+                <Code size={16} /> Tool Call: {toolUse.name}
+              </div>
+              {renderTimestamp()}
+            </div>
+            <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
+              {JSON.stringify(toolUse.input || toolUse.args || toolUse.payload, null, 2)}
+            </pre>
+          </div>
+        );
+      });
+    }
   }
 
-  // --- CODEX ---
+  // 9. CODEX (request_item / response_item)
   if (type === "response_item" || type === "request_item") {
     const role = payload?.role || (type === "request_item" ? "user" : "assistant");
     const itemType = payload?.type;
     
-    if (itemType === "reasoning") {
-       if (mode === "dialogue") return null;
-       return (
-          <div className="bg-purple-500/5 border border-purple-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-purple-500/50">
-            <div className="flex items-center gap-2 text-purple-400 font-bold mb-3 text-xs uppercase tracking-widest">
-              <Brain size={16} /> Codex Reasoning
+    if (itemType === "reasoning" && mode !== "dialogue") {
+       parts.push(
+          <div className="bg-purple-500/5 border border-purple-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-purple-500/50 group">
+            <div className="flex justify-between items-start mb-3">
+              <div className="flex items-center gap-2 text-purple-400 font-bold mb-3 text-xs uppercase tracking-widest">
+                <Brain size={16} /> Reasoning
+              </div>
+              {renderTimestamp()}
             </div>
-            <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{payload.content}</div>
+            <div className="text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{
+              Array.isArray(payload.content)
+                ? payload.content.map((c: any) => c?.text ?? c?.summary ?? c?.content ?? (typeof c === 'string' ? c : "")).filter(Boolean).join("\n\n")
+                : (typeof payload.content === 'string' ? payload.content : (payload.summary ?? payload.text ?? ""))
+            }</div>
           </div>
        );
     }
 
-    if (itemType === "function_call" || itemType === "tool_use") {
-       if (mode === "dialogue") return null;
-       return (
-          <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50">
-            <div className="flex items-center gap-2 text-blue-400 font-bold mb-4 text-xs uppercase tracking-widest">
-              <Code size={16} /> Tool Call: {payload.name}
+    if ((itemType === "function_call" || itemType === "tool_use") && mode !== "dialogue") {
+       parts.push(
+          <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 shadow-sm ml-4 border-l-4 border-l-blue-500/50 group">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-2 text-blue-400 font-bold mb-4 text-xs uppercase tracking-widest">
+                <Code size={16} /> Tool Call: {payload.name}
+              </div>
+              {renderTimestamp()}
             </div>
             <pre className="bg-slate-950 text-blue-300 p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-slate-800 shadow-inner">
               {JSON.stringify(payload.arguments || payload.input || payload.parameters, null, 2)}
@@ -1168,28 +1401,32 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
           text = content;
        }
 
-       if (!text) return null;
-
-       const isAssistant = role === "assistant";
-       if (mode === "brain") return null; // Logic is handled by isReasoning/isTool in the main loop anyway
-
-       return (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all">
-            <div className={`absolute top-0 left-0 w-1 h-full ${isAssistant ? 'bg-emerald-600' : 'bg-blue-600'}`}></div>
-            <div className={`flex items-center gap-2 ${isAssistant ? 'text-emerald-400' : 'text-blue-400'} font-black text-[10px] uppercase tracking-[0.2em] mb-4`}>
-                {isAssistant ? <MessageSquare size={16} strokeWidth={3} /> : <User size={16} strokeWidth={3} />}
-                {isAssistant ? 'Codex Response' : 'User Prompt'}
-            </div>
-            {isAssistant
-              ? <ResponseBody text={text} />
-              : <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{text}</div>}
-          </div>
-       );
+       if (text) {
+         const isAssistant = role === "assistant";
+         if (mode !== "brain") {
+           parts.push(
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-slate-600 transition-all text-left">
+                <div className={`absolute top-0 left-0 w-1 h-full ${isAssistant ? 'bg-emerald-600' : 'bg-blue-600'}`}></div>
+                <div className="flex justify-between items-start mb-4">
+                  <div className={`flex items-center gap-2 ${isAssistant ? 'text-emerald-400' : 'text-blue-400'} font-black text-[10px] uppercase tracking-[0.2em]`}>
+                      {isAssistant ? <MessageSquare size={16} strokeWidth={3} /> : <User size={16} strokeWidth={3} />}
+                      {isAssistant ? 'Response' : 'User Prompt'}
+                  </div>
+                  {renderTimestamp()}
+                </div>
+                {isAssistant
+                  ? <ResponseBody text={text} />
+                  : <div className="text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium">{text}</div>}
+              </div>
+           );
+         }
+       }
     }
   }
 
+  // 10. SYSTEM METADATA
   if (type === "session_meta") {
-    return (
+    parts.push(
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl opacity-90 border-dashed">
         <div className="flex items-center gap-2 text-slate-400 font-bold mb-4 text-xs uppercase tracking-widest">
           <Info size={16} /> Session Metadata
@@ -1209,7 +1446,7 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
   }
 
   if (type === "event_msg") {
-    return (
+    parts.push(
       <div className="bg-slate-900/30 border border-slate-800/50 rounded-xl p-4 text-[10px] text-slate-500 flex items-center gap-4 group hover:bg-slate-800/20 transition-all">
         <Zap size={14} className="text-purple-500/50 group-hover:text-purple-400" />
         <span className="font-bold text-slate-400 uppercase tracking-[0.2em]">{payload?.type}</span>
@@ -1217,13 +1454,16 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     );
   }
 
-  return (mode === "all") ? (
-    <div className="bg-slate-900/20 border border-slate-800/30 rounded-xl p-3 text-[10px] text-slate-600 flex justify-between items-center opacity-40 hover:opacity-100 transition-opacity">
-      <span className="font-mono">System Event: {type}</span>
-    </div>
-  ) : null;
-}
+  if (parts.length === 0 && mode === "all") {
+    parts.push(
+      <div className="bg-slate-900/20 border border-slate-800/30 rounded-xl p-3 text-[10px] text-slate-600 flex justify-between items-center opacity-40 hover:opacity-100 transition-opacity">
+        <span className="font-mono">System Event: {type}</span>
+      </div>
+    );
+  }
 
+  return <div className="space-y-6 w-full">{parts.map((p, i) => <React.Fragment key={i}>{p}</React.Fragment>)}</div>;
+}
 function ResponseBody({ text, tone = "default" }: { text: string; tone?: "default" | "muted" }) {
   const [mode, setMode] = useState<"md" | "raw">("md");
   if (!text) return null;
@@ -1231,14 +1471,7 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
     ? "text-slate-400 whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80"
     : "text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-medium";
   return (
-    <>
-      <button
-        onClick={(e) => { e.stopPropagation(); setMode(mode === "md" ? "raw" : "md"); }}
-        className="absolute top-4 right-4 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-slate-950/70 border border-slate-800 text-slate-500 hover:text-slate-200 hover:border-slate-600 transition-colors z-10"
-        title={mode === "md" ? "Show raw text" : "Render markdown"}
-      >
-        {mode === "md" ? "MD" : "Raw"}
-      </button>
+    <div className="relative group/body">
       {mode === "md" ? (
         <div className="prose prose-invert prose-sm max-w-none text-slate-200 text-sm leading-relaxed">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
@@ -1246,6 +1479,13 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
       ) : (
         <div className={base}>{text}</div>
       )}
-    </>
+      <button
+        onClick={(e) => { e.stopPropagation(); setMode(mode === "md" ? "raw" : "md"); }}
+        className="absolute -bottom-2 -right-2 text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-lg bg-slate-900/80 backdrop-blur-md border border-slate-800 text-slate-500 hover:text-blue-400 hover:border-blue-500/50 transition-all opacity-0 group-hover/body:opacity-100 shadow-xl z-10"
+        title={mode === "md" ? "Show raw text" : "Render markdown"}
+      >
+        {mode === "md" ? "View Raw" : "View MD"}
+      </button>
+    </div>
   );
 }

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import json
+import yaml
 import sqlite3
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
@@ -70,9 +71,17 @@ OPENCODE_DB = HOME / ".local/share/opencode/opencode.db"
 VSCODE_STORAGE = VSCODE_BASE / "User/workspaceStorage"
 CURSOR_STORAGE = CURSOR_BASE / "User/workspaceStorage"
 ANTIGRAVITY_BRAIN_DIR = GEMINI_DIR / "antigravity" / "brain"
+PROJECT_ALIASES_FILE = HOME / ".agent-harness" / "aliases.json"
 
-def _now():
-    return datetime.now(timezone.utc)
+def _load_project_aliases() -> Dict[str, str]:
+    # Ensure directory exists
+    PROJECT_ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if PROJECT_ALIASES_FILE.exists():
+        try:
+            with open(PROJECT_ALIASES_FILE, "r") as f:
+                return json.load(f)
+        except: pass
+    return {}
 
 def _antigravity_infer_project(text: str) -> str:
     import re
@@ -117,6 +126,11 @@ class PlanSnippet(BaseModel):
     timestamp: datetime
     content: str
 
+class Artifact(BaseModel):
+    name: str
+    path: str
+    type: str # 'video', 'image', 'document', 'terminal'
+
 class Session(BaseModel):
     id: str
     agent: str
@@ -129,6 +143,7 @@ class Session(BaseModel):
     has_plan: bool = False
     tokens: TokenUsage = TokenUsage()
     plans: List[PlanSnippet] = []
+    artifacts: List[Artifact] = []
 
 @app.get("/")
 async def root():
@@ -171,6 +186,10 @@ async def get_available_agents():
 
 def _scan_sessions_sync():
     sessions = []
+    aliases = _load_project_aliases()
+
+    def apply_alias(path: str) -> str:
+        return aliases.get(path, path)
 
     # 1. Claude
     claude_history = CLAUDE_DIR / "history.jsonl"
@@ -194,13 +213,21 @@ def _scan_sessions_sync():
                         if not sid: continue
                         ts = datetime.fromtimestamp(data.get("timestamp") / 1000, tz=timezone.utc) if data.get("timestamp") else _now()
                         if sid not in claude_sessions or ts > claude_sessions[sid]["timestamp"]:
-                            claude_sessions[sid] = {"id": sid, "agent": "claude", "project": data.get("project", "unknown"), "timestamp": ts, "display": data.get("display"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None}
+                            claude_sessions[sid] = {"id": sid, "agent": "claude", "project": apply_alias(data.get("project", "unknown")), "timestamp": ts, "display": data.get("display"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": []}
                     except: continue
         except: pass
 
         for sid, sess in list(claude_sessions.items())[:100]:
             session_file = claude_file_map.get(sid)
             if session_file:
+                # Discover Claude Project Memory artifacts
+                try:
+                    memory_dir = session_file.parent.parent / "memory"
+                    if memory_dir.exists():
+                        for mf in memory_dir.glob("*.md"):
+                            sess["artifacts"].append({"name": mf.name, "path": str(mf), "type": "document"})
+                except: pass
+
                 try:
                     with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                         for line in f:
@@ -218,6 +245,7 @@ def _scan_sessions_sync():
                                     sess["tokens"]["output"] += usage.get("output_tokens", 0)
                                     sess["tokens"]["cached"] += usage.get("cache_read_input_tokens", 0)
                                 sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
+                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"])
                                 for item in msg.get("content", []):
                                     if item.get("type") == "tool_use":
                                         tool = item.get("name")
@@ -250,25 +278,29 @@ def _scan_sessions_sync():
                     codex_file_map[sid] = f
         except: pass
 
-        with open(codex_index, "r") as f:
-            for line in f:
-                try:
-                    data = json.loads(line); sid = data.get("id")
-                    if not sid: continue
-                    ts = _aware(datetime.fromisoformat(data.get("updated_at").replace('Z', '+00:00'))) if data.get("updated_at") else _now()
-                    if sid not in codex_sessions or ts > codex_sessions[sid]["timestamp"]:
-                        codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": data.get("thread_name"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None}
-                except: continue
+        try:
+            with open(codex_index, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line); sid = data.get("id")
+                        if not sid: continue
+                        ts = _aware(datetime.fromisoformat(data.get("updated_at").replace('Z', '+00:00'))) if data.get("updated_at") else _now()
+                        if sid not in codex_sessions or ts > codex_sessions[sid]["timestamp"]:
+                            codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": data.get("thread_name"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": []}
+                    except: continue
+        except: pass
         
         for sid, sess in list(codex_sessions.items())[:100]:
             rollout_file = codex_file_map.get(sid)
             if rollout_file:
                 try:
-                    with open(rollout_file, "r") as f:
+                    with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
                         for line in f:
-                            data = json.loads(line)
+                            try:
+                                data = json.loads(line)
+                            except: continue
                             if data.get("type") == "session_meta":
-                                sess["project"] = data["payload"].get("cwd", "unknown")
+                                sess["project"] = apply_alias(data["payload"].get("cwd", "unknown"))
                                 if not sess.get("model") and data["payload"].get("model"):
                                     sess["model"] = data["payload"].get("model")
                                 if not sess.get("_provider"):
@@ -282,6 +314,7 @@ def _scan_sessions_sync():
                                     sess["tokens"]["output"] = max(sess["tokens"]["output"], usage.get("output_tokens", 0))
                                     sess["tokens"]["cached"] = max(sess["tokens"]["cached"], usage.get("cached_input_tokens", 0))
                                     sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"])
                             if data.get("type") == "response_item":
                                 if data.get("payload", {}).get("type") == "function_call":
                                     tool = data["payload"].get("name")
@@ -318,10 +351,10 @@ def _scan_sessions_sync():
                 chat_dir = tmp_dir / "chats"
                 if chat_dir.exists():
                     agent_type = "gemini" if slug in gemini_slugs else "antigravity"
-                    project_path = gemini_slug_to_path.get(slug, f"System / {slug[:8]}")
+                    project_path = apply_alias(gemini_slug_to_path.get(slug, f"System / {slug[:8]}"))
                     for cf in chat_dir.glob("*.json"):
                         try:
-                            with open(cf, "r") as f:
+                            with open(cf, "r", encoding="utf-8", errors="replace") as f:
                                 data = json.load(f); sid = data.get("sessionId")
                                 if not sid: continue
                                 ts = _aware(datetime.fromisoformat(data.get("lastUpdated").replace('Z', '+00:00'))) if data.get("lastUpdated") else _now()
@@ -345,68 +378,120 @@ def _scan_sessions_sync():
                                                 plan_text = ""
                                                 pp = (tc.get("args") or {}).get("plan_path")
                                                 if pp:
-                                                    try: plan_text = open(pp).read()
+                                                    try: 
+                                                        with open(pp, "r", encoding="utf-8", errors="replace") as pf:
+                                                            plan_text = pf.read()
                                                     except: plan_text = f"(plan stored at {pp})"
                                                 if not plan_text:
                                                     plan_text = (tc.get("args") or {}).get("plan") or tc.get("resultDisplay") or ""
                                                 if plan_text:
                                                     has_plan = True
                                                     plans.append({"session_id": sid, "agent": agent_type, "timestamp": ts, "content": plan_text})
-                                # Skip "ghost" sessions: file exists only because the CLI opened,
-                                # but the user never sent a prompt (e.g. only an `info` update notice).
+                                
+                                # Skip "ghost" sessions
                                 if not has_user and tokens["total"] == 0 and not mcp_tools:
                                     continue
+                                    
                                 model = None
                                 for msg in data.get("messages", []):
                                     if msg.get("model"): model = msg.get("model"); break
                                     if msg.get("modelVersion"): model = msg.get("modelVersion"); break
-                                sessions.append({"id": sid, "agent": agent_type, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model})
+                                
+                                # Discover Antigravity chat-level media artifacts
+                                artifacts = []
+                                try:
+                                    art_dir = chat_dir.parent / "artifacts"
+                                    if art_dir.exists():
+                                        for af in art_dir.iterdir():
+                                            if af.suffix.lower() in (".mp4", ".mov"): artifacts.append({"name": af.name, "path": str(af), "type": "video"})
+                                            elif af.suffix.lower() in (".png", ".webp", ".jpg", ".jpeg"): artifacts.append({"name": af.name, "path": str(af), "type": "image"})
+                                except: pass
+
+                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                                sessions.append({"id": sid, "agent": agent_type, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                         except: continue
         except: pass
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
     if ANTIGRAVITY_BRAIN_DIR.exists():
         for sess_dir in ANTIGRAVITY_BRAIN_DIR.iterdir():
-            if not sess_dir.is_dir(): continue
-            sid = sess_dir.name
-            task = plan = walkthrough = ""
-            latest_ts = None
-            for fname in ("task.md", "implementation_plan.md", "walkthrough.md"):
-                fp = sess_dir / fname
-                mp = sess_dir / f"{fname}.metadata.json"
-                if fp.exists():
-                    try: body = fp.read_text(errors="ignore")
-                    except: body = ""
-                    if fname == "task.md": task = body
-                    elif fname == "implementation_plan.md": plan = body
-                    else: walkthrough = body
-                if mp.exists():
-                    try:
-                        md = json.loads(mp.read_text())
-                        updated = md.get("updatedAt")
-                        if updated:
-                            ts = _aware(datetime.fromisoformat(updated.replace("Z", "+00:00")))
-                            if latest_ts is None or ts > latest_ts: latest_ts = ts
-                    except: pass
-            if not (task or plan or walkthrough): continue
-            project = _antigravity_infer_project((task or "") + "\n" + (plan or ""))
-            first_line = next((ln.strip() for ln in (task or plan or walkthrough).splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
-            display = (first_line or "Antigravity session")[:100]
-            plans: List[dict] = []
-            if plan:
-                plans.append({"session_id": sid, "agent": "antigravity", "timestamp": latest_ts or _now(), "content": plan})
-            sessions.append({
-                "id": sid,
-                "agent": "antigravity",
-                "project": project,
-                "timestamp": latest_ts or datetime.fromtimestamp(sess_dir.stat().st_mtime, tz=timezone.utc),
-                "display": display,
-                "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
-                "mcp_tools": [],
-                "has_plan": bool(plan),
-                "plans": plans,
-                "model": "gemini (antigravity)",
-            })
+            try:
+                if not sess_dir.is_dir(): continue
+                sid = sess_dir.name
+                task = plan = walkthrough = ""
+                latest_ts = None
+                artifacts = []
+                # Scan for base documents as artifacts
+                for fname in ("task.md", "implementation_plan.md", "walkthrough.md"):
+                    fp = sess_dir / fname
+                    mp = sess_dir / f"{fname}.metadata.json"
+                    if fp.exists():
+                        artifacts.append({"name": fname, "path": str(fp), "type": "document"})
+                        try: 
+                            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                                body = f.read()
+                        except: body = ""
+                        if fname == "task.md": task = body
+                        elif fname == "implementation_plan.md": plan = body
+                        else: walkthrough = body
+                    if mp.exists():
+                        try:
+                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
+                            updated = md.get("updatedAt")
+                            if updated:
+                                ts = _aware(datetime.fromisoformat(updated.replace("Z", "+00:00")))
+                                if latest_ts is None or ts > latest_ts: latest_ts = ts
+                        except: pass
+                
+                # Scan for media artifacts at the brain session root (Antigravity drops
+                # previews/screenshots here) and optionally in an artifacts/ subdir.
+                try:
+                    media_dirs = [sess_dir]
+                    sub = sess_dir / "artifacts"
+                    if sub.exists(): media_dirs.append(sub)
+                    for d in media_dirs:
+                        for af in d.iterdir():
+                            if not af.is_file(): continue
+                            ext = af.suffix.lower()
+                            if ext in (".mp4", ".mov", ".webm"):
+                                artifacts.append({"name": af.name, "path": str(af), "type": "video"})
+                            elif ext in (".png", ".webp", ".jpg", ".jpeg", ".gif"):
+                                artifacts.append({"name": af.name, "path": str(af), "type": "image"})
+                except: pass
+
+                # Pull in a sampled slice of browser_recordings/<sid> frames
+                try:
+                    rec_dir = GEMINI_DIR / "antigravity" / "browser_recordings" / sid
+                    if rec_dir.is_dir():
+                        frames = sorted([p for p in rec_dir.iterdir() if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")])
+                        total = len(frames)
+                        if total:
+                            step = max(1, total // 12)  # cap at ~12 thumbnails
+                            for p in frames[::step]:
+                                artifacts.append({"name": f"frame {p.name}", "path": str(p), "type": "image"})
+                except: pass
+
+                if not (task or plan or walkthrough or artifacts): continue
+                project = apply_alias(_antigravity_infer_project((task or "") + "\n" + (plan or "")))
+                first_line = next((ln.strip() for ln in (task or plan or walkthrough).splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
+                display = (first_line or "Antigravity session")[:100]
+                plans: List[dict] = []
+                if plan:
+                    plans.append({"session_id": sid, "agent": "antigravity", "timestamp": latest_ts or _now(), "content": plan})
+                sessions.append({
+                    "id": sid,
+                    "agent": "antigravity",
+                    "project": project,
+                    "timestamp": latest_ts or datetime.fromtimestamp(sess_dir.stat().st_mtime, tz=timezone.utc),
+                    "display": display,
+                    "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                    "mcp_tools": [],
+                    "has_plan": bool(plan),
+                    "plans": plans,
+                    "model": "gemini (antigravity)",
+                    "artifacts": artifacts
+                })
+            except: continue
 
     # 4. Qwen
     if QWEN_DIR.exists():
@@ -417,10 +502,11 @@ def _scan_sessions_sync():
                         sid = cf.stem; mcp_tools = []; has_plan = False; first_msg = ""; plans = []
                         tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                         project_path = "unknown"; last_ts = _now(); model = None
-                        with open(cf, "r") as f:
+                        artifacts = []
+                        with open(cf, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
                                 try:
-                                    data = json.loads(line); project_path = data.get("cwd", project_path)
+                                    data = json.loads(line); project_path = apply_alias(data.get("cwd", project_path))
                                     if data.get("timestamp"): last_ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
                                     if data.get("type") == "user":
                                         txt = data.get("message", {}).get("content", "")
@@ -442,7 +528,8 @@ def _scan_sessions_sync():
                                                     plans.append({"session_id": sid, "agent": "qwen", "timestamp": last_ts, "content": t_text})
                                 except: continue
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                        sessions.append({"id": sid, "agent": "qwen", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model})
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                        sessions.append({"id": sid, "agent": "qwen", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                     except: continue
 
     # 5. Vibe
@@ -457,7 +544,8 @@ def _scan_sessions_sync():
                     tokens = {"input": stats.get("session_prompt_tokens", 0), "output": stats.get("session_completion_tokens", 0), "cached": stats.get("context_tokens", 0), "total": stats.get("session_total_llm_tokens", 0)}
                     mcp_tools = [t.get("function", {}).get("name") for t in meta.get("tools_available", []) if t.get("function", {}).get("name")]
                     model = meta.get("agent_config", {}).get("active_model")
-                    sessions.append({"id": sid, "agent": "vibe", "project": meta.get("environment", {}).get("working_directory", "unknown"), "timestamp": ts, "display": f"Vibe Session {sid[:8]}", "tokens": tokens, "mcp_tools": list(set(mcp_tools)), "has_plan": False, "plans": [], "model": model})
+                    project_path = apply_alias(meta.get("environment", {}).get("working_directory", "unknown"))
+                    sessions.append({"id": sid, "agent": "vibe", "project": project_path, "timestamp": ts, "display": f"Vibe Session {sid[:8]}", "tokens": tokens, "mcp_tools": list(set(mcp_tools)), "has_plan": False, "plans": [], "model": model, "artifacts": []})
             except: continue
 
     # 6. Cursor
@@ -491,16 +579,26 @@ def _scan_sessions_sync():
                     if trans_dir.is_dir():
                         sid = trans_dir.name
                         cf = trans_dir / f"{sid}.jsonl"
+                        artifacts = []
+                        # Discover Cursor Terminal artifacts
+                        try:
+                            term_dir = pd / "terminals"
+                            if term_dir.exists():
+                                for tf in term_dir.glob("*.txt"):
+                                    artifacts.append({"name": f"Terminal: {tf.name}", "path": str(tf), "type": "terminal"})
+                        except: pass
+
                         if cf.exists():
                             try:
                                 mtime = datetime.fromtimestamp(cf.stat().st_mtime, tz=timezone.utc)
                                 first_msg = ""
                                 tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                                 mcp_tools = []
+                                subagents = []
                                 has_plan = False
                                 plans = []
                                 model = None
-                                with open(cf, "r") as f:
+                                with open(cf, "r", encoding="utf-8", errors="replace") as f:
                                     for line in f:
                                         try:
                                             data = json.loads(line)
@@ -520,14 +618,21 @@ def _scan_sessions_sync():
                                             tokens["cached"] += usage.get("cache_read_input_tokens", 0)
                                             for item in msg.get("content", []) if isinstance(msg.get("content"), list) else []:
                                                 if item.get("type") == "tool_use":
-                                                    if item.get("name") not in mcp_tools: mcp_tools.append(item.get("name"))
+                                                    name = item.get("name")
+                                                    if name not in mcp_tools: mcp_tools.append(name)
+                                                    if name == "Subagent":
+                                                        sub_input = item.get("input") or {}
+                                                        sub_name = sub_input.get("name") or sub_input.get("subagent_type")
+                                                        if sub_name and sub_name not in subagents:
+                                                            subagents.append(sub_name)
                                                 if item.get("type") == "thinking":
                                                     t_text = item.get("thinking", "")
                                                     if "plan" in t_text.lower() and len(t_text) > 100:
                                                         has_plan = True
                                                         plans.append({"session_id": sid, "agent": "cursor", "timestamp": mtime, "content": t_text})
                                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                                sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model})
+                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                                sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "subagents": subagents, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                             except: continue
 
     # 7. Copilot
@@ -566,7 +671,8 @@ def _scan_sessions_sync():
                                         plans.append({"session_id": sid, "agent": "copilot", "timestamp": last_ts, "content": t_text})
                                 if "response" in req:
                                     for part in req["response"]: tokens["total"] += part.get("tokens", 0)
-                            sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model})
+                            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                            sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "cost": tokens["cost"]})
                     except: continue
             except: continue
 
@@ -628,25 +734,14 @@ def _scan_sessions_sync():
                         plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
                         plans.append({"session_id": sid, "agent": "opencode", "timestamp": ts, "content": plan_text})
                     sessions.append({
-                        "id": sid, "agent": "opencode", "project": project_path, "timestamp": ts,
+                        "id": sid, "agent": "opencode", "project": apply_alias(srow["directory"] or "unknown"), "timestamp": ts,
                         "display": display, "tokens": tokens, "mcp_tools": mcp_tools,
-                        "has_plan": has_plan, "plans": plans, "model": model,
+                        "has_plan": has_plan, "plans": plans, "model": model, "artifacts": []
                     })
             finally:
                 conn.close()
         except Exception:
             pass
-
-    # Apply user-defined project aliases in a single pass.
-    # Logs stay authentic; this only rewrites the grouping key.
-    aliases = load_aliases()
-    if aliases:
-        for s in sessions:
-            s["project"] = apply_alias(s.get("project", ""), aliases)
-            for pl in s.get("plans", []) or []:
-                # plans don't usually carry a project field, but be defensive
-                if isinstance(pl, dict) and pl.get("project"):
-                    pl["project"] = apply_alias(pl["project"], aliases)
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -662,6 +757,7 @@ def _scan_sessions_sync():
 # and asyncio.to_thread keeps the event loop free while we scan.
 import asyncio as _asyncio
 import time as _time
+from pricing import calculate_cost, PRICING, PRICING_UPDATED
 import logging as _logging
 
 _log = _logging.getLogger("harness.cache")
@@ -726,12 +822,31 @@ async def get_sessions(fresh: bool = False):
     return await get_sessions_cached(fresh=fresh)
 
 
-@app.post("/cache/invalidate")
-async def invalidate_cache():
-    """Drop the sessions cache so the next read triggers a fresh scan."""
-    _sessions_cache["data"] = None
-    _sessions_cache["at"] = 0.0
-    return {"ok": True}
+@app.get("/pricing")
+async def get_pricing():
+    """Return the static pricing table and the date it was last refreshed."""
+    return {"updated": PRICING_UPDATED, "models": PRICING}
+
+
+@app.get("/artifacts")
+async def get_artifact(path: str):
+    """Stream a local artifact file securely."""
+    from fastapi.responses import FileResponse
+    p = Path(path)
+    # Security: only serve files from known agent directories
+    allowed = [CLAUDE_DIR, CODEX_DIR, GEMINI_DIR, QWEN_DIR, VIBE_DIR, CURSOR_DIR, VSCODE_BASE, CURSOR_BASE]
+    is_safe = False
+    for a in allowed:
+        try:
+            if p.resolve().is_relative_to(a.resolve()):
+                is_safe = True; break
+        except: continue
+
+    if not is_safe or not p.exists() or not p.is_file():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Unauthorized or not found")
+
+    return FileResponse(path)
 
 
 @app.get("/cache/status")
@@ -743,7 +858,16 @@ async def cache_status():
         "ttl_sec": SESSIONS_TTL_SEC,
         "entries": len(_sessions_cache["data"]) if _sessions_cache.get("data") is not None else 0,
         "building": _sessions_cache.get("building", False),
+        "last_error": _sessions_cache.get("last_error")
     }
+
+
+@app.post("/cache/invalidate")
+async def invalidate_cache():
+    """Drop the sessions cache so the next read triggers a fresh scan."""
+    _sessions_cache["data"] = None
+    _sessions_cache["at"] = 0.0
+    return {"ok": True}
 
 
 @app.get("/sessions/{session_id}")
@@ -966,13 +1090,14 @@ async def get_projects(include_hidden: bool = False):
     for s in sessions:
         proj = s["project"]
         if proj not in projects:
-            projects[proj] = {"name": proj.split("/")[-1], "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "plans": []}
+            projects[proj] = {"name": proj.split("/")[-1], "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
         projects[proj]["session_count"] += 1; projects[proj]["agents"].add(s["agent"])
         for t in s.get("mcp_tools", []): projects[proj]["mcp_tools"].add(t)
         if s.get("has_plan"): projects[proj]["plan_count"] += 1
         projects[proj]["subagent_count"] += len(s.get("subagents", []))
         st = s.get("tokens", {})
         for k in ["input", "output", "cached", "total"]: projects[proj]["tokens"][k] += st.get(k, 0)
+        projects[proj]["tokens"]["cost"] += s.get("cost", 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
     for p in projects.values():
         p["agents"] = list(p["agents"])
@@ -986,9 +1111,21 @@ async def get_projects(include_hidden: bool = False):
         p["hidden"] = p["path"] in hidden
         # Count configured subagents on disk for this project path
         try:
-            agents_dir = Path(p["path"]) / ".claude" / "agents"
-            p["configured_subagent_count"] = len(list(agents_dir.glob("*.md"))) if agents_dir.exists() else 0
-        except: p["configured_subagent_count"] = 0
+            p["configured_subagent_count"] = 0
+            # 1. Standard Claude agents
+            claude_dir = Path(p["path"]) / ".claude" / "agents"
+            if claude_dir.exists():
+                p["configured_subagent_count"] += len(list(claude_dir.glob("*.md")))
+            # 2. Cursor skills/agents
+            cursor_dir = Path(p["path"]) / ".cursor" / "skills-cursor"
+            if cursor_dir.exists():
+                # For Cursor, we count directories that contain a SKILL.md
+                p["configured_subagent_count"] += len(list(cursor_dir.glob("*/SKILL.md")))
+            # 3. Generic .agents directory
+            agents_dir = Path(p["path"]) / ".agents" / "skills"
+            if agents_dir.exists():
+                p["configured_subagent_count"] += len(list(agents_dir.glob("*/SKILL.md")))
+        except: pass
     out = list(projects.values())
     if not include_hidden:
         out = [p for p in out if not p["hidden"]]
@@ -1054,48 +1191,83 @@ async def get_analytics():
     sessions = await get_sessions_cached(); by_agent = {}; by_day = {}; by_model = {}
     for s in sessions:
         agent = s["agent"]
-        if agent not in by_agent: by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "session_count": 0}
+        if agent not in by_agent: by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0}
         st = s.get("tokens", {})
+        scost = s.get("cost", 0.0)
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
+        by_agent[agent]["cost"] += scost
         by_agent[agent]["session_count"] += 1
         model_name = s.get("model") or f"{agent} (unknown)"
         if model_name not in by_model:
-            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "session_count": 0, "agent": agent}
+            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0, "agent": agent}
         for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
+        by_model[model_name]["cost"] += scost
         by_model[model_name]["session_count"] += 1
         day = s["timestamp"].strftime("%Y-%m-%d")
-        if day not in by_day: by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0}
+        if day not in by_day: by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
+        by_day[day]["cost"] += scost
     sorted_days = sorted([{"date": d, **v} for d, v in by_day.items()], key=lambda x: x["date"])
-    return {"by_agent": by_agent, "by_day": sorted_days, "by_model": by_model, "total": {"input": sum(a["input"] for a in by_agent.values()), "output": sum(a["output"] for a in by_agent.values()), "cached": sum(a["cached"] for a in by_agent.values()), "total": sum(a["total"] for a in by_agent.values())}}
+    return {
+        "by_agent": by_agent, 
+        "by_day": sorted_days, 
+        "by_model": by_model, 
+        "total": {
+            "input": sum(a["input"] for a in by_agent.values()), 
+            "output": sum(a["output"] for a in by_agent.values()), 
+            "cached": sum(a["cached"] for a in by_agent.values()), 
+            "total": sum(a["total"] for a in by_agent.values()),
+            "cost": sum(a["cost"] for a in by_agent.values())
+        },
+        "pricing_updated": PRICING_UPDATED,
+    }
 
 def _parse_skill_md(p: Path):
     """Read SKILL.md frontmatter; return {name, description}."""
     try:
         text = p.read_text(errors="ignore")
     except: return None
+    
     name = p.parent.name
     description = ""
+    
     if text.startswith("---"):
         end = text.find("---", 3)
         if end > 0:
-            for line in text[3:end].splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    k = k.strip().lower(); v = v.strip().strip('"').strip("'")
-                    if k == "name": name = v
-                    elif k == "description": description = v
-    return {"name": name, "description": description[:200]}
+            try:
+                frontmatter = yaml.safe_load(text[3:end])
+                if isinstance(frontmatter, dict):
+                    if frontmatter.get("name"):
+                        name = str(frontmatter["name"])
+                    if frontmatter.get("description"):
+                        description = str(frontmatter["description"])
+            except:
+                # Fallback to manual line parsing if YAML is slightly malformed
+                for line in text[3:end].splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        k = k.strip().lower(); v = v.strip().strip('"').strip("'")
+                        if k == "name": name = v
+                        elif k == "description": description = v
+                        
+    return {"name": name, "description": (description or "")[:500]}
 
 def _collect_skills(base: Path, scope: str, agent: str):
     out = []
-    skills_dir = base / "skills"
-    if not skills_dir.exists(): return out
+    # If the base folder itself looks like a skills folder (e.g. skills-cursor), scan it directly
+    # otherwise look for a 'skills' subfolder.
+    skills_dir = base
+    if not (base / "SKILL.md").exists() and (base / "skills").exists():
+        skills_dir = base / "skills"
+    elif not base.exists():
+        return out
+        
     for skill_md in skills_dir.glob("*/SKILL.md"):
         s = _parse_skill_md(skill_md)
         if s:
             out.append({**s, "scope": scope, "agent": agent, "source": str(skill_md)})
-    # Plugin-bundled skills (Claude)
+    
+    # Check for deeper nested skills (common in plugin structures)
     for skill_md in skills_dir.glob("*/skills/*/SKILL.md"):
         s = _parse_skill_md(skill_md)
         if s:
@@ -1155,14 +1327,22 @@ def _collect_subagents(base: Path, scope: str, agent: str):
         if txt.startswith("---"):
             end = txt.find("---", 3)
             if end > 0:
-                for line in txt[3:end].splitlines():
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        k = k.strip().lower(); v = v.strip().strip('"').strip("'")
-                        if k == "name": name = v
-                        elif k == "description": description = v
-                        elif k == "tools": tools = v
-                        elif k == "model": model = v
+                try:
+                    fm = yaml.safe_load(txt[3:end])
+                    if isinstance(fm, dict):
+                        if fm.get("name"): name = str(fm["name"])
+                        if fm.get("description"): description = str(fm["description"])
+                        if fm.get("tools"): tools = str(fm["tools"])
+                        if fm.get("model"): model = str(fm["model"])
+                except:
+                    for line in txt[3:end].splitlines():
+                        if ":" in line:
+                            k, v = line.split(":", 1)
+                            k = k.strip().lower(); v = v.strip().strip('"').strip("'")
+                            if k == "name": name = v
+                            elif k == "description": description = v
+                            elif k == "tools": tools = v
+                            elif k == "model": model = v
         out.append({
             "name": name, "description": description[:300], "tools": tools, "model": model,
             "scope": scope, "agent": agent, "source": str(md),
@@ -1184,11 +1364,16 @@ def _collect_commands(base: Path, scope: str, agent: str):
             if txt.startswith("---"):
                 end = txt.find("---", 3)
                 if end > 0:
-                    for line in txt[3:end].splitlines():
-                        if ":" in line:
-                            k, v = line.split(":", 1)
-                            if k.strip().lower() == "description":
-                                description = v.strip().strip('"').strip("'")
+                    try:
+                        fm = yaml.safe_load(txt[3:end])
+                        if isinstance(fm, dict) and fm.get("description"):
+                            description = str(fm["description"])
+                    except:
+                        for line in txt[3:end].splitlines():
+                            if ":" in line:
+                                k, v = line.split(":", 1)
+                                if k.strip().lower() == "description":
+                                    description = v.strip().strip('"').strip("'")
             out.append({"name": name, "description": description[:200], "scope": scope, "agent": agent, "source": str(md)})
     return out
 
@@ -1278,9 +1463,22 @@ async def get_config(project: Optional[str] = None):
 
             # Cursor
             mcps += _mcps_from_json(proj / ".cursor" / "mcp.json", "project", "cursor")
+            skills += _collect_skills(proj / ".cursor" / "skills-cursor", "project", "cursor")
+            subagents += _collect_subagents(proj / ".cursor", "project", "cursor")
+
+            # Generic .agents
+            skills += _collect_skills(proj / ".agents", "project", "agents")
+            subagents += _collect_subagents(proj / ".agents", "project", "agents")
 
             # Gemini
             mcps += _mcps_from_json(proj / ".gemini" / "settings.json", "project", "gemini")
+
+    # Dedupe skills by (name, scope)
+    seen_skills = set(); deduped_skills = []
+    for s in skills:
+        key = (s.get("name"), s.get("scope"))
+        if key in seen_skills: continue
+        seen_skills.add(key); deduped_skills.append(s)
 
     # Dedupe MCPs by (name, scope, agent)
     seen = set(); deduped = []
@@ -1292,13 +1490,13 @@ async def get_config(project: Optional[str] = None):
     return {
         "project": project,
         "project_valid": project_valid,
-        "skills": skills,
+        "skills": deduped_skills,
         "mcps": deduped,
         "memory": memory,
         "commands": commands,
         "subagents": subagents,
         "counts": {
-            "skills": len(skills),
+            "skills": len(deduped_skills),
             "mcps": len(deduped),
             "memory_files": len(memory),
             "commands": len(commands),

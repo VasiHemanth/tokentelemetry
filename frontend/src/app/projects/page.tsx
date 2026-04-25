@@ -13,13 +13,19 @@ interface Project {
   subagent_count: number;
   configured_subagent_count?: number;
   plan_count: number;
-  tokens?: { input: number; output: number; cached: number; total: number };
+  tokens?: { input: number; output: number; cached: number; total: number; cost: number };
+}
+
+function formatCost(usd: number): string {
+  if (!usd) return "$0.00";
+  if (usd < 0.01) return `<$0.01`;
+  return `$${usd.toFixed(2)}`;
 }
 
 function formatTokens(n: number): string {
   if (!n) return "0";
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "K";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
 
@@ -154,9 +160,9 @@ export default function ProjectsPage() {
                      </div>
                   )}
                   {(project.tokens?.total || 0) > 0 && (
-                     <div className="flex flex-col items-center gap-1" title={`${(project.tokens?.total || 0).toLocaleString()} total tokens`}>
-                        <span className="text-sm font-black text-amber-400 leading-none tabular-nums">{(project.tokens?.total || 0).toLocaleString()}</span>
-                        <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tokens</span>
+                     <div className="flex flex-col items-center gap-1" title={`${(project.tokens?.total || 0).toLocaleString()} tokens`}>
+                        <span className="text-lg font-black text-amber-400 leading-none tabular-nums">{formatCost(project.tokens?.cost || 0)}</span>
+                        <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Cost</span>
                      </div>
                   )}
                 </div>
