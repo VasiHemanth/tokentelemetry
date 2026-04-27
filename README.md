@@ -6,6 +6,8 @@ It reads session logs from **Claude Code**, **Codex**, **Gemini CLI**, **Antigra
 
 Runs 100% on your machine. No signup, no telemetry, no cloud.
 
+🌐 **Website:** https://tokentelemetry.com
+
 ---
 
 ## Requirements
@@ -52,6 +54,29 @@ The first run creates a Python virtualenv, installs backend + frontend dependenc
 - API → http://127.0.0.1:8000
 
 Press `Ctrl+C` to stop both.
+
+### Running again (after first install)
+
+The one-line installer clones the repo into a `tokentelemetry/` folder. Next time you want the dashboard, just re-enter that folder and start it:
+
+**macOS / Linux**
+```bash
+cd tokentelemetry
+./start.sh
+```
+
+**Windows**
+```powershell
+cd tokentelemetry
+start.bat
+```
+
+Or cross-platform:
+```bash
+node bin/cli.js
+```
+
+> **Tip:** Press `Ctrl+C` to stop both the backend and frontend at any time.
 
 ---
 
