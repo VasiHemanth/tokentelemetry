@@ -61,7 +61,7 @@ More agents added regularly. [Request support for your agent →](https://github
 - 🛠️ **Tool Call Analytics** — which tools your agents call most, success/failure rates
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
 - 🧠 **Plan Capture** — view plan-mode outputs from Claude Code and other agents
-- 📈 **Model Analytics** — compare GPT-4o vs Claude 3.5 Sonnet vs Gemini 2.0 Flash efficiency
+- 📈 **Model Analytics** — compare GPT-5.4 vs Claude 5.6 Sonnet vs Gemini 3.1 Flash efficiency
 - 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
