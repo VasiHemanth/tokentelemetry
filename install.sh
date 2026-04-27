@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Agent Observability Harness — one-line installer.
-#   curl -fsSL https://raw.githubusercontent.com/hemanthvasi/coding-agent-harness-evaluation/main/install.sh | bash
+# tokentelemetry — one-line installer.
+#   curl -fsSL https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.sh | bash
 set -euo pipefail
 
-REPO_URL="https://github.com/hemanthvasi/coding-agent-harness-evaluation.git"
-TARGET_DIR="${AGENT_HARNESS_DIR:-agent-harness}"
+REPO_URL="https://github.com/VasiHemanth/tokentelemetry.git"
+TARGET_DIR="${TOKENTELEMETRY_DIR:-tokentelemetry}"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: $1 is required but not installed."; exit 1; }; }
 
