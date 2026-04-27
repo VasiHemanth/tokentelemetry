@@ -31,11 +31,11 @@ export default function TerminalReplay() {
         <div className="w-3 h-3 rounded-full bg-red-500/70" />
         <div className="w-3 h-3 rounded-full bg-yellow-500/70" />
         <div className="w-3 h-3 rounded-full bg-emerald-500/70" />
-        <span className="ml-3 text-[10px] font-mono text-slate-500 uppercase tracking-widest">tokentelemetry · session-trace</span>
+        <span className="ml-3 text-[10px] font-mono text-slate-500 uppercase tracking-widest truncate">tokentelemetry · session-trace</span>
       </div>
-      <div className="p-5 font-mono text-[12px] leading-relaxed min-h-[320px] space-y-1.5">
+      <div className="p-4 sm:p-5 font-mono text-[11px] sm:text-[12px] leading-relaxed min-h-[280px] sm:min-h-[320px] space-y-1.5 overflow-x-auto">
         {visible.map((line, i) => (
-          <div key={i} className={`${COLOR[line.kind]} transition-opacity`}>
+          <div key={i} className={`${COLOR[line.kind]} transition-opacity whitespace-pre-wrap break-words`}>
             {line.text}
           </div>
         ))}
