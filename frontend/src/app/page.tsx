@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Clock, Database, Terminal, Sparkles, TrendingUp, Cpu, Zap, GitBranch, Orbit, ArrowRight, MousePointer2, Code2, Layers } from "lucide-react";
+import { Activity, Clock, Database, Terminal, Sparkles, TrendingUp, Cpu, Zap, GitBranch, Orbit, ArrowRight, MousePointer2, Code2, Layers, Target, RotateCcw } from "lucide-react";
 import { format } from "date-fns";
 import Link from "next/link";
 
@@ -39,16 +39,16 @@ const AGENT_HEX: Record<string, string> = {
   antigravity: "#10b981", qwen: "#3b82f6", vibe: "#f472b6", cursor: "#3b82f6", copilot: "#6366f1", opencode: "#f59e0b"
 };
 
-// interface QualityTotals {
-//   edit_turns: number;
-//   retry_turns: number;
-//   one_shot_rate: number | null;
-//   retry_rate: number | null;
-//   measured_sessions: number;
-// }
+interface QualityTotals {
+  edit_turns: number;
+  retry_turns: number;
+  one_shot_rate: number | null;
+  retry_rate: number | null;
+  measured_sessions: number;
+}
 interface AnalyticsTotals {
   cache_hit_pct: number | null;
-  // quality: QualityTotals;
+  quality: QualityTotals;
 }
 
 export default function Home() {
@@ -84,8 +84,8 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  // const measuredSessions = analyticsTotals?.quality?.measured_sessions ?? 0;
-  // const editTurns = analyticsTotals?.quality?.edit_turns ?? 0;
+  const measuredSessions = analyticsTotals?.quality?.measured_sessions ?? 0;
+  const editTurns = analyticsTotals?.quality?.edit_turns ?? 0;
 
   const modelRows = Object.entries(byModel)
     .map(([name, s]) => ({ name, ...s }))
@@ -140,28 +140,26 @@ export default function Home() {
             footer="cached / (input + cached) tokens"
             emptyHint="No token data yet"
           />
-          {/* Quality signals cards commented out (not yet implemented)
           <QualityCard
             title="One-Shot Rate"
             scope="CLAUDE"
-            value={null}
+            value={analyticsTotals?.quality?.one_shot_rate ?? null}
             tone="emerald"
             icon={<Target size={16} />}
-            barFraction={null}
+            barFraction={analyticsTotals?.quality?.one_shot_rate ?? null}
             footer="Edits succeeding without retry"
             emptyHint="No Claude edit turns yet"
           />
           <QualityCard
             title="Retry Rate"
             scope="CLAUDE"
-            value={null}
+            value={analyticsTotals?.quality?.retry_rate ?? null}
             tone="amber"
             icon={<RotateCcw size={16} />}
-            barFraction={null}
+            barFraction={analyticsTotals?.quality?.retry_rate ?? null}
             footer="Failed edits retried by the model"
             emptyHint="No Claude edit turns yet"
           />
-          */}
         </div>
       </section>
 

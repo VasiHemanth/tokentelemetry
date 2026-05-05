@@ -137,10 +137,10 @@ class Artifact(BaseModel):
     path: str
     type: str # 'video', 'image', 'document', 'terminal'
 
-# class QualityMetrics(BaseModel):
-#     edit_turns: int = 0
-#     retry_turns: int = 0
-#     measured: bool = False
+class QualityMetrics(BaseModel):
+    edit_turns: int = 0
+    retry_turns: int = 0
+    measured: bool = False
 
 class Session(BaseModel):
     id: str
@@ -155,9 +155,9 @@ class Session(BaseModel):
     tokens: TokenUsage = TokenUsage()
     plans: List[PlanSnippet] = []
     artifacts: List[Artifact] = []
-    # quality: QualityMetrics = QualityMetrics()
+    quality: QualityMetrics = QualityMetrics()
 
-# EDIT_TOOLS: Set[str] = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
+EDIT_TOOLS: Set[str] = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
 
 @app.get("/")
 async def root():
@@ -242,8 +242,8 @@ def _scan_sessions_sync():
                             sess["artifacts"].append({"name": mf.name, "path": str(mf), "type": "document"})
                 except: pass
 
-                # pending_edit_tool_ids: Set[str] = set()  # quality signals (commented out)
-                # prior_edit_failed = False
+                pending_edit_tool_ids: Set[str] = set()
+                prior_edit_failed = False
                 try:
                     with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                         for line in f:
@@ -262,10 +262,13 @@ def _scan_sessions_sync():
                                     sess["tokens"]["cached"] += usage.get("cache_read_input_tokens", 0)
                                 sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
                                 sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"])
+                                this_turn_edit_ids = set()
                                 for item in msg.get("content", []):
                                     if item.get("type") == "tool_use":
                                         tool = item.get("name")
                                         if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
+                                        if any(et in tool for et in EDIT_TOOLS):
+                                            this_turn_edit_ids.add(item.get("id"))
                                         if tool == "ExitPlanMode":
                                             plan_text = (item.get("input") or {}).get("plan") or ""
                                             if plan_text:
@@ -276,27 +279,26 @@ def _scan_sessions_sync():
                                         if "plan" in t_text.lower() and len(t_text) > 100:
                                             sess["has_plan"] = True
                                             sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": t_text})
-                                # Quality signals (edit/retry tracking) commented out:
-                                # if this_turn_edit_ids:
-                                #     sess["quality"]["edit_turns"] += 1
-                                #     if prior_edit_failed:
-                                #         sess["quality"]["retry_turns"] += 1
-                                #     pending_edit_tool_ids = this_turn_edit_ids
-                                #     prior_edit_failed = False
+                                if this_turn_edit_ids:
+                                    sess.setdefault("quality", {"edit_turns": 0, "retry_turns": 0, "measured": True})
+                                    sess["quality"]["edit_turns"] += 1
+                                    if prior_edit_failed:
+                                        sess["quality"]["retry_turns"] += 1
+                                    pending_edit_tool_ids = this_turn_edit_ids
+                                    prior_edit_failed = False
                             if data.get("type") == "user":
                                 u_msg = data.get("message", {})
                                 u_content = u_msg.get("content", "")
                                 if "/plan" in str(u_content):
                                     sess["has_plan"] = True
-                                # Quality signals (retry chain tracking) commented out:
-                                # if isinstance(u_content, list):
-                                #     for it in u_content:
-                                #         if isinstance(it, dict) and it.get("type") == "tool_result":
-                                #             if it.get("tool_use_id") in pending_edit_tool_ids and it.get("is_error"):
-                                #                 prior_edit_failed = True
-                                # else:
-                                #     prior_edit_failed = False
-                                #     pending_edit_tool_ids = set()
+                                if isinstance(u_content, list):
+                                    for it in u_content:
+                                        if isinstance(it, dict) and it.get("type") == "tool_result":
+                                            if it.get("tool_use_id") in pending_edit_tool_ids and it.get("is_error"):
+                                                prior_edit_failed = True
+                                else:
+                                    prior_edit_failed = False
+                                    pending_edit_tool_ids = set()
                 except: continue
         sessions.extend(claude_sessions.values())
     # 2. Codex
@@ -1295,20 +1297,20 @@ async def post_aliases(aliases: Dict[str, str]):
     _invalidate_sessions_cache()
     return {"ok": True, "aliases": cleaned}
 
-# def _quality_summary(edit_turns: int, retry_turns: int, measured_sessions: int) -> Dict[str, Any]:
-#     if edit_turns > 0:
-#         retry_rate = retry_turns / edit_turns
-#         one_shot_rate = 1.0 - retry_rate
-#     else:
-#         retry_rate = None
-#         one_shot_rate = None
-#     return {
-#         "edit_turns": edit_turns,
-#         "retry_turns": retry_turns,
-#         "one_shot_rate": one_shot_rate,
-#         "retry_rate": retry_rate,
-#         "measured_sessions": measured_sessions,
-#     }
+def _quality_summary(edit_turns: int, retry_turns: int, measured_sessions: int) -> Dict[str, Any]:
+    if edit_turns > 0:
+        retry_rate = retry_turns / edit_turns
+        one_shot_rate = 1.0 - retry_rate
+    else:
+        retry_rate = None
+        one_shot_rate = None
+    return {
+        "edit_turns": edit_turns,
+        "retry_turns": retry_turns,
+        "one_shot_rate": one_shot_rate,
+        "retry_rate": retry_rate,
+        "measured_sessions": measured_sessions,
+    }
 
 
 def _cache_hit_pct(input_tokens: int, cached_tokens: int) -> Optional[float]:
@@ -1321,10 +1323,10 @@ def _cache_hit_pct(input_tokens: int, cached_tokens: int) -> Optional[float]:
 @app.get("/analytics")
 async def get_analytics():
     sessions = await get_sessions_cached(); by_agent = {}; by_day = {}; by_model = {}
-    # quality_by_agent: Dict[str, Dict[str, int]] = {}
-    # total_edit_turns = 0
-    # total_retry_turns = 0
-    # total_measured_sessions = 0
+    quality_by_agent: Dict[str, Dict[str, int]] = {}
+    total_edit_turns = 0
+    total_retry_turns = 0
+    total_measured_sessions = 0
     for s in sessions:
         agent = s["agent"]
         if agent not in by_agent: by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0}
@@ -1343,22 +1345,22 @@ async def get_analytics():
         if day not in by_day: by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
         by_day[day]["cost"] += scost
-        # q = s.get("quality") or {}
-        # if q.get("measured"):
-        #     agg = quality_by_agent.setdefault(agent, {"edit_turns": 0, "retry_turns": 0, "measured_sessions": 0})
-        #     agg["edit_turns"] += q.get("edit_turns", 0)
-        #     agg["retry_turns"] += q.get("retry_turns", 0)
-        #     agg["measured_sessions"] += 1
-        #     total_edit_turns += q.get("edit_turns", 0)
-        #     total_retry_turns += q.get("retry_turns", 0)
-        #     total_measured_sessions += 1
+        q = s.get("quality") or {}
+        if q.get("measured"):
+            agg = quality_by_agent.setdefault(agent, {"edit_turns": 0, "retry_turns": 0, "measured_sessions": 0})
+            agg["edit_turns"] += q.get("edit_turns", 0)
+            agg["retry_turns"] += q.get("retry_turns", 0)
+            agg["measured_sessions"] += 1
+            total_edit_turns += q.get("edit_turns", 0)
+            total_retry_turns += q.get("retry_turns", 0)
+            total_measured_sessions += 1
     for agent, row in by_agent.items():
         row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cached"])
-        # agg = quality_by_agent.get(agent)
-        # if agg:
-        #     row["quality"] = _quality_summary(agg["edit_turns"], agg["retry_turns"], agg["measured_sessions"])
-        # else:
-        #     row["quality"] = _quality_summary(0, 0, 0)
+        agg = quality_by_agent.get(agent)
+        if agg:
+            row["quality"] = _quality_summary(agg["edit_turns"], agg["retry_turns"], agg["measured_sessions"])
+        else:
+            row["quality"] = _quality_summary(0, 0, 0)
     sorted_days = sorted([{"date": d, **v} for d, v in by_day.items()], key=lambda x: x["date"])
     total_input = sum(a["input"] for a in by_agent.values())
     total_output = sum(a["output"] for a in by_agent.values())
@@ -1374,7 +1376,7 @@ async def get_analytics():
             "total": sum(a["total"] for a in by_agent.values()),
             "cost": sum(a["cost"] for a in by_agent.values()),
             "cache_hit_pct": _cache_hit_pct(total_input, total_cached),
-            # "quality": _quality_summary(total_edit_turns, total_retry_turns, total_measured_sessions),
+            "quality": _quality_summary(total_edit_turns, total_retry_turns, total_measured_sessions),
         },
         "pricing_updated": PRICING_UPDATED,
     }
