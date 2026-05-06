@@ -129,16 +129,20 @@ export default function SessionDetailPage() {
   const id = params?.id as string;
   const searchParams = useSearchParams();
   const agent = searchParams.get("agent");
-  
+  const initialTab = (() => {
+    const t = searchParams.get("tab");
+    return t === "tools" || t === "artifacts" || t === "raw" || t === "context" ? t : "context";
+  })();
+
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
-  
+
   // Trace View States
   const [splitView, setSplitView] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(1000);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "raw">("context");
+  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
