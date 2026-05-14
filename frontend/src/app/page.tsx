@@ -123,8 +123,7 @@ export default function Home() {
         >
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
             {availableAgents.map((k) => {
-              const meta = AGENTS[k as AgentKey];
-              if (!meta) return null;
+              const meta = getAgent(k);
               const count = sessions.filter((s) => s.agent === k).length;
               const Icon = meta.icon;
               return (
