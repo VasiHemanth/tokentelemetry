@@ -1,0 +1,30 @@
+[
+  {
+    "name": "deepclaude",
+    "log_glob": "~/.deepclaude/agent-*.jsonl",
+    "fields": {
+      "session_id": "agentId",
+      "timestamp": "ts",
+      "model": "model",
+      "input_tokens": "usage.input_tokens",
+      "output_tokens": "usage.output_tokens",
+      "cached_tokens": "usage.cached_tokens",
+      "project": "cwd",
+      "display": "prompt"
+    },
+    "default_model": "deepseek-v4-pro"
+  },
+  {
+    "name": "triss",
+    "log_glob": "~/.triss/sessions/*.jsonl",
+    "fields": {
+      "session_id": "session_id",
+      "timestamp": "timestamp",
+      "model": "model",
+      "input_tokens": "prompt_tokens",
+      "output_tokens": "completion_tokens",
+      "project": "project_dir"
+    },
+    "default_model": "deepseek-v3"
+  }
+]

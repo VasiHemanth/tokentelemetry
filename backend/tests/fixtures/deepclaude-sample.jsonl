@@ -1,0 +1,3 @@
+{"agentId":"abc123","ts":"2026-05-14T10:00:00Z","model":"deepseek-v4-pro","usage":{"input_tokens":1500,"output_tokens":420,"cached_tokens":0},"cwd":"/Users/dev/my-project","prompt":"summarize this file"}
+{"agentId":"abc123","ts":"2026-05-14T10:00:05Z","model":"deepseek-v4-pro","usage":{"input_tokens":2300,"output_tokens":180,"cached_tokens":900},"cwd":"/Users/dev/my-project","prompt":"continue"}
+{"agentId":"def456","ts":"2026-05-14T11:15:30Z","model":"deepseek-v4-pro","usage":{"input_tokens":8000,"output_tokens":1200,"cached_tokens":3000},"cwd":"/Users/dev/other-project","prompt":"read all files in src/"}
