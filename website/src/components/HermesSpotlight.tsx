@@ -3,6 +3,7 @@ import {
   Send, Bell, Clock, Webhook, Terminal, MessageSquare, Hash,
   ArrowRight,
 } from "lucide-react";
+import PluginInstallBlock from "./PluginInstallBlock";
 
 // Inline caduceus — matches the icon shipped in the app's frontend so the
 // brand is consistent between the marketing site and the dashboard.
@@ -165,25 +166,12 @@ export default function HermesSpotlight() {
             </div>
 
             {/* Plugin callout — embeds inside Hermes Dashboard */}
-            <div className="rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-[#eab308]">
-                  Hermes Dashboard plugin
-                </span>
-                <span className="text-[10px] font-mono text-[var(--tt-fg-dim)]">
-                  :9119 → :3000
-                </span>
-              </div>
-              <p className="text-[13px] text-[var(--tt-fg-muted)] leading-relaxed mb-3">
-                One port to remember. Install the plugin and{" "}
-                <strong className="text-[var(--tt-fg)]">TokenTelemetry shows up as a tab inside Hermes&apos;s own web dashboard</strong>
-                {" "}— deep-link cards open Overview, Skills, Memory, Analytics, and Projects in a new tab.
+            <div className="space-y-3">
+              <p className="text-[13px] text-[var(--tt-fg-muted)] leading-relaxed">
+                <strong className="text-[var(--tt-fg)]">One port to remember.</strong>{" "}
+                Install the plugin and TokenTelemetry shows up as a tab inside Hermes&apos;s own web dashboard — deep-link cards open Overview, Skills, Memory, Analytics, and Projects in a new tab.
               </p>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-[var(--tt-fg-dim)]">
-                <span>./scripts/install-hermes-plugin.sh</span>
-                <span className="text-[var(--tt-fg-dim)]/60">·</span>
-                <span>hermes dashboard</span>
-              </div>
+              <PluginInstallBlock />
             </div>
           </div>
         </div>
