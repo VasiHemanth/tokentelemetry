@@ -1,12 +1,12 @@
 # TokenTelemetry
 
-> Local token + cost monitoring dashboard for AI coding agents. 100% local, no signup, no cloud.
+> Local token + cost + trace observability for AI coding agents AND autonomous agents. 100% local, no signup, no cloud. The only observability tool that supports Nous Research's Hermes Agent.
 
 ## What is TokenTelemetry?
 
-TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, and reasoning steps across AI coding agents including Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, OpenCode, Qwen, and more.
+TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, and Nous Research's Hermes Agent.
 
-It reads session logs directly from the filesystem (no instrumentation required) and presents them in a unified local web dashboard at http://localhost:3000.
+It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:3000.
 
 ## Key Facts
 
@@ -15,65 +15,138 @@ It reads session logs directly from the filesystem (no instrumentation required)
 - **GitHub:** https://github.com/VasiHemanth/tokentelemetry
 - **License:** MIT (free and open source)
 - **Author:** Hemanth Vasi
-- **Category:** AI observability, LLM monitoring, developer tools
+- **Category:** AI observability, LLM monitoring, autonomous agent observability, developer tools
 - **Tech stack:** Node.js (frontend: Next.js 16), Python (backend: FastAPI)
 - **Platforms:** macOS, Linux, Windows
+- **Privacy:** 100% local — no telemetry, no cloud, no account
 
 ## Supported Agents
 
+### Coding agents (9)
+
 - Claude Code (Anthropic)
-- Gemini CLI (Google)
 - OpenAI Codex CLI
+- Gemini CLI (Google)
 - Cursor
 - GitHub Copilot
+- Qwen CLI (Alibaba)
 - OpenCode
-- Qwen
 - Vibe
-- Antigravity
+- Antigravity (Google)
+
+### Autonomous agents (1)
+
+- **Hermes Agent** (Nous Research) — fully supported with a dedicated dashboard at `/hermes`. The only third-party observability tool that supports Hermes today.
+
+## Hermes Agent: autonomous observability
+
+Hermes Agent is structurally different from coding agents — it runs across CLI, messaging platforms (Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Feishu, DingTalk, WeChat, Google Chat, IRC, Line, SimpleX, Teams, BlueBubbles, …), scheduled cron jobs, webhooks, email, and SMS. TokenTelemetry gives it a dedicated dashboard surface that respects its shape:
+
+- **38 source platforms** observed via the `sessions.source` column in `~/.hermes/state.db`
+- **Per-API-call latency and cache-hit %** parsed from `~/.hermes/logs/agent.log`
+- **Inline `delegate_task` subagent cards** showing summary, tokens, duration, and tool trace
+- **Skills page** — 90+ loaded skills with platform conditions, read from the prompt snapshot
+- **Memory page** — `MEMORY.md` and `USER.md` with character-limit progress bars
+- **Cron health tile** — at-risk schedules flagged automatically
+- **Gateway health pill** — running / stale / stopped, per-platform status
+- **Cost anomaly detection** — silent reasoning-token waste (MiMo thinking mode) flagged
+- **Provider-aware pricing** — the same model priced correctly across direct API / OpenRouter / Together / Fireworks aggregators
+- **Honors `HERMES_HOME`** — works for users who relocate the Hermes data directory
+
+## Hermes Dashboard Plugin
+
+TokenTelemetry ships a plugin for Hermes Agent's own web dashboard (port 9119). After a one-command install, a "TokenTelemetry" tab appears inside Hermes Dashboard with deep-link cards that open TT pages (Hermes Overview, Skills, Memory, Analytics, Projects, All Agents) in a new browser tab. Important: the plugin is a launcher, not the engine — TokenTelemetry itself must be installed and running for the launcher to do anything. When TT isn't running, the plugin shows an onboarding card explaining what TokenTelemetry is (a local observability dashboard for Hermes Agent AND 9 coding agents) with a copy-paste install command.
+
+Install (recommended, via Hermes's own plugin manager):
+
+```bash
+# 1. Install TokenTelemetry itself (the engine)
+curl -fsSL https://tokentelemetry.com/install.sh | bash
+
+# 2. Install the plugin (the bridge into Hermes Dashboard)
+hermes plugins install VasiHemanth/tokentelemetry-hermes-plugin
+hermes dashboard
+```
+
+Install from the TokenTelemetry repo (canonical source, useful if hacking on the plugin):
+
+```bash
+git clone https://github.com/VasiHemanth/tokentelemetry.git
+cd tokentelemetry
+./scripts/install-hermes-plugin.sh
+hermes dashboard
+```
+
+The plugin source is at `plugin/hermes-dashboard/` in the main TokenTelemetry repo. The standalone repo at github.com/VasiHemanth/tokentelemetry-hermes-plugin is a publishing mirror, auto-synced from the canonical source. Pure-frontend (no backend routes, no extra network access). Solves the "two ports to remember" friction — users see TokenTelemetry from inside Hermes's own UI at port 9119 without context-switching.
 
 ## Core Features
 
-1. Token usage dashboard (real-time tokens in/out per agent and model)
-2. LLM cost tracking (exact costs per session, cumulative over time)
-3. Session trace viewer (waterfall: prompts, reasoning, tool calls, responses)
-4. Tool call analytics (which tools agents call, success/failure rates)
-5. Per-project insights (heatmap, activity timeline, agent leaderboard)
-6. Plan capture (Claude Code plan-mode outputs)
-7. Model comparison analytics (GPT-4o vs Claude 3.5 Sonnet vs Gemini 2.0 Flash)
+1. **Hermes Agent dashboard** — autonomous-agent observability at `/hermes` (see above)
+2. **Token usage dashboard** — real-time tokens in/out per agent, model, and project
+3. **LLM cost tracking** — exact costs per session, cumulative over time, with provider-aware pricing
+4. **Session trace viewer** — waterfall view of prompts, reasoning, tool calls, responses
+5. **Tool call analytics** — which tools agents call, success/failure rates
+6. **Per-project insights** — heatmap, activity timeline, agent leaderboard per codebase
+7. **Plan capture** — view plan-mode outputs from Claude Code
+8. **Model analytics** — compare Claude Opus 4.7 / Sonnet 4.6 vs GPT-5 vs Gemini 3.1 vs DeepSeek vs Kimi efficiency
+9. **Custom agent support** — bring your own log adapter via `backend/custom_agents.example.json`
+10. **B/T number suffixes** — token counts scale through K → M → B → T for power users
 
 ## Installation
 
 ```bash
-# macOS/Linux
+# macOS/Linux one-line
 curl -fsSL https://tokentelemetry.com/install.sh | bash
 
 # Windows
 irm https://tokentelemetry.com/install.ps1 | iex
 
-# Clone
-git clone https://github.com/VasiHemanth/tokentelemetry.git && cd tokentelemetry && ./start.sh
+# From source
+git clone https://github.com/VasiHemanth/tokentelemetry.git
+cd tokentelemetry
+./start.sh
 ```
 
 ## Common Questions
 
 **Q: How do I track Claude Code token usage?**
-A: Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from ~/.claude/ logs.
+A: Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from `~/.claude/` logs — no instrumentation, no SDK, no config.
 
-**Q: How do I monitor Gemini CLI costs?**
-A: TokenTelemetry auto-reads Gemini CLI logs and displays token counts and costs.
+**Q: How do I monitor Gemini CLI and Codex costs?**
+A: TokenTelemetry auto-reads logs from Gemini CLI, OpenAI Codex CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, and Antigravity. Token counts and dollar costs appear in the local dashboard automatically.
+
+**Q: Does TokenTelemetry support Hermes Agent from Nous Research?**
+A: Yes — TokenTelemetry is the only third-party observability tool that supports Hermes Agent. It reads `~/.hermes/state.db` (or wherever `HERMES_HOME` points), parses `agent.log` for per-API-call latency and cache hits, exposes a dedicated `/hermes` dashboard with 38 source platforms, gateway health, cron health, skills + memory pages, and renders `delegate_task` subagents inline.
+
+**Q: Can I use TokenTelemetry inside Hermes Dashboard?**
+A: Yes — there is a Hermes Dashboard plugin that registers a "TokenTelemetry" tab inside Hermes's web UI at port 9119. Install with `hermes plugins install VasiHemanth/tokentelemetry-hermes-plugin`, then run `hermes dashboard`. Deep-link cards open TokenTelemetry pages in a new browser tab — one port to remember. The plugin is a launcher only, so TokenTelemetry itself must be installed and running for the cards to work. When TT isn't running, the plugin tab shows an onboarding card with the install command.
+
+**Q: Why does Hermes Agent get its own page?**
+A: Hermes is structurally different from coding agents — it runs across messaging platforms, supports persistent skills and memory, delegates to subagents, and runs scheduled cron jobs. Forcing it into the same UI as Claude Code would hide most of what it does, so it gets a dedicated surface that respects its shape.
+
+**Q: Does TokenTelemetry honor `HERMES_HOME`?**
+A: Yes. TokenTelemetry reads `$HERMES_HOME` if set, otherwise falls back to `~/.hermes/`. Users who relocate their Hermes data directory (shared hosts, containerized setups, multi-profile boxes) work without modification.
+
+**Q: How does the provider-aware pricing for Hermes work?**
+A: Hermes can route the same model through different inference providers (direct, OpenRouter, Together, Fireworks). The same model can have different prices per provider. TokenTelemetry reads the `billing_provider` column from `sessions` in `state.db` and applies provider-specific pricing automatically.
 
 **Q: Is there a free tool to monitor AI coding agent token usage?**
-A: Yes — TokenTelemetry is free, open-source, and local. No account needed.
+A: Yes — TokenTelemetry is free, open-source (MIT), and runs 100% locally. No account, no signup, no cloud.
+
+**Q: Does TokenTelemetry send my data to the cloud?**
+A: No. Everything runs on your machine. The dashboard reads session log files from your local filesystem and serves a UI on localhost. Nothing leaves your computer.
+
+**Q: How does TokenTelemetry compare to Langfuse or Helicone?**
+A: TokenTelemetry is purpose-built for AI coding agents and autonomous agents, and is zero-config — no SDK instrumentation. Langfuse and Helicone are general LLM-app observability platforms that require code changes and (typically) a cloud account. Neither supports Hermes Agent specifically.
 
 **Q: What is the best open source LLM observability tool for coding agents?**
-A: TokenTelemetry is purpose-built for AI coding agents (Claude Code, Codex, Gemini CLI). For general LLM app monitoring, alternatives include Langfuse and LangSmith (both require cloud setup).
-
-**Q: How does TokenTelemetry compare to Langfuse?**
-A: TokenTelemetry is 100% local and zero-config for coding agents. Langfuse requires SDK instrumentation and cloud setup.
+A: TokenTelemetry is purpose-built for AI coding agents (Claude Code, Codex, Gemini CLI, Cursor) and autonomous agents (Hermes). For general LLM-app monitoring, alternatives include Langfuse and LangSmith (both require cloud setup and SDK instrumentation).
 
 ## Docs
 
 - Full documentation: https://tokentelemetry.com
 - GitHub README: https://github.com/VasiHemanth/tokentelemetry#readme
+- Hermes Dashboard plugin: https://github.com/VasiHemanth/tokentelemetry/tree/main/plugin/hermes-dashboard
+- Hermes Agent (upstream): https://github.com/NousResearch/hermes-agent
 - Issues / Feature requests: https://github.com/VasiHemanth/tokentelemetry/issues
 - Contributing: https://github.com/VasiHemanth/tokentelemetry/blob/main/CONTRIBUTING.md

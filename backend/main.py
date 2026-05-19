@@ -73,7 +73,10 @@ CURSOR_DIR = HOME / ".cursor"
 OLLAMA_DIR = HOME / ".ollama"
 HF_DIR = HOME / ".cache/huggingface"
 OPENCODE_DB = HOME / ".local/share/opencode/opencode.db"
-HERMES_DIR = HOME / ".hermes"
+# Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
+# users who relocate their data dir (shared hosts, containerized setups, etc.).
+# Mirror that contract so we read from wherever the agent actually writes.
+HERMES_DIR = Path(os.environ.get("HERMES_HOME") or (HOME / ".hermes")).expanduser()
 HERMES_DB = HERMES_DIR / "state.db"
 HERMES_PROFILES_DIR = HERMES_DIR / "profiles"
 

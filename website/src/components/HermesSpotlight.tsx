@@ -1,8 +1,6 @@
 import Link from "next/link";
-import {
-  Send, Bell, Clock, Webhook, Terminal, MessageSquare, Hash,
-  ArrowRight,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import PluginInstallBlock from "./PluginInstallBlock";
 
 // Inline caduceus — matches the icon shipped in the app's frontend so the
 // brand is consistent between the marketing site and the dashboard.
@@ -34,20 +32,9 @@ function Caduceus({ size = 24 }: { size?: number }) {
 
 const HERMES_HEX = "#eab308";
 
-const PLATFORM_CHIPS = [
-  { icon: Terminal,       label: "CLI" },
-  { icon: Send,           label: "Telegram" },
-  { icon: MessageSquare,  label: "Discord" },
-  { icon: Hash,           label: "Slack" },
-  { icon: Bell,           label: "DingTalk" },
-  { icon: Clock,          label: "Cron" },
-  { icon: Webhook,        label: "Webhook" },
-];
-
 const STATS = [
   { label: "Source platforms", value: "38" },
   { label: "Skills observable", value: "90+" },
-  { label: "Per-call latency", value: "tracked" },
   { label: "Hermes stars (★)", value: "153k" },
 ];
 
@@ -78,20 +65,6 @@ export default function HermesSpotlight() {
               <strong className="text-[var(--tt-fg)]"> 38 source platforms in total</strong>. TokenTelemetry is the only tool that observes them as a single agent, with a dedicated dashboard that respects how Hermes actually works.
             </p>
 
-            <div className="flex flex-wrap gap-1.5 mb-7">
-              {PLATFORM_CHIPS.map(({ icon: Icon, label }) => (
-                <span
-                  key={label}
-                  className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-tight text-[var(--tt-fg-muted)] bg-[var(--tt-panel)] border border-[var(--tt-border)] px-2 py-1 rounded"
-                >
-                  <Icon size={11} /> {label}
-                </span>
-              ))}
-              <span className="inline-flex items-center text-[11px] font-medium text-[var(--tt-fg-dim)] px-1.5 py-1 italic">
-                +31 more
-              </span>
-            </div>
-
             <div className="flex flex-wrap gap-3">
               <Link
                 href="#features"
@@ -109,9 +82,9 @@ export default function HermesSpotlight() {
             </div>
           </div>
 
-          {/* Right: signals + previews */}
+          {/* Right: signals + install */}
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {STATS.map((s) => (
                 <div
                   key={s.label}
@@ -127,42 +100,7 @@ export default function HermesSpotlight() {
               ))}
             </div>
 
-            <div className="rounded-[var(--tt-radius-lg)] border border-[#eab308]/30 bg-[var(--tt-panel)] p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="h-6 w-6 grid place-items-center rounded-md bg-[#eab308]/15 text-[#eab308]">
-                  <Caduceus size={12} />
-                </span>
-                <span className="text-[11px] font-mono text-[var(--tt-fg-muted)]">
-                  /hermes <span className="text-[var(--tt-fg-dim)]">·</span> dashboard
-                </span>
-              </div>
-              <ul className="space-y-2.5 text-[13px] text-[var(--tt-fg-muted)] leading-relaxed">
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">Gateway health pill</strong> — running / stale / stopped, per-platform status</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">Cron health tile</strong> — "did my 8am cron run?" answered, at-risk flagged</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">Per-API-call latency + cache hit</strong> parsed from agent.log</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">delegate_task subagents</strong> rendered inline with summary, tokens, tool trace</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">Skills + memory pages</strong> — 90 loaded skills, MEMORY.md / USER.md</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="text-[#eab308] mt-0.5">▸</span>
-                  <span><strong className="text-[var(--tt-fg)]">Cost anomaly detection</strong> — silent thinking-token waste flagged</span>
-                </li>
-              </ul>
-            </div>
+            <PluginInstallBlock />
           </div>
         </div>
       </div>

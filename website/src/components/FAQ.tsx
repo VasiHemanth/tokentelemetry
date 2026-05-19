@@ -31,6 +31,10 @@ export const FAQ_ITEMS = [
     q: "Why does Hermes Agent get its own page?",
     a: "Hermes is structurally different from coding agents — it runs across messaging platforms (Telegram / Discord / Slack / WhatsApp / Signal / Matrix / Feishu / DingTalk / WeChat), supports persistent skills and memory, delegates to subagents, and runs scheduled cron jobs. Forcing it into the same UI as Claude Code would hide most of what it does, so it gets a dedicated surface that respects its shape.",
   },
+  {
+    q: "Can I use TokenTelemetry from inside Hermes Dashboard?",
+    a: "Yes — there's a Hermes Dashboard plugin that registers a 'TokenTelemetry' tab inside Hermes's web UI at port 9119. It's a thin launcher: deep-link cards open the relevant TokenTelemetry page (Hermes Overview, Skills, Memory, Analytics, Projects) in a new browser tab, so you don't have to remember a second port. Install with `./scripts/install-hermes-plugin.sh` from the TokenTelemetry repo, then run `hermes dashboard`.",
+  },
 ];
 
 export default function FAQ() {

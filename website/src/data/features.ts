@@ -17,6 +17,7 @@ export const FEATURES: Feature[] = [
       "Subagent delegation rendered inline: each delegate_task call expands to show the child's summary, tokens, duration, and tool trace.",
       "Skills + memory pages: 90 loaded skills with platform conditions, MEMORY.md / USER.md with char-limit progress bars.",
       "Cost anomaly detection: silent reasoning-token waste (MiMo thinking-mode) flagged automatically.",
+      "Hermes Dashboard plugin: one-command install adds a TokenTelemetry tab inside Hermes's own web UI (port 9119) — deep-link launcher to Overview, Skills, Memory, Analytics, Projects.",
     ],
     screenshot: "/screenshots/hermes.png",
   },
