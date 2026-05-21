@@ -326,7 +326,17 @@ Want to add support for a new agent? [Open an issue](https://github.com/VasiHema
 **Hemanth Vasi**  
 🌐 [tokentelemetry.com](https://tokentelemetry.com)  
 🐙 [github.com/VasiHemanth](https://github.com/VasiHemanth)  
+🐦 [@VasiHemanth on X](https://twitter.com/VasiHemanth)  
 💼 [LinkedIn](https://www.linkedin.com/in/vasi-hemanth/)
+
+## Feedback
+
+Have an idea, found a bug, or just want to share how you're using TokenTelemetry? Two ways in:
+
+- 💬 **[GitHub Discussions](https://github.com/VasiHemanth/tokentelemetry/discussions)** — ideas, Q&A, show-and-tell
+- 🐛 **[Issues](https://github.com/VasiHemanth/tokentelemetry/issues)** — bugs and concrete feature requests
+
+There's also a feedback button inside the app (bottom-right of every page).
 
 ---
 

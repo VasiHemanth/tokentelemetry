@@ -74,4 +74,14 @@ MIT — see [LICENSE](LICENSE).
 - **TokenTelemetry homepage**: <https://tokentelemetry.com>
 - **TokenTelemetry source**: <https://github.com/VasiHemanth/tokentelemetry>
 - **Hermes Agent**: <https://github.com/NousResearch/hermes-agent>
-- **Report a bug / request a feature**: <https://github.com/VasiHemanth/tokentelemetry/issues>
+
+## Feedback
+
+All conversations happen on the canonical repo:
+
+- 💬 **Discussions** (ideas, Q&A, show-and-tell): <https://github.com/VasiHemanth/tokentelemetry/discussions>
+- 🐛 **Issues** (bugs, concrete feature requests): <https://github.com/VasiHemanth/tokentelemetry/issues>
+
+## Author
+
+**Hemanth Vasi** · 🐦 [@VasiHemanth](https://twitter.com/VasiHemanth) · 💼 [LinkedIn](https://www.linkedin.com/in/vasi-hemanth/)

@@ -1,6 +1,7 @@
 "use client";
 
 import Navigation from "./Navigation";
+import FeedbackFloatingButton from "./feedback/FeedbackFloatingButton";
 import { useEffect, useState } from "react";
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
@@ -33,6 +34,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <div aria-hidden className="pointer-events-none absolute inset-0 tt-grid opacity-40" />
         <div className="relative z-10">{children}</div>
       </main>
+      <FeedbackFloatingButton />
     </body>
   );
 }
