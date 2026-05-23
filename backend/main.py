@@ -631,18 +631,38 @@ def _scan_sessions_sync():
         return aliases.get(path, path)
 
     # 1. Claude
+    # Modern Claude Code (v1+) writes sessions exclusively to
+    #   ~/.claude/projects/<encoded-path>/<uuid>.jsonl
+    # and no longer creates history.jsonl.  We therefore discover sessions
+    # from the projects/ tree first (works on every OS), then overlay any
+    # metadata from history.jsonl if it happens to exist (legacy installs).
     claude_history = CLAUDE_DIR / "history.jsonl"
-    if claude_history.exists():
-        claude_sessions = {}
-        # Pre-index Claude session files to avoid recursive glob in loop
-        claude_file_map = {}
-        try:
-            for p_dir in (CLAUDE_DIR / "projects").iterdir():
-                if p_dir.is_dir():
-                    for f in p_dir.glob("*.jsonl"):
-                        claude_file_map[f.stem] = f
-        except Exception: pass
+    claude_sessions: dict = {}
+    # Pre-index Claude session files to avoid recursive glob in loop
+    claude_file_map: dict = {}
+    try:
+        for p_dir in (CLAUDE_DIR / "projects").iterdir():
+            if p_dir.is_dir():
+                for f in p_dir.glob("*.jsonl"):
+                    claude_file_map[f.stem] = f
+    except Exception: pass
 
+    # Seed one stub per discovered session file (mtime as timestamp).
+    for sid, f in claude_file_map.items():
+        try:
+            ts = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            ts = _now()
+        claude_sessions[sid] = {
+            "id": sid, "agent": "claude", "project": "unknown",
+            "timestamp": ts, "display": None,
+            "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+            "mcp_tools": [], "has_plan": False, "plans": [],
+            "model": None, "artifacts": [],
+        }
+
+    # Optional enrichment: overlay project/display from legacy history.jsonl.
+    if claude_history.exists():
         try:
             with open(claude_history, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
@@ -651,14 +671,58 @@ def _scan_sessions_sync():
                         sid = data.get("sessionId")
                         if not sid: continue
                         ts = datetime.fromtimestamp(data.get("timestamp") / 1000, tz=timezone.utc) if data.get("timestamp") else _file_mtime_utc(claude_history)
-                        if sid not in claude_sessions or ts > claude_sessions[sid]["timestamp"]:
-                            claude_sessions[sid] = {"id": sid, "agent": "claude", "project": apply_alias(data.get("project", "unknown")), "timestamp": ts, "display": data.get("display"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": []}
+                        if sid not in claude_sessions:
+                            # Session only known from history.jsonl (no matching .jsonl file)
+                            claude_sessions[sid] = {
+                                "id": sid, "agent": "claude",
+                                "project": apply_alias(data.get("project", "unknown")),
+                                "timestamp": ts, "display": data.get("display"),
+                                "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                                "mcp_tools": [], "has_plan": False, "plans": [],
+                                "model": None, "artifacts": [],
+                            }
+                        else:
+                            # Overlay metadata only; keep file-derived timestamp if newer
+                            sess = claude_sessions[sid]
+                            if ts > sess["timestamp"]:
+                                sess["timestamp"] = ts
+                            if data.get("project"):
+                                sess["project"] = apply_alias(data["project"])
+                            if data.get("display") and not sess.get("display"):
+                                sess["display"] = data["display"]
                     except Exception: continue
         except Exception: pass
 
-        # Sort by recency (newest first) BEFORE truncating — insertion-order
-        # slicing previously dropped genuinely recent sessions when totals
-        # exceeded 100.
+    # Derive project/display from session file content for stubs still unknown.
+    for sid, sess in claude_sessions.items():
+        if sess["project"] != "unknown" and sess.get("display"):
+            continue
+        session_file = claude_file_map.get(sid)
+        if not session_file:
+            continue
+        try:
+            with open(session_file, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                    except Exception: continue
+                    if sess["project"] == "unknown" and data.get("cwd"):
+                        sess["project"] = apply_alias(data["cwd"])
+                    if not sess.get("display"):
+                        if data.get("type") == "summary" and data.get("summary"):
+                            sess["display"] = str(data["summary"])[:120]
+                        elif data.get("type") == "user":
+                            uc = data.get("message", {}).get("content")
+                            if isinstance(uc, str) and uc.strip():
+                                sess["display"] = uc.strip()[:120]
+                    if sess["project"] != "unknown" and sess.get("display"):
+                        break
+        except Exception: pass
+
+    # Sort by recency (newest first) BEFORE truncating — insertion-order
+    # slicing previously dropped genuinely recent sessions when totals
+    # exceeded 100.
+    if claude_sessions:
         for sid, sess in sorted(claude_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True)[:100]:
             session_file = claude_file_map.get(sid)
             if session_file:
@@ -1048,7 +1112,8 @@ def _scan_sessions_sync():
                     "has_plan": bool(plan),
                     "plans": plans,
                     "model": "gemini (antigravity)",
-                    "artifacts": artifacts
+                    "artifacts": artifacts,
+                    "cost": 0.0,
                 })
             except Exception: continue
 
@@ -1856,7 +1921,7 @@ async def get_projects(include_hidden: bool = False):
         proj = s["project"]
         if proj not in projects:
             # Basename that handles both POSIX (/) and Windows (\) separators
-            proj_name = os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown"
+            proj_name = (os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown").strip()
             projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
         projects[proj]["session_count"] += 1; projects[proj]["agents"].add(s["agent"])
         for t in s.get("mcp_tools", []): projects[proj]["mcp_tools"].add(t)
