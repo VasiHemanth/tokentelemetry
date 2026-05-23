@@ -738,7 +738,7 @@ def _scan_sessions_sync():
                             if data.get("type") == "turn_context" and not sess.get("model"):
                                 sess["model"] = data.get("payload", {}).get("model")
                             if data.get("type") == "event_msg":
-                                usage = data.get("payload", {}).get("info", {}).get("total_token_usage", {})
+                                usage = ((data.get("payload") or {}).get("info") or {}).get("total_token_usage") or {}
                                 if usage:
                                     sess["tokens"]["input"] = max(sess["tokens"]["input"], usage.get("input_tokens", 0))
                                     sess["tokens"]["output"] = max(sess["tokens"]["output"], usage.get("output_tokens", 0))
