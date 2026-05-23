@@ -137,9 +137,18 @@ function ensureBackend() {
     console.log('→ creating Python venv…');
     run(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
   }
-  // Always ensure requirements are satisfied. Pip is idempotent and fast when nothing changes.
+  // Skip pip install when requirements.txt hasn't changed since last install.
+  // Previously this ran every launch (hitting PyPI ~6× per hour for someone
+  // restarting often), which is both slow and ironic for a "100% local" tool.
+  const reqPath = path.join(backendDir, 'requirements.txt');
+  const stampPath = path.join(venvDir, '.requirements.sha');
+  let cachedSha = null;
+  try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
+  const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(reqPath)).digest('hex');
+  if (cachedSha === currentSha) return;
   console.log('→ installing backend dependencies…');
   run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+  try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
 function ensureFrontend() {
