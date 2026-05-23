@@ -28,6 +28,31 @@ def _aware(dt):
 def _now():
     return datetime.now(timezone.utc)
 
+def _pid_alive(pid: int) -> bool:
+    """Cross-platform process liveness probe.
+
+    On POSIX, os.kill(pid, 0) is a cheap no-op signal that raises if the
+    process is gone. On Windows, signal 0 is not honored — os.kill calls
+    TerminateProcess and would actually kill the target — so we use
+    OpenProcess via ctypes (PROCESS_QUERY_LIMITED_INFORMATION = 0x1000).
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
 app = FastAPI(title="TokenTelemetry API")
 
 # Enable CORS for Next.js frontend
@@ -478,13 +503,11 @@ def _hermes_gateway_state() -> Dict[str, Any]:
                 out["pid"] = pid_data.get("pid") if isinstance(pid_data, dict) else int(pid_data)
             except json.JSONDecodeError:
                 out["pid"] = int(raw)
-            # Cheap liveness check — kill(pid, 0) raises if no such process
+            # Cheap liveness check. On POSIX, kill(pid, 0) is a no-op probe.
+            # On Windows, kill(pid, 0) actually terminates the process, so use
+            # OpenProcess via ctypes instead.
             if out["pid"]:
-                try:
-                    os.kill(out["pid"], 0)
-                    out["pid_alive"] = True
-                except (ProcessLookupError, PermissionError, OSError):
-                    out["pid_alive"] = False
+                out["pid_alive"] = _pid_alive(out["pid"])
     except Exception:
         pass
     return out
@@ -1797,7 +1820,9 @@ async def get_projects(include_hidden: bool = False):
     for s in sessions:
         proj = s["project"]
         if proj not in projects:
-            projects[proj] = {"name": proj.split("/")[-1], "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
+            # Basename that handles both POSIX (/) and Windows (\) separators
+            proj_name = os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown"
+            projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
         projects[proj]["session_count"] += 1; projects[proj]["agents"].add(s["agent"])
         for t in s.get("mcp_tools", []): projects[proj]["mcp_tools"].add(t)
         if s.get("has_plan"): projects[proj]["plan_count"] += 1
