@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Lock, FileCode, Zap, GitBranch } from "lucide-react";
 
 const ITEMS = [
@@ -35,6 +36,13 @@ export default function TrustStrip() {
             >
               Hemanth Vasi
             </a>
+            <span className="mx-2 text-[var(--tt-fg-faint)]">·</span>
+            <Link
+              href="/privacy"
+              className="text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
+            >
+              Privacy
+            </Link>
           </div>
           <a
             href="https://github.com/VasiHemanth/tokentelemetry"

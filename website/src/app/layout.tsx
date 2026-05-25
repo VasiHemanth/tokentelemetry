@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { FAQ_ITEMS } from "@/components/FAQ";
 import SiteHeader from "@/components/SiteHeader";
 import MarqueeBanner from "@/components/MarqueeBanner";
-
-const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+import Analytics from "@/components/Analytics";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -139,26 +137,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ORG_LD) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(FAQ_LD) }} />
-        {GA_ID && (
-          <>
-            <Script
-              id="ga4-loader"
-              strategy="afterInteractive"
-              src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
-            />
-            <Script id="ga4-init" strategy="afterInteractive">
-              {`
-                const host = location.hostname;
-                if (host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0') {
-                  window.dataLayer = window.dataLayer || [];
-                  function gtag(){dataLayer.push(arguments);}
-                  gtag('js', new Date());
-                  gtag('config', '${GA_ID}', { anonymize_ip: true });
-                }
-              `}
-            </Script>
-          </>
-        )}
+        <Analytics />
       </body>
     </html>
   );
