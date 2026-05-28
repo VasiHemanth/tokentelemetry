@@ -896,6 +896,13 @@ def _local_commit() -> Optional[str]:
     return None
 
 
+def _looks_like_sha(s: Any) -> bool:
+    """Real commit SHAs are 40 hex chars. Rejecting anything else guards
+    against bogus dev-seeded cache values lingering on disk (e.g. literal
+    "preview-local"), which would otherwise pin `behind=true` forever."""
+    return isinstance(s, str) and len(s) == 40 and all(c in "0123456789abcdef" for c in s.lower())
+
+
 def _read_cache() -> Optional[Dict[str, Any]]:
     if not _UPDATE_CACHE.exists():
         return None
@@ -903,6 +910,8 @@ def _read_cache() -> Optional[Dict[str, Any]]:
         with open(_UPDATE_CACHE, "r", encoding="utf-8") as f:
             cached = json.load(f)
         if not isinstance(cached, dict):
+            return None
+        if not _looks_like_sha(cached.get("latest")):
             return None
         age = _upd_time.time() - float(cached.get("fetched_at", 0))
         if age > _UPDATE_CACHE_TTL:
