@@ -2197,8 +2197,11 @@ def _scan_sessions_sync():
                             if not model:
                                 model = mdata.get("modelID") or mdata.get("providerID")
                                 if not model:
-                                    mi = mdata.get("model") or {}
-                                    model = mi.get("modelID") or mi.get("providerID")
+                                    mi = mdata.get("model")
+                                    if isinstance(mi, dict):
+                                        model = mi.get("modelID") or mi.get("providerID")
+                                    elif isinstance(mi, str):
+                                        model = mi
                             if mdata.get("mode") == "plan":
                                 has_plan = True
                     # Parts: first user text, tool names, token totals from step-finish
