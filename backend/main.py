@@ -183,7 +183,8 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     try:
         with open(tf, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
                 try:
                     data = json.loads(line)
                     tokens = len(line) // 4
@@ -191,9 +192,13 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
                         tkns["output"] += tokens
                     else:
                         tkns["input"] += tokens
-                except Exception: pass
+                except Exception:
+                    # Ignore unparseable lines
+                    pass
         tkns["total"] = tkns["input"] + tkns["output"]
-    except Exception: pass
+    except Exception:
+        # Failsafe if file is inaccessible
+        pass
     return tkns
 
 class TokenUsage(BaseModel):
@@ -1903,10 +1908,11 @@ def _scan_sessions_sync():
                             _tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
                             for _msg in _msgs:
                                 toks = len(_msg.get("message", "")) // 4
-                                if _msg.get("type") in ("user", "human"):
-                                    _tkns["input"] += toks
-                                else:
+                                msg_type = _msg.get("type", "")
+                                if msg_type in ("assistant", "model"):
                                     _tkns["output"] += toks
+                                else:
+                                    _tkns["input"] += toks
                             _tkns["total"] = _tkns["input"] + _tkns["output"]
                             sessions.append({"id": _lsid, "agent": "antigravity", "project": project_path, "timestamp": _lts, "display": _first_msg[:100], "tokens": _tkns, "mcp_tools": [], "has_plan": _has_plan, "plans": _plans, "model": None, "artifacts": [], "cost": 0.0})
                             _all_log_sids.add(_lsid)
