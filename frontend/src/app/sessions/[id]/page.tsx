@@ -11,6 +11,7 @@ import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { API_BASE } from "@/lib/api";
+import { resolveSessionBackTarget } from "@/lib/navigation";
 
 interface Artifact {
   name: string;
@@ -30,7 +31,8 @@ interface Session {
   has_plan: boolean;
   plans: any[];
   model?: string;
-  tokens?: { input: number; output: number; cached: number; total: number };
+  tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
+  cost?: number;
   artifacts?: Artifact[];
   /** Hermes-only */
   source_subtype?: string;
@@ -78,6 +80,7 @@ function eventKind(evt: Event): StepKind {
 
   if (type === "session_meta" || type === "event_msg" || type === "turn_context") return "meta";
   if (type === "agent_reasoning" || evt.thoughts || payloadType === "reasoning" || type === "assistant_thinking") return "reasoning";
+
   if (Array.isArray(evt.payload) && (evt.payload as any[]).some((p: any) => p.kind === "thinking" || p.type === "thinking")) return "reasoning";
   if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "thinking" || c.type === "thought")) return "reasoning";
   if (evt.toolCalls || payloadType === "function_call" || payloadType === "tool_use") return "tool";
@@ -136,6 +139,7 @@ export default function SessionDetailPage() {
   const id = params?.id as string;
   const searchParams = useSearchParams();
   const agent = searchParams.get("agent");
+  const fromParam = searchParams.get("from");
   const initialTab = (() => {
     const t = searchParams.get("tab");
     return t === "tools" || t === "artifacts" || t === "raw" || t === "context" ? t : "context";
@@ -146,6 +150,7 @@ export default function SessionDetailPage() {
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
   const [hermesOverlay, setHermesOverlay] = useState<any | null>(null);
   const [allHermesSessions, setAllHermesSessions] = useState<Session[] | null>(null);
+  const [grokForensics, setGrokForensics] = useState<any | null>(null);
 
   // Trace View States
   const [splitView, setSplitView] = useState(false);
@@ -227,6 +232,14 @@ export default function SessionDetailPage() {
           .then(res => res.json())
           .then(data => setHermesOverlay(data))
           .catch(() => setHermesOverlay(null));
+      }
+
+      // 4. Grok Build rich forensics (token progression, permissions, tools, phases, plan mode)
+      if (agent === "grok") {
+        fetch(`${API_BASE}/sessions/${id}/grok-forensics`)
+          .then(res => res.json())
+          .then(data => setGrokForensics(data))
+          .catch(() => setGrokForensics(null));
       }
     }
   }, [id, agent]);
@@ -444,14 +457,7 @@ export default function SessionDetailPage() {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="flex items-start gap-3 min-w-0">
               <button
-                onClick={() => {
-                  const hasHistory = typeof window !== "undefined" && document.referrer.includes(window.location.host);
-                  if (hasHistory) {
-                    router.back();
-                  } else {
-                    router.push(agent === "hermes" ? "/hermes" : "/");
-                  }
-                }}
+                onClick={() => router.push(resolveSessionBackTarget(searchParams.get("from"), agent))}
                 title="Back"
                 aria-label="Back"
                 className="h-9 w-9 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0 mt-0.5"
@@ -497,11 +503,27 @@ export default function SessionDetailPage() {
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
-                  <TokenStat label="Input"  value={sessionInfo.tokens.input.toLocaleString()} />
-                  <span className="w-px h-5 bg-[var(--tt-border)]" />
-                  <TokenStat label="Output" value={sessionInfo.tokens.output.toLocaleString()} />
-                  <span className="w-px h-5 bg-[var(--tt-border)]" />
-                  <TokenStat label="Cached" value={sessionInfo.tokens.cached.toLocaleString()} accent="text-[var(--tt-cyan-fg)]" />
+                  {agent === "grok" ? (
+                    // Grok Build only reports cumulative context (input-side) usage —
+                    // it never logs generated-output or cache-read tokens, so we label
+                    // the figure "Context" and show "—" (not reported) rather than a
+                    // misleading 0. See GrokForensicsCard for the context-window meter.
+                    <>
+                      <TokenStat label="Context" value={sessionInfo.tokens.input.toLocaleString()} />
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Output" value="—" />
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Cached" value="—" accent="text-[var(--tt-cyan-fg)]" />
+                    </>
+                  ) : (
+                    <>
+                      <TokenStat label="Input"  value={sessionInfo.tokens.input.toLocaleString()} />
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Output" value={sessionInfo.tokens.output.toLocaleString()} />
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Cached" value={sessionInfo.tokens.cached.toLocaleString()} accent="text-[var(--tt-cyan-fg)]" />
+                    </>
+                  )}
                 </div>
               )}
               <Button
@@ -612,10 +634,12 @@ export default function SessionDetailPage() {
              )}
              {/* Hermes session chain (compression / branched continuations) */}
              {agent === "hermes" && sessionInfo && allHermesSessions && (
-               <HermesChainBanner current={sessionInfo} all={allHermesSessions} />
+               <HermesChainBanner current={sessionInfo} all={allHermesSessions} from={fromParam} />
              )}
              {/* Hermes performance overlay */}
              {agent === "hermes" && hermesOverlay && <HermesOverlayCard overlay={hermesOverlay} />}
+             {/* Grok Build forensics — token growth, permissions, tool lifecycle, plan mode */}
+             {agent === "grok" && grokForensics && <GrokForensicsCard forensics={grokForensics} cost={sessionInfo?.tokens?.cost ?? sessionInfo?.cost} />}
              <div className={splitView ? "grid grid-cols-2 gap-8" : "space-y-8"}>
                 <div className="space-y-8">
                    {splitView && <h3 className="text-[10px] font-black text-[var(--tt-fg-dim)] uppercase tracking-[0.2em] ml-2 mb-2 flex items-center gap-2"><User size={14}/> User & Agent Dialogue</h3>}
@@ -636,6 +660,7 @@ export default function SessionDetailPage() {
                       
                       if (splitView && ((isReasoning || hasThinkingPart) && !hasText)) return null;
                       const kind = eventKind(event);
+
                       return (
                          <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
                             <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} />
@@ -1840,7 +1865,199 @@ function HermesOverlayCard({ overlay }: { overlay: any }) {
   );
 }
 
-function HermesChainBanner({ current, all }: { current: Session; all: Session[] }) {
+function GrokForensicsCard({ forensics, cost }: { forensics: any; cost?: number }) {
+  if (!forensics || forensics.error) return null;
+
+  const summary = forensics.summary || {};
+  const plan = forensics.plan_mode || {};
+  const tokenProg = forensics.token_progression || [];
+  const permEvents = forensics.permission_events || [];
+  const counts = forensics.counts || {};
+  const signals = forensics.signals || {};
+
+  const latestTokens = tokenProg.length > 0 ? Number(tokenProg[tokenProg.length - 1].totalTokens || 0) : null;
+
+  // Context usage
+  const ctxUsed = Number(signals.context_tokens_used ?? 0);
+  const ctxWindow = Number(signals.context_window_tokens ?? 0);
+  const ctxPctRaw = Number(
+    signals.context_window_usage_pct ??
+      (ctxWindow > 0 ? (ctxUsed / ctxWindow) * 100 : 0)
+  );
+  const ctxPct = Math.max(0, Math.min(100, ctxPctRaw));
+
+  // Duration formatting (e.g. "1m 49s")
+  const fmtDuration = (secs: number) => {
+    const s = Math.max(0, Math.round(secs));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}m ${rem}s`;
+  };
+  // TTFT: ms or s
+  const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
+
+  const toolsUsed: string[] = Array.isArray(signals.tools_used) ? signals.tools_used : [];
+
+  // Metric tiles — only render those with a meaningful source value.
+  const has = (k: string) => signals[k] != null && Number(signals[k]) > 0;
+  type Tile = { label: string; value: string; show: boolean };
+  const tiles: Tile[] = [
+    { label: "Tools", value: Number(signals.tool_call_count ?? 0).toLocaleString(), show: has("tool_call_count") },
+    { label: "Turns", value: Number(signals.turn_count ?? 0).toLocaleString(), show: has("turn_count") },
+    { label: "Duration", value: fmtDuration(Number(signals.session_duration_seconds ?? 0)), show: has("session_duration_seconds") },
+    { label: "Errors", value: Number(signals.error_count ?? 0).toLocaleString(), show: has("error_count") },
+    { label: "Tool failures", value: Number(signals.tool_failure_count ?? 0).toLocaleString(), show: has("tool_failure_count") },
+    { label: "Cancellations", value: Number(signals.cancellation_count ?? 0).toLocaleString(), show: has("cancellation_count") },
+    { label: "Compactions", value: Number(signals.compaction_count ?? 0).toLocaleString(), show: has("compaction_count") },
+    { label: "Doom-loops", value: Number(signals.doom_loop_detections ?? 0).toLocaleString(), show: has("doom_loop_detections") },
+    {
+      label: "Lines",
+      value: `+${Number(signals.agent_lines_added ?? 0).toLocaleString()} / −${Number(signals.agent_lines_removed ?? 0).toLocaleString()}`,
+      show: has("agent_lines_added") || has("agent_lines_removed"),
+    },
+    { label: "Files touched", value: Number(signals.agent_files_touched ?? 0).toLocaleString(), show: has("agent_files_touched") },
+    { label: "Avg TTFT", value: fmtMs(Number(signals.avg_time_to_first_token_ms ?? 0)), show: has("avg_time_to_first_token_ms") },
+  ];
+  const visibleTiles = tiles.filter((t) => t.show);
+
+  return (
+    <div className="mb-8 bg-[var(--tt-panel)]/60 border border-zinc-600/40 rounded-[var(--tt-radius-lg)] p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-300 flex items-center gap-2">
+          <Cpu size={12} strokeWidth={3} className="text-zinc-400" /> Grok Build Forensics
+        </div>
+        <div className="text-[10px] font-mono text-[var(--tt-fg-muted)]">
+          {summary.num_messages || 0} msgs · {counts.tools || 0} tool events
+        </div>
+      </div>
+
+      {/* Summary + Git context */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4 text-[11px]">
+        <div className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-3">
+          <div className="text-[var(--tt-fg-dim)] mb-1">Session</div>
+          <div className="font-medium text-[var(--tt-fg)]">{summary.generated_title || summary.session_summary || "—"}</div>
+          <div className="text-[var(--tt-fg-muted)] mt-1">
+            Model: <span className="font-mono">{summary.current_model_id || "grok-build"}</span>
+          </div>
+          {typeof cost === "number" && cost > 0 && (
+            <div className="text-[var(--tt-fg-muted)] mt-0.5">
+              Est. cost: <span className="font-mono text-[var(--tt-fg)]">${cost.toFixed(4)}</span>
+              <span className="text-[var(--tt-fg-faint)] ml-1">· input-rate estimate (output not reported)</span>
+            </div>
+          )}
+        </div>
+        <div className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-3">
+          <div className="text-[var(--tt-fg-dim)] mb-1">Git Context</div>
+          <div className="font-mono text-[var(--tt-fg)] truncate">{summary.git_root_dir || "—"}</div>
+          <div className="text-[var(--tt-fg-muted)] mt-0.5">
+            {summary.head_branch ? <span className="text-emerald-400">{summary.head_branch}</span> : null}
+            {summary.head_commit ? <span className="ml-2 text-[var(--tt-fg-faint)]">{String(summary.head_commit).slice(0, 8)}</span> : null}
+          </div>
+        </div>
+      </div>
+
+      {/* Context Usage — authoritative context-window pressure */}
+      {ctxWindow > 0 && (
+        <div className="mb-4 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-3">
+          <div className="flex items-center justify-between text-[11px] mb-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-dim)]">Context Usage</span>
+            <span className="font-mono text-[var(--tt-fg)]">
+              {ctxUsed.toLocaleString()} / {ctxWindow.toLocaleString()}
+              <span className="text-zinc-400 ml-2">{ctxPct.toFixed(1)}%</span>
+            </span>
+          </div>
+          <div className="h-1.5 w-full bg-[var(--tt-border)] rounded-full overflow-hidden">
+            <div className="h-full bg-zinc-300 rounded-full" style={{ width: `${ctxPct}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Signals metrics grid */}
+      {visibleTiles.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          {visibleTiles.map((t) => (
+            <div key={t.label} className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2.5 py-1.5">
+              <div className="text-[9px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">{t.label}</div>
+              <div className="text-[12px] font-mono tabular text-[var(--tt-fg)] mt-0.5">{t.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Tools used — canonical names from signals */}
+      {toolsUsed.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1.5">Tools Used</div>
+          <div className="flex flex-wrap gap-1.5">
+            {toolsUsed.map((t, i) => (
+              <span
+                key={`${t}-${i}`}
+                className="text-[10px] font-mono px-2 py-0.5 rounded border border-zinc-600/40 bg-zinc-700/20 text-zinc-300"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Permission decisions — very useful forensics */}
+      {permEvents.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1">Permission Decisions</div>
+          <div className="space-y-1 text-[11px]">
+            {permEvents.slice(-6).map((p: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1">
+                <span className="font-mono text-[var(--tt-fg-muted)]">{p.tool_name}</span>
+                {p.decision && (
+                  <span className={p.decision === "allow" ? "text-emerald-400" : "text-amber-400"}>
+                    {p.decision}
+                  </span>
+                )}
+                {p.wait_ms != null && <span className="text-[var(--tt-fg-faint)] text-[10px]">({p.wait_ms}ms)</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Context Growth (streaming samples) — NOT billed input/output */}
+      {tokenProg.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1 flex items-center gap-2">
+            Context Growth (streaming samples) <span className="text-zinc-400">({tokenProg.length})</span>
+            {latestTokens != null && <span className="font-mono text-[var(--tt-fg)]">→ {latestTokens.toLocaleString()} total</span>}
+          </div>
+          <div className="text-[9px] text-[var(--tt-fg-faint)] mb-1.5">
+            Cumulative context observed during streaming — not billed input/output tokens.
+          </div>
+          <div className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-2 max-h-28 overflow-y-auto text-[10px] font-mono">
+            {tokenProg.slice(-12).map((t: any, i: number) => (
+              <div key={i} className="flex justify-between py-0.5">
+                <span className="text-[var(--tt-fg-muted)]">{t.updateType || "update"}</span>
+                <span className="text-[var(--tt-fg)]">{Number(t.totalTokens || 0).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Plan mode + high level counts */}
+      <div className="flex flex-wrap gap-3 text-[11px]">
+        <div className="px-3 py-1 rounded border border-[var(--tt-border)] bg-[var(--tt-sunken)]">
+          Plan mode: <span className={plan?.state === "Active" ? "text-zinc-200 font-medium" : "text-[var(--tt-fg-muted)]"}>{plan?.state || "Inactive"}</span>
+        </div>
+        <div className="px-3 py-1 rounded border border-[var(--tt-border)] bg-[var(--tt-sunken)] text-[var(--tt-fg-muted)]">
+          {counts.tools || 0} tool events · {counts.permissions || 0} permission prompts
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HermesChainBanner({ current, all, from }: { current: Session; all: Session[]; from?: string | null }) {
+  const fromSuffix = from ? `&from=${encodeURIComponent(from)}` : "";
   // Compression-style continuation chain via parent_session_id.
   // delegate_task subagents are NOT in state.db (verified — see HERMES_INTERNALS.md §1.6).
   const parent = current.parent_session_id
@@ -1862,7 +2079,7 @@ function HermesChainBanner({ current, all }: { current: Session; all: Session[] 
       <div className="flex items-center gap-2 flex-wrap">
         {parent && (
           <Link
-            href={`/sessions/${parent.id}?agent=hermes`}
+            href={`/sessions/${parent.id}?agent=hermes${fromSuffix}`}
             className="inline-flex items-center gap-1.5 text-[11px] font-mono bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1 hover:border-violet-500/50 hover:bg-violet-500/5 text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
           >
             <ChevronLeft size={11} />
@@ -1873,7 +2090,7 @@ function HermesChainBanner({ current, all }: { current: Session; all: Session[] 
         {children.map((c) => (
           <Link
             key={c.id}
-            href={`/sessions/${c.id}?agent=hermes`}
+            href={`/sessions/${c.id}?agent=hermes${fromSuffix}`}
             className="inline-flex items-center gap-1.5 text-[11px] font-mono bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1 hover:border-violet-500/50 hover:bg-violet-500/5 text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
           >
             <span className="truncate max-w-[200px]">{c.display || c.id}</span>

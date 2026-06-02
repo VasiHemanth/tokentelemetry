@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,6 +11,7 @@ import { Card, CardTitle, AgentBadge, EmptyState } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
 
 export default function PlansTab() {
+  const pathname = usePathname();
   const { project } = useProject();
   const plans = project?.plans ?? [];
 
@@ -47,7 +49,7 @@ export default function PlansTab() {
 
           <div className="px-5 py-3 border-t border-[var(--tt-border)] bg-[var(--tt-sunken)] flex justify-end">
             <Link
-              href={`/sessions/${plan.session_id}?agent=${plan.agent}`}
+              href={`/sessions/${plan.session_id}?agent=${plan.agent}&from=${encodeURIComponent(pathname)}`}
               className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-brand)] transition-colors uppercase tracking-[0.16em]"
             >
               View full session <ArrowUpRight size={12} />

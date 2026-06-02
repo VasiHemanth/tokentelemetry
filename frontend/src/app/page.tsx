@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
@@ -35,6 +36,7 @@ interface AnalyticsResponse {
 }
 
 export default function Home() {
+  const pathname = usePathname();
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
   const agentsRes   = useResource<string[]>("/agents", { pollMs: 30_000, initial: [] });
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
@@ -226,12 +228,12 @@ export default function Home() {
                   {sessions.slice(0, 50).map((s, i) => (
                     <TR key={`${s.agent}-${s.id}-${i}`} interactive>
                       <TD className="pl-5">
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
                           <AgentBadge agent={s.agent} />
                         </Link>
                       </TD>
                       <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block truncate">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.agent === "hermes" ? (
                             <SourceBadge source={s.source_subtype} size="xs" />
                           ) : (
@@ -240,14 +242,14 @@ export default function Home() {
                         </Link>
                       </TD>
                       <TD className="text-[var(--tt-fg)] max-w-[480px] truncate">
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block truncate">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.display || s.text || (
                             <span className="italic text-[var(--tt-fg-faint)]">No message content</span>
                           )}
                         </Link>
                       </TD>
                       <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)] group-hover:text-[var(--tt-brand)] transition-colors">
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
                           <div>{format(new Date(s.timestamp), "HH:mm:ss")}</div>
                           <div className="text-[10px] text-[var(--tt-fg-faint)] uppercase tracking-wider">
                             {format(new Date(s.timestamp), "MMM d")}

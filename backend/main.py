@@ -112,6 +112,19 @@ HERMES_DIR = Path(os.environ.get("HERMES_HOME") or (HOME / ".hermes")).expanduse
 HERMES_DB = HERMES_DIR / "state.db"
 HERMES_PROFILES_DIR = HERMES_DIR / "profiles"
 
+# Grok Build (xAI) — the TUI/agent this conversation is running in.
+# Stores rich per-session data under ~/.grok/sessions/<encoded-cwd>/<uuid>/
+GROK_DIR = HOME / ".grok"
+GROK_SESSIONS_DIR = GROK_DIR / "sessions"
+
+# Grok Build session file names (per <cwd-uuid> directory)
+GROK_SUMMARY = "summary.json"
+GROK_EVENTS = "events.jsonl"
+GROK_UPDATES = "updates.jsonl"
+GROK_CHAT_HISTORY = "chat_history.jsonl"
+GROK_PLAN_MODE = "plan_mode.json"
+GROK_SIGNALS = "signals.json"
+
 # Specialized storage paths
 VSCODE_STORAGE = VSCODE_BASE / "User/workspaceStorage"
 CURSOR_STORAGE = CURSOR_BASE / "User/workspaceStorage"
@@ -472,6 +485,129 @@ async def hermes_tools():
         except Exception:
             pass
     return {"enabled_tools": enabled_tools}
+
+
+@app.get("/sessions/{session_id}/grok-forensics")
+async def grok_session_forensics(session_id: str):
+    """Rich forensics payload for a Grok Build session (phases, permissions, tool lifecycle, token progression)."""
+    sess_dir = None
+    for bucket in GROK_SESSIONS_DIR.glob("*"):
+        candidate = bucket / session_id
+        if candidate.is_dir():
+            sess_dir = candidate
+            break
+    if not sess_dir:
+        return {"error": "Not found"}
+
+    summary = {}
+    try:
+        with open(sess_dir / GROK_SUMMARY, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+    except Exception:
+        pass
+
+    # Extract high-signal events
+    tool_events = []
+    permission_events = []
+    phase_events = []
+    token_progression = []
+
+    events_path = sess_dir / GROK_EVENTS
+    if events_path.exists():
+        try:
+            with open(events_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    try:
+                        ev = json.loads(line)
+                        t = ev.get("type")
+                        if t in ("tool_started", "tool_completed"):
+                            tool_events.append(ev)
+                        elif t in ("permission_requested", "permission_resolved"):
+                            permission_events.append(ev)
+                        elif t == "phase_changed":
+                            phase_events.append(ev)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    updates_path = sess_dir / GROK_UPDATES
+    if updates_path.exists():
+        try:
+            with open(updates_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "totalTokens" in line:
+                        try:
+                            u = json.loads(line)
+                            meta = (u.get("params") or {}).get("_meta") or {}
+                            if "totalTokens" in meta:
+                                token_progression.append({
+                                    "ts": u.get("timestamp"),
+                                    "totalTokens": meta["totalTokens"],
+                                    "updateType": meta.get("updateType"),
+                                })
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+    plan = {}
+    try:
+        with open(sess_dir / GROK_PLAN_MODE, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+    except Exception:
+        pass
+
+    # signals.json — Grok's rich accurate metrics. Mapped to a fixed snake_case
+    # shape the frontend reads; {} when the file is missing entirely.
+    signals_block: Dict[str, Any] = {}
+    raw_signals: Dict[str, Any] = {}
+    signals_path = sess_dir / GROK_SIGNALS
+    if signals_path.exists():
+        try:
+            with open(signals_path, "r", encoding="utf-8") as f:
+                raw_signals = json.load(f) or {}
+        except Exception:
+            raw_signals = {}
+        signals_block = {
+            "context_tokens_used": raw_signals.get("contextTokensUsed", 0),
+            "context_window_tokens": raw_signals.get("contextWindowTokens", 0),
+            "context_window_usage_pct": raw_signals.get("contextWindowUsage", 0),
+            "tool_call_count": raw_signals.get("toolCallCount", 0),
+            "tools_used": raw_signals.get("toolsUsed", []) or [],
+            "models_used": raw_signals.get("modelsUsed", []) or [],
+            "session_duration_seconds": raw_signals.get("sessionDurationSeconds", 0),
+            "turn_count": raw_signals.get("turnCount", 0),
+            "user_message_count": raw_signals.get("userMessageCount", 0),
+            "assistant_message_count": raw_signals.get("assistantMessageCount", 0),
+            "error_count": raw_signals.get("errorCount", 0),
+            "tool_failure_count": raw_signals.get("toolFailureCount", 0),
+            "cancellation_count": raw_signals.get("cancellationCount", 0),
+            "compaction_count": raw_signals.get("compactionCount", 0),
+            "doom_loop_detections": raw_signals.get("doomLoopDetections", 0),
+            "agent_lines_added": raw_signals.get("agentLinesAdded", 0),
+            "agent_lines_removed": raw_signals.get("agentLinesRemoved", 0),
+            "agent_files_touched": raw_signals.get("agentFilesTouched", 0),
+            "avg_time_to_first_token_ms": raw_signals.get("avgTimeToFirstTokenMs", None),
+            "avg_response_time_ms": raw_signals.get("avgResponseTimeMs", None),
+        }
+
+    return {
+        "session_id": session_id,
+        "summary": summary,
+        "plan_mode": plan,
+        "signals": signals_block,
+        "tool_events": tool_events[-100:],          # cap for UI
+        "permission_events": permission_events[-50:],
+        "phase_events": phase_events[-30:],
+        "token_progression": token_progression[-100:],
+        "counts": {
+            "tools": len(tool_events),
+            "permissions": len(permission_events),
+            "phases": len(phase_events),
+            "token_samples": len(token_progression),
+        }
+    }
 
 
 @app.get("/sessions/{session_id}/hermes-overlay")
@@ -1058,6 +1194,7 @@ async def get_available_agents():
     if VSCODE_STORAGE.exists(): agents.append("copilot")
     if OPENCODE_DB.exists(): agents.append("opencode")
     if _hermes_dbs(): agents.append("hermes")
+    if GROK_SESSIONS_DIR.exists(): agents.append("grok")
     # if OLLAMA_DIR.exists(): agents.append("ollama")
     return agents
 
@@ -1078,6 +1215,260 @@ async def get_available_agents():
 #             status["hf_usage"] = f"{total_size / (1024**3):.1f}GB"
 #         except: pass
 #     return status
+
+
+def _scan_grok_sessions() -> List[Dict[str, Any]]:
+    """Scan Grok Build sessions under ~/.grok/sessions/.
+
+    Produces the standard TokenTelemetry session record with rich Grok-specific forensics.
+    """
+    if not GROK_SESSIONS_DIR.exists():
+        return []
+
+    # Load aliases locally so this top-level function doesn't depend on closures inside _scan_sessions_sync
+    aliases = _load_project_aliases()
+    def _apply_alias(p: str) -> str:
+        return aliases.get(p, p)
+
+    out: List[Dict[str, Any]] = []
+
+    for proj_bucket in GROK_SESSIONS_DIR.iterdir():
+        if not proj_bucket.is_dir():
+            continue
+
+        try:
+            from urllib.parse import unquote
+            cwd = unquote(proj_bucket.name)
+        except Exception:
+            cwd = proj_bucket.name
+
+        for sess_id_dir in proj_bucket.iterdir():
+            if not sess_id_dir.is_dir():
+                continue
+            sid = sess_id_dir.name
+
+            summary_path = sess_id_dir / GROK_SUMMARY
+            if not summary_path.exists():
+                continue
+
+            try:
+                with open(summary_path, "r", encoding="utf-8") as f:
+                    summary = json.load(f)
+            except Exception:
+                continue
+
+            info = summary.get("info", {}) or {}
+            project_path = _apply_alias(info.get("cwd") or cwd or "unknown")
+
+            created = summary.get("created_at")
+            updated = summary.get("updated_at") or created
+            try:
+                ts = datetime.fromisoformat((updated or created).replace("Z", "+00:00"))
+            except Exception:
+                ts = _file_mtime_utc(summary_path)
+
+            title = summary.get("generated_title") or summary.get("session_summary") or f"Grok session {sid[:8]}"
+            display = title[:120]
+            model = summary.get("current_model_id") or "grok-build"
+
+            # Load signals.json — Grok's rich, accurate per-session metrics file.
+            signals: Dict[str, Any] = {}
+            signals_path = sess_id_dir / GROK_SIGNALS
+            if signals_path.exists():
+                try:
+                    with open(signals_path, "r", encoding="utf-8") as f:
+                        signals = json.load(f) or {}
+                except Exception:
+                    signals = {}
+
+            # Token forensics. Grok exposes no prompt/completion split anywhere, so we
+            # use signals.contextTokensUsed (the measured context footprint) when present,
+            # falling back to the max cumulative totalTokens scanned from updates.jsonl.
+            tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+            ctx_used = signals.get("contextTokensUsed")
+            if isinstance(ctx_used, (int, float)) and ctx_used > 0:
+                total = int(ctx_used)
+            else:
+                # Fallback only when signals lacks a usable figure: scan the (large)
+                # updates.jsonl for the max cumulative totalTokens. Skipped entirely
+                # in the common case so the list scan stays cheap.
+                max_total = 0
+                updates_path = sess_id_dir / GROK_UPDATES
+                if updates_path.exists():
+                    try:
+                        with open(updates_path, "r", encoding="utf-8", errors="ignore") as f:
+                            for line in f:
+                                if "totalTokens" not in line:
+                                    continue
+                                try:
+                                    u = json.loads(line)
+                                    meta = (u.get("params") or {}).get("_meta") or {}
+                                    val = meta.get("totalTokens")
+                                    if isinstance(val, (int, float)) and val > max_total:
+                                        max_total = int(val)
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+                total = max_total
+
+            # Grok exposes no prompt/completion split; the agentic context is overwhelmingly
+            # fed-in tool/file content, so we attribute the measured context footprint to input
+            # rather than fabricating a 50/50 guess. Cost is therefore a lower-bound estimate.
+            tokens["total"] = total
+            tokens["input"] = total
+            tokens["output"] = 0
+            tokens["cached"] = 0
+
+            tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0))
+
+            # Prefer signals.modelsUsed for the model when available.
+            models_used = signals.get("modelsUsed")
+            if isinstance(models_used, list) and models_used:
+                model = summary.get("current_model_id") or models_used[0] or model
+
+            # Tool names — prefer signals.toolsUsed (accurate, deduped) and avoid the
+            # redundant full events.jsonl scan when it's available.
+            mcp_tools: List[str] = []
+            tools_used = signals.get("toolsUsed")
+            if isinstance(tools_used, list) and tools_used:
+                mcp_tools = [t for t in tools_used if t]
+            else:
+                events_path = sess_id_dir / GROK_EVENTS
+                if events_path.exists():
+                    try:
+                        with open(events_path, "r", encoding="utf-8", errors="ignore") as f:
+                            for line in f:
+                                try:
+                                    ev = json.loads(line)
+                                except Exception:
+                                    continue
+                                t = ev.get("type")
+                                if t in ("tool_started", "tool_completed"):
+                                    name = ev.get("tool_name")
+                                    if name and name not in mcp_tools:
+                                        mcp_tools.append(name)
+                    except Exception:
+                        pass
+
+            # Plan mode
+            has_plan = False
+            plans: List[Dict[str, Any]] = []
+            plan_path = sess_id_dir / GROK_PLAN_MODE
+            if plan_path.exists():
+                try:
+                    with open(plan_path, "r", encoding="utf-8") as f:
+                        pm = json.load(f)
+                    if pm.get("state") == "Active" or pm.get("was_previously_active"):
+                        has_plan = True
+                        plans.append({
+                            "session_id": sid,
+                            "agent": "grok",
+                            "timestamp": ts,
+                            "content": f"Plan mode was active (state={pm.get('state')})"
+                        })
+                except Exception:
+                    pass
+
+            artifacts: List[Dict[str, Any]] = []
+            if plan_path.exists():
+                artifacts.append({"name": "plan_mode.json", "path": str(plan_path), "type": "document"})
+            artifacts.append({"name": "summary.json", "path": str(summary_path), "type": "document"})
+
+            git_info = {
+                "root": summary.get("git_root_dir"),
+                "branch": summary.get("head_branch"),
+                "commit": summary.get("head_commit"),
+            }
+
+            sess = {
+                "id": sid,
+                "agent": "grok",
+                "project": project_path,
+                "timestamp": ts,
+                "display": display,
+                "text": summary.get("session_summary"),
+                "tokens": tokens,
+                "mcp_tools": mcp_tools,
+                "has_plan": has_plan,
+                "plans": plans,
+                "model": model,
+                "artifacts": artifacts,
+                "cost": tokens.get("cost", 0.0),
+                "grok": {
+                    "cwd": info.get("cwd"),
+                    "git": git_info,
+                    "num_messages": summary.get("num_messages"),
+                    "num_chat_messages": summary.get("num_chat_messages"),
+                    "agent_name": summary.get("agent_name"),
+                    "last_active_at": summary.get("last_active_at"),
+                },
+            }
+            out.append(sess)
+
+    return out
+
+
+def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
+    """Reconstruct a Copilot chat session object from VS Code's newer .jsonl
+    delta-log format (VS Code ~1.100+ writes <id>.jsonl instead of <id>.json).
+
+    The file is an append-only event log, not a single JSON object:
+      - kind 0: full session snapshot (base state); v is the session dict.
+      - kind 1: SET the value at key-path k (e.g. ["customTitle"]).
+      - kind 2: APPEND/extend the array at key-path k (e.g. ["requests"]).
+    Replaying these yields a dict shaped like the legacy single-object .json,
+    so the existing per-request extraction below works unchanged.
+    """
+    data: Dict[str, Any] = {}
+
+    def _navigate(root, keys):
+        cur = root
+        for key in keys:
+            if isinstance(cur, dict):
+                cur = cur.get(key)
+            elif isinstance(cur, list) and isinstance(key, int) and 0 <= key < len(cur):
+                cur = cur[key]
+            else:
+                return None
+        return cur
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            kind = ev.get("kind")
+            k = ev.get("k")
+            v = ev.get("v")
+            if kind == 0:
+                if isinstance(v, dict):
+                    data = v
+                continue
+            if kind not in (1, 2) or not isinstance(k, list) or not k:
+                continue
+            parent = _navigate(data, k[:-1]) if len(k) > 1 else data
+            leaf = k[-1]
+            if isinstance(parent, dict):
+                if kind == 1:
+                    parent[leaf] = v
+                else:  # append/extend the array at leaf
+                    arr = parent.get(leaf)
+                    if not isinstance(arr, list):
+                        arr = []
+                        parent[leaf] = arr
+                    arr.extend(v) if isinstance(v, list) else arr.append(v)
+            elif isinstance(parent, list) and isinstance(leaf, int):
+                if kind == 1 and 0 <= leaf < len(parent):
+                    parent[leaf] = v
+                elif kind == 2 and 0 <= leaf < len(parent) and isinstance(parent[leaf], list):
+                    parent[leaf].extend(v) if isinstance(v, list) else parent[leaf].append(v)
+    return data
+
 
 def _scan_sessions_sync():
     sessions = []
@@ -1733,38 +2124,49 @@ def _scan_sessions_sync():
                     with open(workspace_json, "r") as f:
                         wj = json.load(f); folder_url = wj.get("folder")
                         if folder_url: project_path = unquote(folder_url.replace("file://", ""))
-                for cf in ws_folder.glob("*.json"):
+                # VS Code ~1.100+ switched session files from <id>.json (single
+                # object) to <id>.jsonl (append-only delta log). Scan both so
+                # sessions created after that cutover aren't silently dropped.
+                session_files = list(ws_folder.glob("*.json")) + list(ws_folder.glob("*.jsonl"))
+                for cf in session_files:
                     try:
-                        with open(cf, "r", encoding="utf-8", errors="replace") as f:
-                            data = json.load(f); sid = cf.stem; tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-                            first_msg = ""; plans = []; model = None
-                            
-                            # Fallback to creation date if no requests
-                            creation_ts = data.get("creationDate") or data.get("timestamp")
-                            last_ts = datetime.fromtimestamp(creation_ts / 1000, tz=timezone.utc) if isinstance(creation_ts, (int, float)) else _file_mtime_utc(cf)
-                            
-                            for req in data.get("requests", []):
-                                msg_text = req.get("message", {}).get("text", "") or ""
-                                if not first_msg: first_msg = msg_text
-                                if req.get("modelId") and not model:
-                                    model = req.get("modelId").split("/")[-1]
-                                if req.get("timestamp"):
-                                    ts_val = req.get("timestamp")
-                                    if isinstance(ts_val, (int, float)):
-                                        req_ts = datetime.fromtimestamp(ts_val / 1000, tz=timezone.utc)
-                                        if req_ts > last_ts: last_ts = req_ts
-                                # Copilot doesn't record input tokens; estimate from prompt chars (~4 chars/token).
-                                tokens["input"] += len(msg_text) // 4
-                                if "thinking" in req:
-                                    tokens["output"] += req["thinking"].get("tokens", 0) or 0
-                                    t_text = req["thinking"].get("text", "")
-                                    if "plan" in t_text.lower() and len(t_text) > 100:
-                                        plans.append({"session_id": sid, "agent": "copilot", "timestamp": last_ts, "content": t_text})
-                                if "response" in req:
-                                    for part in req["response"]: tokens["output"] += part.get("tokens", 0) or 0
-                            tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
-                            sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "cost": tokens["cost"]})
+                        if cf.suffix == ".jsonl":
+                            data = _reconstruct_vscode_chat_jsonl(cf)
+                        else:
+                            with open(cf, "r", encoding="utf-8", errors="replace") as f:
+                                data = json.load(f)
+                        sid = cf.stem; tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+                        first_msg = ""; plans = []; model = None
+
+                        # Fallback to creation date if no requests
+                        creation_ts = data.get("creationDate") or data.get("timestamp")
+                        last_ts = datetime.fromtimestamp(creation_ts / 1000, tz=timezone.utc) if isinstance(creation_ts, (int, float)) else _file_mtime_utc(cf)
+
+                        for req in data.get("requests", []):
+                            msg_text = req.get("message", {}).get("text", "") or ""
+                            if not first_msg: first_msg = msg_text
+                            if req.get("modelId") and not model:
+                                model = req.get("modelId").split("/")[-1]
+                            if req.get("timestamp"):
+                                ts_val = req.get("timestamp")
+                                if isinstance(ts_val, (int, float)):
+                                    req_ts = datetime.fromtimestamp(ts_val / 1000, tz=timezone.utc)
+                                    if req_ts > last_ts: last_ts = req_ts
+                            # Copilot doesn't record input tokens; estimate from prompt chars (~4 chars/token).
+                            tokens["input"] += len(msg_text) // 4
+                            if "thinking" in req:
+                                tokens["output"] += req["thinking"].get("tokens", 0) or 0
+                                t_text = req["thinking"].get("text", "")
+                                if "plan" in t_text.lower() and len(t_text) > 100:
+                                    plans.append({"session_id": sid, "agent": "copilot", "timestamp": last_ts, "content": t_text})
+                            # New .jsonl schema records completionTokens per request directly.
+                            if isinstance(req.get("completionTokens"), (int, float)):
+                                tokens["output"] += int(req["completionTokens"])
+                            elif "response" in req:
+                                for part in req["response"]: tokens["output"] += part.get("tokens", 0) or 0
+                        tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                        sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "cost": tokens["cost"]})
                     except Exception: continue
             except Exception: continue
 
@@ -1840,6 +2242,9 @@ def _scan_sessions_sync():
                 conn.close()
         except Exception:
             pass
+
+    # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
+    sessions.extend(_scan_grok_sessions())
 
     # 9. Hermes Agent (SQLite: sessions / messages, pre-aggregated tokens)
     hermes_cwd_map = _hermes_cwd_by_session() if _hermes_dbs() else {}
@@ -2072,6 +2477,116 @@ async def get_session_detail(session_id: str, agent: str):
                     events.append(data)
                 except Exception: continue
         return events
+    elif agent == "grok":
+        # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
+        # FILE ORDER and carries NO per-message timestamps, so we normalize each
+        # entry into Claude-shaped message events (the mature EventCard path already
+        # pairs assistant tool_use with the following user tool_result) and assign
+        # synthetic, order-preserving timestamps. Lifecycle events from events.jsonl
+        # are NOT merged here — they can't be aligned to the dialogue and are surfaced
+        # in the grok-forensics card instead.
+        sess_dir = None
+        for bucket in GROK_SESSIONS_DIR.glob("*"):
+            candidate = bucket / session_id
+            if candidate.is_dir() and (candidate / GROK_SUMMARY).exists():
+                sess_dir = candidate
+                break
+        if not sess_dir:
+            return {"error": "Not found"}
+
+        # Synthetic timeline base: summary.created_at -> epoch-ms, else dir mtime.
+        base_ms = None
+        summary = {}
+        try:
+            with open(sess_dir / GROK_SUMMARY, "r", encoding="utf-8") as f:
+                summary = json.load(f)
+        except Exception:
+            summary = {}
+        created = summary.get("created_at")
+        if created:
+            try:
+                base_ms = _aware(datetime.fromisoformat(str(created).replace("Z", "+00:00"))).timestamp() * 1000
+            except Exception:
+                base_ms = None
+        if base_ms is None:
+            base_ms = _file_mtime_utc(sess_dir).timestamp() * 1000
+
+        events: List[Dict[str, Any]] = []
+        seq = 0
+        chat_path = sess_dir / GROK_CHAT_HISTORY
+        if chat_path.exists():
+            try:
+                with open(chat_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        try:
+                            entry = json.loads(line)
+                        except Exception:
+                            continue
+                        etype = entry.get("type")
+                        norm = None  # set when we emit an event
+
+                        if etype == "user":
+                            parts = entry.get("content") or []
+                            text = "".join(
+                                p.get("text", "") for p in parts
+                                if isinstance(p, dict) and p.get("type") == "text"
+                            )
+                            norm = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+                        elif etype == "assistant":
+                            content_blocks: List[Dict[str, Any]] = []
+                            text = entry.get("content") or ""
+                            if isinstance(text, str) and text.strip():
+                                content_blocks.append({"type": "text", "text": text})
+                            for tc in (entry.get("tool_calls") or []):
+                                if not isinstance(tc, dict):
+                                    continue
+                                try:
+                                    args = json.loads(tc.get("arguments") or "{}")
+                                except Exception:
+                                    args = {}
+                                if not isinstance(args, dict):
+                                    args = {}
+                                content_blocks.append({
+                                    "type": "tool_use",
+                                    "id": tc.get("id"),
+                                    "name": tc.get("name"),
+                                    "input": args,
+                                })
+                            if content_blocks:
+                                norm = {"type": "assistant", "message": {"role": "assistant", "content": content_blocks}}
+
+                        elif etype == "reasoning":
+                            summ = entry.get("summary") or []
+                            thinking = "".join(
+                                s.get("text", "") for s in summ
+                                if isinstance(s, dict) and s.get("type") == "summary_text"
+                            )
+                            if thinking.strip():
+                                norm = {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": thinking}]}}
+
+                        elif etype == "tool_result":
+                            norm = {"type": "user", "message": {"role": "user", "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": entry.get("tool_call_id"),
+                                "content": entry.get("content") or "",
+                            }]}}
+
+                        # system / backend_tool_call and any empty entries are skipped.
+                        if norm is None:
+                            continue
+
+                        # Synthetic order-preserving timestamp: Grok's chat_history has no
+                        # per-message timestamps, so we space events 1s apart in file order.
+                        norm["normalized_timestamp"] = base_ms + seq * 1000
+                        seq += 1
+                        events.append(norm)
+            except Exception:
+                pass
+
+        # Already in file order (monotonic via seq).
+        return events
+
     elif agent in ["gemini", "antigravity"]:
         # Antigravity brain-based session (has no .json file; synthesize from markdown artifacts)
         brain_dir = ANTIGRAVITY_BRAIN_DIR / session_id
@@ -2234,18 +2749,25 @@ async def get_session_detail(session_id: str, agent: str):
                 except Exception: continue
         return events
     elif agent == "copilot":
-        files = list(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.json"))
+        # VS Code ~1.100+ stores sessions as <id>.jsonl (delta log) instead of
+        # <id>.json (single object); match both and reconstruct the .jsonl form.
+        files = list(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.json")) \
+            + list(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.jsonl"))
         if not files: return {"error": "Not found"}
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            data = json.load(f)
-            events = []
-            for req in data.get("requests", []):
-                ts_val = req.get("timestamp")
-                norm_ts = ts_val if isinstance(ts_val, (int, float)) else None
-                events.append({"type": "user", "payload": req.get("message"), "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
-                if "thinking" in req: events.append({"type": "assistant_thinking", "payload": req["thinking"], "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
-                if "response" in req: events.append({"type": "assistant", "payload": req["response"], "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
-            return events
+        cf = files[0]
+        if cf.suffix == ".jsonl":
+            data = _reconstruct_vscode_chat_jsonl(cf)
+        else:
+            with open(cf, "r", encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+        events = []
+        for req in data.get("requests", []):
+            ts_val = req.get("timestamp")
+            norm_ts = ts_val if isinstance(ts_val, (int, float)) else None
+            events.append({"type": "user", "payload": req.get("message"), "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
+            if "thinking" in req: events.append({"type": "assistant_thinking", "payload": req["thinking"], "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
+            if "response" in req: events.append({"type": "assistant", "payload": req["response"], "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
+        return events
     elif agent == "opencode":
         if not OPENCODE_DB.exists(): return {"error": "Not found"}
         uri = f"file:{OPENCODE_DB}?mode=ro"

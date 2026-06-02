@@ -3,10 +3,11 @@ import {
   GitBranch, Code2, type LucideIcon,
 } from "lucide-react";
 import HermesIcon from "@/components/icons/HermesIcon";
+import GrokIcon from "@/components/icons/GrokIcon";
 
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
-  | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes";
+  | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -27,6 +28,7 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   copilot:     { key: "copilot",     label: "Copilot",     hex: "#6366f1", icon: GitBranch },
   opencode:    { key: "opencode",    label: "OpenCode",    hex: "#f59e0b", icon: Code2 },
   hermes:      { key: "hermes",      label: "Hermes Agent", hex: "#eab308", icon: HermesIcon },
+  grok:        { key: "grok",        label: "Grok Build",  hex: "#d4d4d8", icon: GrokIcon },
 };
 
 const FALLBACK: AgentMeta = {

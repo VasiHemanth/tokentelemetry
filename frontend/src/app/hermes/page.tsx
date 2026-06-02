@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
 import { useMemo } from "react";
 import {
@@ -69,6 +70,7 @@ interface Group {
 }
 
 export default function HermesPage() {
+  const pathname = usePathname();
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
   const overviewRes = useResource<Overview>("/hermes/overview", { pollMs: 30_000 });
   const gateway = overviewRes.data?.gateway;
@@ -417,17 +419,17 @@ export default function HermesPage() {
                 .map((s) => (
                   <TR key={s.id} interactive>
                     <TD className="pl-5">
-                      <Link href={`/sessions/${s.id}?agent=hermes`} className="block">
+                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
                         <SourceBadge source={s.source_subtype} size="xs" />
                       </Link>
                     </TD>
                     <TD className="font-mono text-[11px] text-[var(--tt-fg-muted)] max-w-[180px] truncate" title={s.model}>
-                      <Link href={`/sessions/${s.id}?agent=hermes`} className="block truncate">
+                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate">
                         {s.model || "—"}
                       </Link>
                     </TD>
                     <TD className="text-[var(--tt-fg)] max-w-[480px] truncate">
-                      <Link href={`/sessions/${s.id}?agent=hermes`} className="block truncate">
+                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate">
                         <span className="inline-flex items-center gap-1.5">
                           {s.cost_anomaly && (
                             <span
@@ -446,7 +448,7 @@ export default function HermesPage() {
                       </Link>
                     </TD>
                     <TD className="text-right tabular text-[11px] text-[var(--tt-fg-muted)]">
-                      <Link href={`/sessions/${s.id}?agent=hermes`} className="block">
+                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
                         {s.cost && s.cost > 0 ? formatCost(s.cost) : "—"}
                         {s.tokens?.reasoning && s.tokens.reasoning > 0 ? (
                           <div className="text-[9px] text-[var(--tt-fg-faint)] uppercase tracking-wider">
@@ -456,7 +458,7 @@ export default function HermesPage() {
                       </Link>
                     </TD>
                     <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)]">
-                      <Link href={`/sessions/${s.id}?agent=hermes`} className="block">
+                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
                         <div>{format(new Date(s.timestamp), "HH:mm:ss")}</div>
                         <div className="text-[10px] text-[var(--tt-fg-faint)] uppercase tracking-wider">
                           {format(new Date(s.timestamp), "MMM d")}

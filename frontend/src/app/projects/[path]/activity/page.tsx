@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import { Activity, ClipboardList, Cpu, Terminal } from "lucide-react";
 
@@ -11,6 +12,7 @@ import {
 import { useProject } from "../_lib/project-context";
 
 export default function ActivityTab() {
+  const pathname = usePathname();
   const { sessions, loading } = useProject();
 
   return (
@@ -45,12 +47,12 @@ export default function ActivityTab() {
               {sessions.map((s, i) => (
                 <TR key={`${s.agent}-${s.id}-${i}`} interactive>
                   <TD className="pl-5">
-                    <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block">
+                    <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
                       <AgentBadge agent={s.agent} />
                     </Link>
                   </TD>
                   <TD className="text-[var(--tt-fg)] max-w-[640px] truncate">
-                    <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block truncate">
+                    <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                       {s.display || s.text || (
                         <span className="italic text-[var(--tt-fg-faint)]">No prompt content</span>
                       )}
@@ -69,7 +71,7 @@ export default function ActivityTab() {
                     </div>
                   </TD>
                   <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)] group-hover:text-[var(--tt-brand)] transition-colors">
-                    <Link href={`/sessions/${s.id}?agent=${s.agent}`} className="block">
+                    <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
                       <div>{format(new Date(s.timestamp), "HH:mm:ss")}</div>
                       <div className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-faint)]">
                         {format(new Date(s.timestamp), "MMM d")}

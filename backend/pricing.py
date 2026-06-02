@@ -78,6 +78,13 @@ PRICING = {
     # --- xAI (Grok) ---
     "grok-4.3":                     {"in": 1.25,  "out": 2.50,  "cached_read": None},
     "grok-4.3-latest":              {"in": 1.25,  "out": 2.50,  "cached_read": None},
+    # Grok Build — xAI's agentic coding CLI. Sessions record the model id as the
+    # generic "grok-build"; the underlying model is grok-build-0.1 (256K context;
+    # grok-code-fast-1 requests route here after 2026-05-15). API rates below.
+    "grok-build":                   {"in": 0.20,  "out": 1.50,  "cached_read": None},
+    "grok-build-0.1":               {"in": 0.20,  "out": 1.50,  "cached_read": None},
+    "grok-code-fast-1":             {"in": 0.20,  "out": 1.50,  "cached_read": None},
+    "grok-code-fast":               {"in": 0.20,  "out": 1.50,  "cached_read": None},
 
     # --- Moonshot (Kimi, direct) ---
     "kimi-k2.6":                    {"in": 0.95,  "out": 4.00,  "cached_read": 0.16},
