@@ -129,6 +129,7 @@ GROK_SIGNALS = "signals.json"
 VSCODE_STORAGE = VSCODE_BASE / "User/workspaceStorage"
 CURSOR_STORAGE = CURSOR_BASE / "User/workspaceStorage"
 ANTIGRAVITY_BRAIN_DIR = GEMINI_DIR / "antigravity" / "brain"
+ANTIGRAVITY_BRAIN_DIRS = [GEMINI_DIR / "antigravity-cli" / "brain", GEMINI_DIR / "antigravity" / "brain"]
 PROJECT_ALIASES_FILE = HOME / ".tokentelemetry" / "aliases.json"
 
 def _load_project_aliases() -> Dict[str, str]:
@@ -171,6 +172,29 @@ def _antigravity_infer_project(text: str) -> str:
             return path
             
     return "Antigravity / unassigned"
+
+def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
+    tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
+    tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
+    if not tf.exists():
+        tf = sess_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+    if not tf.exists():
+        return tkns
+    try:
+        with open(tf, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.strip(): continue
+                try:
+                    data = json.loads(line)
+                    tokens = len(line) // 4
+                    if data.get("source") == "MODEL":
+                        tkns["output"] += tokens
+                    else:
+                        tkns["input"] += tokens
+                except Exception: pass
+        tkns["total"] = tkns["input"] + tkns["output"]
+    except Exception: pass
+    return tkns
 
 class TokenUsage(BaseModel):
     input: int = 0
@@ -1877,14 +1901,22 @@ def _scan_sessions_sync():
                                         _plans.append({"session_id": _lsid, "agent": "antigravity", "timestamp": _lts, "content": _pt})
                                     except Exception: pass
                             _tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
+                            for _msg in _msgs:
+                                toks = len(_msg.get("message", "")) // 4
+                                if _msg.get("type") in ("user", "human"):
+                                    _tkns["input"] += toks
+                                else:
+                                    _tkns["output"] += toks
+                            _tkns["total"] = _tkns["input"] + _tkns["output"]
                             sessions.append({"id": _lsid, "agent": "antigravity", "project": project_path, "timestamp": _lts, "display": _first_msg[:100], "tokens": _tkns, "mcp_tools": [], "has_plan": _has_plan, "plans": _plans, "model": None, "artifacts": [], "cost": 0.0})
                             _all_log_sids.add(_lsid)
                     except Exception: pass
         except Exception: pass
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
-    if ANTIGRAVITY_BRAIN_DIR.exists():
-        for sess_dir in ANTIGRAVITY_BRAIN_DIR.iterdir():
+    for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
+        if not _brain_dir.exists(): continue
+        for sess_dir in _brain_dir.iterdir():
             try:
                 if not sess_dir.is_dir(): continue
                 sid = sess_dir.name
@@ -1954,7 +1986,7 @@ def _scan_sessions_sync():
                     "project": project,
                     "timestamp": latest_ts or datetime.fromtimestamp(sess_dir.stat().st_mtime, tz=timezone.utc),
                     "display": display,
-                    "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                    "tokens": _estimate_antigravity_tokens(sess_dir),
                     "mcp_tools": [],
                     "has_plan": bool(plan),
                     "plans": plans,
@@ -2590,6 +2622,10 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent in ["gemini", "antigravity"]:
         # Antigravity brain-based session (has no .json file; synthesize from markdown artifacts)
         brain_dir = ANTIGRAVITY_BRAIN_DIR / session_id
+        for _bd in ANTIGRAVITY_BRAIN_DIRS:
+            if (_bd / session_id).is_dir():
+                brain_dir = _bd / session_id
+                break
         if agent == "antigravity" and brain_dir.is_dir():
             messages = []
             base_ts = None
