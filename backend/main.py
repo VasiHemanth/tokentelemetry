@@ -1470,6 +1470,33 @@ def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
     return data
 
 
+def _opencode_resolve_model(val):
+    """Resolve an OpenCode model name from a model payload.
+
+    OpenCode stores the model in several shapes depending on provider and
+    version: a dict (assistant/user message `model`, or the session-level
+    `model` column), a JSON-encoded string of that dict, or a plain model
+    string. The session-level blob uses the key ``id`` (e.g.
+    ``{"id":"claude-opus-4.6","providerID":"github-copilot"}``) while message
+    payloads use ``modelID`` — so we try both. Returns None if nothing usable.
+    """
+    if not val:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith("{"):
+            try:
+                val = json.loads(s)
+            except Exception:
+                return s or None
+        else:
+            return s or None
+    if isinstance(val, dict):
+        return (val.get("id") or val.get("modelID") or val.get("modelId")
+                or val.get("providerID"))
+    return None
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -2178,12 +2205,22 @@ def _scan_sessions_sync():
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             try:
+                # Some OpenCode versions added a session-level `model` column
+                # (e.g. the github-copilot provider stores the model only there,
+                # not on assistant messages — see issue #39). Detect it so we can
+                # fall back to it, without breaking older schemas that lack it.
+                try:
+                    _sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+                except Exception:
+                    _sess_cols = set()
+                _has_sess_model = "model" in _sess_cols
                 rows = conn.execute("SELECT id, directory, title, time_created, time_updated FROM session").fetchall()
                 for srow in rows:
                     sid = srow["id"]
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
+                    models_used: List[str] = []   # distinct models, in first-seen order (#39)
                     first_user = ""
                     mcp_tools: List[str] = []
                     has_plan = False
@@ -2202,8 +2239,38 @@ def _scan_sessions_sync():
                                         model = mi.get("modelID") or mi.get("providerID")
                                     elif isinstance(mi, str):
                                         model = mi
+                            # Track every distinct model used this session (sessions can
+                            # switch models mid-thread). Prefer the real model id over a
+                            # bare providerID so the list stays meaningful.
+                            _mm = mdata.get("modelID") or _opencode_resolve_model(mdata.get("model"))
+                            if _mm and _mm not in models_used:
+                                models_used.append(_mm)
                             if mdata.get("mode") == "plan":
                                 has_plan = True
+                    # Fallbacks for #39: some providers (e.g. github-copilot) carry
+                    # no model on assistant messages. Try the session-level `model`
+                    # column, then any message regardless of role.
+                    if not model and _has_sess_model:
+                        try:
+                            mrow = conn.execute("SELECT model FROM session WHERE id=?", (sid,)).fetchone()
+                            if mrow is not None:
+                                model = _opencode_resolve_model(mrow["model"])
+                        except Exception:
+                            pass
+                    if not model:
+                        for mrow in conn.execute("SELECT data FROM message WHERE session_id=? ORDER BY time_created", (sid,)):
+                            try:
+                                mdata = json.loads(mrow["data"] or "{}")
+                            except Exception:
+                                continue
+                            model = (_opencode_resolve_model(mdata.get("model"))
+                                     or mdata.get("modelID") or mdata.get("providerID"))
+                            if model:
+                                break
+                    # Keep the resolved primary model represented in the list (covers the
+                    # fallback cases where it came from session.model, not a message).
+                    if model and model not in models_used:
+                        models_used.insert(0, model)
                     # Parts: first user text, tool names, token totals from step-finish
                     for prow in conn.execute("SELECT data FROM part WHERE session_id=? ORDER BY time_created", (sid,)):
                         try:
@@ -2240,7 +2307,8 @@ def _scan_sessions_sync():
                     sessions.append({
                         "id": sid, "agent": "opencode", "project": apply_alias(srow["directory"] or "unknown"), "timestamp": ts,
                         "display": display, "tokens": tokens, "mcp_tools": mcp_tools,
-                        "has_plan": has_plan, "plans": plans, "model": model, "artifacts": [],
+                        "has_plan": has_plan, "plans": plans, "model": model,
+                        "models_used": models_used, "artifacts": [],
                         "cost": tokens["cost"],
                     })
             finally:
