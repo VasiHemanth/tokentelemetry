@@ -31,6 +31,7 @@ interface Session {
   has_plan: boolean;
   plans: any[];
   model?: string;
+  models_used?: string[];
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
   cost?: number;
   artifacts?: Artifact[];
@@ -344,8 +345,11 @@ export default function SessionDetailPage() {
       }
       if (e.payload?.model) push(e.payload.model);
     });
+    // Agents whose trace events don't carry per-message models (e.g. OpenCode)
+    // surface the list at the session level instead (#39, mixed-model sessions).
+    (sessionInfo?.models_used ?? []).forEach(push);
     return order;
-  }, [events]);
+  }, [events, sessionInfo]);
 
   // Context Inspector
   const context = useMemo(() => {
