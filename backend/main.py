@@ -38,6 +38,65 @@ def _file_mtime_utc(path) -> datetime:
     except Exception:
         return _now()
 
+def _load_copilot_cli_events(events_file: Path) -> List[dict]:
+    """Load a GitHub Copilot CLI session's append-only event log (#36)."""
+    rows: List[dict] = []
+    try:
+        with open(events_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except OSError:
+        pass
+    return rows
+
+def _parse_copilot_iso(ts) -> Optional[datetime]:
+    """Copilot CLI timestamps are ISO-8601 with a trailing Z (e.g.
+    '2026-06-04T11:45:07.548Z'). Returns None for anything unparseable."""
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
+    """Best-effort precise token totals from a closed session's
+    `session.shutdown.modelMetrics`. The exact shape varies by Copilot
+    version, so we defensively sum any recognizable input/output/cache token
+    counts found anywhere in the structure. Returns None when nothing usable
+    is present (caller then falls back to the per-message estimate)."""
+    if not isinstance(metrics, (dict, list)):
+        return None
+    tot = {"input": 0, "output": 0, "cached": 0}
+    found = False
+
+    def grab(obj):
+        nonlocal found
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and "token" in kl:
+                    if "cache" in kl:
+                        tot["cached"] += int(v); found = True
+                    elif "out" in kl or "completion" in kl or "output" in kl:
+                        tot["output"] += int(v); found = True
+                    elif "in" in kl or "prompt" in kl:
+                        tot["input"] += int(v); found = True
+                else:
+                    grab(v)
+        elif isinstance(obj, list):
+            for x in obj:
+                grab(x)
+
+    grab(metrics)
+    return tot if found else None
+
 def _pid_alive(pid: int) -> bool:
     """Cross-platform process liveness probe.
 
@@ -128,6 +187,9 @@ GROK_SIGNALS = "signals.json"
 # Specialized storage paths
 VSCODE_STORAGE = VSCODE_BASE / "User/workspaceStorage"
 CURSOR_STORAGE = CURSOR_BASE / "User/workspaceStorage"
+# GitHub Copilot CLI / agent writes an append-only event log per session here,
+# separate from the VS Code Copilot chat store above (#36).
+COPILOT_CLI_DIR = HOME / ".copilot" / "session-state"
 ANTIGRAVITY_BRAIN_DIR = GEMINI_DIR / "antigravity" / "brain"
 PROJECT_ALIASES_FILE = HOME / ".tokentelemetry" / "aliases.json"
 
@@ -1191,7 +1253,7 @@ async def get_available_agents():
     if QWEN_DIR.exists(): agents.append("qwen")
     if VIBE_DIR.exists(): agents.append("vibe")
     if CURSOR_DIR.exists(): agents.append("cursor")
-    if VSCODE_STORAGE.exists(): agents.append("copilot")
+    if VSCODE_STORAGE.exists() or COPILOT_CLI_DIR.exists(): agents.append("copilot")
     if OPENCODE_DB.exists(): agents.append("opencode")
     if _hermes_dbs(): agents.append("hermes")
     if GROK_SESSIONS_DIR.exists(): agents.append("grok")
@@ -2166,8 +2228,71 @@ def _scan_sessions_sync():
                                 for part in req["response"]: tokens["output"] += part.get("tokens", 0) or 0
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                         tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
-                        sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "cost": tokens["cost"]})
+                        sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "copilot_source": "vscode", "cost": tokens["cost"]})
                     except Exception: continue
+            except Exception: continue
+
+    # 7b. GitHub Copilot CLI / agent — ~/.copilot/session-state/<id>/events.jsonl.
+    # A separate store from the VS Code Copilot chat sessions above; the CLI
+    # writes an append-only event log per session (#36). Token usage comes from
+    # session.shutdown.modelMetrics when the session has ended, otherwise we sum
+    # per-message outputTokens and estimate input from prompt length.
+    if COPILOT_CLI_DIR.exists():
+        for sess_dir in COPILOT_CLI_DIR.iterdir():
+            try:
+                if not sess_dir.is_dir(): continue
+                ev_file = sess_dir / "events.jsonl"
+                if not ev_file.exists(): continue
+                rows = _load_copilot_cli_events(ev_file)
+                if not rows: continue
+                sid = sess_dir.name
+                project_path = "unknown"; first_msg = ""; model = None
+                models_used: List[str] = []
+                out_tokens = 0; in_estimate = 0
+                start_ts = None; last_ts = None; shutdown_metrics = None
+                for r in rows:
+                    et = r.get("type"); d = r.get("data") or {}
+                    rts = _parse_copilot_iso(r.get("timestamp"))
+                    if rts and (last_ts is None or rts > last_ts): last_ts = rts
+                    if et == "session.start":
+                        cwd = (d.get("context") or {}).get("cwd")
+                        if cwd: project_path = cwd
+                        start_ts = _parse_copilot_iso(d.get("startTime")) or rts
+                    elif et == "user.message":
+                        c = d.get("content") or ""
+                        if c and not first_msg: first_msg = c
+                        in_estimate += len(c) // 4
+                    elif et == "assistant.message":
+                        m = d.get("model")
+                        if m:
+                            if not model: model = m
+                            if m not in models_used: models_used.append(m)
+                        ot = d.get("outputTokens")
+                        if isinstance(ot, (int, float)) and not isinstance(ot, bool):
+                            out_tokens += int(ot)
+                    elif et == "session.model_change":
+                        nm = d.get("newModel")
+                        if nm and nm not in models_used: models_used.append(nm)
+                    elif et == "session.shutdown":
+                        shutdown_metrics = d.get("modelMetrics")
+                tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+                metr = _copilot_cli_tokens_from_metrics(shutdown_metrics)
+                if metr:
+                    tokens.update(metr)
+                else:
+                    tokens["input"] = in_estimate
+                    tokens["output"] = out_tokens
+                tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                if model and model not in models_used: models_used.insert(0, model)
+                ts = last_ts or start_ts or _file_mtime_utc(ev_file)
+                sessions.append({
+                    "id": sid, "agent": "copilot", "project": apply_alias(project_path),
+                    "timestamp": ts, "display": first_msg[:100], "tokens": tokens,
+                    "mcp_tools": [], "has_plan": False, "plans": [],
+                    "model": model, "models_used": models_used, "artifacts": [],
+                    "copilot_source": "cli", "cost": tokens["cost"],
+                })
             except Exception: continue
 
     # 8. OpenCode (SQLite: session / message / part)
@@ -2754,6 +2879,31 @@ async def get_session_detail(session_id: str, agent: str):
                 except Exception: continue
         return events
     elif agent == "copilot":
+        # GitHub Copilot CLI session (~/.copilot/session-state/<id>/events.jsonl)
+        # takes priority — its ids are dir-named UUIDs distinct from VS Code (#36).
+        cli_file = COPILOT_CLI_DIR / session_id / "events.jsonl"
+        if cli_file.exists():
+            events = []
+            for r in _load_copilot_cli_events(cli_file):
+                et = r.get("type"); d = r.get("data") or {}
+                _p = _parse_copilot_iso(r.get("timestamp"))
+                norm = int(_p.timestamp() * 1000) if _p else None
+                base = {"timestamp": norm, "normalized_timestamp": norm}
+                if et == "user.message":
+                    events.append({"type": "user", "payload": {"content": d.get("content", "")}, **base})
+                elif et == "assistant.message":
+                    rt = d.get("reasoningText") or ""
+                    if rt:
+                        events.append({"type": "assistant_thinking", "payload": {"text": rt}, **base})
+                    txt = d.get("content") or ""
+                    if txt:
+                        events.append({"type": "assistant", "payload": {"content": txt, "model": d.get("model")}, **base})
+                    for tr in (d.get("toolRequests") or []):
+                        events.append({"type": "tool_call", "payload": {
+                            "tool": tr.get("name"), "callID": tr.get("toolCallId"),
+                            "arguments": tr.get("arguments"),
+                        }, **base})
+            return events
         # VS Code ~1.100+ stores sessions as <id>.jsonl (delta log) instead of
         # <id>.json (single object); match both and reconstruct the .jsonl form.
         files = list(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.json")) \

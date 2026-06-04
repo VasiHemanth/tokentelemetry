@@ -9,6 +9,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
+import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { API_BASE } from "@/lib/api";
 import { resolveSessionBackTarget } from "@/lib/navigation";
@@ -34,6 +35,8 @@ interface Session {
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
   cost?: number;
   artifacts?: Artifact[];
+  /** Copilot-only: which surface (cli vs vscode) */
+  copilot_source?: string;
   /** Hermes-only */
   source_subtype?: string;
   parent_session_id?: string | null;
@@ -471,6 +474,7 @@ export default function SessionDetailPage() {
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {agent && <AgentBadge agent={agent} />}
+                  {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
                   {agent === "hermes" && <SourceBadge source={sessionInfo?.source_subtype} size="sm" />}
                   <button
                     onClick={() => navigator.clipboard?.writeText(id)}
