@@ -1,6 +1,22 @@
 {
   "releases": [
     {
+      "tag": "2026-06-04",
+      "title": "GitHub Copilot CLI support",
+      "highlights": [
+        {
+          "title": "GitHub Copilot CLI sessions tracked",
+          "description": "TokenTelemetry now reads GitHub Copilot CLI / agent sessions from ~/.copilot/session-state, so your terminal Copilot usage shows up alongside everything else — model, tokens, project, and full trace.",
+          "href": "/"
+        },
+        {
+          "title": "Copilot surface sub-label",
+          "description": "Copilot sessions now carry a small CLI or VS Code tag so you can tell at a glance which surface a session came from. They still roll up under one Copilot total.",
+          "href": "/"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-02",
       "title": "Grok Build support + tracking fixes",
       "highlights": [

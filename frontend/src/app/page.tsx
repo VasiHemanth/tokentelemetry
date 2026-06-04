@@ -10,6 +10,7 @@ import {
 import { useResource } from "@/lib/api";
 import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import SourceBadge from "@/components/SourceBadge";
+import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import { formatTokens, formatCost } from "@/lib/format";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
@@ -25,6 +26,8 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  /** Copilot-only: cli / vscode */
+  copilot_source?: string;
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
 }
@@ -228,8 +231,9 @@ export default function Home() {
                   {sessions.slice(0, 50).map((s, i) => (
                     <TR key={`${s.agent}-${s.id}-${i}`} interactive>
                       <TD className="pl-5">
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                           <AgentBadge agent={s.agent} />
+                          {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                         </Link>
                       </TD>
                       <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>

@@ -19,6 +19,7 @@ export interface SessionRow {
   mcp_tools: string[];
   subagents: string[];
   has_plan: boolean;
+  copilot_source?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
 }
 

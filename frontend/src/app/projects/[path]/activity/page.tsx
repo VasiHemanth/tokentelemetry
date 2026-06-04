@@ -10,6 +10,7 @@ import {
   Table, THead, TBody, TR, TH, TD,
 } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
+import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 
 export default function ActivityTab() {
   const pathname = usePathname();
@@ -47,8 +48,9 @@ export default function ActivityTab() {
               {sessions.map((s, i) => (
                 <TR key={`${s.agent}-${s.id}-${i}`} interactive>
                   <TD className="pl-5">
-                    <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">
+                    <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                       <AgentBadge agent={s.agent} />
+                      {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                     </Link>
                   </TD>
                   <TD className="text-[var(--tt-fg)] max-w-[640px] truncate">
