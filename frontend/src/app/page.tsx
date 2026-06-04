@@ -115,9 +115,9 @@ export default function Home() {
             accent="var(--tt-info)"
           />
           <StatTile
-            label="Cost (est.)"
+            label="API equiv. (est.)"
             value={loading ? <Skeleton className="h-8 w-20" /> : formatCost(totalCost)}
-            hint={pricingUpdated ? `Rates updated ${pricingUpdated}` : undefined}
+            hint="Estimated at API list prices. Subscription users pay a flat monthly fee — this is not your actual spend."
             icon={<DollarSign size={16} />}
             accent="var(--tt-warn)"
           />

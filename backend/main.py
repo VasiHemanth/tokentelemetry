@@ -1741,7 +1741,7 @@ def _scan_sessions_sync():
                                     sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cr)
                                     sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
                                 sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
-                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]))
+                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"])
                                 for item in msg.get("content", []):
                                     if item.get("type") == "tool_use":
                                         tool = item.get("name")
@@ -2147,7 +2147,7 @@ def _scan_sessions_sync():
                                                     plans.append({"session_id": sid, "agent": "qwen", "timestamp": last_ts, "content": t_text})
                                 except Exception: continue
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]))
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
                         sessions.append({"id": sid, "agent": "qwen", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                     except Exception: continue
 
@@ -2254,7 +2254,7 @@ def _scan_sessions_sync():
                                                         has_plan = True
                                                         plans.append({"session_id": sid, "agent": "cursor", "timestamp": mtime, "content": t_text})
                                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]))
+                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
                                 sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "subagents": subagents, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                             except Exception: continue
 
@@ -2472,7 +2472,7 @@ def _scan_sessions_sync():
                             # writes into input as the closest available approximation).
                             tokens["input"]  += (tk.get("input", 0) or 0) + cache_write
                             tokens["output"] += tk.get("output", 0) or 0
-                            tokens["cached"] += (cache.get("read", 0) or 0)
+                            tokens["cached"] = max(tokens["cached"], cache.get("read", 0) or 0)
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                     tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
                     project_path = srow["directory"] or "unknown"

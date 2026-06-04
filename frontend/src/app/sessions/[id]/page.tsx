@@ -1950,8 +1950,8 @@ function GrokForensicsCard({ forensics, cost }: { forensics: any; cost?: number 
           </div>
           {typeof cost === "number" && cost > 0 && (
             <div className="text-[var(--tt-fg-muted)] mt-0.5">
-              Est. cost: <span className="font-mono text-[var(--tt-fg)]">${cost.toFixed(4)}</span>
-              <span className="text-[var(--tt-fg-faint)] ml-1">· input-rate estimate (output not reported)</span>
+              API equiv.: <span className="font-mono text-[var(--tt-fg)]">${cost.toFixed(4)}</span>
+              <span className="text-[var(--tt-fg-faint)] ml-1">· API list-price estimate</span>
             </div>
           )}
         </div>

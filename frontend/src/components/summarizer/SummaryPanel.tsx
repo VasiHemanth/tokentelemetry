@@ -217,7 +217,7 @@ export default function SummaryPanel({ sessionId, agent }: SummaryPanelProps) {
                 <Stat label="Input" value={formatTokens(brief.tokens.input)} />
                 <Stat label="Output" value={formatTokens(brief.tokens.output)} />
                 <Stat label="Total" value={formatTokens(brief.tokens.total)} accent />
-                <Stat label="Cost" value={formatCost(brief.cost)} icon={<Coins size={11} />} accent />
+                <Stat label="API equiv." value={formatCost(brief.cost)} icon={<Coins size={11} />} accent />
                 <Stat label="User turns" value={brief.user_turns} />
                 {brief.model && (
                   <Badge variant="success" size="xs" className="font-mono normal-case" title={brief.model}>{brief.model}</Badge>

@@ -163,7 +163,7 @@ export default function AnalyticsPage() {
           <StatTile
             label="Cache efficiency"
             value={`${cacheEff.toFixed(1)}%`}
-            hint={`${compact(data.total.cached)} cached · est. $${data.total.cost.toFixed(2)} cost`}
+            hint={`${compact(data.total.cached)} cached · est. $${data.total.cost.toFixed(2)} API equiv.`}
             icon={<Zap size={16} />}
             accent="var(--tt-warn)"
           />
@@ -275,7 +275,7 @@ export default function AnalyticsPage() {
                 <TH className="text-right">Output</TH>
                 <TH className="text-right">Cached</TH>
                 <TH className="text-right">Total</TH>
-                <TH className="text-right pr-5 text-amber-300">Cost</TH>
+                <TH className="text-right pr-5 text-amber-300">API equiv.</TH>
               </TR>
             </THead>
             <TBody>
@@ -384,7 +384,7 @@ export default function AnalyticsPage() {
                     <TH className="text-right">Output</TH>
                     <TH className="text-right">Cached</TH>
                     <TH className="text-right">Total</TH>
-                    <TH className="text-right pr-5 text-amber-300">Cost</TH>
+                    <TH className="text-right pr-5 text-amber-300">API equiv.</TH>
                   </TR>
                 </THead>
                 <TBody>

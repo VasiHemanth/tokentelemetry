@@ -34,7 +34,7 @@ type SortKey = "sessions" | "tokens" | "cost" | "name";
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "sessions", label: "Sessions" },
   { key: "tokens",   label: "Tokens"   },
-  { key: "cost",     label: "Cost"     },
+  { key: "cost",     label: "API equiv."     },
   { key: "name",     label: "Name"     },
 ];
 
@@ -166,7 +166,7 @@ export default function ProjectsPage() {
                 <TH className="text-right">Subagents</TH>
                 <TH className="text-right">Plans</TH>
                 <TH className="text-right">Tokens</TH>
-                <TH className="text-right pr-5">Cost</TH>
+                <TH className="text-right pr-5">API equiv.</TH>
               </TR>
             </THead>
             <TBody>
@@ -268,7 +268,7 @@ function ProjectCard({ project }: { project: Project }) {
           <Stat label="Sessions" value={project.session_count} />
           <Stat label="Subs"     value={subs}      tone="purple" />
           <Stat label="Plans"    value={project.plan_count || 0} tone="emerald" />
-          <Stat label="Cost"     value={formatCost(cost)} tone="amber"
+          <Stat label="API equiv." value={formatCost(cost)} tone="amber"
                 hint={tokens ? formatTokens(tokens) : undefined} />
         </div>
       </Card>

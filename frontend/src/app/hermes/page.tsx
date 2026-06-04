@@ -154,7 +154,7 @@ export default function HermesPage() {
         />
         <StatTile
           icon={<DollarSign size={14} />}
-          label="Total cost"
+          label="API equiv."
           value={loading ? "—" : formatCost(totalCost)}
         />
         <StatTile
