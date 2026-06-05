@@ -20,6 +20,7 @@ export interface SessionRow {
   subagents: string[];
   has_plan: boolean;
   copilot_source?: string;
+  antigravity_source?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
 }
 
