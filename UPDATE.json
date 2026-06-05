@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-06-05",
+      "title": "Summarize with any OpenAI-compatible server",
+      "highlights": [
+        {
+          "title": "OpenAI-compatible summarizer backend",
+          "description": "Point TokenTelemetry at any server speaking the OpenAI /v1/chat/completions API — llama.cpp, vLLM, LM Studio, LocalAI, or Ollama's OpenAI endpoint — to generate trace summaries. No extra CLI to install: set the endpoint, model, and (optionally) an API key, tune sampling, and hit Test connection.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-04",
       "title": "Antigravity — tokens, IDE coverage, surface labels",
       "highlights": [

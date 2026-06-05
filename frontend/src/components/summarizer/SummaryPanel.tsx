@@ -316,6 +316,7 @@ const ERROR_ICONS: Record<SummaryErrorInfo["category"], React.ComponentType<{ si
   timeout: Clock,
   network: ServerOff,
   quota: Ban,
+  too_large: Gauge,
   model: AlertOctagon,
   no_output: AlertCircle,
   unknown: AlertCircle,

@@ -10,8 +10,13 @@ import {
   putSummarizerConfig,
   isConfigUnset,
   ONBOARDING_FLAG,
+  DEFAULT_OPENAI_COMPAT,
   type SummarizerBackend,
+  type OpenAICompatConfig,
 } from "@/lib/summarizer";
+
+// Backends that carry a per-backend model selection.
+const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat"]);
 
 /**
  * First-run onboarding. On app load it reads /config/summarizer; if the config
@@ -24,6 +29,8 @@ export default function OnboardingModal() {
   const [selected, setSelected] = useState<string | null>(null);
   // Only meaningful when selected === "ollama".
   const [model, setModel] = useState<string | null>(null);
+  // Only meaningful when selected === "openai_compat".
+  const [openaiCompat, setOpenaiCompat] = useState<OpenAICompatConfig>(DEFAULT_OPENAI_COMPAT);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,7 +67,8 @@ export default function OnboardingModal() {
       await putSummarizerConfig({
         enabled: selected !== null,
         backend: selected,
-        model: (selected === "ollama" || selected === "codex") ? model : null,
+        model: selected && MODEL_BACKENDS.has(selected) ? model : null,
+        ...(selected === "openai_compat" ? { openai_compat: openaiCompat } : {}),
       });
       dismiss();
     } catch (e) {
@@ -119,10 +127,12 @@ export default function OnboardingModal() {
             selected={selected}
             onSelect={(name) => {
               setSelected(name);
-              if (name !== "ollama" && name !== "codex") setModel(null);
+              if (!name || !MODEL_BACKENDS.has(name)) setModel(null);
             }}
             model={model}
             onModelChange={setModel}
+            openaiCompat={openaiCompat}
+            onOpenAICompatChange={setOpenaiCompat}
           />
 
           {error && (

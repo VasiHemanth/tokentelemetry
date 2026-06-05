@@ -9,10 +9,43 @@ export interface SummarizerBackend {
   display_name: string;
 }
 
+/**
+ * Tuning for the openai_compat backend — POSTed to any server speaking the
+ * OpenAI /v1/chat/completions API. Mirrors the backend default_config().
+ */
+export interface OpenAICompatConfig {
+  endpoint: string;
+  /** Optional bearer token; most local servers ignore it. */
+  api_key: string;
+  max_tokens: number;
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  min_p: number;
+  presence_penalty: number;
+  repetition_penalty: number;
+  enable_thinking: boolean;
+}
+
+export const DEFAULT_OPENAI_COMPAT: OpenAICompatConfig = {
+  endpoint: "http://localhost:8080/v1",
+  api_key: "",
+  max_tokens: 512,
+  temperature: 0.7,
+  top_p: 0.95,
+  top_k: 20,
+  min_p: 0.0,
+  presence_penalty: 1.5,
+  repetition_penalty: 1.0,
+  enable_thinking: false,
+};
+
 export interface SummarizerConfig {
   enabled: boolean;
   backend: string | null;
   model: string | null;
+  /** Present only when the openai_compat backend has been configured. */
+  openai_compat?: OpenAICompatConfig;
 }
 
 export interface SummaryBrief {
@@ -51,7 +84,7 @@ export interface Summary {
 }
 
 export interface SummaryErrorInfo {
-  category: "auth" | "quota" | "model" | "timeout" | "network" | "no_output" | "unknown";
+  category: "auth" | "quota" | "too_large" | "model" | "timeout" | "network" | "no_output" | "unknown";
   title: string;
   message: string;
   hint: string | null;
@@ -93,6 +126,22 @@ export const putSummarizerConfig = (cfg: SummarizerConfig) =>
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(cfg),
+  });
+
+export interface OpenAICompatTestResult {
+  ok: boolean;
+  sample?: string;
+  endpoint?: string;
+  error?: string;
+  error_info?: SummaryErrorInfo | null;
+}
+
+/** Ping the configured OpenAI-compatible endpoint to confirm it's reachable. */
+export const testOpenAICompat = (model: string | null, openai_compat: OpenAICompatConfig) =>
+  api<OpenAICompatTestResult>("/summarizer/openai-compat/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, openai_compat }),
   });
 
 export const getCachedSummary = (sessionId: string) =>

@@ -6,8 +6,12 @@ import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skelet
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
-  type SummarizerConfig, type SummarizerBackend,
+  DEFAULT_OPENAI_COMPAT,
+  type SummarizerConfig, type SummarizerBackend, type OpenAICompatConfig,
 } from "@/lib/summarizer";
+
+// Backends that carry a per-backend model selection.
+const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat"]);
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<SummarizerConfig | null>(null);
@@ -15,6 +19,8 @@ export default function SettingsPage() {
   const [selected, setSelected] = useState<string | null>(null);
   // Only meaningful when selected === "ollama"; null = "auto-pick first model".
   const [model, setModel] = useState<string | null>(null);
+  // Only meaningful when selected === "openai_compat".
+  const [openaiCompat, setOpenaiCompat] = useState<OpenAICompatConfig>(DEFAULT_OPENAI_COMPAT);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -29,6 +35,7 @@ export default function SettingsPage() {
         setBackends(list);
         setSelected(cfg.enabled ? cfg.backend : null);
         setModel(cfg.model);
+        if (cfg.openai_compat) setOpenaiCompat(cfg.openai_compat);
         setLoading(false);
       })
       .catch((e) => {
@@ -48,12 +55,15 @@ export default function SettingsPage() {
         enabled: selected !== null,
         backend: selected,
         // Model field is meaningful for backends that support per-backend
-        // model selection (currently ollama + codex); null otherwise.
-        model: (selected === "ollama" || selected === "codex") ? model : null,
+        // model selection (ollama + codex + openai_compat); null otherwise.
+        model: selected && MODEL_BACKENDS.has(selected) ? model : null,
+        // Persist endpoint/tuning whenever openai_compat is the active backend.
+        ...(selected === "openai_compat" ? { openai_compat: openaiCompat } : {}),
       });
       setConfig(next);
       setSelected(next.enabled ? next.backend : null);
       setModel(next.model);
+      if (next.openai_compat) setOpenaiCompat(next.openai_compat);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
@@ -65,7 +75,9 @@ export default function SettingsPage() {
 
   const dirty = config
     ? (selected !== (config.enabled ? config.backend : null))
-        || ((selected === "ollama" || selected === "codex") && model !== config.model)
+        || (!!selected && MODEL_BACKENDS.has(selected) && model !== config.model)
+        || (selected === "openai_compat"
+            && JSON.stringify(openaiCompat) !== JSON.stringify(config.openai_compat ?? DEFAULT_OPENAI_COMPAT))
     : false;
 
   return (
@@ -109,10 +121,12 @@ export default function SettingsPage() {
                   // Drop the model when switching to a backend that doesn't
                   // use one — keeps the dirty-check honest and avoids saving
                   // an irrelevant model name into config.
-                  if (name !== "ollama" && name !== "codex") setModel(null);
+                  if (!name || !MODEL_BACKENDS.has(name)) setModel(null);
                 }}
                 model={model}
                 onModelChange={setModel}
+                openaiCompat={openaiCompat}
+                onOpenAICompatChange={setOpenaiCompat}
               />
 
               {error && <p className="text-[12px] text-[var(--tt-danger-fg)]">{error}</p>}

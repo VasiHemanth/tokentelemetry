@@ -84,3 +84,36 @@ The hook is intentionally narrow. Cases:
 - **Backend default port: 8000** (matches `bin/cli.js`). If you start uvicorn elsewhere, frontend's `NEXT_PUBLIC_API_BASE` must follow.
 - **`UPDATE.json` is committed.** It's not generated, not gitignored. Treat it as source code.
 - **Test pollution: clear `~/.tokentelemetry/.update-check.json`** if you manually seed it for testing; the SHA validator added in PR #34 catches obvious garbage but doesn't catch all dev mistakes.
+
+## Summarizer error handling (never dump raw errors in the UI)
+
+Any failure from a summarizer backend (CLI non-zero exit, HTTP 4xx/5xx, timeout,
+empty output) **must be classified, not surfaced raw**. A user should never see a
+bare stack trace, `HTTP 4xx …`, or a provider's JSON blob as the error message.
+
+The pipeline is:
+
+1. **Adapters raise `SummarizerError`** with the underlying detail kept in the
+   message (status code + provider body), so the classifier has something to
+   match on. HTTP adapters keep the numeric status in the string (e.g.
+   `HTTP 413 from …: {…}`).
+2. **`backend/summarizers/errors.py::classify()`** buckets it into a `category`
+   and returns `{category, title, message, hint, raw}` — a short human title, a
+   plain-English message, an actionable hint, and the truncated raw text (shown
+   only behind a "Show raw error" disclosure). Patterns are ordered, first match
+   wins; order matters (e.g. `too_large` before `quota` because token-budget
+   413s also carry rate-limit wording).
+3. **The endpoint returns `error_info`**, and the frontend renders it via
+   `SummaryErrorCard` (`SummaryPanel.tsx`) / the Test-connection result.
+
+**When you add a new error category** you must touch all three layers or it
+won't compile / won't render:
+- add the pattern + `title`/`message`/`hint` branch in `errors.py`;
+- add it to the `SummaryErrorInfo["category"]` union in `frontend/src/lib/summarizer.ts`;
+- add an icon to `ERROR_ICONS` in `SummaryPanel.tsx` (it's a total `Record`, so
+  TS fails the build if a category is missing).
+
+Hints should tell the user what to *do* (switch model, check `ollama serve`,
+set an env var), not just restate the error. Prefer graceful degradation over a
+hard error where possible — e.g. the `openai_compat` adapter retries once with a
+clean OpenAI-only payload when a strict gateway 400s on a non-standard field.

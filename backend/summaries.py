@@ -364,6 +364,33 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Config — which backend summarizes, persisted in ~/.tokentelemetry.
 # --------------------------------------------------------------------------- #
+def _coerce_openai_compat(raw: Any) -> Dict[str, Any]:
+    """Merge a user-supplied openai_compat sub-config over the canonical
+    defaults, coercing each field to its expected type. Unknown keys are
+    dropped so the persisted file stays clean."""
+    from summarizers.openai_compat import default_config
+
+    defaults = default_config()
+    merged = dict(defaults)
+    if isinstance(raw, dict):
+        for key, default in defaults.items():
+            if key not in raw or raw[key] is None:
+                continue
+            val = raw[key]
+            try:
+                if isinstance(default, bool):
+                    merged[key] = bool(val)
+                elif isinstance(default, int) and not isinstance(default, bool):
+                    merged[key] = int(val)
+                elif isinstance(default, float):
+                    merged[key] = float(val)
+                else:
+                    merged[key] = str(val)
+            except (TypeError, ValueError):
+                merged[key] = default
+    return merged
+
+
 def load_config() -> Dict[str, Any]:
     try:
         return json.loads(_CONFIG_PATH.read_text())
@@ -373,10 +400,15 @@ def load_config() -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     TT_HOME.mkdir(parents=True, exist_ok=True)
-    out = {
+    out: Dict[str, Any] = {
         "enabled": bool(cfg.get("enabled")),
         "backend": cfg.get("backend") or None,
         "model": cfg.get("model") or None,
     }
+    # Persist the openai_compat sub-config whenever it's supplied — keeping it
+    # around even when another backend is active means the user's endpoint /
+    # tuning survives a backend switch.
+    if cfg.get("openai_compat") is not None or out["backend"] == "openai_compat":
+        out["openai_compat"] = _coerce_openai_compat(cfg.get("openai_compat"))
     _CONFIG_PATH.write_text(json.dumps(out, indent=2))
     return out

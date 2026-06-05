@@ -4011,6 +4011,29 @@ async def list_codex_models():
     from summarizers.codex import SUGGESTED_MODELS
     return {"models": SUGGESTED_MODELS}
 
+
+@app.post("/summarizer/openai-compat/test")
+async def test_openai_compat(cfg: dict = Body(...)):
+    """Ping the configured OpenAI-compatible endpoint with a trivial prompt so
+    the settings UI can confirm the server is reachable before saving. Accepts
+    the same shape as the config (top-level ``model`` + ``openai_compat`` block,
+    or a bare openai_compat dict)."""
+    from summarizers.openai_compat import OpenAICompatSummarizer
+    from summarizers.errors import classify as _classify_err
+
+    options = cfg.get("openai_compat") if isinstance(cfg.get("openai_compat"), dict) else cfg
+    sm = OpenAICompatSummarizer(model=cfg.get("model"), config=options)
+    try:
+        sample = sm.summarize("Reply with the single word: ok", timeout=30)
+        return {"ok": True, "sample": sample[:200], "endpoint": sm.endpoint}
+    except SummarizerError as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_info": _classify_err(str(e), backend_name="openai_compat"),
+        }
+
+
 @app.get("/sessions/{session_id}/summary")
 async def get_summary(session_id: str):
     cached = _summaries.get_cached(session_id)
@@ -4038,7 +4061,7 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
     narrative = None
     gen_error = None
     if cfg.get("enabled") and backend_name:
-        sm = get_summarizer(backend_name, cfg.get("model"))
+        sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
         if sm and sm.is_available():
             try:
                 raw = sm.summarize(_summaries.build_prompt(brief))
