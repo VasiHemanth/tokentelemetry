@@ -2,6 +2,27 @@
   "releases": [
     {
       "tag": "2026-06-04",
+      "title": "Antigravity — tokens, IDE coverage, surface labels",
+      "highlights": [
+        {
+          "title": "Antigravity token usage",
+          "description": "Antigravity sessions now show estimated token usage instead of zero, read from the session transcripts.",
+          "href": "/"
+        },
+        {
+          "title": "Antigravity IDE sessions tracked",
+          "description": "Sessions from the Antigravity IDE (not just the CLI) are now picked up, and overlapping sessions are de-duplicated so counts stay accurate.",
+          "href": "/"
+        },
+        {
+          "title": "Antigravity surface sub-label",
+          "description": "Antigravity sessions carry a small CLI / IDE / APP tag so you can tell which surface a session came from. They still roll up under one Antigravity total.",
+          "href": "/"
+        }
+      ]
+    },
+    {
+      "tag": "2026-06-04",
       "title": "GitHub Copilot CLI support",
       "highlights": [
         {

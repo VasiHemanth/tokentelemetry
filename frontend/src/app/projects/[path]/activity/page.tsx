@@ -11,6 +11,7 @@ import {
 } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
+import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 
 export default function ActivityTab() {
   const pathname = usePathname();
@@ -51,6 +52,7 @@ export default function ActivityTab() {
                     <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                       <AgentBadge agent={s.agent} />
                       {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
+                      {s.agent === "antigravity" && <AntigravitySourceBadge source={s.antigravity_source} size="xs" />}
                     </Link>
                   </TD>
                   <TD className="text-[var(--tt-fg)] max-w-[640px] truncate">

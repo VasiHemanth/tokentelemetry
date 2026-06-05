@@ -10,6 +10,7 @@ import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
+import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { API_BASE } from "@/lib/api";
 import { resolveSessionBackTarget } from "@/lib/navigation";
@@ -38,6 +39,8 @@ interface Session {
   artifacts?: Artifact[];
   /** Copilot-only: which surface (cli vs vscode) */
   copilot_source?: string;
+  /** Antigravity-only: which surface (cli / ide / app) */
+  antigravity_source?: string;
   /** Hermes-only */
   source_subtype?: string;
   parent_session_id?: string | null;
@@ -479,6 +482,7 @@ export default function SessionDetailPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   {agent && <AgentBadge agent={agent} />}
                   {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
+                  {agent === "antigravity" && <AntigravitySourceBadge source={sessionInfo?.antigravity_source} size="sm" />}
                   {agent === "hermes" && <SourceBadge source={sessionInfo?.source_subtype} size="sm" />}
                   <button
                     onClick={() => navigator.clipboard?.writeText(id)}

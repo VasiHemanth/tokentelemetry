@@ -97,6 +97,22 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
     grab(metrics)
     return tot if found else None
 
+def _antigravity_surface_map() -> Dict[str, str]:
+    """Map Antigravity session id → surface (cli / ide / app) from the brain dirs,
+    so sessions discovered via the gemini-logs path can also be labelled. First
+    match wins if an id somehow appears under more than one surface."""
+    m: Dict[str, str] = {}
+    for _bd, _src in ANTIGRAVITY_BRAIN_SOURCES:
+        if not _bd.exists():
+            continue
+        try:
+            for p in _bd.iterdir():
+                if p.is_dir():
+                    m.setdefault(p.name, _src)
+        except OSError:
+            continue
+    return m
+
 def _pid_alive(pid: int) -> bool:
     """Cross-platform process liveness probe.
 
@@ -191,7 +207,15 @@ CURSOR_STORAGE = CURSOR_BASE / "User/workspaceStorage"
 # separate from the VS Code Copilot chat store above (#36).
 COPILOT_CLI_DIR = HOME / ".copilot" / "session-state"
 ANTIGRAVITY_BRAIN_DIR = GEMINI_DIR / "antigravity" / "brain"
-ANTIGRAVITY_BRAIN_DIRS = [GEMINI_DIR / "antigravity-cli" / "brain", GEMINI_DIR / "antigravity" / "brain"]
+# Antigravity ships as an IDE and a CLI, each with its own brain/ store; the bare
+# `antigravity/` is the original app store. (dir, surface) so sessions can be
+# labelled by where they came from. `antigravity-backup/` is intentionally excluded.
+ANTIGRAVITY_BRAIN_SOURCES = [
+    (GEMINI_DIR / "antigravity-cli" / "brain", "cli"),
+    (GEMINI_DIR / "antigravity-ide" / "brain", "ide"),
+    (GEMINI_DIR / "antigravity" / "brain", "app"),
+]
+ANTIGRAVITY_BRAIN_DIRS = [d for d, _ in ANTIGRAVITY_BRAIN_SOURCES]
 PROJECT_ALIASES_FILE = HOME / ".tokentelemetry" / "aliases.json"
 
 def _load_project_aliases() -> Dict[str, str]:
@@ -1906,7 +1930,8 @@ def _scan_sessions_sync():
                         try:
                             _all_chat_sids.add(json.loads(_cf.read_text(encoding="utf-8", errors="replace")).get("sessionId") or "")
                         except Exception: pass
-            _all_log_sids: set = set()  # tracks log-only sessions added, prevents cross-dir duplication
+            _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
+            _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
 
             for tmp_dir in (GEMINI_DIR / "tmp").glob("*"):
                 if not tmp_dir.is_dir(): continue
@@ -1980,7 +2005,9 @@ def _scan_sessions_sync():
                                 except Exception: pass
 
                                 tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
-                                sessions.append({"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
+                                if sid in _seen_antigravity: continue
+                                _seen_antigravity.add(sid)
+                                sessions.append({"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "antigravity_source": _ag_surface.get(sid), "cost": tokens["cost"]})
                         except Exception: continue
                 # Scan logs.json for Antigravity sessions that have no chat JSON file
                 _logs_file = tmp_dir / "logs.json"
@@ -1997,7 +2024,7 @@ def _scan_sessions_sync():
                                 if _lsid not in _session_msgs: _session_msgs[_lsid] = []
                                 _session_msgs[_lsid].append(_le)
                         for _lsid, _msgs in _session_msgs.items():
-                            if not _msgs or _lsid in _all_log_sids: continue
+                            if not _msgs or _lsid in _seen_antigravity: continue
                             _first_msg = _msgs[0].get("message", "")
                             _last_ts_str = _session_last_ts.get(_lsid, "")
                             try: _lts = _aware(datetime.fromisoformat(_last_ts_str.replace('Z', '+00:00')))
@@ -2020,18 +2047,25 @@ def _scan_sessions_sync():
                                 else:
                                     _tkns["input"] += toks
                             _tkns["total"] = _tkns["input"] + _tkns["output"]
-                            sessions.append({"id": _lsid, "agent": "antigravity", "project": project_path, "timestamp": _lts, "display": _first_msg[:100], "tokens": _tkns, "mcp_tools": [], "has_plan": _has_plan, "plans": _plans, "model": None, "artifacts": [], "cost": 0.0})
-                            _all_log_sids.add(_lsid)
+                            if _lsid in _seen_antigravity: continue
+                            _seen_antigravity.add(_lsid)
+                            sessions.append({"id": _lsid, "agent": "antigravity", "project": project_path, "timestamp": _lts, "display": _first_msg[:100], "tokens": _tkns, "mcp_tools": [], "has_plan": _has_plan, "plans": _plans, "model": None, "artifacts": [], "antigravity_source": _ag_surface.get(_lsid), "cost": 0.0})
                     except Exception: pass
         except Exception: pass
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
+    _seen_brain_sids: set = set()
     for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
         if not _brain_dir.exists(): continue
         for sess_dir in _brain_dir.iterdir():
             try:
                 if not sess_dir.is_dir(): continue
                 sid = sess_dir.name
+                # Dedup: a session may already be captured via the gemini-logs/chat path (real tokens),
+                # or appear under more than one brain surface. Skip those so we don't double-count.
+                # _seen_antigravity covers prior chat/logs + earlier brain sources; _seen_brain_sids
+                # handles overlaps within this brain SOURCES iteration.
+                if sid in _seen_antigravity or sid in _seen_brain_sids: continue
                 task = plan = walkthrough = ""
                 latest_ts = None
                 artifacts = []
@@ -2085,7 +2119,16 @@ def _scan_sessions_sync():
                                 artifacts.append({"name": f"frame {p.name}", "path": str(p), "type": "image"})
                 except Exception: pass
 
-                if not (task or plan or walkthrough or artifacts): continue
+                # CLI sessions carry a transcript but often none of the IDE artifacts
+                # above, so also keep a session if its transcript yields token usage —
+                # otherwise it's an empty/aborted dir worth skipping. (computed once,
+                # reused in the append below.)
+                _ag_tokens = _estimate_antigravity_tokens(sess_dir)
+                if not (task or plan or walkthrough or artifacts or _ag_tokens.get("total", 0) > 0): continue
+                # Mark seen only now that we're actually appending — a content-less
+                # mirror dir must not block the dir that holds this session's content.
+                _seen_antigravity.add(sid)
+                _seen_brain_sids.add(sid)
                 project = apply_alias(_antigravity_infer_project((task or "") + "\n" + (plan or "")))
                 first_line = next((ln.strip() for ln in (task or plan or walkthrough).splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
                 display = (first_line or "Antigravity session")[:100]
@@ -2098,12 +2141,13 @@ def _scan_sessions_sync():
                     "project": project,
                     "timestamp": latest_ts or datetime.fromtimestamp(sess_dir.stat().st_mtime, tz=timezone.utc),
                     "display": display,
-                    "tokens": _estimate_antigravity_tokens(sess_dir),
+                    "tokens": _ag_tokens,
                     "mcp_tools": [],
                     "has_plan": bool(plan),
                     "plans": plans,
                     "model": "gemini (antigravity)",
                     "artifacts": artifacts,
+                    "antigravity_source": _ag_surface.get(sid),
                     "cost": 0.0,
                 })
             except Exception: continue
