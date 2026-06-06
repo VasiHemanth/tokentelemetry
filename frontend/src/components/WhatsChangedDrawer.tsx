@@ -16,6 +16,21 @@ interface Props {
 }
 
 /**
+ * Neutralize hrefs whose data originates from the remote /version feed (which
+ * can be poisoned via a compromised update cache or MITM). Only http(s) and
+ * in-app absolute paths pass through; `javascript:`, `data:`, and any other
+ * scheme collapse to "#" so a crafted release_url / highlight href can't
+ * execute script when clicked (#56).
+ */
+function safeHref(url: string | null | undefined): string {
+  if (!url) return "#";
+  if (url.startsWith("/") || url.startsWith("https://") || url.startsWith("http://")) {
+    return url;
+  }
+  return "#";
+}
+
+/**
  * Side-drawer that lists all curated releases from UPDATE.json — newest first.
  * The first release gets a "Latest" pill; older releases are shown as history
  * so users who fell behind by several updates can read everything they missed
@@ -106,7 +121,7 @@ export default function WhatsChangedDrawer({
             <span className="ml-2 text-[var(--tt-fg-faint)]">on {repo}</span>
           </span>
           <a
-            href={releaseUrl}
+            href={safeHref(releaseUrl)}
             target="_blank" rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
           >
@@ -201,7 +216,7 @@ function HighlightCard({
           </Link>
         ) : (
           <a
-            href={h.href}
+            href={safeHref(h.href)}
             target="_blank" rel="noopener noreferrer"
             className="mt-2.5 inline-flex items-center gap-1 text-[12px] font-medium text-[var(--tt-brand)] hover:text-[var(--tt-brand-strong)] transition-colors"
           >
