@@ -3966,7 +3966,7 @@ async def get_config(project: Optional[str] = None):
 # Trace summaries
 # --------------------------------------------------------------------------- #
 from fastapi import Body, HTTPException
-from summarizers import get_summarizer, available_summarizers, SummarizerError
+from summarizers import get_summarizer, available_summarizers, SummarizerError, KNOWN_BACKENDS
 import summaries as _summaries
 
 async def _session_meta(session_id: str, agent: str):
@@ -3992,6 +3992,16 @@ async def get_summarizer_config():
 
 @app.put("/config/summarizer")
 async def put_summarizer_config(cfg: dict = Body(...)):
+    # Reject an unknown backend up front rather than persisting garbage that
+    # silently disables every future summarizer call (#57). Validated against
+    # the live registry so all real backends (gemini/antigravity/qwen/
+    # openai_compat/…) stay accepted — not a stale hardcoded list.
+    backend = cfg.get("backend") or None
+    if backend is not None and backend not in KNOWN_BACKENDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown summarizer backend {backend!r}; expected one of {sorted(KNOWN_BACKENDS)}",
+        )
     return _summaries.save_config(cfg)
 
 

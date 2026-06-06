@@ -138,9 +138,20 @@ export function encodeSchedule(b: BuilderState): string | null {
     case "weekly": {
       const [hh, mm] = b.weeklyTime.split(":");
       const day = parseInt(b.weeklyDay, 10);
-      if (Number.isNaN(day) || !hh || !mm) return null;
+      const hhN = parseInt(hh, 10);
+      const mmN = parseInt(mm, 10);
+      // parseInt("ab") is NaN — a falsy `!hh` check let malformed times like
+      // "ab:cd" through and emitted "NaN NaN * * 1" (#53). Validate the parsed
+      // numbers and their ranges instead.
+      if (
+        Number.isNaN(day) ||
+        Number.isNaN(hhN) || hhN < 0 || hhN > 23 ||
+        Number.isNaN(mmN) || mmN < 0 || mmN > 59
+      ) {
+        return null;
+      }
       // Cron: minute hour * * day-of-week
-      return `${parseInt(mm, 10)} ${parseInt(hh, 10)} * * ${day}`;
+      return `${mmN} ${hhN} * * ${day}`;
     }
     case "custom":
       return b.customCron.trim() || null;

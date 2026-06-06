@@ -31,6 +31,11 @@ _ALL: List[BaseSummarizer] = [
 
 _BY_NAME: Dict[str, BaseSummarizer] = {s.name: s for s in _ALL}
 
+# Every backend name the registry knows about, installed or not. Used to
+# validate persisted config so an unknown ``backend`` value can't be saved and
+# then silently disable summaries (#57).
+KNOWN_BACKENDS: frozenset[str] = frozenset(_BY_NAME)
+
 
 def get_summarizer(
     name: str,
@@ -60,4 +65,5 @@ __all__ = [
     "SummarizerError",
     "get_summarizer",
     "available_summarizers",
+    "KNOWN_BACKENDS",
 ]

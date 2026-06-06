@@ -275,21 +275,28 @@ def content_hash(session_id: str, events: List[Dict[str, Any]]) -> str:
 def _conn() -> sqlite3.Connection:
     TT_HOME.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS summaries (
-            session_id   TEXT PRIMARY KEY,
-            agent        TEXT,
-            content_hash TEXT,
-            backend      TEXT,
-            model        TEXT,
-            brief_json   TEXT,
-            narrative_json TEXT,
-            summary_cost REAL,
-            generated_at TEXT
-        )"""
-    )
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS summaries (
+                session_id   TEXT PRIMARY KEY,
+                agent        TEXT,
+                content_hash TEXT,
+                backend      TEXT,
+                model        TEXT,
+                brief_json   TEXT,
+                narrative_json TEXT,
+                summary_cost REAL,
+                generated_at TEXT
+            )"""
+        )
+        return conn
+    except Exception:
+        # The DDL can fail on a corrupt DB, a read-only dir, or an incompatible
+        # schema. Close the just-opened handle before propagating so repeated
+        # failures don't leak file descriptors until the OS limit is hit (#52).
+        conn.close()
+        raise
 
 
 def get_cached(session_id: str) -> Optional[Dict[str, Any]]:
