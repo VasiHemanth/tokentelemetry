@@ -3814,6 +3814,35 @@ def _collect_all_plugins(project: Optional[Path]) -> List[dict]:
         seen.add(key); deduped.append(p)
     return deduped
 
+def _project_safe_roots() -> List[Path]:
+    """Directories a `?project=` path is allowed to resolve inside.
+
+    Defaults to the user's home (where agents and their per-project config
+    live in practice). Power users whose code lives elsewhere (external
+    volumes, /opt, …) can extend this via TT_PROJECT_ROOTS — an os-pathsep
+    separated list of additional roots.
+    """
+    roots = [HOME]
+    extra = os.environ.get("TT_PROJECT_ROOTS")
+    if extra:
+        roots += [Path(p).expanduser() for p in extra.split(os.pathsep) if p.strip()]
+    return roots
+
+
+def _project_within_safe_roots(project: str) -> bool:
+    """True iff `project` resolves inside an allowed root (#54).
+
+    Resolution collapses symlinks and `..`, so neither `?project=/etc` nor a
+    `../../` escape nor a symlink can point the project scope at files outside
+    the user's own tree.
+    """
+    try:
+        resolved = Path(project).resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(resolved.is_relative_to(r.resolve()) for r in _project_safe_roots())
+
+
 @app.get("/config")
 async def get_config(project: Optional[str] = None):
     """Return skills, MCPs, and memory files for user scope + optional project scope."""
@@ -3887,7 +3916,7 @@ async def get_config(project: Optional[str] = None):
 
     # ---- PROJECT scope ----
     project_valid = False
-    if project:
+    if project and _project_within_safe_roots(project):
         proj = Path(project)
         if proj.exists() and proj.is_dir():
             project_valid = True
