@@ -50,7 +50,7 @@ export const FEATURES: Feature[] = [
     bullets: [
       "Stacked daily area chart shows where your budget is actually going.",
       "Model leaderboard ranked by usage, cost, and cache hit rate.",
-      "All math local. No data leaves your machine.",
+      "All math runs locally — your analytics data never leaves your machine.",
     ],
     screenshot: "/screenshots/analytics.png",
   },

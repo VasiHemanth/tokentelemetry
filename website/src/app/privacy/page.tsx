@@ -65,8 +65,15 @@ export default function PrivacyPage() {
 
       <Section title="What we never collect">
         <p>
-          Your prompts, code, agent logs, token counts, and costs stay on your own machine. The TokenTelemetry
-          application has no telemetry endpoint — there is nowhere for that data to go.
+          Your prompts, code, agent logs, token counts, and costs stay on your own machine. TokenTelemetry has no
+          usage-telemetry endpoint — your data is never collected or transmitted anywhere.
+        </p>
+        <p>
+          The application makes a single outbound network request: an <strong className="text-[var(--tt-fg)]">optional
+          update check</strong> that fetches the latest version and release notes from GitHub (about once an hour) so
+          you know when new features are available. It sends no usage data — only a version request, which, like any
+          web request, exposes your IP address and the app name to GitHub. Disable it in the app under
+          Settings → Updates &amp; privacy, or by setting <code>TT_NO_UPDATE_CHECK=1</code> before launching.
         </p>
       </Section>
 

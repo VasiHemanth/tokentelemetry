@@ -74,7 +74,7 @@ export default function Hero() {
             {/* Subhead */}
             <p className="text-[15px] sm:text-[17px] text-[var(--tt-fg-muted)] max-w-2xl mx-auto lg:mx-0 leading-relaxed mb-3">
               Local, read-only observability for Claude Code, Codex, Gemini CLI, Cursor, Copilot, Antigravity,
-              Qwen CLI, OpenCode, Grok Build, Hermes Agent, and Vibe — one command, no signup, nothing leaves your machine.
+              Qwen CLI, OpenCode, Grok Build, Hermes Agent, and Vibe — one command, no signup, your logs never leave your machine.
             </p>
             <p className="text-[13px] sm:text-[14px] text-[var(--tt-fg-dim)] font-mono italic mb-9 transition-opacity">
               &ldquo;{PAINS[pain]}&rdquo;

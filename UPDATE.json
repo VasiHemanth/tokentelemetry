@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-06-07",
+      "title": "Update check — now visible and yours to control",
+      "highlights": [
+        {
+          "title": "Check-for-updates toggle",
+          "description": "TokenTelemetry's one outbound call — an optional check that tells you when new features ship — now has a switch in Settings → Updates & privacy. It sends no usage data; turn it off any time, or set TT_NO_UPDATE_CHECK=1 to enforce it off.",
+          "href": "/settings"
+        },
+        {
+          "title": "Clearer privacy wording",
+          "description": "Docs and site now state precisely what stays local (all your logs, sessions, tokens, and costs) and what the update check does, so the privacy promise matches the behavior."
+        }
+      ]
+    },
+    {
       "tag": "2026-06-05",
       "title": "Summarize with any OpenAI-compatible server",
       "highlights": [

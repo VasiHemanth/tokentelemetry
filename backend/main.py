@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import re
@@ -15,6 +15,7 @@ from harness_config import (
     load_aliases, apply_alias,
     load_hidden, hide_project, unhide_project,
     list_aliases, save_aliases,
+    load_preferences, save_preferences,
 )
 
 def _aware(dt):
@@ -1265,10 +1266,25 @@ def _fetch_remote() -> Optional[Dict[str, Any]]:
     return {"latest": latest_sha, "releases": releases, "release_url": release_url}
 
 
+def _update_check_enabled() -> bool:
+    """Whether the dashboard may contact GitHub for version/release info.
+
+    Two ways to turn it off, env var taking precedence so ops/enterprise can
+    enforce it regardless of the in-app setting:
+      - TT_NO_UPDATE_CHECK=1 (env) — hard off, not user-overridable; and
+      - the `update_check` preference (Settings toggle), default on.
+    This is the *only* outbound network call the app makes; it sends no logs,
+    sessions, or usage data — just a version/UPDATE.json fetch."""
+    if os.environ.get("TT_NO_UPDATE_CHECK"):
+        return False
+    return bool(load_preferences().get("update_check", True))
+
+
 @app.get("/version")
 async def get_version():
     """Banner data: how far behind the local checkout is + 1-3 curated bullets
-    about what's in the update. Set TT_NO_UPDATE_CHECK=1 to disable."""
+    about what's in the update. Disable via the Settings toggle or, to enforce
+    it for everyone, TT_NO_UPDATE_CHECK=1."""
     current = _local_commit()
     base: Dict[str, Any] = {
         "current": current,
@@ -1279,7 +1295,7 @@ async def get_version():
         "source": "none",
         "repo": f"{_REPO_OWNER}/{_REPO_NAME}",
     }
-    if os.environ.get("TT_NO_UPDATE_CHECK"):
+    if not _update_check_enabled():
         base["source"] = "disabled"
         return base
     if not current:
@@ -3302,6 +3318,30 @@ async def post_unhide(payload: PathPayload):
     updated = unhide_project(payload.path)
     _invalidate_sessions_cache()
     return {"ok": True, "hidden": sorted(updated)}
+
+
+@app.get("/config/update-check")
+async def get_update_check():
+    """Current update-check state for the Settings toggle.
+
+    `enabled` is the saved preference; `env_forced_off` is true when
+    TT_NO_UPDATE_CHECK is set, in which case the toggle is read-only (ops/policy
+    override). `effective` is what actually happens (env wins)."""
+    pref = bool(load_preferences().get("update_check", True))
+    env_off = bool(os.environ.get("TT_NO_UPDATE_CHECK"))
+    return {"enabled": pref, "env_forced_off": env_off, "effective": pref and not env_off}
+
+
+@app.post("/config/update-check")
+async def post_update_check(payload: dict = Body(...)):
+    """Persist the update-check preference. Body: {"enabled": bool}."""
+    from fastapi import HTTPException
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="'enabled' must be a boolean")
+    save_preferences({"update_check": enabled})
+    env_off = bool(os.environ.get("TT_NO_UPDATE_CHECK"))
+    return {"enabled": enabled, "env_forced_off": env_off, "effective": enabled and not env_off}
 
 
 @app.get("/config/aliases")
