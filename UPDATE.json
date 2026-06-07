@@ -10,8 +10,8 @@
           "href": "/"
         },
         {
-          "title": "Accurate project for Antigravity CLI sessions",
-          "description": "CLI sessions are now grouped under the exact project folder they ran in, taken from the CLI's own prompt history rather than guessed from the task text — so they stop landing in \"unassigned\".",
+          "title": "Accurate, stable project for Antigravity CLI sessions",
+          "description": "CLI sessions are now grouped under the exact folder they worked in, read from each session's own saved record — so the grouping stays correct over time instead of guessing from task text. Sessions that genuinely never entered a project (pure chat/research) stay under \"unassigned\".",
           "href": "/"
         }
       ]

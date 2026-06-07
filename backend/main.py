@@ -320,48 +320,104 @@ _AG_MODEL_DISPLAY_RE = re.compile(
     rb'(?:Pro|Flash|Ultra|Nano|Opus|Sonnet|Haiku)(?:[ ]\([A-Za-z]+\))?)'
 )
 
-def _antigravity_db_model(db_path: Path) -> Optional[str]:
-    """Pull the model display name from an Antigravity CLI SQLite trajectory.
+# Tool-call steps in an Antigravity CLI trajectory embed a clean JSON arg blob.
+# Its Cwd/SearchPath fields are the session's real workspace root; the file-path
+# fields point at files it touched. These are the authoritative, always-present
+# record of *where* a session worked — unlike history.jsonl, a rolling log that
+# ages out. Paths under the agent's own home (~/.gemini/...) are internal
+# (brain/scratch/mcp), not user projects, and are ignored.
+_AG_WORKSPACE_RE = re.compile(rb'"(?:Cwd|SearchPath)"\s*:\s*"((?:[^"\\]|\\.)+)"')
+_AG_FILEPATH_RE = re.compile(rb'"(?:AbsolutePath|TargetFile|DirectoryPath)"\s*:\s*"((?:[^"\\]|\\.)+)"')
 
-    `agy` stores the model as a protobuf field inside the gen_metadata.data
-    blobs (one row per model generation). We scan those blobs and take the most
-    common display-name match. Read-only and best-effort: returns None on any
-    DB/IO error or when no model string is present (e.g. older .pb sessions,
-    which don't embed the display name)."""
+
+def _antigravity_db_meta(db_path: Path) -> Dict[str, Optional[str]]:
+    """Read model + project for one Antigravity CLI session from its SQLite trajectory.
+
+    Single read-only pass over the DB:
+      - **model**: most common display name in the gen_metadata blobs (None for
+        older .pb-only sessions, which don't embed it).
+      - **project**: the workspace the session actually worked in, taken from the
+        Cwd/SearchPath of its tool calls (falling back to the project root of a
+        touched file). Paths under ~/.gemini are the agent's own internals and
+        are skipped, so a pure chat/research session that never entered a project
+        stays unattributed (project=None) instead of being mislabeled.
+
+    Best-effort: returns {"model": None, "project": None} on any DB/IO error."""
     from collections import Counter
-    counts: "Counter[str]" = Counter()
+    models: "Counter[str]" = Counter()
+    roots: "Counter[str]" = Counter()
+    files: "Counter[str]" = Counter()
+    gemini_home = str(GEMINI_DIR)
     try:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:
             for (blob,) in con.execute("SELECT data FROM gen_metadata WHERE data IS NOT NULL"):
-                if not blob:
+                if blob:
+                    for m in _AG_MODEL_DISPLAY_RE.findall(blob):
+                        models[m.decode("ascii", "ignore")] += 1
+            for (payload,) in con.execute("SELECT step_payload FROM steps WHERE step_payload IS NOT NULL"):
+                if not payload:
                     continue
-                for m in _AG_MODEL_DISPLAY_RE.findall(blob):
-                    counts[m.decode("ascii", "ignore")] += 1
+                for m in _AG_WORKSPACE_RE.findall(payload):
+                    v = m.decode("utf-8", "ignore")
+                    if not v.startswith(gemini_home):
+                        roots[v] += 1
+                for m in _AG_FILEPATH_RE.findall(payload):
+                    v = m.decode("utf-8", "ignore")
+                    if not v.startswith(gemini_home):
+                        files[v] += 1
         finally:
             con.close()
     except (sqlite3.Error, OSError):
-        return None
-    if not counts:
-        return None
-    return counts.most_common(1)[0][0]
+        return {"model": None, "project": None}
+
+    model = models.most_common(1)[0][0] if models else None
+    project: Optional[str] = None
+    if roots:
+        project = roots.most_common(1)[0][0]
+    elif files:
+        inferred = _antigravity_infer_project(files.most_common(1)[0][0])
+        if "unassigned" not in inferred:  # only accept a real derived root
+            project = inferred
+    return {"model": model, "project": project}
+
 
 def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict[str, Any]]:
     """Enrich Antigravity CLI (`agy`) sessions from its own stores.
 
-    The brain/ scanner only sees derived markdown, so it labels every CLI
-    session with a generic model ("gemini (antigravity)") and a heuristic
-    project guessed from the task/plan text. Here we recover the ground truth:
+    The brain/ scanner only sees derived markdown, so it labels every CLI session
+    with a generic model ("gemini (antigravity)") and a project heuristically
+    guessed from the task/plan text. Here we recover the ground truth, preferring
+    the per-session SQLite trajectory (permanent) over history.jsonl (a rolling
+    log that ages out):
 
-      - **project cwd** from history.jsonl, which maps conversationId -> workspace
-        directly (no guessing); and
-      - **model display name** from each conversations/<uuid>.db gen_metadata table.
+      1. model + project from each conversations/<uuid>.db (see _antigravity_db_meta);
+      2. project from history.jsonl (conversationId -> workspace) as a fallback for
+         sessions whose trajectory recorded no workspace (e.g. older .pb sessions).
 
     Session ids in brain/ are the conversation UUIDs, so the returned map keys
     line up 1:1. Returns {session_id: {"model": str, "project": str}} with each
     field present only when found. Best-effort — never raises."""
     meta: Dict[str, Dict[str, Any]] = {}
-    # 1. Exact project cwd from the flat prompt log (last line wins => latest cwd).
+    # 1. Authoritative, permanent: each session's own SQLite trajectory.
+    conv = cli_dir / "conversations"
+    try:
+        db_files = sorted(conv.glob("*.db")) if conv.exists() else []
+    except OSError:
+        db_files = []
+    for db in db_files:
+        dm = _antigravity_db_meta(db)
+        entry: Dict[str, Any] = {}
+        if dm.get("model"):
+            entry["model"] = dm["model"]
+        if dm.get("project"):
+            entry["project"] = dm["project"]
+        if entry:
+            meta[db.stem] = entry
+    # 2. Fallback project source: the flat prompt log. Build a last-wins map
+    #    (newest cwd per conversation), then fill only sessions the .db didn't
+    #    resolve — so a project from the authoritative .db always wins.
+    hist_project: Dict[str, str] = {}
     hist = cli_dir / "history.jsonl"
     try:
         if hist.exists():
@@ -376,19 +432,11 @@ def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict
                         continue
                     cid, ws = rec.get("conversationId"), rec.get("workspace")
                     if cid and ws:
-                        meta.setdefault(cid, {})["project"] = ws
+                        hist_project[cid] = ws  # last line wins => latest cwd
     except OSError:
         pass
-    # 2. Real model name from the per-session SQLite trajectory.
-    conv = cli_dir / "conversations"
-    try:
-        db_files = sorted(conv.glob("*.db")) if conv.exists() else []
-    except OSError:
-        db_files = []
-    for db in db_files:
-        model = _antigravity_db_model(db)
-        if model:
-            meta.setdefault(db.stem, {})["model"] = model
+    for cid, ws in hist_project.items():
+        meta.setdefault(cid, {}).setdefault("project", ws)
     return meta
 
 class TokenUsage(BaseModel):

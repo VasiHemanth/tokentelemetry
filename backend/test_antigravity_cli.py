@@ -28,46 +28,80 @@ def _make_cli_dir(root: Path) -> Path:
     conv = root / "conversations"
     conv.mkdir(parents=True)
     # history.jsonl: last-wins per conversationId; tolerate junk + missing fields.
+    # sid-db's history workspace must LOSE to the .db-derived project below.
     (root / "history.jsonl").write_text(
-        json.dumps({"conversationId": "sid-db", "workspace": "/proj/alpha"}) + "\n"
+        json.dumps({"conversationId": "sid-db", "workspace": "/proj/stale-history"}) + "\n"
         + "this is not json\n"
-        + json.dumps({"conversationId": "sid-db", "workspace": "/proj/alpha2"}) + "\n"
         + json.dumps({"display": "no conversation id"}) + "\n"
-        + json.dumps({"conversationId": "sid-pb", "workspace": "/proj/beta"}) + "\n",
+        + json.dumps({"conversationId": "sid-pb", "workspace": "/proj/beta"}) + "\n"
+        + json.dumps({"conversationId": "sid-chat", "workspace": "/proj/from-history"}) + "\n",
         encoding="utf-8",
     )
-    # .db session with the model embedded in gen_metadata blobs (+ prose noise).
-    db = conv / "sid-db.db"
-    con = sqlite3.connect(db)
-    con.execute("CREATE TABLE gen_metadata (idx integer, data blob)")
-    con.execute("INSERT INTO gen_metadata VALUES (?,?)",
-                (0, b"\x0aGemini 3.1 Pro (High)\x12 Gemini API) prose \x1aClaude Code"))
-    con.execute("INSERT INTO gen_metadata VALUES (?,?)", (1, b"xxGemini 3.1 Pro (High)yy"))
-    con.execute("INSERT INTO gen_metadata VALUES (?,?)", (2, None))
-    con.commit()
-    con.close()
-    # .pb-only session: no model embedded -> model unresolved, project still found.
-    (conv / "sid-pb.pb").write_bytes(b"raw protobuf bytes with no model display name")
+
+    def _make_db(name, gen_blobs, step_blobs):
+        db = conv / name
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE gen_metadata (idx integer, data blob)")
+        for i, b in enumerate(gen_blobs):
+            con.execute("INSERT INTO gen_metadata VALUES (?,?)", (i, b))
+        con.execute("CREATE TABLE steps (idx integer, step_payload blob)")
+        for i, b in enumerate(step_blobs):
+            con.execute("INSERT INTO steps VALUES (?,?)", (i, b))
+        con.commit()
+        con.close()
+
+    # sid-db: model in gen_metadata (+ prose noise); workspace in tool-call Cwd,
+    # appearing more often than a one-off side path so it's the most common.
+    _make_db(
+        "sid-db.db",
+        [b"\x0aGemini 3.1 Pro (High)\x12 Gemini API) prose \x1aClaude Code",
+         b"xxGemini 3.1 Pro (High)yy", None],
+        [b'{"Cwd":"/work/realproj","toolAction":"x"}',
+         b'{"SearchPath":"/work/realproj","Query":"y"}',
+         b'{"Cwd":"/work/realproj"}',
+         b'{"AbsolutePath":"/work/other/one-off.py"}', None],
+    )
+    # sid-chat: a pure research session — its only path is under the agent's own
+    # ~/.gemini home, so the .db yields no project; history.jsonl fills it.
+    _make_db(
+        "sid-chat.db",
+        [None],
+        [(b'{"Cwd":"' + str(main.GEMINI_DIR).encode() + b'/antigravity-cli/scratch"}'),
+         b'{"Query":"how do tariffs work"}'],
+    )
+    # .pb-only session: no model and no extractable cwd -> project from history.
+    (conv / "sid-pb.pb").write_bytes(b"raw protobuf bytes with no model or path")
     return root
 
 
-def test_cli_meta_recovers_model_and_project():
+def test_cli_meta_prefers_db_project_over_history():
     with tempfile.TemporaryDirectory() as d:
         cli = _make_cli_dir(Path(d))
         meta = main._antigravity_cli_meta(cli)
-        assert meta["sid-db"]["project"] == "/proj/alpha2"  # last line wins
+        # .db workspace (permanent) wins over the rolling history.jsonl entry.
+        assert meta["sid-db"]["project"] == "/work/realproj"
         assert meta["sid-db"]["model"] == "Gemini 3.1 Pro (High)"
+
+
+def test_cli_meta_history_fallback_and_internal_paths_ignored():
+    with tempfile.TemporaryDirectory() as d:
+        cli = _make_cli_dir(Path(d))
+        meta = main._antigravity_cli_meta(cli)
+        # .pb session has no .db signal -> project comes from history.jsonl.
         assert meta["sid-pb"]["project"] == "/proj/beta"
-        assert "model" not in meta["sid-pb"]  # .pb has no embedded display name
+        assert "model" not in meta["sid-pb"]
+        # Research session: ~/.gemini-internal cwd ignored, so history fills it
+        # rather than the session being mislabeled with the agent's own path.
+        assert meta["sid-chat"]["project"] == "/proj/from-history"
 
 
-def test_model_regex_ignores_prose_and_handles_errors():
-    # Strict pattern must not match prose like "Gemini API" or skill names.
+def test_db_meta_regex_and_error_handling():
+    # Strict model pattern must not match prose like "Gemini API" or skill names.
     assert main._AG_MODEL_DISPLAY_RE.findall(b"Gemini API) into web apps; Claude Code") == []
     with tempfile.TemporaryDirectory() as d:
         bad = Path(d) / "corrupt.db"
         bad.write_bytes(b"this is not a sqlite database")
-        assert main._antigravity_db_model(bad) is None
+        assert main._antigravity_db_meta(bad) == {"model": None, "project": None}
         # Missing dir must yield an empty map, never raise.
         assert main._antigravity_cli_meta(Path(d) / "does-not-exist") == {}
 
