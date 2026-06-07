@@ -21,7 +21,8 @@ class GeminiSummarizer(BaseSummarizer):
 
     def summarize(self, prompt: str, *, timeout: int = 120) -> str:
         out = run_cli(
-            [self.binary, "-p", prompt, "-o", "json"],
+            [self.binary, "-o", "json"],
+            stdin=prompt,
             cwd=_ensure_cwd(),
             timeout=timeout,
         )

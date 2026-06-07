@@ -23,7 +23,8 @@ class QwenSummarizer(BaseSummarizer):
 
     def summarize(self, prompt: str, *, timeout: int = 120) -> str:
         out = run_cli(
-            [self.binary, prompt, "-o", "json"],
+            [self.binary, "-o", "json"],
+            stdin=prompt,
             cwd=_ensure_cwd(),
             timeout=timeout,
         )

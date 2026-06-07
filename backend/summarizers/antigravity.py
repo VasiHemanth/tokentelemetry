@@ -28,10 +28,10 @@ class AntigravitySummarizer(BaseSummarizer):
         out = run_cli(
             [
                 self.binary,
-                "-p", prompt,
                 "--dangerously-skip-permissions",
                 "--print-timeout", f"{timeout}s",
             ],
+            stdin=prompt,
             cwd=_ensure_cwd(),
             # Give the process a little slack past its own print-timeout so the
             # binary's timeout fires first with a cleaner message.

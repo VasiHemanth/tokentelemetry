@@ -56,9 +56,12 @@ export default function SummaryPanel({ sessionId, agent }: SummaryPanelProps) {
     setErrorInfo(null);
     try {
       const res = await generateSummary(sessionId, agent, force);
-      setSummary(res.summary);
-      if (res.error) setError(res.error);
-      if (res.error_info) setErrorInfo(res.error_info);
+      if (res.error) {
+        setError(res.error);
+        if (res.error_info) setErrorInfo(res.error_info);
+      } else {
+        setSummary(res.summary);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate summary.");
     } finally {
