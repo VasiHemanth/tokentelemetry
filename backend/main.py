@@ -217,6 +217,13 @@ ANTIGRAVITY_BRAIN_SOURCES = [
     (GEMINI_DIR / "antigravity" / "brain", "app"),
 ]
 ANTIGRAVITY_BRAIN_DIRS = [d for d, _ in ANTIGRAVITY_BRAIN_SOURCES]
+# `agy` (the Antigravity CLI) additionally persists each session's full trajectory
+# under antigravity-cli/conversations/<uuid>.db (SQLite; newer sessions) or
+# <uuid>.pb (protobuf; older), plus a flat prompt log in history.jsonl. The brain/
+# scanner above only reads derived markdown, so it falls back to a generic model
+# name and a heuristic project. We mine these CLI-only stores for the real model
+# display name and the exact project cwd — see _antigravity_cli_meta().
+ANTIGRAVITY_CLI_DIR = GEMINI_DIR / "antigravity-cli"
 PROJECT_ALIASES_FILE = HOME / ".tokentelemetry" / "aliases.json"
 
 def _load_project_aliases() -> Dict[str, str]:
@@ -304,6 +311,86 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
         logging.debug(f"Failed to access transcript for {sess_dir}: {e}")
 
     return tkns
+
+# Model display name as embedded (protobuf string field) in Antigravity CLI
+# trajectories, e.g. "Gemini 3.1 Pro (High)". Deliberately strict — requires a
+# version number + tier word — so it never matches prose like "Gemini API ..."
+# or skill/plugin names ("Claude Code") that also appear in the blobs.
+_AG_MODEL_DISPLAY_RE = re.compile(
+    rb'\b((?:Gemini|Claude|GPT)[ ]\d[0-9.]*[ ]'
+    rb'(?:Pro|Flash|Ultra|Nano|Opus|Sonnet|Haiku)(?:[ ]\([A-Za-z]+\))?)'
+)
+
+def _antigravity_db_model(db_path: Path) -> Optional[str]:
+    """Pull the model display name from an Antigravity CLI SQLite trajectory.
+
+    `agy` stores the model as a protobuf field inside the gen_metadata.data
+    blobs (one row per model generation). We scan those blobs and take the most
+    common display-name match. Read-only and best-effort: returns None on any
+    DB/IO error or when no model string is present (e.g. older .pb sessions,
+    which don't embed the display name)."""
+    from collections import Counter
+    counts: "Counter[str]" = Counter()
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            for (blob,) in con.execute("SELECT data FROM gen_metadata WHERE data IS NOT NULL"):
+                if not blob:
+                    continue
+                for m in _AG_MODEL_DISPLAY_RE.findall(blob):
+                    counts[m.decode("ascii", "ignore")] += 1
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError):
+        return None
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict[str, Any]]:
+    """Enrich Antigravity CLI (`agy`) sessions from its own stores.
+
+    The brain/ scanner only sees derived markdown, so it labels every CLI
+    session with a generic model ("gemini (antigravity)") and a heuristic
+    project guessed from the task/plan text. Here we recover the ground truth:
+
+      - **project cwd** from history.jsonl, which maps conversationId -> workspace
+        directly (no guessing); and
+      - **model display name** from each conversations/<uuid>.db gen_metadata table.
+
+    Session ids in brain/ are the conversation UUIDs, so the returned map keys
+    line up 1:1. Returns {session_id: {"model": str, "project": str}} with each
+    field present only when found. Best-effort — never raises."""
+    meta: Dict[str, Dict[str, Any]] = {}
+    # 1. Exact project cwd from the flat prompt log (last line wins => latest cwd).
+    hist = cli_dir / "history.jsonl"
+    try:
+        if hist.exists():
+            with open(hist, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    cid, ws = rec.get("conversationId"), rec.get("workspace")
+                    if cid and ws:
+                        meta.setdefault(cid, {})["project"] = ws
+    except OSError:
+        pass
+    # 2. Real model name from the per-session SQLite trajectory.
+    conv = cli_dir / "conversations"
+    try:
+        db_files = sorted(conv.glob("*.db")) if conv.exists() else []
+    except OSError:
+        db_files = []
+    for db in db_files:
+        model = _antigravity_db_model(db)
+        if model:
+            meta.setdefault(db.stem, {})["model"] = model
+    return meta
 
 class TokenUsage(BaseModel):
     input: int = 0
@@ -2071,6 +2158,8 @@ def _scan_sessions_sync():
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
     _seen_brain_sids: set = set()
+    # CLI (`agy`) ground truth: real model + exact project, keyed by session id.
+    _ag_cli_meta = _antigravity_cli_meta()
     for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
         if not _brain_dir.exists(): continue
         for sess_dir in _brain_dir.iterdir():
@@ -2145,7 +2234,10 @@ def _scan_sessions_sync():
                 # mirror dir must not block the dir that holds this session's content.
                 _seen_antigravity.add(sid)
                 _seen_brain_sids.add(sid)
-                project = apply_alias(_antigravity_infer_project((task or "") + "\n" + (plan or "")))
+                # Prefer the CLI's own records (exact cwd from history.jsonl, real
+                # model from the SQLite trajectory); fall back to brain heuristics.
+                _cli = _ag_cli_meta.get(sid, {})
+                project = apply_alias(_cli.get("project") or _antigravity_infer_project((task or "") + "\n" + (plan or "")))
                 first_line = next((ln.strip() for ln in (task or plan or walkthrough).splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
                 display = (first_line or "Antigravity session")[:100]
                 plans: List[dict] = []
@@ -2161,7 +2253,7 @@ def _scan_sessions_sync():
                     "mcp_tools": [],
                     "has_plan": bool(plan),
                     "plans": plans,
-                    "model": "gemini (antigravity)",
+                    "model": _cli.get("model") or "gemini (antigravity)",
                     "artifacts": artifacts,
                     "antigravity_source": _ag_surface.get(sid),
                     "cost": 0.0,
@@ -2718,20 +2810,33 @@ async def get_artifact(path: str):
     """Stream a local artifact file securely."""
     from fastapi.responses import FileResponse
     p = Path(path)
-    # Security: only serve files from known agent directories
-    allowed = [CLAUDE_DIR, CODEX_DIR, GEMINI_DIR, QWEN_DIR, VIBE_DIR, CURSOR_DIR, VSCODE_BASE, CURSOR_BASE]
+    # Security: only serve files from known agent directories. We compare the
+    # *resolved* path (symlinks collapsed) against each resolved allow-root, so a
+    # symlink planted inside an allowed dir that points outside it is rejected.
+    # Antigravity's brain/CLI stores live under GEMINI_DIR already, but we list
+    # them explicitly so the allow-list survives any future narrowing of that
+    # root (and documents that those artifacts are intentionally served).
+    allowed = [CLAUDE_DIR, CODEX_DIR, GEMINI_DIR, QWEN_DIR, VIBE_DIR, CURSOR_DIR,
+               VSCODE_BASE, CURSOR_BASE, *ANTIGRAVITY_BRAIN_DIRS, ANTIGRAVITY_CLI_DIR]
+    try:
+        resolved = p.resolve()
+    except Exception:
+        resolved = None
     is_safe = False
-    for a in allowed:
-        try:
-            if p.resolve().is_relative_to(a.resolve()):
-                is_safe = True; break
-        except Exception: continue
+    if resolved is not None:
+        for a in allowed:
+            try:
+                if resolved.is_relative_to(a.resolve()):
+                    is_safe = True; break
+            except Exception: continue
 
-    if not is_safe or not p.exists() or not p.is_file():
+    if not is_safe or resolved is None or not resolved.exists() or not resolved.is_file():
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Unauthorized or not found")
 
-    return FileResponse(path)
+    # Serve the validated, resolved path (not the raw input) so the file we
+    # checked is exactly the file we return — closes any symlink-swap window.
+    return FileResponse(str(resolved))
 
 
 @app.get("/cache/status")
