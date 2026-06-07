@@ -235,6 +235,12 @@ def _load_project_aliases() -> Dict[str, str]:
         except Exception: pass
     return {}
 
+# Sentinel project for Antigravity sessions whose real workspace can't be
+# recovered (pure chat/research runs that never entered a project dir). It groups
+# such sessions but is NOT a real workspace, so get_projects hides it from the
+# Projects view — the sessions still appear in the dashboard and session lists.
+ANTIGRAVITY_UNASSIGNED = "Antigravity / unassigned"
+
 def _antigravity_infer_project(text: str) -> str:
     import re
     # Match absolute paths starting with the home directory or common root prefixes
@@ -263,8 +269,8 @@ def _antigravity_infer_project(text: str) -> str:
             if len(parts) >= 4:
                 return "/".join(parts[:4])
             return path
-            
-    return "Antigravity / unassigned"
+
+    return ANTIGRAVITY_UNASSIGNED
 
 def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     import logging
@@ -3376,6 +3382,11 @@ async def get_projects(include_hidden: bool = False):
     hidden = load_hidden()
     for s in sessions:
         proj = s["project"]
+        # The Antigravity "unassigned" sentinel isn't a real workspace — skip it
+        # so it never shows as a project card. These sessions remain visible in
+        # the dashboard and session lists, just not grouped as a project.
+        if proj == ANTIGRAVITY_UNASSIGNED:
+            continue
         if proj not in projects:
             # Basename that handles both POSIX (/) and Windows (\) separators
             proj_name = (os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown").strip()

@@ -106,6 +106,28 @@ def test_db_meta_regex_and_error_handling():
         assert main._antigravity_cli_meta(Path(d) / "does-not-exist") == {}
 
 
+def test_projects_excludes_unassigned_sentinel():
+    # The Antigravity "unassigned" bucket must never render as a project card,
+    # while real workspaces still do. Sessions themselves remain in /sessions.
+    async def fake_sessions():
+        common = {"agent": "antigravity", "mcp_tools": [], "subagents": [],
+                  "tokens": {}, "cost": 0.0, "plans": [], "has_plan": False}
+        return [
+            {"project": "/Users/me/Documents/Developer/realproj", **common},
+            {"project": main.ANTIGRAVITY_UNASSIGNED, **common},
+            {"project": main.ANTIGRAVITY_UNASSIGNED, **common},
+        ]
+    orig = main.get_sessions_cached
+    main.get_sessions_cached = fake_sessions
+    try:
+        out = asyncio.run(main.get_projects())
+    finally:
+        main.get_sessions_cached = orig
+    paths = [p["path"] for p in out]
+    assert main.ANTIGRAVITY_UNASSIGNED not in paths
+    assert "/Users/me/Documents/Developer/realproj" in paths
+
+
 def _call_artifact(path):
     try:
         resp = asyncio.run(main.get_artifact(path))
