@@ -17,7 +17,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Does TokenTelemetry send my data to the cloud?",
-    a: "No. Everything runs on your machine. The dashboard reads session log files from your local filesystem and serves a UI on localhost. Nothing leaves your computer.",
+    a: "No usage data, ever. The dashboard reads session log files from your local filesystem and serves a UI on localhost — your logs, sessions, tokens, and costs never leave your computer. The only outbound call is an optional update check that fetches the latest version and release notes from GitHub (no usage data sent); turn it off in Settings → Updates & privacy, or with TT_NO_UPDATE_CHECK=1.",
   },
   {
     q: "How does TokenTelemetry compare to Langfuse or Helicone?",

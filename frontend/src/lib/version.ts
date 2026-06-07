@@ -30,3 +30,22 @@ export interface VersionInfo {
 }
 
 export const getVersion = () => api<VersionInfo>("/version");
+
+/** State of the update-check preference (`GET/POST /config/update-check`). */
+export interface UpdateCheckState {
+  /** The saved preference (what the toggle reflects). */
+  enabled: boolean;
+  /** True when TT_NO_UPDATE_CHECK is set — toggle is read-only (policy override). */
+  env_forced_off: boolean;
+  /** What actually happens: enabled && !env_forced_off. */
+  effective: boolean;
+}
+
+export const getUpdateCheck = () => api<UpdateCheckState>("/config/update-check");
+
+export const setUpdateCheck = (enabled: boolean) =>
+  api<UpdateCheckState>("/config/update-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });

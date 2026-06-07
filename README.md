@@ -185,12 +185,29 @@ TokenTelemetry stores lightweight state in `~/.tokentelemetry/`:
 
 ```
 ~/.tokentelemetry/
-  aliases.json    # Rename/merge project folder paths
-  hidden.json     # Hide specific projects from dashboard
-  VERSION         # Current version
+  aliases.json       # Rename/merge project folder paths
+  hidden.json        # Hide specific projects from dashboard
+  preferences.json   # App preferences (e.g. update check on/off)
+  VERSION            # Current version
 ```
 
 All hand-editable JSON — no database, no config GUI needed.
+
+### Update check
+
+TokenTelemetry does **not** collect or transmit your logs, sessions, tokens, or
+costs — those never leave your machine. The one outbound call it makes is an
+**optional update check**: about once an hour the dashboard fetches the latest
+version and curated release notes from GitHub, so you know when new features
+land. It sends no usage data — only a version request, which (like any web
+request) exposes your IP and the app name to GitHub.
+
+Turn it off either way:
+
+- **In the app** — Settings → *Updates & privacy* → toggle off *Check for updates*.
+- **Via environment** — set `TT_NO_UPDATE_CHECK=1` before launching. This wins
+  over the in-app toggle, so admins can enforce it (e.g. in air-gapped or
+  egress-monitored environments).
 
 ---
 
@@ -210,7 +227,7 @@ tokentelemetry/
 ## FAQ
 
 **Q: Does TokenTelemetry send any data to the cloud?**  
-A: No. 100% local. It reads log files from your filesystem and serves a local web dashboard. Nothing leaves your machine.
+A: No usage data, ever. It reads log files from your filesystem and serves a local web dashboard — your logs, sessions, tokens, and costs never leave your machine. The only outbound call is an optional update check that fetches the latest version and release notes from GitHub (no usage data sent); disable it in Settings → *Updates & privacy* or with `TT_NO_UPDATE_CHECK=1`. See [Update check](#update-check).
 
 **Q: How does it track Claude Code token usage?**  
 A: Claude Code writes JSONL session logs to `~/.claude/`. TokenTelemetry watches those files and parses token counts, tool calls, and reasoning in real time.

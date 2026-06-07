@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Lock, FileCode, Zap, GitBranch } from "lucide-react";
 
 const ITEMS = [
-  { icon: Lock,     title: "100% local",      body: "Logs never leave your machine. No telemetry endpoints. No accounts." },
+  { icon: Lock,     title: "100% local",      body: "Your logs never leave your machine. No usage tracking. No accounts. Only an optional update check pings GitHub." },
   { icon: FileCode, title: "MIT open source", body: "Read every line. Fork it. Replace it with something better — up to you." },
   { icon: Zap,      title: "No signup",       body: "One command, browser opens. That is the entire onboarding." },
 ];
