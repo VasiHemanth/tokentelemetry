@@ -16,9 +16,23 @@
 #
 # Sources cited in PRICING_SOURCES.md alongside this file.
 
+import json
+from pathlib import Path
 from typing import Optional
 
 PRICING_UPDATED = "2026-05-17"
+
+# Build-time pricing dataset (models.dev), refreshed maintainer/CI-side and
+# committed alongside this module — see pricing_sync.py. We read ONLY this
+# bundled file from the package directory; pricing.py performs ZERO network I/O
+# at import or runtime. The inline PRICING / PRICING_BY_PROVIDER dicts below
+# stay as the curated, authoritative fallback (and the fallback if the bundled
+# file is absent or malformed). The overlay fills in the long tail of models the
+# inline tables don't cover, without clobbering the hand-tuned entries.
+_PRICING_DATA_PATH = Path(__file__).parent / "pricing_data.json"
+# Separator used by pricing_sync.py to flatten (provider, model) tuples into the
+# JSON string keys of the "by_provider" map.
+_PROVIDER_SEP = "\x00"
 
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
@@ -180,6 +194,80 @@ PRICING_BY_PROVIDER = {
     ("groq", "llama-3.3-70b-versatile"):             {"in": 0.59, "out": 0.79, "cached_read": None},
     ("groq", "llama-3.1-8b-instant"):                {"in": 0.05, "out": 0.08, "cached_read": None},
 }
+
+
+def _coerce_rates(value) -> Optional[dict]:
+    """Validate one overlay entry → {in, out, cached_read} with float|None values.
+
+    Returns None for anything that isn't a usable rate dict, so malformed entries
+    are skipped rather than poisoning the table.
+    """
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in ("in", "out", "cached_read"):
+        raw = value.get(key)
+        if raw is None:
+            out[key] = None
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        out[key] = float(raw)
+    # Need at least one priced direction to be meaningful.
+    if out["in"] is None and out["out"] is None:
+        return None
+    return out
+
+
+def _load_bundled_pricing() -> None:
+    """Overlay the committed pricing_data.json onto the inline tables, in place.
+
+    Pure local file read — NO network I/O. Inline dict entries always win
+    (curated/authoritative); the overlay only adds models not already present,
+    giving us broad models.dev coverage without clobbering hand-tuned prices.
+    Any failure (missing file, bad JSON, wrong shape) is swallowed so the module
+    falls back cleanly to the static tables.
+    """
+    try:
+        raw = _PRICING_DATA_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    flat = data.get("pricing")
+    if isinstance(flat, dict):
+        for model_id, rates in flat.items():
+            if not isinstance(model_id, str):
+                continue
+            key = model_id.lower().strip()
+            if not key or key in PRICING:
+                continue  # inline entry is authoritative
+            coerced = _coerce_rates(rates)
+            if coerced is not None:
+                PRICING[key] = coerced
+
+    by_provider = data.get("by_provider")
+    if isinstance(by_provider, dict):
+        for combined, rates in by_provider.items():
+            if not isinstance(combined, str) or _PROVIDER_SEP not in combined:
+                continue
+            provider, model_id = combined.split(_PROVIDER_SEP, 1)
+            tup = (provider.lower().strip(), model_id.lower().strip())
+            if not tup[0] or not tup[1] or tup in PRICING_BY_PROVIDER:
+                continue  # inline entry is authoritative
+            coerced = _coerce_rates(rates)
+            if coerced is not None:
+                PRICING_BY_PROVIDER[tup] = coerced
+
+    updated = data.get("updated")
+    if isinstance(updated, str) and updated.strip():
+        global PRICING_UPDATED
+        PRICING_UPDATED = updated.strip()
+
+
+_load_bundled_pricing()
 
 
 def _normalize_model_id(model: str) -> str:

@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-06-08",
+      "title": "Broader, fresher model pricing",
+      "highlights": [
+        {
+          "title": "2000+ models priced for accurate cost estimates",
+          "description": "Cost estimates now draw on a much larger, regularly-refreshed pricing dataset (sourced from models.dev), so far more models — and provider-specific rates — get an accurate price instead of a generic fallback. The data ships with each update and is read entirely on your machine: no new outbound calls, same local-first privacy.",
+          "href": "/"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-07",
       "title": "Update check — now visible and yours to control",
       "highlights": [
