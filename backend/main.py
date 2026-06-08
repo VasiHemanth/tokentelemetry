@@ -1474,7 +1474,7 @@ def _list_available_agents() -> list:
     if CODEX_DIR.exists(): agents.append("codex")
     if GEMINI_DIR.exists(): 
         agents.append("gemini")
-        if (GEMINI_DIR / "antigravity").exists() or list((GEMINI_DIR / "tmp").glob("*")):
+        if (GEMINI_DIR / "antigravity").exists() or (GEMINI_DIR / "antigravity-cli").exists() or list((GEMINI_DIR / "tmp").glob("*")):
             agents.append("antigravity")
     if QWEN_DIR.exists(): agents.append("qwen")
     if VIBE_DIR.exists(): agents.append("vibe")
