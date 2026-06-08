@@ -2,6 +2,17 @@
   "releases": [
     {
       "tag": "2026-06-08",
+      "title": "Carbon footprint for local models",
+      "highlights": [
+        {
+          "title": "Estimate your AI's CO₂ impact",
+          "description": "TokenTelemetry now estimates the carbon footprint of your local AI sessions. You can set your local grid's carbon intensity alongside your power rate, and we'll track the CO₂ grams generated based on real hardware draw and session duration.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-06-08",
       "title": "Real cost for the local models you run",
       "highlights": [
         {

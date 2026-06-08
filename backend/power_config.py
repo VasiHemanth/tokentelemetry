@@ -48,6 +48,10 @@ DEFAULT_COST_PER_KWH = 0.15
 # A realistic electricity tariff is well under this; reject absurd values so a
 # fat-fingered or garbage rate can't blow up the electricity estimate.
 MAX_COST_PER_KWH = 100.0
+# Grams of CO2 per kWh. 400 is a reasonable global average.
+DEFAULT_CARBON_INTENSITY = 400
+# Sane upper bound for carbon intensity.
+MAX_CARBON_INTENSITY = 2000
 DEFAULT_SUBSCRIPTION_ENDPOINTS: List[str] = []
 # Extra endpoints (beyond loopback) the user runs models on locally, e.g. a LAN
 # box at http://192.168.1.50:11434. Loopback is always treated as local.
@@ -56,9 +60,11 @@ DEFAULT_LOCAL_ENDPOINTS: List[str] = []
 DEFAULTS: Dict[str, Any] = {
     "loadWatts": DEFAULT_LOAD_WATTS,
     "costPerKwh": DEFAULT_COST_PER_KWH,
+    "gridCarbonIntensity": DEFAULT_CARBON_INTENSITY,
     "subscriptionEndpoints": list(DEFAULT_SUBSCRIPTION_ENDPOINTS),
     "localEndpoints": list(DEFAULT_LOCAL_ENDPOINTS),
 }
+
 
 # Provider ids that always denote local/self-hosted inference (no API bill).
 LOCAL_PROVIDERS = {
@@ -105,9 +111,11 @@ def local_power_enabled() -> bool:
         return False
     lw = raw.get("loadWatts")
     cpk = raw.get("costPerKwh")
+    gci = raw.get("gridCarbonIntensity")
     lw_ok = isinstance(lw, (int, float)) and not isinstance(lw, bool) and 0 < lw <= MAX_LOAD_WATTS
     cpk_ok = isinstance(cpk, (int, float)) and not isinstance(cpk, bool) and 0 <= cpk <= MAX_COST_PER_KWH
-    return bool(lw_ok or cpk_ok)
+    gci_ok = isinstance(gci, (int, float)) and not isinstance(gci, bool) and 0 <= gci <= MAX_CARBON_INTENSITY
+    return bool(lw_ok or cpk_ok or gci_ok)
 
 
 def load_power_config() -> Dict[str, Any]:
@@ -139,6 +147,10 @@ def load_power_config() -> Dict[str, Any]:
     if isinstance(cpk, (int, float)) and not isinstance(cpk, bool) and 0 <= cpk <= MAX_COST_PER_KWH:
         config["costPerKwh"] = float(cpk)
 
+    gci = raw.get("gridCarbonIntensity")
+    if isinstance(gci, (int, float)) and not isinstance(gci, bool) and 0 <= gci <= MAX_CARBON_INTENSITY:
+        config["gridCarbonIntensity"] = int(gci)
+
     eps = raw.get("subscriptionEndpoints")
     if isinstance(eps, list):
         config["subscriptionEndpoints"] = [
@@ -169,6 +181,10 @@ def save_power_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     cpk = updates.get("costPerKwh")
     if isinstance(cpk, (int, float)) and not isinstance(cpk, bool) and 0 <= cpk <= MAX_COST_PER_KWH:
         config["costPerKwh"] = float(cpk)
+
+    gci = updates.get("gridCarbonIntensity")
+    if isinstance(gci, (int, float)) and not isinstance(gci, bool) and 0 <= gci <= MAX_CARBON_INTENSITY:
+        config["gridCarbonIntensity"] = int(gci)
 
     eps = updates.get("subscriptionEndpoints")
     if isinstance(eps, list):
@@ -317,3 +333,27 @@ def electricity_cost(
     # seconds->hours in one shot (3600 s/h * 1000 Wh/kWh).
     kwh = (watts * gen_seconds) / 3_600_000
     return kwh * cost_per_kwh
+
+
+def co2_grams(kwh: float, *, intensity: float) -> float:
+    """Return grams of CO2 for a given kWh and grid intensity."""
+    if kwh < 0 or intensity < 0:
+        return 0.0
+    return kwh * intensity
+
+
+def co2_for_session(
+    output_tokens: int,
+    config: Optional[Dict[str, Any]] = None,
+    tok_per_sec: float = DEFAULT_TOK_PER_SEC,
+) -> float:
+    """Estimate the CO2 footprint (grams) of generating ``output_tokens`` locally."""
+    if config is None:
+        config = load_power_config()
+    if output_tokens <= 0 or not tok_per_sec or tok_per_sec <= 0:
+        return 0.0
+    watts = config.get("loadWatts", DEFAULT_LOAD_WATTS)
+    gen_seconds = output_tokens / tok_per_sec
+    kwh = (watts * gen_seconds) / 3_600_000
+    intensity = config.get("gridCarbonIntensity", DEFAULT_CARBON_INTENSITY)
+    return co2_grams(kwh, intensity=intensity)

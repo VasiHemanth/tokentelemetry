@@ -15,6 +15,7 @@ export function PowerSettings() {
   const [meter, setMeter] = useState<PowerMeter | null>(null);
   const [watts, setWatts] = useState("");
   const [kwh, setKwh] = useState("");
+  const [gci, setGci] = useState("");
   const [subs, setSubs] = useState("");
   const [locals, setLocals] = useState("");
   const [loading, setLoading] = useState(true);
@@ -28,6 +29,7 @@ export function PowerSettings() {
     setCfg(c);
     setWatts(String(c.loadWatts));
     setKwh(String(c.costPerKwh));
+    setGci(String(c.gridCarbonIntensity));
     setSubs((c.subscriptionEndpoints ?? []).join("\n"));
     setLocals((c.localEndpoints ?? []).join("\n"));
   };
@@ -50,6 +52,7 @@ export function PowerSettings() {
       const next = await putPowerConfig({
         loadWatts: Number(watts) || 0,
         costPerKwh: Number(kwh) || 0,
+        gridCarbonIntensity: Number(gci) || 0,
         subscriptionEndpoints: linesToList(subs),
         localEndpoints: linesToList(locals),
       });
@@ -104,7 +107,7 @@ export function PowerSettings() {
             TokenTelemetry estimates it from your machine&apos;s draw under load and your kWh rate.
           </p>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <label className="block">
               <span className="text-[11px] uppercase tracking-wide text-[var(--tt-fg-muted)]">Load watts</span>
               <input
@@ -116,6 +119,13 @@ export function PowerSettings() {
               <span className="text-[11px] uppercase tracking-wide text-[var(--tt-fg-muted)]">Cost per kWh ($)</span>
               <input
                 type="number" inputMode="decimal" step="0.01" value={kwh} onChange={(e) => setKwh(e.target.value)}
+                className="mt-1 w-full rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[13px] text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)]"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-[var(--tt-fg-muted)]">Grid CO₂ (g/kWh)</span>
+              <input
+                type="number" inputMode="decimal" value={gci} onChange={(e) => setGci(e.target.value)}
                 className="mt-1 w-full rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[13px] text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)]"
               />
             </label>
