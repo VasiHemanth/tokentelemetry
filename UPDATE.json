@@ -1,6 +1,35 @@
 {
   "releases": [
     {
+      "tag": "2026-06-08",
+      "title": "More accurate cost estimates",
+      "highlights": [
+        {
+          "title": "2000+ models priced for accurate cost estimates",
+          "description": "Cost estimates now draw on a much larger, regularly-refreshed pricing dataset (sourced from models.dev), so far more models — and provider-specific rates — get an accurate price instead of a generic fallback. The data ships with each update and is read entirely on your machine: no new outbound calls, same local-first privacy.",
+          "href": "/"
+        },
+        {
+          "title": "Local models priced by electricity, not fake API rates",
+          "description": "Models you run yourself (Ollama, llama.cpp, vLLM) have no API bill — their real cost is power. Set your machine's watts under load and your kWh rate, and TokenTelemetry estimates the electricity cost instead of inventing a per-token charge."
+        },
+        {
+          "title": "Flat subscriptions now show $0 per call",
+          "description": "Endpoints you pay for monthly (Ollama Cloud Pro, a proxied gateway) are billed by subscription, not per token. List them as subscription endpoints and their sessions stop inflating your per-call cost totals."
+        },
+        {
+          "title": "Full subscription-cost disclaimer",
+          "description": "The dashboard's \"API equiv. (est.)\" figure used to cut off mid-sentence at \"Subscription users p…\". The disclaimer now shows in full, plus a persistent callout makes clear the number re-prices your usage at API list rates for comparing sessions — it is not an invoice. On a flat-fee plan like Claude Pro/Max or Copilot, your actual spend is much lower.",
+          "href": "/"
+        },
+        {
+          "title": "Per-agent billing mode — bill vs. estimate, framed right",
+          "description": "If you pay per token (API key) for an agent, the cost figure approximates your real bill; on a flat subscription it's only an API-list-price equivalent. TokenTelemetry now auto-detects which one you're on per agent (from each agent's own auth — e.g. ~/.codex/auth.json) and frames the number accordingly, with a Settings → Billing & cost control to override any agent.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-07",
       "title": "Update check — now visible and yours to control",
       "highlights": [

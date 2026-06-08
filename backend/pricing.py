@@ -16,9 +16,23 @@
 #
 # Sources cited in PRICING_SOURCES.md alongside this file.
 
+import json
+from pathlib import Path
 from typing import Optional
 
 PRICING_UPDATED = "2026-05-17"
+
+# Build-time pricing dataset (models.dev), refreshed maintainer/CI-side and
+# committed alongside this module — see pricing_sync.py. We read ONLY this
+# bundled file from the package directory; pricing.py performs ZERO network I/O
+# at import or runtime. The inline PRICING / PRICING_BY_PROVIDER dicts below
+# stay as the curated, authoritative fallback (and the fallback if the bundled
+# file is absent or malformed). The overlay fills in the long tail of models the
+# inline tables don't cover, without clobbering the hand-tuned entries.
+_PRICING_DATA_PATH = Path(__file__).parent / "pricing_data.json"
+# Separator used by pricing_sync.py to flatten (provider, model) tuples into the
+# JSON string keys of the "by_provider" map.
+_PROVIDER_SEP = "\x00"
 
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
@@ -182,6 +196,80 @@ PRICING_BY_PROVIDER = {
 }
 
 
+def _coerce_rates(value) -> Optional[dict]:
+    """Validate one overlay entry → {in, out, cached_read} with float|None values.
+
+    Returns None for anything that isn't a usable rate dict, so malformed entries
+    are skipped rather than poisoning the table.
+    """
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in ("in", "out", "cached_read"):
+        raw = value.get(key)
+        if raw is None:
+            out[key] = None
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        out[key] = float(raw)
+    # Need at least one priced direction to be meaningful.
+    if out["in"] is None and out["out"] is None:
+        return None
+    return out
+
+
+def _load_bundled_pricing() -> None:
+    """Overlay the committed pricing_data.json onto the inline tables, in place.
+
+    Pure local file read — NO network I/O. Inline dict entries always win
+    (curated/authoritative); the overlay only adds models not already present,
+    giving us broad models.dev coverage without clobbering hand-tuned prices.
+    Any failure (missing file, bad JSON, wrong shape) is swallowed so the module
+    falls back cleanly to the static tables.
+    """
+    try:
+        raw = _PRICING_DATA_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    flat = data.get("pricing")
+    if isinstance(flat, dict):
+        for model_id, rates in flat.items():
+            if not isinstance(model_id, str):
+                continue
+            key = model_id.lower().strip()
+            if not key or key in PRICING:
+                continue  # inline entry is authoritative
+            coerced = _coerce_rates(rates)
+            if coerced is not None:
+                PRICING[key] = coerced
+
+    by_provider = data.get("by_provider")
+    if isinstance(by_provider, dict):
+        for combined, rates in by_provider.items():
+            if not isinstance(combined, str) or _PROVIDER_SEP not in combined:
+                continue
+            provider, model_id = combined.split(_PROVIDER_SEP, 1)
+            tup = (provider.lower().strip(), model_id.lower().strip())
+            if not tup[0] or not tup[1] or tup in PRICING_BY_PROVIDER:
+                continue  # inline entry is authoritative
+            coerced = _coerce_rates(rates)
+            if coerced is not None:
+                PRICING_BY_PROVIDER[tup] = coerced
+
+    updated = data.get("updated")
+    if isinstance(updated, str) and updated.strip():
+        global PRICING_UPDATED
+        PRICING_UPDATED = updated.strip()
+
+
+_load_bundled_pricing()
+
+
 def _normalize_model_id(model: str) -> str:
     """Lowercase and strip common aggregator namespace prefixes."""
     m = model.lower().strip()
@@ -200,8 +288,38 @@ def calculate_cost(
     output_tokens: int,
     cached_tokens: int = 0,
     provider: Optional[str] = None,
+    cache_creation_tokens: int = 0,
+    endpoint: Optional[str] = None,
+    tok_per_sec: Optional[float] = None,
 ) -> float:
-    """Estimate cost in USD. Prefer (provider, model) when provider is known."""
+    """Estimate cost in USD. Prefer (provider, model) when provider is known.
+
+    ``cache_creation_tokens`` are prompt-cache WRITE tokens (Anthropic's
+    ``cache_creation_input_tokens``). Anthropic bills these at 1.25x the input
+    rate — distinct from ``cached_tokens`` (cache READ), billed at the much
+    cheaper ``cached_read`` rate. Defaults to 0 so existing positional callers
+    are unaffected.
+
+    ``endpoint`` and ``tok_per_sec`` are optional and only affect the
+    local/subscription branches: if the session was served by a flat-subscription
+    endpoint the per-call cost is 0 (billed monthly), and a local model with no
+    API rate is priced by its electricity draw. All callers that omit these get
+    the unchanged per-token behaviour.
+    """
+    # --- LOOKUP region -----------------------------------------------------
+    # Subscription / local-model branches go FIRST so they short-circuit before
+    # the per-token rate-math at the bottom. Both are opt-in via
+    # ~/.tokentelemetry/power.json; with no config the substring match never
+    # fires and unpriced models fall through to _default as before.
+    if endpoint:
+        try:
+            from power_config import is_subscription_endpoint
+            if is_subscription_endpoint(endpoint):
+                # Flat monthly subscription — per-call cost is tracked separately.
+                return 0.0
+        except Exception:
+            pass
+
     if not model_name:
         config = PRICING["_default"]
     else:
@@ -219,6 +337,23 @@ def calculate_cost(
                     config = PRICING[k]
                     break
         if not config:
+            # No known API rate for this model. If the user has opted in via
+            # ~/.tokentelemetry/power.json, treat it as a local model and price
+            # it by electricity instead of the (wrong) _default per-token rate.
+            try:
+                from power_config import (
+                    local_power_enabled, load_power_config, electricity_cost,
+                    DEFAULT_TOK_PER_SEC,
+                )
+                if local_power_enabled():
+                    pc = load_power_config()
+                    return electricity_cost(
+                        output_tokens,
+                        config=pc,
+                        tok_per_sec=tok_per_sec or DEFAULT_TOK_PER_SEC,
+                    )
+            except Exception:
+                pass
             config = PRICING["_default"]
 
     in_rate = config["in"] or 0
@@ -227,7 +362,11 @@ def calculate_cost(
     if cached_rate is None:
         cached_rate = in_rate * 0.1  # 2026-era default: cached read ≈ 10% of input
 
+    # Prompt-cache WRITE tokens cost 1.25x the input rate (Anthropic billing).
+    cache_write_rate = in_rate * 1.25
+
     in_cost = (input_tokens / 1_000_000) * in_rate
     out_cost = (output_tokens / 1_000_000) * out_rate
     cached_cost = (cached_tokens / 1_000_000) * cached_rate
-    return in_cost + out_cost + cached_cost
+    cache_write_cost = (cache_creation_tokens / 1_000_000) * cache_write_rate
+    return in_cost + out_cost + cached_cost + cache_write_cost

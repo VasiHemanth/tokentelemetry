@@ -48,3 +48,8 @@ feature/
 graphify-out/
 **/graphify-out/
 GRAPH_REPORT.md
+
+# Agent worktrees (live git worktrees, never commit)
+.claude/worktrees/
+# Local plan files
+.claude/plans/

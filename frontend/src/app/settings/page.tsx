@@ -5,6 +5,7 @@ import { Settings2, Sparkles, Check, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
+import { BillingSettings } from "@/components/settings/BillingSettings";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
   DEFAULT_OPENAI_COMPAT,
@@ -171,6 +172,13 @@ export default function SettingsPage() {
             </div>
           )}
         </Card>
+      </Section>
+
+      <Section
+        title="Billing & cost"
+        description="How you pay for each agent. The cost figure is always the API-list-price equivalent — this only changes how it's framed (a real bill for pay-per-token API plans, an equivalent for flat subscriptions). Auto-detected where possible; override any agent here."
+      >
+        <BillingSettings />
       </Section>
 
       <Section

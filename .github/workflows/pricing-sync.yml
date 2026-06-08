@@ -1,0 +1,48 @@
+name: Pricing sync (models.dev)
+
+# Refreshes backend/pricing_data.json from models.dev and opens a PR for review.
+# This is the ONLY place pricing data is fetched over the network — it runs in
+# CI, never on a user machine. TokenTelemetry stays local-first: users get fresh
+# prices through the normal version update, with no new outbound call.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate pricing_data.json
+        run: python backend/pricing_sync.py
+
+      - name: Open PR with refreshed pricing
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(pricing): refresh pricing_data.json from models.dev"
+          title: "chore(pricing): weekly models.dev pricing refresh"
+          body: |
+            Automated weekly refresh of `backend/pricing_data.json` from
+            [models.dev](https://models.dev/api.json).
+
+            - No runtime/user-machine network calls are introduced — this data is
+              shipped with the package and read locally by `backend/pricing.py`.
+            - Inline curated entries in `pricing.py` remain authoritative; this
+              overlay only covers the long tail.
+
+            Please eyeball the diff for any wild price swings before merging.
+          branch: pricing-sync/models-dev
+          delete-branch: true
+          add-paths: |
+            backend/pricing_data.json

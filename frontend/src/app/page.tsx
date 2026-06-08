@@ -13,6 +13,7 @@ import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import { formatTokens, formatCost } from "@/lib/format";
+import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
@@ -46,6 +47,7 @@ export default function Home() {
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
   const agentsRes   = useResource<string[]>("/agents", { pollMs: 30_000, initial: [] });
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
+  const billingRes  = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -59,6 +61,7 @@ export default function Home() {
   const totalTokens = sessions.reduce((a, s) => a + (s.tokens?.total ?? 0), 0);
   const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0), 0);
   const projectCount = new Set(sessions.map((s) => s.project)).size;
+  const framing = costFraming(billingRes.data?.agents);
 
   const modelRows = Object.entries(byModel)
     .map(([name, s]) => ({ name, ...s }))
@@ -120,11 +123,18 @@ export default function Home() {
           <StatTile
             label="API equiv. (est.)"
             value={loading ? <Skeleton className="h-8 w-20" /> : formatCost(totalCost)}
-            hint="Estimated at API list prices. Subscription users pay a flat monthly fee — this is not your actual spend."
+            hint={framing.hint}
             icon={<DollarSign size={16} />}
             accent="var(--tt-warn)"
           />
         </div>
+        <p className="mt-3 text-[12px] leading-relaxed text-[var(--tt-fg-muted)]">
+          <span aria-hidden>💡</span>{" "}
+          {framing.callout}{" "}
+          <Link href="/settings" className="font-medium text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)]">
+            Set your plans
+          </Link>.
+        </p>
       </Section>
 
       {/* Connected agents — split into coding vs autonomous */}

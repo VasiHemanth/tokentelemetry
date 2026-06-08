@@ -46,7 +46,14 @@ export function StatTile({ label, value, hint, icon, delta, accent, className }:
           </span>
         )}
       </div>
-      {hint && <div className="mt-2 text-[11px] text-[var(--tt-fg-dim)] tabular truncate">{hint}</div>}
+      {hint && (
+        <div
+          className="mt-2 text-[11px] leading-snug text-[var(--tt-fg-dim)] tabular"
+          title={typeof hint === "string" ? hint : undefined}
+        >
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
