@@ -291,6 +291,7 @@ def calculate_cost(
     cache_creation_tokens: int = 0,
     endpoint: Optional[str] = None,
     tok_per_sec: Optional[float] = None,
+    billing_mode: Optional[str] = None,
 ) -> float:
     """Estimate cost in USD. Prefer (provider, model) when provider is known.
 
@@ -320,6 +321,25 @@ def calculate_cost(
         except Exception:
             pass
 
+    # Confirmed-local sessions (loopback/local endpoint, a local provider id, or
+    # the agent set to `local` billing mode) are priced by electricity and WIN
+    # over the pricing table — so a local llama-3.3-70b isn't billed at cloud
+    # rates, and gemma4 isn't reported as free. Throughput is the measured rate
+    # when the caller has one, else a model-size-based default.
+    try:
+        from power_config import (
+            is_local_session, load_power_config, electricity_cost,
+            default_tok_per_sec_for_model,
+        )
+        if is_local_session(model_name, endpoint, provider, billing_mode):
+            return electricity_cost(
+                output_tokens,
+                config=load_power_config(),
+                tok_per_sec=tok_per_sec or default_tok_per_sec_for_model(model_name),
+            )
+    except Exception:
+        pass
+
     if not model_name:
         config = PRICING["_default"]
     else:
@@ -343,14 +363,14 @@ def calculate_cost(
             try:
                 from power_config import (
                     local_power_enabled, load_power_config, electricity_cost,
-                    DEFAULT_TOK_PER_SEC,
+                    default_tok_per_sec_for_model,
                 )
                 if local_power_enabled():
                     pc = load_power_config()
                     return electricity_cost(
                         output_tokens,
                         config=pc,
-                        tok_per_sec=tok_per_sec or DEFAULT_TOK_PER_SEC,
+                        tok_per_sec=tok_per_sec or default_tok_per_sec_for_model(model_name),
                     )
             except Exception:
                 pass

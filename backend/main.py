@@ -2620,6 +2620,7 @@ def _scan_sessions_sync():
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
+                    provider_id = None   # OpenCode records the runtime (e.g. "ollama") → local detection
                     models_used: List[str] = []   # distinct models, in first-seen order (#39)
                     first_user = ""
                     mcp_tools: List[str] = []
@@ -2631,6 +2632,8 @@ def _scan_sessions_sync():
                             mdata = json.loads(mrow["data"] or "{}")
                         except Exception: continue
                         if mdata.get("role") == "assistant":
+                            if not provider_id:
+                                provider_id = mdata.get("providerID")
                             if not model:
                                 model = mdata.get("modelID") or mdata.get("providerID")
                                 if not model:
@@ -2693,7 +2696,7 @@ def _scan_sessions_sync():
                             # cache writes ARE billed per event → cumulative; priced at 1.25x input.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + cache_write
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0))
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), provider=provider_id)
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
@@ -2763,11 +2766,25 @@ def _scan_sessions_sync():
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
                     if cost is None:
+                        # Only when TT has to compute the cost itself AND the session
+                        # is local do we parse the agent log for a MEASURED tok/s
+                        # (out/latency per call). This keeps the common path cheap —
+                        # most Hermes sessions carry their own cost and skip this.
+                        _measured_tps = None
+                        try:
+                            from power_config import is_local_session
+                            if is_local_session(model, srow["billing_base_url"], srow["billing_provider"]):
+                                _summ = _hermes_log_summary(sid).get("summary")
+                                if _summ and _summ.get("total_latency_s", 0) > 0 and out_t > 0:
+                                    _measured_tps = out_t / _summ["total_latency_s"]
+                        except Exception:
+                            _measured_tps = None
                         cost = calculate_cost(
                             model, in_t, out_t, cached,
                             provider=srow["billing_provider"],
                             cache_creation_tokens=cache_write,
                             endpoint=srow["billing_base_url"],
+                            tok_per_sec=_measured_tps,
                         )
                     tokens["cost"] = cost
                     # First user message → display fallback when title is empty
@@ -3567,6 +3584,36 @@ async def put_power_config(payload: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Could not save power config to disk.")
     _invalidate_sessions_cache()
     return {**cfg, "configured": True}
+
+
+@app.get("/config/power/meter")
+async def get_power_meter():
+    """What real power measurement is possible here, plus a live reading if any.
+
+    `capability` explains the platform situation to the UI (e.g. Apple Silicon on
+    AC needs admin). `reading` is a real watts value when a root-free source
+    exists (nvidia-smi / on-battery macOS), else null.
+    """
+    from power_meter import capability, read_power_watts
+    return {"capability": capability(), "reading": read_power_watts()}
+
+
+@app.post("/config/power/calibrate")
+async def calibrate_power():
+    """Sample real power for a few seconds and return it as a SUGGESTION.
+
+    Does NOT persist — the UI fills the loadWatts field with the measured value
+    for the user to review and Save. When no root-free source is available (e.g.
+    Apple Silicon on AC), returns `{measured: null, reason: …}`.
+    """
+    from power_meter import sample_average_watts, capability
+    sample = sample_average_watts(duration_s=4.0, interval_s=1.0)
+    if not sample:
+        return {"measured": None, "reason": capability().get("reason")}
+    return {
+        "measured": sample["watts"], "source": sample["source"],
+        "samples": sample.get("samples"),
+    }
 
 
 @app.get("/config/billing")

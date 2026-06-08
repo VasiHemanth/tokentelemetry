@@ -2,6 +2,22 @@
   "releases": [
     {
       "tag": "2026-06-08",
+      "title": "Real cost for the local models you run",
+      "highlights": [
+        {
+          "title": "Local models priced by your actual hardware",
+          "description": "Sessions on Ollama, llama.cpp or vLLM are now detected by their endpoint/provider — not by guessing — so a local model is always costed by electricity, never at cloud API rates (even when it shares a name with a cloud model). Generation time uses each model's real throughput where measurable (a 4B isn't costed like a 70B).",
+          "href": "/settings"
+        },
+        {
+          "title": "Set or measure your machine's power",
+          "description": "A new Settings → Local power & electricity card lets you set your watts-under-load and kWh rate, mark local/LAN and flat-subscription endpoints, and — where your OS allows it without admin — measure real power draw directly. The estimate is honest about where its numbers come from.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-06-08",
       "title": "More accurate cost estimates",
       "highlights": [
         {

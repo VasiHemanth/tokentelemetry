@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import { BillingSettings } from "@/components/settings/BillingSettings";
+import { PowerSettings } from "@/components/settings/PowerSettings";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
   DEFAULT_OPENAI_COMPAT,
@@ -178,7 +179,10 @@ export default function SettingsPage() {
         title="Billing & cost"
         description="How you pay for each agent. The cost figure is always the API-list-price equivalent — this only changes how it's framed (a real bill for pay-per-token API plans, an equivalent for flat subscriptions). Auto-detected where possible; override any agent here."
       >
-        <BillingSettings />
+        <div className="space-y-4">
+          <BillingSettings />
+          <PowerSettings />
+        </div>
       </Section>
 
       <Section
