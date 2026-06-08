@@ -2711,6 +2711,7 @@ def _scan_sessions_sync():
                         "display": display, "tokens": tokens, "mcp_tools": mcp_tools,
                         "has_plan": has_plan, "plans": plans, "model": model,
                         "models_used": models_used, "artifacts": [],
+                        "provider": provider_id,  # expose runtime (e.g. "ollama") so analytics can detect local sessions
                         "cost": tokens["cost"],
                     })
             finally:

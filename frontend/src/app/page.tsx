@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format } from "date-fns";
@@ -71,6 +72,14 @@ export default function Home() {
 
   const loading = sessionsRes.loading;
 
+  const [showLocalPower, setShowLocalPower] = useState(false);
+  useEffect(() => {
+    const check = () => setShowLocalPower(localStorage.getItem("tt-show-local-dash") === "true");
+    check();
+    window.addEventListener("storage", check);
+    return () => window.removeEventListener("storage", check);
+  }, []);
+
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
       <PageHeader
@@ -138,7 +147,7 @@ export default function Home() {
         </p>
       </Section>
 
-      <LocalPowerInsights />
+      {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {

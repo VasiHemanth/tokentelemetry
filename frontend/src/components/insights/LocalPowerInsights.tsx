@@ -4,12 +4,13 @@ import React, { useMemo } from "react";
 import { Zap, Leaf, Cpu, CheckCircle2 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { Section, Card, CardTitle, Table, THead, TBody, TR, TH, TD, Badge, Skeleton } from "@/components/ui";
-import { isLocalModel, estimateEnergyWh } from "@/lib/insights";
+import { isLocalSession, estimateEnergyWh } from "@/lib/insights";
 
 interface Session {
   id: string;
   agent: string;
   model?: string;
+  provider?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
 }
 
@@ -19,7 +20,7 @@ interface AnalyticsData {
   total?: { energy_wh?: number; savings_usd?: number };
 }
 
-export default function LocalPowerInsights() {
+export default function LocalPowerInsights({ forceShow = false }: { forceShow?: boolean } = {}) {
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
   const analyticsRes = useResource<AnalyticsData>("/analytics", { pollMs: 30_000 });
 
@@ -32,7 +33,7 @@ export default function LocalPowerInsights() {
     const map = new Map<string, { session_count: number; total_tokens: number; output_tokens: number }>();
     sessions.forEach(s => {
       const model = s.model || "unknown";
-      if (isLocalModel(model)) {
+      if (isLocalSession(s.model, s.provider)) {
         const existing = map.get(model) || { session_count: 0, total_tokens: 0, output_tokens: 0 };
         existing.session_count += 1;
         existing.total_tokens += s.tokens?.total || 0;
@@ -45,7 +46,7 @@ export default function LocalPowerInsights() {
 
   const hasLocalModels = localModelsMap.size > 0;
 
-  if (!loading && !hasLocalModels) {
+  if (!loading && !hasLocalModels && !forceShow) {
     return null;
   }
 
