@@ -12,6 +12,7 @@ import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
+import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
 import { formatTokens, formatCost } from "@/lib/format";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
@@ -136,6 +137,8 @@ export default function Home() {
           </Link>.
         </p>
       </Section>
+
+      <LocalPowerInsights />
 
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {

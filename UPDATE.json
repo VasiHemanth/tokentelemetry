@@ -5,6 +5,11 @@
       "title": "Local model insights: energy, savings & CO₂",
       "highlights": [
         {
+          "title": "Dedicated Local & Power insights surface",
+          "description": "A new dashboard card brings your local model usage front and center — total local energy (Wh/kWh), estimated cloud savings from running locally, and a breakdown of which local models you use most.",
+          "href": "/"
+        },
+        {
           "title": "Energy consumption insights",
           "description": "TokenTelemetry now estimates the energy consumed (in Watt-hours) for local generation based on your actual hardware's power configuration and model throughput.",
           "href": "/"
