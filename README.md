@@ -110,9 +110,151 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
 - 🧠 **Plan Capture** — view plan-mode outputs from Claude Code and other agents
 - 📈 **Model Analytics** — compare GPT-5.4 vs Claude 4.6 Sonnet vs Gemini 3.1 Flash efficiency
+- ⚡ **Efficiency Scoring** — 0–100 score per session measuring how productively tokens were spent *(Intelligence Layer)*
+- 🦨 **AI Smell Detection** — rule-based warnings for context rot, loop traps, tool thrash, high error rate, and massive sessions *(Intelligence Layer)*
+- 🔥 **Burn Rate Forecasting** — daily token trends projected to month-end with plan limit alerts *(Intelligence Layer)*
 - 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
+
+---
+
+## Intelligence Layer
+
+> **Branch:** `tokentelemetry-intelligence-layer` — pure computation on top of existing session data. No new required dependencies.
+
+Three analytical capabilities that turn raw token counts into actionable insight:
+
+---
+
+### ⚡ Agent Efficiency Score
+
+Every session now carries a **0–100 score** measuring how productively tokens were spent:
+
+```
+score = output_ratio × error_penalty × turn_penalty × 100
+```
+
+| Factor | Formula | Rationale |
+|--------|---------|-----------|
+| `output_ratio` | output tokens ÷ total tokens | More output per token = more productive work |
+| `error_penalty` | 1 ÷ (1 + errors × 0.15) | Tool failures waste tokens |
+| `turn_penalty` | 1 ÷ (1 + log(turns) × 0.18) | Fewer turns = clearer prompts |
+
+**Labels:** `good` (≥ 70) · `fair` (40–69) · `poor` (< 40)
+
+**In the UI:** a colour-coded `⚡ Score` badge appears on every row in the Recent Activity table — green, amber, or red at a glance.
+
+**API:**
+```
+GET /sessions          → each session now includes: efficiency, efficiency_label
+GET /efficiency        → all sessions sorted best-first (great for leaderboards)
+GET /efficiency?project=/path/to/repo   → filtered by project
+```
+
+---
+
+### 🦨 AI Smell Detection
+
+Rule-based detection of **5 anti-patterns** that indicate wasted tokens or a stuck agent:
+
+| Smell | Trigger | Severity |
+|-------|---------|----------|
+| `context_rot` | Session > 200 turns | warning (> 400 turns → critical) |
+| `loop_trap` | Same tool called with identical input ≥ 8 times in a row | critical |
+| `tool_thrash` | Same file read ≥ 25 times across a session | warning |
+| `high_error_rate` | Errors > 20% of turns | warning (> 40% → critical) |
+| `massive_session` | Total tokens > 2 M | warning (> 5 M → critical) |
+
+Each smell is a structured dict `{ type, title, detail, severity }` — the `detail` field explains what happened and what to do about it.
+
+**In the UI:** an `⚠` icon appears on session rows that have at least one smell — orange for warnings, red for critical. Hovering shows the count and worst severity.
+
+**API:**
+```
+GET /smells             → sessions with at least one smell (all projects)
+GET /smells?project=/path/to/repo   → filtered by project
+```
+
+Each entry:
+```json
+{
+  "session_id": "abc123",
+  "agent": "claude",
+  "project": "/Users/me/myapp",
+  "timestamp": "2026-06-09T14:30:00Z",
+  "efficiency": 42.3,
+  "smells": [
+    {
+      "type": "context_rot",
+      "title": "Context rot (247 turns)",
+      "detail": "This session ran for 247 turns. Context quality typically degrades past 200 turns — consider breaking long tasks into focused sub-sessions.",
+      "severity": "warning"
+    }
+  ]
+}
+```
+
+---
+
+### 🔥 Burn Rate Forecasting
+
+Linear projection of your token consumption toward your subscription's monthly limit:
+
+- **Daily buckets** — aggregates total tokens per calendar day over the last 60 days
+- **7-day average** used for projection (recent pace, not historical average)
+- **Trend detection** — compares last 7 days vs prior 7 days → `accelerating` / `steady` / `slowing`
+- **Days-until-limit** — how many days at current pace before hitting your plan quota
+
+**Supported plans:**
+
+| Plan | Monthly token limit |
+|------|-------------------|
+| `claude_pro` | 500 M |
+| `claude_max` | 2 B |
+| `codex_plus` | 200 M |
+| `copilot` | 100 M |
+| `api_unlimited` | No limit |
+
+**In the UI:** a **Burn Rate** card in the dashboard sidebar shows your daily rate, projected month-end total, a colour-coded progress bar (green → amber → red as you approach the limit), and an urgency alert when you're ≤ 7 days from hitting the cap.
+
+**API:**
+```
+GET /forecast                       → forecast at default plan (claude_pro)
+GET /forecast?plan=claude_max       → forecast against Claude Max 2B limit
+```
+
+Response:
+```json
+{
+  "daily_avg_7d": 18500000,
+  "daily_avg_30d": 14200000,
+  "projected_month": 412000000,
+  "used_this_month": 227000000,
+  "days_until_limit": 14,
+  "trend": "accelerating",
+  "trend_pct": 30.2,
+  "limit": 500000000,
+  "plan": "claude_pro",
+  "buckets_30d": { "2026-06-01": 15200000, "2026-06-02": 19400000, "..." : "..." }
+}
+```
+
+---
+
+### Implementation notes
+
+All three features live in three new standalone Python modules — no changes to existing data collection or parsing logic:
+
+| Module | Responsibility |
+|--------|---------------|
+| `backend/scoring.py` | Efficiency score computation |
+| `backend/smells.py` | Smell rule evaluation |
+| `backend/forecast.py` | Daily bucketing + linear projection |
+
+**No new required dependencies.** Everything uses Python stdlib (`math`, `datetime`, `collections`). Ollama, scipy, numpy — none needed.
+
+Smells and efficiency scores are computed in-memory after the session cache is built, so they add no I/O overhead. Forecast runs over the already-loaded session list.
 
 ---
 
