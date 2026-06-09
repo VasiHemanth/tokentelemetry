@@ -1,6 +1,6 @@
 """TokenTelemetry config: aliases + hidden projects.
 
-Lives at ~/.tokentelemetry/. Three files:
+Lives at the resolved data dir (default ~/.tokentelemetry/; see tt_paths). Files:
   - aliases.json   {"/old/path": "/new/path", ...}   one-way, no chains
   - hidden.json    ["/path", ...]                    projects excluded from dashboard
   - VERSION        single integer for future migrations
@@ -19,7 +19,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-HARNESS_DIR = Path.home() / ".tokentelemetry"
+from tt_paths import data_dir
+
+# Resolved once at import. The data dir is an install-time setting (exported via
+# TOKENTELEMETRY_DATA_DIR / TOKENTELEMETRY_HOME before the backend launches), so
+# reading it once here is correct; see tt_paths.data_dir for the precedence rules.
+HARNESS_DIR = data_dir()
 ALIASES_FILE = HARNESS_DIR / "aliases.json"
 HIDDEN_FILE = HARNESS_DIR / "hidden.json"
 PREFERENCES_FILE = HARNESS_DIR / "preferences.json"

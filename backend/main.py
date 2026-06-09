@@ -17,6 +17,7 @@ from harness_config import (
     list_aliases, save_aliases,
     load_preferences, save_preferences,
 )
+from tt_paths import data_dir
 
 def _aware(dt):
     """Ensure datetime is timezone-aware UTC. Naive inputs are assumed to be UTC."""
@@ -224,7 +225,7 @@ ANTIGRAVITY_BRAIN_DIRS = [d for d, _ in ANTIGRAVITY_BRAIN_SOURCES]
 # name and a heuristic project. We mine these CLI-only stores for the real model
 # display name and the exact project cwd — see _antigravity_cli_meta().
 ANTIGRAVITY_CLI_DIR = GEMINI_DIR / "antigravity-cli"
-PROJECT_ALIASES_FILE = HOME / ".tokentelemetry" / "aliases.json"
+PROJECT_ALIASES_FILE = data_dir() / "aliases.json"
 
 def _load_project_aliases() -> Dict[str, str]:
     # Ensure directory exists
@@ -1385,7 +1386,7 @@ import time as _upd_time
 import urllib.request as _urlreq
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_TT_HOME = HOME / ".tokentelemetry"
+_TT_HOME = data_dir()
 _UPDATE_CACHE = _TT_HOME / ".update-check.json"
 _REPO_OWNER = "VasiHemanth"
 _REPO_NAME = "tokentelemetry"

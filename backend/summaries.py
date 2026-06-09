@@ -15,7 +15,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-TT_HOME = Path.home() / ".tokentelemetry"
+from tt_paths import data_dir
+
+TT_HOME = data_dir()
 _DB_PATH = TT_HOME / "summaries.db"
 _CONFIG_PATH = TT_HOME / "summarizer.json"
 

@@ -33,6 +33,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tt_paths import data_dir
+
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
@@ -81,8 +83,7 @@ DEFAULT_TOK_PER_SEC = 30.0
 
 
 def _config_path() -> Path:
-    home = Path(os.environ.get("TOKENTELEMETRY_HOME") or Path.home())
-    return home / ".tokentelemetry" / "power.json"
+    return data_dir() / "power.json"
 
 
 def has_user_config() -> bool:

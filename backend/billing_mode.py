@@ -35,6 +35,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from tt_paths import data_dir
+
 MODES = ("subscription", "api", "local", "unknown")
 
 # Static fallback when no override and no detection signal exists.
@@ -144,8 +146,7 @@ def detect_mode(agent: str, home: Optional[Path] = None) -> Optional[str]:
 # User overrides (~/.tokentelemetry/billing.json: {"<agent>": "<mode>"})
 # ---------------------------------------------------------------------------
 def _overrides_path() -> Path:
-    home = Path(os.environ.get("TOKENTELEMETRY_HOME") or Path.home())
-    return home / ".tokentelemetry" / "billing.json"
+    return data_dir() / "billing.json"
 
 
 def load_overrides() -> Dict[str, str]:

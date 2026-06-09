@@ -188,10 +188,29 @@ TokenTelemetry stores lightweight state in `~/.tokentelemetry/`:
   aliases.json       # Rename/merge project folder paths
   hidden.json        # Hide specific projects from dashboard
   preferences.json   # App preferences (e.g. update check on/off)
+  billing.json       # Per-agent billing-mode overrides
+  power.json         # Local-model power & electricity settings
   VERSION            # Current version
 ```
 
 All hand-editable JSON — no database, no config GUI needed.
+
+### Choosing where data is stored
+
+Prefer to keep your system drive clear, or isolate dev-tool state on a secondary
+drive? Point TokenTelemetry's data directory anywhere:
+
+- **Launcher flag** — `start.sh --data-dir /mnt/d/tt-data` (or `-d`). The folder
+  is created on first write.
+- **Environment** — set `TOKENTELEMETRY_DATA_DIR=/mnt/d/tt-data` before
+  launching. Used verbatim — that exact folder becomes the store (no
+  `.tokentelemetry` suffix appended). An explicit `--data-dir` flag wins over it.
+
+> **Windows cmd.exe tip:** If using quotes around the path, avoid a trailing backslash (e.g. `--data-dir "D:\tt\"`) as `\"` escapes the quote in `cmd.exe`. Use forward slashes or omit the trailing slash instead.
+
+Everything — aliases, hidden projects, preferences, billing/power overrides,
+summaries cache, the update-check stamp — moves together, so a single setting
+relocates *all* state. The default remains `~/.tokentelemetry/`.
 
 ### Update check
 

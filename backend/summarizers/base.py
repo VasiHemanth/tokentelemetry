@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+from tt_paths import data_dir
+
 
 class SummarizerError(Exception):
     """Raised when a backend is unavailable or the CLI call fails/﻿times out.
@@ -29,7 +31,7 @@ class SummarizerError(Exception):
 # CLIs that log their own sessions (codex/gemini/qwen) are run from here so the
 # ingest layer can recognise and skip TokenTelemetry's own summarizer calls,
 # rather than surfacing them as phantom traces in the user's stats.
-SUMMARIZER_CWD = Path.home() / ".tokentelemetry" / "summarizer"
+SUMMARIZER_CWD = data_dir() / "summarizer"
 
 
 def _ensure_cwd() -> str:
