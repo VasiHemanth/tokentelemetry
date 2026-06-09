@@ -3006,6 +3006,21 @@ def _scan_sessions_sync():
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    # ── Intelligence layer: efficiency score + smell detection ───────────────
+    for s in sessions:
+        try:
+            score = score_session(s)
+            s["efficiency"] = score
+            s["efficiency_label"] = score_label(score)
+        except Exception:
+            s["efficiency"] = None
+            s["efficiency_label"] = "unknown"
+        try:
+            s["smells"] = detect_smells(s)
+        except Exception:
+            s["smells"] = []
+
     return sessions
 
 
@@ -3019,6 +3034,9 @@ def _scan_sessions_sync():
 import asyncio as _asyncio
 import time as _time
 from pricing import calculate_cost, PRICING, PRICING_UPDATED
+from scoring import score_session, score_label
+from smells import detect_smells
+from forecast import compute_forecast
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3087,6 +3105,68 @@ async def get_sessions(fresh: bool = False):
 async def get_pricing():
     """Return the static pricing table and the date it was last refreshed."""
     return {"updated": PRICING_UPDATED, "models": PRICING}
+
+
+@app.get("/forecast")
+async def get_forecast(plan: str = "claude_pro"):
+    """
+    Burn-rate forecast: daily token averages, projected monthly usage,
+    days until plan limit, and trend direction.
+    plan: claude_pro | claude_max | codex_plus | copilot | api_unlimited
+    """
+    sessions = await get_sessions_cached()
+    return compute_forecast(sessions, plan=plan)
+
+
+@app.get("/smells")
+async def get_smells(project: Optional[str] = None):
+    """
+    Return sessions that have at least one AI smell warning.
+    Each entry: { session_id, agent, project, timestamp, smells: [...] }
+    """
+    sessions = await get_sessions_cached()
+    result = []
+    for s in sessions:
+        if project and s.get("project") != project:
+            continue
+        smells = s.get("smells") or []
+        if not smells:
+            continue
+        result.append({
+            "session_id": s.get("id"),
+            "agent":      s.get("agent"),
+            "project":    s.get("project"),
+            "timestamp":  s.get("timestamp"),
+            "efficiency": s.get("efficiency"),
+            "smells":     smells,
+        })
+    return result
+
+
+@app.get("/efficiency")
+async def get_efficiency(project: Optional[str] = None):
+    """
+    Return efficiency scores for all sessions, sorted best-first.
+    Useful for leaderboard views and detecting worst-performing sessions.
+    """
+    sessions = await get_sessions_cached()
+    result = []
+    for s in sessions:
+        if project and s.get("project") != project:
+            continue
+        score = s.get("efficiency")
+        if score is None:
+            continue
+        result.append({
+            "session_id":       s.get("id"),
+            "agent":            s.get("agent"),
+            "project":          s.get("project"),
+            "timestamp":        s.get("timestamp"),
+            "efficiency":       score,
+            "efficiency_label": s.get("efficiency_label"),
+        })
+    result.sort(key=lambda x: x["efficiency"], reverse=True)
+    return result
 
 
 @app.get("/remote-access")
