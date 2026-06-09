@@ -12,6 +12,11 @@
         {
           "title": "Protected by an access token",
           "description": "Exposing the dashboard puts your data on the network, so remote access now requires a token: when you start with a non-loopback --host, a random token is printed once in the server console — enter it on the other device when prompted. Your own browser on the server is exempt, and a fully trusted private network can opt out with --insecure-no-auth."
+        },
+        {
+          "title": "Scan to connect — no typing",
+          "description": "When remote access is on, Settings shows a \"Connect a device\" panel with a QR code. Scan it from your phone or tablet and the dashboard opens already signed in — the token rides along in the link, gets stored on the device, and is cleared from the address bar automatically.",
+          "href": "/settings"
         }
       ]
     },

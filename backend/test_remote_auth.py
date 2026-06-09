@@ -27,7 +27,7 @@ from main import app, _is_loopback, _presented_token  # noqa: E402
 
 
 async def _request(method, path, *, headers=None, query=b"", client=("203.0.113.7", 5555)):
-    """Send one request through the real ASGI app; return (status, headers_dict)."""
+    """Send one request through the real ASGI app; return (status, headers_dict, body)."""
     raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     scope = {
         "type": "http",
@@ -43,6 +43,7 @@ async def _request(method, path, *, headers=None, query=b"", client=("203.0.113.
     }
     status = {"code": None}
     resp_headers: list = []
+    body_parts: list = []
     pending = [{"type": "http.request", "body": b"", "more_body": False}]
 
     async def receive():
@@ -52,14 +53,27 @@ async def _request(method, path, *, headers=None, query=b"", client=("203.0.113.
         if message["type"] == "http.response.start":
             status["code"] = message["status"]
             resp_headers.extend(message.get("headers", []))
+        elif message["type"] == "http.response.body":
+            body_parts.append(message.get("body", b""))
 
     await app(scope, receive, send)
     hdrs = {k.decode().lower(): v.decode() for k, v in resp_headers}
-    return status["code"], hdrs
+    return status["code"], hdrs, b"".join(body_parts)
 
 
 def _get(**kw):
-    return asyncio.run(_request("GET", "/pricing", **kw))
+    status, hdrs, _ = asyncio.run(_request("GET", "/pricing", **kw))
+    return status, hdrs
+
+
+def _remote_access(**kw):
+    import json
+    status, _, body = asyncio.run(_request("GET", "/remote-access", **kw))
+    try:
+        data = json.loads(body) if body else None
+    except ValueError:
+        data = None
+    return status, data
 
 
 TOKEN = "s3cret-token-value"
@@ -119,7 +133,7 @@ def test_preflight_is_answered_without_token():
     """CORS is outermost: an OPTIONS preflight (no Authorization) must succeed and
     carry the allow-origin header, never get a 401 from the auth layer."""
     _set_token(TOKEN)
-    status, hdrs = asyncio.run(_request(
+    status, hdrs, _ = asyncio.run(_request(
         "OPTIONS", "/pricing", client=REMOTE,
         headers={
             "Origin": "http://localhost:3000",
@@ -138,6 +152,44 @@ def test_401_carries_cors_headers():
     status, hdrs = _get(client=REMOTE, headers=ORIGIN)
     assert status == 401, status
     assert "access-control-allow-origin" in hdrs, hdrs
+
+
+def test_remote_access_loopback_returns_connect_info():
+    """The QR endpoint hands the connect URL + token to a LOCAL caller only."""
+    _set_token(TOKEN)
+    os.environ["TT_REMOTE_CONNECT_URL"] = "http://192.168.0.6:3000/?token=" + TOKEN
+    try:
+        status, data = _remote_access(client=LOOPBACK)
+        assert status == 200, status
+        assert data and data.get("enabled") is True, data
+        assert data.get("token") == TOKEN, data
+        assert "192.168.0.6" in data.get("url", ""), data
+    finally:
+        os.environ.pop("TT_REMOTE_CONNECT_URL", None)
+
+
+def test_remote_access_not_fetchable_remotely():
+    """A remote device can never read the token: no token → 401 (middleware),
+    token → 403 (endpoint's own loopback check). Never 200."""
+    _set_token(TOKEN)
+    os.environ["TT_REMOTE_CONNECT_URL"] = "http://192.168.0.6:3000/?token=" + TOKEN
+    try:
+        status_no_creds, _ = _remote_access(client=REMOTE)
+        assert status_no_creds == 401, status_no_creds
+        status_with_token, _ = _remote_access(
+            client=REMOTE, headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        assert status_with_token == 403, status_with_token
+    finally:
+        os.environ.pop("TT_REMOTE_CONNECT_URL", None)
+
+
+def test_remote_access_disabled_when_no_connect_url():
+    _set_token(TOKEN)
+    os.environ.pop("TT_REMOTE_CONNECT_URL", None)
+    status, data = _remote_access(client=LOOPBACK)
+    assert status == 200, status
+    assert data == {"enabled": False}, data
 
 
 def test_loopback_helper():

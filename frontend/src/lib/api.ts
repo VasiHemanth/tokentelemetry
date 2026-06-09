@@ -51,6 +51,38 @@ export function setToken(token: string): void {
   }
 }
 
+// Bootstrap: if the dashboard was opened with a `?token=` in the URL (e.g. from
+// a scanned QR / "connect a device" link), persist it for this host. Runs at
+// module load — before any component fetch — so the first request already
+// carries the token. The URL itself is cleaned up separately, post-hydration,
+// by stripBootstrapTokenFromUrl() (Next's router re-applies the query if we
+// strip it this early). Browser-only; no-op during SSR.
+function consumeBootstrapToken(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const t = new URLSearchParams(window.location.search).get("token");
+    if (t) setToken(t);
+  } catch {
+    /* malformed URL / storage unavailable — non-fatal */
+  }
+}
+consumeBootstrapToken();
+
+/** Remove a consumed `?token=` from the address bar so it doesn't linger in
+ *  history/bookmarks/screenshots. Must run AFTER hydration (see TokenGate) —
+ *  a module-load replaceState gets overwritten when Next syncs the URL. */
+export function stripBootstrapTokenFromUrl(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("token")) return;
+    url.searchParams.delete("token");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  } catch {
+    /* non-fatal */
+  }
+}
+
 /** Raised when the backend rejects a request for lack of a valid token. The
  *  TokenGate listens for the `tt-auth-required` window event this also emits. */
 export class AuthRequiredError extends Error {
@@ -98,6 +130,19 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(path, init);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${path}`);
   return res.json() as Promise<T>;
+}
+
+/** Remote-access connection info for the "Connect a device" panel. The backend
+ *  serves this loopback-only, so on a remote device the request 403s and the
+ *  panel simply renders nothing. */
+export interface RemoteAccess {
+  enabled: boolean;
+  url?: string;
+  token?: string;
+}
+
+export function getRemoteAccess(): Promise<RemoteAccess> {
+  return api<RemoteAccess>("/remote-access");
 }
 
 export interface ResourceState<T> {

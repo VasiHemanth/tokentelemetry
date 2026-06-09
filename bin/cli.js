@@ -18,6 +18,7 @@ const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const crypto = require('crypto');
+const os = require('os');
 
 const rootDir = path.resolve(__dirname, '..');
 const backendDir = path.join(rootDir, 'backend');
@@ -65,6 +66,24 @@ function parseArgs(argv) {
     else die(`unknown argument: ${a}\nRun with --help for usage.`);
   }
   return out;
+}
+
+// Pick a concrete, reachable address for the connect/QR URL. 0.0.0.0 is a bind
+// wildcard, not a destination, so we can't hand it to a phone. Preference:
+//   1. an explicit non-wildcard --host (the operator named it),
+//   2. the first --allowed-origins entry (they told us how they'll reach it),
+//   3. the primary non-internal IPv4 of this box (best-effort autodetect).
+// Returns '' if nothing concrete is available.
+function pickConnectHost(host, allowedOrigins) {
+  if (host && !['0.0.0.0', '127.0.0.1', 'localhost'].includes(host)) return host;
+  const first = (allowedOrigins || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
+  if (first) return first;
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family === 'IPv4' && !a.internal) return a.address;
+    }
+  }
+  return '';
 }
 
 function printHelp() {
@@ -265,6 +284,16 @@ async function start() {
     }
   }
 
+  // Scan-to-open URL for the "connect a device" QR. Needs a concrete reachable
+  // address (0.0.0.0 isn't one): prefer an explicit --host, else the first
+  // --allowed-origins entry, else the box's primary LAN IPv4. The token rides
+  // in the URL as a one-time bootstrap; the frontend stores it and strips it
+  // from the address bar on load (see frontend/src/lib/api.ts).
+  const connectHost = pickConnectHost(host, allowedOrigins);
+  const connectUrl = (authMode === 'token' && connectHost)
+    ? `http://${connectHost}:${frontPort}/?token=${encodeURIComponent(resolvedToken)}`
+    : '';
+
   console.log('\n→ launching services…');
   const backend = spawn(venvPython, ['main.py', '--port', String(apiPort), '--host', host], {
     cwd: backendDir,
@@ -273,7 +302,13 @@ async function start() {
     detached: !isWindows,
     // TT_ALLOWED_ORIGINS opts extra hosts into the backend's CORS allowlist.
     // TT_AUTH_TOKEN (when set) turns on the remote-access gate; empty == off.
-    env: { ...process.env, TT_ALLOWED_ORIGINS: allowed, TT_AUTH_TOKEN: resolvedToken },
+    // TT_REMOTE_CONNECT_URL backs the loopback-only /remote-access (QR) endpoint.
+    env: {
+      ...process.env,
+      TT_ALLOWED_ORIGINS: allowed,
+      TT_AUTH_TOKEN: resolvedToken,
+      TT_REMOTE_CONNECT_URL: connectUrl,
+    },
   });
 
   const frontend = spawn('npm', ['run', 'dev', '--', '--port', String(frontPort)], {
@@ -301,9 +336,15 @@ async function start() {
     console.log('\n──────────────────────────────────────────────────────────');
     console.log('Remote access is ON. Other devices must enter this token:');
     console.log(`\n    ${resolvedToken}\n`);
-    console.log('Open the dashboard from another device and paste it when');
-    console.log('prompted. (Your browser on this machine is exempt.) This');
-    console.log('token is shown once — re-run to rotate it.');
+    if (connectUrl) {
+      console.log('Or skip the typing — open this link (or scan its QR from the');
+      console.log('dashboard’s "Connect a device" panel) on the other device:');
+      console.log(`\n    ${connectUrl}\n`);
+    } else {
+      console.log('Open the dashboard from another device and paste it when');
+      console.log('prompted. (Your browser on this machine is exempt.)\n');
+    }
+    console.log('The token is shown once — re-run to rotate it.');
     console.log('──────────────────────────────────────────────────────────');
   } else if (authMode === 'insecure') {
     console.log('\n⚠  WARNING: --insecure-no-auth — the dashboard is exposed to the');

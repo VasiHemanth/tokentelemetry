@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import { BillingSettings } from "@/components/settings/BillingSettings";
+import { ConnectDevice } from "@/components/ConnectDevice";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
   DEFAULT_OPENAI_COMPAT,
@@ -142,6 +143,9 @@ export default function SettingsPage() {
         description="Configure how TokenTelemetry summarizes your session traces."
         icon={<Settings2 size={20} strokeWidth={2.25} />}
       />
+
+      {/* Only renders when remote access is enabled (loopback-only endpoint). */}
+      <ConnectDevice />
 
       <Section
         title="AI trace summaries"

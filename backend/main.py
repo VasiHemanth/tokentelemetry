@@ -2983,6 +2983,24 @@ async def get_pricing():
     return {"updated": PRICING_UPDATED, "models": PRICING}
 
 
+@app.get("/remote-access")
+async def get_remote_access(request: Request):
+    """Connection info for the "connect a device" QR panel: the scan-to-open URL
+    (host + frontend port + bootstrap token) that bin/cli.js precomputed into
+    TT_REMOTE_CONNECT_URL. The token is a credential, so this is LOOPBACK-ONLY —
+    a remote device (even one holding the token) gets 403, so the token can never
+    be re-fetched over the network. Returns {enabled: false} when not exposed."""
+    from fastapi import HTTPException
+    client = request.client.host if request.client else None
+    if not _is_loopback(client):
+        raise HTTPException(status_code=403, detail="Not available remotely.")
+    url = os.environ.get("TT_REMOTE_CONNECT_URL", "").strip()
+    token = os.environ.get("TT_AUTH_TOKEN", "").strip()
+    if not url or not token:
+        return {"enabled": False}
+    return {"enabled": True, "url": url, "token": token}
+
+
 @app.get("/artifacts")
 async def get_artifact(path: str):
     """Stream a local artifact file securely."""

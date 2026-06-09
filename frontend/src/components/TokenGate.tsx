@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { setToken } from "../lib/api";
+import { setToken, stripBootstrapTokenFromUrl } from "../lib/api";
 
 // Modal that appears when the backend rejects a request for lack of a valid
 // access token (remote/tailnet use). It listens for the `tt-auth-required`
@@ -16,6 +16,10 @@ export default function TokenGate() {
   const [value, setValue] = useState("");
 
   useEffect(() => {
+    // Clean a consumed bootstrap token out of the address bar now that Next has
+    // hydrated (doing it at module load gets overwritten by the router).
+    stripBootstrapTokenFromUrl();
+
     // Just open — do NOT touch `value` here. Background pollers keep firing
     // requests, so this event repeats every poll interval while the modal is
     // open; resetting `value` would wipe whatever the user is mid-typing.
