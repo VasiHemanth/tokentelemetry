@@ -6,7 +6,6 @@ import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import { BillingSettings } from "@/components/settings/BillingSettings";
-import { PowerSettings } from "@/components/settings/PowerSettings";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
   DEFAULT_OPENAI_COMPAT,
@@ -16,6 +15,32 @@ import { getUpdateCheck, setUpdateCheck, type UpdateCheckState } from "@/lib/ver
 
 // Backends that carry a per-backend model selection.
 const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat"]);
+
+function DashboardPreferencesToggle() {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    setEnabled(localStorage.getItem("tt-show-local-dash") === "true");
+  }, []);
+
+  const toggle = () => {
+    const next = !enabled;
+    setEnabled(next);
+    localStorage.setItem("tt-show-local-dash", next.toString());
+    window.dispatchEvent(new Event("storage"));
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      role="switch"
+      aria-checked={enabled}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors mt-0.5 border-[var(--tt-border)] cursor-pointer ${enabled ? "tt-tint-1" : ""}`}
+    >
+      <span className={`absolute h-3.5 w-3.5 rounded-full transition-transform ${enabled ? "translate-x-[18px] bg-[var(--tt-brand)]" : "translate-x-0.5 bg-[var(--tt-fg-muted)]"}`} />
+    </button>
+  );
+}
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<SummarizerConfig | null>(null);
@@ -181,8 +206,24 @@ export default function SettingsPage() {
       >
         <div className="space-y-4">
           <BillingSettings />
-          <PowerSettings />
         </div>
+      </Section>
+
+      <Section
+        title="Dashboard preferences"
+        description="Customize what you see on the main dashboard."
+      >
+        <Card>
+          <div className="flex items-start justify-between gap-4 p-5">
+            <div>
+              <CardTitle className="mb-1 text-[13px]">Show local power & energy on dashboard</CardTitle>
+              <p className="text-[12px] text-[var(--tt-fg-dim)] max-w-[560px]">
+                By default, local power insights are only shown on the Local Models page. Turn this on to also display them on the main dashboard.
+              </p>
+            </div>
+            <DashboardPreferencesToggle />
+          </div>
+        </Card>
       </Section>
 
       <Section

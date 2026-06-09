@@ -390,6 +390,109 @@ def _antigravity_db_meta(db_path: Path) -> Dict[str, Optional[str]]:
     return {"model": model, "project": project}
 
 
+# --- Antigravity CLI per-step trace -----------------------------------------
+# agy stores each trajectory step as a protobuf blob in conversations/<id>.db.
+# We have no .proto schema, so (like the metadata reader above) we pattern-match
+# the readable text + tool call out of the bytes — robust enough for a scrubbable
+# trace. step_type is a stable discriminator across recent agy builds.
+_AG_STEP_USER = 14            # the user's prompt
+_AG_STEP_REASONING = 15       # assistant reasoning narrative + a tool call
+_AG_STEP_TOOL_OUTPUT = 21     # result of a tool call
+_AG_STEP_SKIP = {90, 98, 23}  # system EPHEMERAL prompt, internal id, bare file ref
+_AG_TOOLNAME_RE = re.compile(rb'\x12.([a-z_]{3,40})\x1a')
+_AG_TEXT_RE = re.compile(rb'[\x09\x0a\x20-\x7e]{16,}')
+_AG_ARGJSON_RE = re.compile(rb'\{(?:[^{}\\]|\\.|\{(?:[^{}\\]|\\.)*\})*\}')
+
+
+def _ag_best_text(payload: bytes) -> str:
+    """Longest readable text run in a step blob, excluding JSON arg objects."""
+    runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload or b"")]
+    runs = [r for r in runs if not r.lstrip().startswith("{")]
+    if not runs:
+        return ""
+    # Trim a leading 1-2 char protobuf framing token ("k\nicheck…" → "icheck…").
+    txt = max(runs, key=len).strip()
+    txt = re.sub(r"^[a-zA-Z]{1,2}\n", "", txt)
+    return txt.strip()
+
+
+def _ag_tool_call(payload: bytes):
+    """(tool_name, parsed_args|None) for a step blob, or (None, None)."""
+    m = _AG_TOOLNAME_RE.search(payload or b"")
+    if not m:
+        return None, None
+    name = m.group(1).decode("ascii", "ignore")
+    args = None
+    jm = _AG_ARGJSON_RE.search(payload or b"")
+    if jm:
+        try:
+            args = json.loads(jm.group(0).decode("utf-8", "ignore"))
+        except Exception:
+            args = None
+    return name, args
+
+
+def _ag_event(role: str, content: list, sid: str, idx: int, order: int) -> Dict[str, Any]:
+    return {
+        "id": f"{sid}-step-{idx}",
+        "type": role,                       # "user" | "assistant"
+        "role": role,
+        "message": {"role": role, "content": content},
+        "normalized_timestamp": order * 1000,
+    }
+
+
+def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
+    """Build a Claude-format per-step trace from an agy session's SQLite steps.
+
+    Returns events the existing viewer renders (user / reasoning / tool / tool
+    output), or [] when nothing usable is found (caller falls back to brain)."""
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        rows = con.execute(
+            "SELECT idx, step_type, step_payload FROM steps ORDER BY idx"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+    msgs: List[Dict[str, Any]] = []
+    order = 0
+    for idx, stype, payload in rows:
+        if stype in _AG_STEP_SKIP or not payload:
+            continue
+        text = _ag_best_text(payload)
+        if stype == _AG_STEP_USER:
+            if not text:
+                continue
+            order += 1
+            msgs.append(_ag_event("user", [{"type": "text", "text": text}], session_id, idx, order))
+        elif stype == _AG_STEP_TOOL_OUTPUT:
+            if not text:
+                continue
+            order += 1
+            msgs.append(_ag_event("user", [{"type": "tool_result", "content": text[:6000]}], session_id, idx, order))
+        else:
+            tool, args = _ag_tool_call(payload)
+            # Reasoning narrative and the tool call are split into separate steps
+            # so both are counted and render distinctly (thinking → reasoning, the
+            # call → tool).
+            if stype == _AG_STEP_REASONING and text and not text.lstrip().startswith(("{", "<")):
+                order += 1
+                msgs.append(_ag_event("assistant", [{"type": "thinking", "text": text}], session_id, idx, order))
+            if tool:
+                order += 1
+                msgs.append(_ag_event("assistant", [{"type": "tool_use", "name": tool, "input": args or {"preview": text[:600]}}], session_id, idx, order))
+            elif stype != _AG_STEP_REASONING and text:
+                order += 1
+                msgs.append(_ag_event("assistant", [{"type": "text", "text": text}], session_id, idx, order))
+    return msgs
+
+
 def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict[str, Any]]:
     """Enrich Antigravity CLI (`agy`) sessions from its own stores.
 
@@ -2712,6 +2815,7 @@ def _scan_sessions_sync():
                         "display": display, "tokens": tokens, "mcp_tools": mcp_tools,
                         "has_plan": has_plan, "plans": plans, "model": model,
                         "models_used": models_used, "artifacts": [],
+                        "provider": provider_id,  # expose runtime (e.g. "ollama") so analytics can detect local sessions
                         "cost": tokens["cost"],
                     })
             finally:
@@ -2814,6 +2918,9 @@ def _scan_sessions_sync():
                         "cost_anomaly": cost_anomaly,
                         "parent_session_id": srow["parent_session_id"],
                         "end_reason": srow["end_reason"],
+                        "provider": srow.get("billing_provider", None),
+                        "endpoint": srow.get("billing_base_url", None),
+                        "tok_per_sec": _measured_tps,
                     })
             finally:
                 conn.close()
@@ -3106,6 +3213,19 @@ async def get_session_detail(session_id: str, agent: str):
         return events
 
     elif agent in ["gemini", "antigravity"]:
+        # Antigravity CLI (agy) sessions store the real per-step trajectory in
+        # conversations/<id>.db — far richer than the brain markdown. Prefer it.
+        if agent == "antigravity":
+            cli_db = ANTIGRAVITY_CLI_DIR / "conversations" / f"{session_id}.db"
+            if cli_db.exists():
+                cli_msgs = _antigravity_cli_trace(cli_db, session_id)
+                if cli_msgs:
+                    return {
+                        "sessionId": session_id,
+                        "projectHash": "",
+                        "kind": "antigravity_cli",
+                        "messages": cli_msgs,
+                    }
         # Antigravity brain-based session (has no .json file; synthesize from markdown artifacts)
         brain_dir = ANTIGRAVITY_BRAIN_DIR / session_id
         for _bd in ANTIGRAVITY_BRAIN_DIRS:
@@ -3702,40 +3822,59 @@ def _cache_hit_pct(input_tokens: int, cached_tokens: int) -> Optional[float]:
 
 @app.get("/analytics")
 async def get_analytics():
+    from power_config import (
+        is_local_session, load_power_config, default_tok_per_sec_for_model, co2_for_session,
+    )
+    from insights import energy_wh, cloud_equiv_cost, savings_vs_cloud
+    pc = load_power_config()
+    load_watts = pc.get("loadWatts", 80)
+    ref_model = pc.get("referenceCloudModel", "claude-sonnet-4-6")
     sessions = await get_sessions_cached(); by_agent = {}; by_day = {}; by_model = {}
-    # quality_by_agent: Dict[str, Dict[str, int]] = {}
-    # total_edit_turns = 0
-    # total_retry_turns = 0
-    # total_measured_sessions = 0
     for s in sessions:
         agent = s["agent"]
-        if agent not in by_agent: by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0}
+        if agent not in by_agent:
+            by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                               "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0, "session_count": 0}
         st = s.get("tokens", {})
         scost = s.get("cost", 0.0)
+        # Local insights — energy, cloud savings, CO2 — only for local sessions.
+        energy = savings = co2 = 0.0
+        if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
+                            provider=s.get("provider"), billing_mode=s.get("billing_mode"), config=pc):
+            tps = s.get("tok_per_sec")
+            if not tps or tps <= 0:
+                tps = default_tok_per_sec_for_model(s.get("model"))
+            energy = energy_wh(st.get("output", 0), load_watts=load_watts, tok_per_sec=tps)
+            cloud_cost = cloud_equiv_cost(ref_model, st.get("input", 0), st.get("output", 0), st.get("cached", 0))
+            savings = savings_vs_cloud(scost, cloud_cost)
+            co2 = co2_for_session(st.get("output", 0), config=pc, tok_per_sec=tps)
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
         by_agent[agent]["cost"] += scost
+        by_agent[agent]["energy_wh"] += energy
+        by_agent[agent]["savings_usd"] += savings
+        by_agent[agent]["co2_g"] += co2
         by_agent[agent]["session_count"] += 1
         model_name = s.get("model") or f"{agent} (unknown)"
         if model_name not in by_model:
-            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0, "agent": agent}
+            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                    "session_count": 0, "agent": agent}
         for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
         by_model[model_name]["cost"] += scost
+        by_model[model_name]["energy_wh"] += energy
+        by_model[model_name]["savings_usd"] += savings
+        by_model[model_name]["co2_g"] += co2
         by_model[model_name]["session_count"] += 1
-        # Bucket by LOCAL day, not UTC — a 9pm-PT session shouldn't land on the
-        # next day just because the timestamp crossed midnight UTC.
+        # Bucket by LOCAL day, not UTC.
         day = s["timestamp"].astimezone().strftime("%Y-%m-%d")
-        if day not in by_day: by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0}
+        if day not in by_day:
+            by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0,
+                           "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
         by_day[day]["cost"] += scost
-        # q = s.get("quality") or {}
-        # if q.get("measured"):
-        #     agg = quality_by_agent.setdefault(agent, {"edit_turns": 0, "retry_turns": 0, "measured_sessions": 0})
-        #     agg["edit_turns"] += q.get("edit_turns", 0)
-        #     agg["retry_turns"] += q.get("retry_turns", 0)
-        #     agg["measured_sessions"] += 1
-        #     total_edit_turns += q.get("edit_turns", 0)
-        #     total_retry_turns += q.get("retry_turns", 0)
-        #     total_measured_sessions += 1
+        by_day[day]["energy_wh"] += energy
+        by_day[day]["savings_usd"] += savings
+        by_day[day]["co2_g"] += co2
     for agent, row in by_agent.items():
         row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cached"])
         # agg = quality_by_agent.get(agent)
@@ -3757,8 +3896,10 @@ async def get_analytics():
             "cached": total_cached,
             "total": sum(a["total"] for a in by_agent.values()),
             "cost": sum(a["cost"] for a in by_agent.values()),
+            "energy_wh": sum(a["energy_wh"] for a in by_agent.values()),
+            "savings_usd": sum(a["savings_usd"] for a in by_agent.values()),
+            "co2_g": sum(a["co2_g"] for a in by_agent.values()),
             "cache_hit_pct": _cache_hit_pct(total_input, total_cached),
-            # "quality": _quality_summary(total_edit_turns, total_retry_turns, total_measured_sessions),
         },
         "pricing_updated": PRICING_UPDATED,
     }

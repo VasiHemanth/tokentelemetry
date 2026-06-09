@@ -5,6 +5,7 @@ import { api } from "./api";
 export interface PowerConfig {
   loadWatts: number;
   costPerKwh: number;
+  gridCarbonIntensity: number;
   subscriptionEndpoints: string[];
   localEndpoints: string[];
   /** True once the user has saved a power.json (else values are shipped defaults). */

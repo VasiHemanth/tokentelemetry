@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format } from "date-fns";
@@ -12,6 +13,7 @@ import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
+import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
 import { formatTokens, formatCost } from "@/lib/format";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
@@ -69,6 +71,14 @@ export default function Home() {
   const totalModelSessions = modelRows.reduce((a, r) => a + r.session_count, 0) || 1;
 
   const loading = sessionsRes.loading;
+
+  const [showLocalPower, setShowLocalPower] = useState(false);
+  useEffect(() => {
+    const check = () => setShowLocalPower(localStorage.getItem("tt-show-local-dash") === "true");
+    check();
+    window.addEventListener("storage", check);
+    return () => window.removeEventListener("storage", check);
+  }, []);
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -136,6 +146,8 @@ export default function Home() {
           </Link>.
         </p>
       </Section>
+
+      {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {

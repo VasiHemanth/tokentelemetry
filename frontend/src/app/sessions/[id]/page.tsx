@@ -616,7 +616,7 @@ export default function SessionDetailPage() {
               <h2 className="text-[15px] font-semibold text-[var(--tt-fg)] mb-1">No trace available</h2>
               <p className="text-[12px] text-[var(--tt-fg-muted)] leading-relaxed">
                 {agent === "antigravity"
-                  ? "Antigravity sessions are tracked from log metadata only — TokenTelemetry doesn't capture per-step events for this agent. Aggregate stats still appear in Insights and Analytics."
+                  ? "No per-step trace was found for this session. Antigravity CLI (agy) sessions render their full trajectory here; IDE/app or older log-only sessions keep just the metadata, which still appears in Insights and Analytics."
                   : "This session was registered but no per-step events were found in the local log. The session metadata still appears in Insights and Analytics."}
               </p>
             </div>
