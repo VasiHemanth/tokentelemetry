@@ -17,8 +17,85 @@ export const API_BASE = (() => {
   return `http://127.0.0.1:${port}`;
 })();
 
+// --- Remote-access token --------------------------------------------------
+// When the dashboard is opened from another device, the backend requires an
+// access token (see bin/cli.js / backend RemoteAuthMiddleware). We hold it in
+// localStorage keyed by hostname — a laptop may talk to several boxes, each
+// with its own token, and "localhost" never needs one. The token is NEVER
+// baked into the build; the user pastes it (printed once on the server) into
+// the TokenGate prompt. Loopback requests are exempt server-side, so local use
+// never sees any of this.
+
+function tokenKey(): string {
+  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  return `tt-token-${host}`;
+}
+
+export function getToken(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(tokenKey()) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setToken(token: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const t = token.trim();
+    if (t) window.localStorage.setItem(tokenKey(), t);
+    else window.localStorage.removeItem(tokenKey());
+  } catch {
+    /* storage unavailable (private mode / disabled) — non-fatal */
+  }
+}
+
+/** Raised when the backend rejects a request for lack of a valid token. The
+ *  TokenGate listens for the `tt-auth-required` window event this also emits. */
+export class AuthRequiredError extends Error {
+  constructor(path: string) {
+    super(`Authentication required for ${path}`);
+    this.name = "AuthRequiredError";
+  }
+}
+
+function signalAuthRequired(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("tt-auth-required"));
+  }
+}
+
+/** Build a URL for a browser-native resource load (artifact <img>/<a>/<video>),
+ *  carrying the token as a query param since those requests can't set headers. */
+export function artifactUrl(path: string): string {
+  const base = `${API_BASE}${path}`;
+  const token = getToken();
+  if (!token) return base;
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}token=${encodeURIComponent(token)}`;
+}
+
+/** Like fetch(API_BASE + path) but attaches the access token and turns a 401
+ *  into the auth-required signal. Returns the raw Response so callers that read
+ *  .json()/.text() themselves keep working; it throws AuthRequiredError on 401
+ *  so existing .catch handlers stop the chain. */
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  const token = getToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status === 401) {
+    signalAuthRequired();
+    throw new AuthRequiredError(path);
+  }
+  return res;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const res = await apiFetch(path, init);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${path}`);
   return res.json() as Promise<T>;
 }

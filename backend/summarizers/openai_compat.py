@@ -99,6 +99,15 @@ class OpenAICompatSummarizer(BaseSummarizer):
         # too for the standalone test endpoint.
         self._model = model or cfg.get("model")
         self.endpoint = str(cfg.get("endpoint") or _DEFAULT_ENDPOINT).rstrip("/")
+        # SSRF guard: only allow http(s) endpoints. Blocks file://, gopher://,
+        # data:// etc. that could turn the "test connection" probe into a
+        # local-file read or scheme-exfil vector. The remote-auth gate already
+        # keeps unauthenticated callers out; this hardens the value itself.
+        _scheme = self.endpoint.split("://", 1)[0].lower() if "://" in self.endpoint else ""
+        if _scheme not in ("http", "https"):
+            raise SummarizerError(
+                f"openai_compat endpoint must be an http(s) URL, got {self.endpoint!r}"
+            )
         # Env wins so a key needn't be persisted to disk.
         self.api_key = os.environ.get("OPENAI_COMPAT_API_KEY") or cfg.get("api_key") or ""
         self.max_tokens = int(cfg.get("max_tokens", 512))

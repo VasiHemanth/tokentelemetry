@@ -8,6 +8,10 @@
           "title": "Opt-in remote / tailnet access",
           "description": "Run TokenTelemetry on a headless box (a home server, a Tailscale tailnet) and open the dashboard from your laptop or phone. Start it with --host 0.0.0.0 and --allowed-origins <your-hosts>; the frontend now figures out where the backend is from the address you loaded it on, so the same setup works over localhost, a LAN IP, or a tailnet name. Default is unchanged: localhost-only.",
           "href": "/"
+        },
+        {
+          "title": "Protected by an access token",
+          "description": "Exposing the dashboard puts your data on the network, so remote access now requires a token: when you start with a non-loopback --host, a random token is printed once in the server console — enter it on the other device when prompted. Your own browser on the server is exempt, and a fully trusted private network can opt out with --insecure-no-auth."
         }
       ]
     },

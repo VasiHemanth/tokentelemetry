@@ -6,7 +6,7 @@ import {
   Globe, Package,
 } from "lucide-react";
 
-import { API_BASE } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import {
   Card, CardHeader, CardTitle, CardEyebrow, Section, Badge, AgentBadge,
   EmptyState, Skeleton,
@@ -38,9 +38,10 @@ export default function ConfigTab() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/config?project=${encodeURIComponent(decodedPath)}`)
+    apiFetch(`/config?project=${encodeURIComponent(decodedPath)}`)
       .then((r) => r.json())
       .then(setConfig)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [decodedPath]);
 

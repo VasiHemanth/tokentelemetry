@@ -17,6 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
+const crypto = require('crypto');
 
 const rootDir = path.resolve(__dirname, '..');
 const backendDir = path.join(rootDir, 'backend');
@@ -37,7 +38,7 @@ function die(msg) {
 // Accepts --port / --api-port (and -p / -a shorthands), in `--flag value` or
 // `--flag=value` form. Anything unknown triggers the help text.
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '' };
+  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false };
   const take = (i) => {
     if (i + 1 >= argv.length) die(`expected a value after ${argv[i]}`);
     return argv[i + 1];
@@ -58,6 +59,9 @@ function parseArgs(argv) {
     else if (a.startsWith('--host='))          { out.host = a.slice('--host='.length); }
     else if (a === '--allowed-origins')        { out.allowedOrigins = take(i); i++; }
     else if (a.startsWith('--allowed-origins=')) { out.allowedOrigins = a.slice('--allowed-origins='.length); }
+    else if (a === '--auth-token')             { out.authToken = take(i); i++; }
+    else if (a.startsWith('--auth-token='))    { out.authToken = a.slice('--auth-token='.length); }
+    else if (a === '--insecure-no-auth')       { out.insecureNoAuth = true; }
     else die(`unknown argument: ${a}\nRun with --help for usage.`);
   }
   return out;
@@ -74,13 +78,18 @@ function printHelp() {
     '                            Use 0.0.0.0 (or an interface IP) to expose remotely.',
     '      --allowed-origins <L> Comma-separated hosts allowed to load the dashboard',
     '                            from another machine (CORS + Next dev origins).',
+    '      --auth-token <T>      Access token required for remote requests. If a',
+    '                            non-loopback --host is used and this is omitted, a',
+    '                            random token is generated and printed once.',
+    '      --insecure-no-auth    Disable the remote access token entirely. Only safe',
+    '                            on a fully trusted private network (e.g. a tailnet).',
     '  -h, --help               Show this help.',
     '',
     'Examples:',
     '  start.sh                                 # 3000 / 8000, localhost only',
     '  start.sh --port 4000 --api-port 9000     # custom both',
     '  start.sh -p 4000                         # frontend on 4000, backend stays 8000',
-    '  start.sh --host 0.0.0.0 \\               # expose on a tailnet/LAN',
+    '  start.sh --host 0.0.0.0 \\               # expose on a tailnet/LAN (token auto-gen)',
     '    --allowed-origins box.tailnet.ts.net,100.64.0.1',
   ].join('\n'));
 }
@@ -212,7 +221,7 @@ function ensureFrontend() {
 }
 
 async function start() {
-  const { frontPort, apiPort, host, allowedOrigins } = parseArgs(process.argv.slice(2));
+  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth } = parseArgs(process.argv.slice(2));
 
   console.log('\nTokenTelemetry');
   console.log('--------------');
@@ -234,6 +243,28 @@ async function start() {
   const hostIsConcrete = host && !['0.0.0.0', '127.0.0.1', 'localhost'].includes(host);
   const allowed = [allowedOrigins, hostIsConcrete ? host : ''].filter(Boolean).join(',');
 
+  // Remote access auth. A non-loopback bind exposes an otherwise unauthenticated
+  // API to the network — CORS does NOT stop direct (non-browser) clients — so we
+  // require an access token for *remote* requests (loopback is always exempt, so
+  // the operator's own browser on the box stays frictionless). Secure by default:
+  // a token is auto-generated when none is supplied, unless --insecure-no-auth is
+  // passed (for a fully trusted private network). The token is handed ONLY to the
+  // backend — never to the frontend env — so it never lands in the client bundle.
+  const hostIsRemote = host && !['127.0.0.1', 'localhost'].includes(host);
+  let authMode = 'off';      // 'off' | 'token' | 'insecure'
+  let resolvedToken = '';
+  if (hostIsRemote) {
+    if (insecureNoAuth) {
+      authMode = 'insecure';
+    } else {
+      // Honor an explicitly supplied token (flag wins over env, mirroring the
+      // TT_HOST / TT_API_PORT convention); otherwise mint a fresh random one.
+      resolvedToken = (authToken || process.env.TT_AUTH_TOKEN || '').trim()
+        || crypto.randomBytes(24).toString('base64url');
+      authMode = 'token';
+    }
+  }
+
   console.log('\n→ launching services…');
   const backend = spawn(venvPython, ['main.py', '--port', String(apiPort), '--host', host], {
     cwd: backendDir,
@@ -241,7 +272,8 @@ async function start() {
     // detached on POSIX gives us a process group we can signal as a unit
     detached: !isWindows,
     // TT_ALLOWED_ORIGINS opts extra hosts into the backend's CORS allowlist.
-    env: { ...process.env, TT_ALLOWED_ORIGINS: allowed },
+    // TT_AUTH_TOKEN (when set) turns on the remote-access gate; empty == off.
+    env: { ...process.env, TT_ALLOWED_ORIGINS: allowed, TT_AUTH_TOKEN: resolvedToken },
   });
 
   const frontend = spawn('npm', ['run', 'dev', '--', '--port', String(frontPort)], {
@@ -265,6 +297,20 @@ async function start() {
   const dashUrl = `http://${displayHost}:${frontPort}`;
   console.log(`\nDashboard:  ${dashUrl}`);
   console.log(`API:        http://${displayHost}:${apiPort}`);
+  if (authMode === 'token') {
+    console.log('\n──────────────────────────────────────────────────────────');
+    console.log('Remote access is ON. Other devices must enter this token:');
+    console.log(`\n    ${resolvedToken}\n`);
+    console.log('Open the dashboard from another device and paste it when');
+    console.log('prompted. (Your browser on this machine is exempt.) This');
+    console.log('token is shown once — re-run to rotate it.');
+    console.log('──────────────────────────────────────────────────────────');
+  } else if (authMode === 'insecure') {
+    console.log('\n⚠  WARNING: --insecure-no-auth — the dashboard is exposed to the');
+    console.log('   network with NO access token. Anyone who can reach this host can');
+    console.log('   read your data and change settings. Only use this on a fully');
+    console.log('   trusted private network (e.g. a tailnet).');
+  }
   console.log('Press Ctrl+C to stop.\n');
 
   // Auto-launch the dashboard once Next.js is actually responding.

@@ -1,7 +1,9 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os
 import re
+import hmac
 import json
 import yaml
 import sqlite3
@@ -155,6 +157,69 @@ def _cors_origin_regex() -> str:
         if h:
             hosts.append(re.escape(h))
     return r"^https?://(" + "|".join(hosts) + r"):\d+$"
+
+# --- Remote-access auth gate -------------------------------------------------
+# When TT_AUTH_TOKEN is set (bin/cli.js sets it automatically for a non-loopback
+# --host, unless --insecure-no-auth), every *remote* request must present the
+# token as `Authorization: Bearer <token>` or a `?token=<token>` query param.
+# Loopback requests are always exempt, so the operator's own browser on the
+# server — and the default loopback-only setup — is unaffected. With no token
+# set the gate is a no-op: default behavior is byte-for-byte unchanged.
+#
+# IMPORTANT: this is registered BEFORE CORSMiddleware so CORS stays the
+# *outermost* layer (Starlette wraps the most-recently-added middleware on the
+# outside). That lets CORS answer OPTIONS preflight directly — browsers send no
+# Authorization on preflight — and decorate our 401 with the Access-Control
+# headers the browser needs to actually read the response instead of surfacing
+# an opaque CORS error.
+from starlette.middleware.base import BaseHTTPMiddleware
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_loopback(host: Optional[str]) -> bool:
+    """True only for loopback source addresses. An unknown client is treated as
+    remote (fail safe) so a missing peer can never bypass the gate."""
+    if not host:
+        return False
+    h = host.strip("[]")  # normalise bracketed IPv6 literals
+    if h in _LOOPBACK_HOSTS:
+        return True
+    # IPv4-mapped IPv6 form, e.g. ::ffff:127.0.0.1
+    if h.startswith("::ffff:") and h[len("::ffff:"):] in _LOOPBACK_HOSTS:
+        return True
+    return False
+
+
+def _presented_token(request: Request) -> str:
+    """Pull the caller's token from the Authorization header, falling back to a
+    `?token=` query param so browser-native resource loads (artifact <img>/<a>,
+    which can't set headers) can authenticate too."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer "):].strip()
+    return (request.query_params.get("token") or "").strip()
+
+
+class RemoteAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        token = os.environ.get("TT_AUTH_TOKEN", "").strip()
+        if not token:
+            return await call_next(request)  # gate disabled (local default)
+        client = request.client.host if request.client else None
+        if _is_loopback(client):
+            return await call_next(request)  # local is always exempt
+        presented = _presented_token(request)
+        if presented and hmac.compare_digest(presented, token):
+            return await call_next(request)
+        # Never echo the expected token; just say what's needed.
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Remote access requires an access token.", "auth": "token"},
+        )
+
+
+app.add_middleware(RemoteAuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
