@@ -86,7 +86,23 @@ function printHelp() {
 }
 
 function run(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, { stdio: 'inherit', shell: isWindows, ...opts });
+  // On Windows we spawn through the shell so PATH-resolved commands (`py`, the
+  // python launcher, etc.) work — but cmd.exe re-parses the line and does NOT
+  // quote for us. When the repo lives in a path with spaces (e.g.
+  // D:\Project Files\…\backend\venv\Scripts\python.exe) the command breaks at
+  // the first space ("'D:\Project ' is not recognized…"). Quote the command and
+  // any arg containing whitespace or a shell metachar. No-op on macOS/Linux,
+  // where shell is off and the args are passed through verbatim.
+  const useShell = isWindows;
+  const quote = (s) => {
+    s = String(s);
+    return useShell && /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
+  };
+  const res = spawnSync(
+    useShell ? quote(cmd) : cmd,
+    useShell ? args.map(quote) : args,
+    { stdio: 'inherit', shell: useShell, ...opts },
+  );
   if (res.status !== 0) die(`"${cmd} ${args.join(' ')}" exited with ${res.status}`);
 }
 
