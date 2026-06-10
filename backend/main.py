@@ -2130,6 +2130,13 @@ _BUILTIN_CLI_COMMANDS = {
 }
 
 
+# Codex records no structured skill event (verified on 0.136 by invoking a
+# sample skill): activation shows up only as the agent READING the skill's
+# SKILL.md through a tool call. The path inside function_call arguments is the
+# one reliable breadcrumb — match ".../skills/<name>/SKILL.md" (either slash).
+_CODEX_SKILL_RE = re.compile(r'skills[/\\]+([\w.-]+)[/\\]+SKILL\.md')
+
+
 def _count_tool(tool_counts: Dict[str, int], name) -> None:
     if name:
         tool_counts[name] = tool_counts.get(name, 0) + 1
@@ -2624,6 +2631,11 @@ def _scan_sessions_sync():
                                     tool = data["payload"].get("name")
                                     if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                     _count_tool(sess.setdefault("tool_counts", {}), tool)
+                                    # Skill activation breadcrumb: the agent reads
+                                    # <skills-dir>/<name>/SKILL.md (no structured event).
+                                    for _skm in _CODEX_SKILL_RE.finditer(data["payload"].get("arguments") or ""):
+                                        _sc = sess.setdefault("_skill_counts", {})
+                                        _sc[_skm.group(1)] = _sc.get(_skm.group(1), 0) + 1
                                     if tool == "update_plan":
                                         try:
                                             args = json.loads(data["payload"].get("arguments") or "{}")
@@ -2661,6 +2673,10 @@ def _scan_sessions_sync():
             mcp = _mcp_usage_from_counts(s.get("tool_counts") or {})
             if mcp:
                 s["mcp_usage"] = mcp
+            _sc = s.pop("_skill_counts", None)
+            if _sc:
+                s["skills_used"] = [{"name": k, "count": v}
+                                    for k, v in sorted(_sc.items(), key=lambda kv: (-kv[1], kv[0]))]
         # Annotate parents of subagent threads (children are full sessions with
         # their own usage — linkage only, never re-summed).
         for s in codex_sessions.values():

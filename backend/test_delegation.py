@@ -521,8 +521,14 @@ def _make_codex_tree(codex_dir: Path):
                                              "total_tokens": 70}}}}) + "\n"
     prompt = json.dumps({"timestamp": "2026-06-10T07:01:47.000Z", "type": "event_msg",
                          "payload": {"type": "user_message", "message": "probe prompt"}}) + "\n"
+    # Skill activation breadcrumb: codex reads the SKILL.md via a tool call
+    # (it records no structured skill event — verified on 0.136).
+    skill_read = json.dumps({"timestamp": "2026-06-10T07:01:48.000Z", "type": "response_item",
+                             "payload": {"type": "function_call", "name": "exec_command",
+                                         "arguments": json.dumps({"cmd": [
+                                             "cat", "/Users/u/.codex/skills/tt-probe-skill/SKILL.md"]})}}) + "\n"
     (day / f"rollout-2026-06-10T12-31-46-{CODEX_PARENT}.jsonl").write_text(
-        meta(CODEX_PARENT, {"thread_source": "user", "source": "exec"}) + prompt + usage)
+        meta(CODEX_PARENT, {"thread_source": "user", "source": "exec"}) + prompt + skill_read + usage)
     (day / f"rollout-2026-06-10T12-32-00-{CODEX_CHILD}.jsonl").write_text(
         meta(CODEX_CHILD, {"thread_source": "subagent",
                            "forked_from_id": CODEX_PARENT,
@@ -546,6 +552,8 @@ def test_scan_codex_discovery_and_linkage(scan_env, monkeypatch):
     assert by_id[CODEX_PARENT]["delegation"] == {"supported": True,
                                                  "tokens_recorded": False,
                                                  "linked_children": 1}
+    # Skill use recovered from the SKILL.md read breadcrumb.
+    assert by_id[CODEX_PARENT]["skills_used"] == [{"name": "tt-probe-skill", "count": 1}]
     # Each thread keeps its own tokens (count-once).
     assert by_id[CODEX_PARENT]["tokens"]["total"] == 70
     assert by_id[CODEX_CHILD]["tokens"]["total"] == 70
