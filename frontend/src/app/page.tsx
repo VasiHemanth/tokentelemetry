@@ -21,6 +21,10 @@ import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
 } from "@/components/ui";
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip as ReTooltip, ResponsiveContainer, ReferenceLine, Cell,
+} from "recharts";
 
 interface Smell {
   type: string;
@@ -134,6 +138,29 @@ interface GitSummaryResponse {
   non_git_sessions: number;
 }
 
+interface TrendDay {
+  date: string;
+  avg_efficiency: number;
+  session_count: number;
+  total_tokens: number;
+  best: number;
+  worst: number;
+  rolling_7d: number | null;
+}
+
+interface TrendsResponse {
+  days: TrendDay[];
+  trend: "improving" | "steady" | "declining";
+  trend_delta: number;
+  week_over_week: number;
+  overall_avg: number | null;
+  current_streak: number;
+  best_day: { date: string; avg_efficiency: number } | null;
+  worst_day: { date: string; avg_efficiency: number } | null;
+  total_sessions: number;
+  days_with_data: number;
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -149,6 +176,8 @@ export default function Home() {
   const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
   const dnaRes       = useResource<PromptDnaResponse>("/insights/prompt-dna", { pollMs: 120_000 });
   const gitRes       = useResource<GitSummaryResponse>("/insights/git-summary", { pollMs: 60_000 });
+  const [trendsDays, setTrendsDays] = useState<30 | 60>(30);
+  const trendsRes    = useResource<TrendsResponse>(`/insights/trends?days=${trendsDays}`, { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -933,6 +962,162 @@ export default function Home() {
           </Card>
         </Section>
       )}
+      {/* ── Session Trends ────────────────────────────────────── */}
+      {(trendsRes.data?.days_with_data ?? 0) >= 2 && (() => {
+        const td = trendsRes.data!;
+        const trendColor = td.trend === "improving" ? "#4ade80" : td.trend === "declining" ? "#f87171" : "#facc15";
+        const trendIcon = td.trend === "improving" ? "↑" : td.trend === "declining" ? "↓" : "→";
+        const formatDate = (d: string) => {
+          const dt = new Date(d + "T12:00:00Z");
+          return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        };
+        const barColor = (val: number) =>
+          val >= 70 ? "#4ade80" : val >= 40 ? "#facc15" : "#f87171";
+
+        return (
+          <Section
+            title="Session trends"
+            description={`Efficiency over the last ${trendsDays} days · ${td.days_with_data} active days · ${td.total_sessions} sessions`}
+          >
+            <Card className="space-y-4">
+              {/* Header row: trend badge + stats chips + day toggle */}
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Trend badge */}
+                <div
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold"
+                  style={{ background: trendColor + "22", color: trendColor, border: `1px solid ${trendColor}44` }}
+                >
+                  <span className="text-sm leading-none">{trendIcon}</span>
+                  <span className="capitalize">{td.trend}</span>
+                  {Math.abs(td.trend_delta) >= 1 && (
+                    <span className="opacity-80 font-mono">
+                      {td.trend_delta > 0 ? "+" : ""}{td.trend_delta.toFixed(1)} pts WoW
+                    </span>
+                  )}
+                </div>
+
+                {/* Overall avg chip */}
+                {td.overall_avg !== null && (
+                  <div className="text-xs text-[var(--tt-fg-muted)] px-2 py-1 rounded bg-[var(--tt-surface-raised)]">
+                    Avg <span className="font-semibold text-[var(--tt-fg)]">{td.overall_avg.toFixed(1)}</span>
+                  </div>
+                )}
+
+                {/* Streak chip */}
+                {td.current_streak >= 2 && (
+                  <div className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-[var(--tt-surface-raised)] text-amber-400">
+                    <Flame size={11} />
+                    <span className="font-semibold">{td.current_streak}d</span>
+                    <span className="text-[var(--tt-fg-faint)]">streak</span>
+                  </div>
+                )}
+
+                {/* Best day chip */}
+                {td.best_day && (
+                  <div className="text-xs text-[var(--tt-fg-muted)] px-2 py-1 rounded bg-[var(--tt-surface-raised)]">
+                    Best <span className="font-semibold text-emerald-400">{td.best_day.avg_efficiency.toFixed(1)}</span>
+                    <span className="ml-1 text-[var(--tt-fg-faint)]">on {formatDate(td.best_day.date)}</span>
+                  </div>
+                )}
+
+                {/* Day range toggle */}
+                <div className="ml-auto flex items-center gap-1 text-xs">
+                  {([30, 60] as const).map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setTrendsDays(n)}
+                      className="px-2.5 py-1 rounded transition-colors"
+                      style={{
+                        background: trendsDays === n ? "var(--tt-brand)" : "var(--tt-surface-raised)",
+                        color: trendsDays === n ? "var(--tt-bg)" : "var(--tt-fg-muted)",
+                        fontWeight: trendsDays === n ? 600 : 400,
+                      }}
+                    >
+                      {n}d
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Chart */}
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={td.days} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={formatDate}
+                      tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }}
+                      tickLine={false}
+                      axisLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }}
+                      tickLine={false}
+                      axisLine={false}
+                      tickCount={5}
+                    />
+                    <ReTooltip
+                      contentStyle={{
+                        background: "var(--tt-surface)",
+                        border: "1px solid var(--tt-border)",
+                        borderRadius: 8,
+                        fontSize: 12,
+                        color: "var(--tt-fg)",
+                      }}
+                      labelFormatter={(l) => formatDate(String(l))}
+                      formatter={(value, name) => {
+                        const v = typeof value === "number" ? value.toFixed(1) : String(value);
+                        if (name === "avg_efficiency") return [v, "Avg efficiency"];
+                        if (name === "rolling_7d") return [v, "7d rolling avg"];
+                        return [v, String(name)];
+                      }}
+                    />
+                    {/* 60pt "good" threshold line */}
+                    <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.5} />
+                    <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={32}>
+                      {td.days.map((day) => (
+                        <Cell key={day.date} fill={barColor(day.avg_efficiency)} fillOpacity={0.85} />
+                      ))}
+                    </Bar>
+                    <Line
+                      type="monotone"
+                      dataKey="rolling_7d"
+                      stroke="var(--tt-brand)"
+                      strokeWidth={2}
+                      dot={false}
+                      connectNulls
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Legend */}
+              <div className="flex items-center gap-4 text-[10px] text-[var(--tt-fg-faint)]">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-emerald-400 opacity-85" />
+                  Good (≥70)
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-yellow-400 opacity-85" />
+                  Fair (40–69)
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-red-400 opacity-85" />
+                  Poor (&lt;40)
+                </div>
+                <div className="flex items-center gap-1.5 ml-2">
+                  <div className="w-6 h-0.5 rounded" style={{ background: "var(--tt-brand)" }} />
+                  7d rolling avg
+                </div>
+              </div>
+            </Card>
+          </Section>
+        );
+      })()}
+
       {/* ── Git Activity ──────────────────────────────────────── */}
       {(gitRes.data?.git_sessions ?? 0) > 0 && (
         <Section

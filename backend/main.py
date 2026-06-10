@@ -3052,6 +3052,7 @@ from forecast import compute_forecast
 from prompt_analysis import extract_features, analyse_prompt_dna
 from model_comparison import compare_models
 from git_context import get_git_info, git_summary
+from trends import compute_trends
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3209,6 +3210,19 @@ async def get_git_summary(project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return git_summary(sessions)
+
+
+@app.get("/insights/trends")
+async def get_trends(days: int = 60, project: Optional[str] = None):
+    """
+    Session efficiency trends over the last N calendar days (default 60).
+    Returns per-day buckets with rolling 7-day average, trend direction,
+    current streak, best/worst days, and week-over-week delta.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compute_trends(sessions, days=days)
 
 
 @app.get("/insights/model-comparison")
