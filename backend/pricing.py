@@ -289,6 +289,7 @@ def calculate_cost(
     cached_tokens: int = 0,
     provider: Optional[str] = None,
     cache_creation_tokens: int = 0,
+    cache_creation_1h_tokens: int = 0,
     endpoint: Optional[str] = None,
     tok_per_sec: Optional[float] = None,
     billing_mode: Optional[str] = None,
@@ -382,11 +383,16 @@ def calculate_cost(
     if cached_rate is None:
         cached_rate = in_rate * 0.1  # 2026-era default: cached read ≈ 10% of input
 
-    # Prompt-cache WRITE tokens cost 1.25x the input rate (Anthropic billing).
+    # Prompt-cache WRITE tokens cost 1.25x the input rate for 5m TTL, 2x for 1h TTL (Anthropic billing).
     cache_write_rate = in_rate * 1.25
+    cache_write_1h_rate = in_rate * 2.0
 
     in_cost = (input_tokens / 1_000_000) * in_rate
     out_cost = (output_tokens / 1_000_000) * out_rate
     cached_cost = (cached_tokens / 1_000_000) * cached_rate
-    cache_write_cost = (cache_creation_tokens / 1_000_000) * cache_write_rate
+
+    cc_1h = min(cache_creation_1h_tokens or 0, cache_creation_tokens or 0)
+    cc_5m = (cache_creation_tokens or 0) - cc_1h
+
+    cache_write_cost = (cc_5m / 1_000_000) * cache_write_rate + (cc_1h / 1_000_000) * cache_write_1h_rate
     return in_cost + out_cost + cached_cost + cache_write_cost
