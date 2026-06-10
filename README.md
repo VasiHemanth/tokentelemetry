@@ -114,6 +114,7 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - 🦨 **AI Smell Detection** — rule-based warnings for context rot, loop traps, tool thrash, high error rate, and massive sessions *(Intelligence Layer)*
 - 🔥 **Burn Rate Forecasting** — daily token trends projected to month-end with plan limit alerts *(Intelligence Layer)*
 - 🧬 **Prompt DNA** — correlates prompt structure (file refs, length, vagueness, task type) against efficiency scores to show what makes sessions good or bad *(Intelligence Layer)*
+- 🏆 **Multi-Model Comparison** — side-by-side efficiency ranking of every model you've used, with avg/p75/best scores and task-type filter pills *(Intelligence Layer)*
 - 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
@@ -296,9 +297,62 @@ Response:
 
 ---
 
+### 🏆 Multi-Model Comparison
+
+Side-by-side efficiency ranking of every model you've used, filterable by task type.
+
+**Stats per model:**
+
+| Stat | Description |
+|------|-------------|
+| `avg_efficiency` | Mean efficiency score across sessions |
+| `median_efficiency` | Median (robust to outliers) |
+| `p75_efficiency` | 75th percentile — typical good session for this model |
+| `best_efficiency` | Highest single session score |
+| `avg_tokens` | Average tokens per session |
+| `task_breakdown` | Per-task-type count and avg efficiency |
+
+**In the UI:** a full-width **Model comparison** section below the main grid shows ranked model rows with dual efficiency bars (avg + p75) and colour-coded task breakdown pills. Task type filter pills (All / build / refactor / analyze / other) refetch instantly.
+
+**API:**
+```
+GET /insights/model-comparison                      → all task types
+GET /insights/model-comparison?task_type=build      → build tasks only
+GET /insights/model-comparison?task_type=refactor   → refactor tasks only
+```
+
+Response:
+```json
+{
+  "task_type_filter": null,
+  "models_compared": 3,
+  "sessions_used": 13,
+  "sessions_skipped": 25,
+  "models": [
+    {
+      "model": "claude-sonnet-4-6",
+      "agent": "claude",
+      "session_count": 5,
+      "avg_efficiency": 68.4,
+      "median_efficiency": 73.6,
+      "p75_efficiency": 76.6,
+      "best_efficiency": 80.4,
+      "total_tokens": 13258141,
+      "avg_tokens": 2651628,
+      "task_breakdown": {
+        "other": { "count": 5, "avg_efficiency": 68.4 }
+      }
+    }
+  ],
+  "task_types_available": ["build", "refactor", "analyze", "other"]
+}
+```
+
+---
+
 ### Implementation notes
 
-All four features live in standalone Python modules — no changes to existing data collection or parsing logic:
+All five features live in standalone Python modules — no changes to existing data collection or parsing logic:
 
 | Module | Responsibility |
 |--------|---------------|
@@ -306,6 +360,7 @@ All four features live in standalone Python modules — no changes to existing d
 | `backend/smells.py` | Smell rule evaluation |
 | `backend/forecast.py` | Daily bucketing + linear projection |
 | `backend/prompt_analysis.py` | Feature extraction + Pearson correlation |
+| `backend/model_comparison.py` | Per-model efficiency stats + task breakdown |
 
 **No new required dependencies.** Everything uses Python stdlib (`math`, `datetime`, `collections`, `re`). Ollama, scipy, numpy — none needed.
 
