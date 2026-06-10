@@ -3028,6 +3028,10 @@ def _scan_sessions_sync():
         except Exception:
             s["task_type"] = "other"
             s["prompt_features"] = {}
+        try:
+            s["git_info"] = get_git_info(s.get("project", ""), s.get("timestamp"))
+        except Exception:
+            s["git_info"] = {"is_git": False}
 
     return sessions
 
@@ -3047,6 +3051,7 @@ from smells import detect_smells
 from forecast import compute_forecast
 from prompt_analysis import extract_features, analyse_prompt_dna
 from model_comparison import compare_models
+from git_context import get_git_info, git_summary
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3190,6 +3195,20 @@ async def get_prompt_dna(project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return analyse_prompt_dna(sessions)
+
+
+
+@app.get("/insights/git-summary")
+async def get_git_summary(project: Optional[str] = None):
+    """
+    Git activity summary grouped by project.
+    Returns per-project: branch, latest commit, total files/lines changed
+    across all sessions that sit inside a git work-tree.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return git_summary(sessions)
 
 
 @app.get("/insights/model-comparison")

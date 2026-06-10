@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
-  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3,
+  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3, GitBranch, GitCommit, Plus, Minus,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -47,6 +47,7 @@ interface Session {
   antigravity_source?: string;
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
+  git_info?: GitInfo;
 }
 
 interface ForecastResponse {
@@ -101,6 +102,38 @@ interface ModelComparisonResponse {
   task_types_available: string[];
 }
 
+interface GitInfo {
+  is_git: boolean;
+  branch: string | null;
+  commit_sha: string | null;
+  commit_msg: string | null;
+  files_changed: number;
+  lines_added: number;
+  lines_deleted: number;
+}
+
+interface GitProjectSummary {
+  project: string;
+  branch: string | null;
+  session_count: number;
+  total_files_changed: number;
+  total_lines_added: number;
+  total_lines_deleted: number;
+  net_lines: number;
+  latest_commit_sha: string | null;
+  latest_commit_msg: string | null;
+  avg_files_per_session: number;
+}
+
+interface GitSummaryResponse {
+  projects: GitProjectSummary[];
+  total_lines_added: number;
+  total_lines_deleted: number;
+  total_files_changed: number;
+  git_sessions: number;
+  non_git_sessions: number;
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -115,6 +148,7 @@ export default function Home() {
   const billingRes   = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
   const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
   const dnaRes       = useResource<PromptDnaResponse>("/insights/prompt-dna", { pollMs: 120_000 });
+  const gitRes       = useResource<GitSummaryResponse>("/insights/git-summary", { pollMs: 60_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -366,12 +400,20 @@ export default function Home() {
                           )}
                         </Link>
                       </TD>
-                      <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
-                          {s.agent === "hermes" ? (
-                            <SourceBadge source={s.source_subtype} size="xs" />
-                          ) : (
-                            s.project.split("/").pop()
+                      <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[180px]" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex flex-col gap-0.5 truncate">
+                          <span className="truncate">
+                            {s.agent === "hermes" ? (
+                              <SourceBadge source={s.source_subtype} size="xs" />
+                            ) : (
+                              s.project.split(/[/\\]/).pop()
+                            )}
+                          </span>
+                          {s.git_info?.is_git && s.git_info.branch && (
+                            <span className="flex items-center gap-0.5 text-[9px] text-[var(--tt-fg-faint)]">
+                              <GitBranch size={8} />
+                              <span className="truncate max-w-[120px]">{s.git_info.branch}</span>
+                            </span>
                           )}
                         </Link>
                       </TD>
@@ -889,6 +931,77 @@ export default function Home() {
               </div>
             )}
           </Card>
+        </Section>
+      )}
+      {/* ── Git Activity ──────────────────────────────────────── */}
+      {(gitRes.data?.git_sessions ?? 0) > 0 && (
+        <Section
+          title="Repository activity"
+          description={`${gitRes.data!.git_sessions} git-tracked sessions · +${gitRes.data!.total_lines_added.toLocaleString()} / −${gitRes.data!.total_lines_deleted.toLocaleString()} lines across ${gitRes.data!.projects.length} repos`}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {gitRes.data!.projects.filter(p => p.session_count > 0).map((p) => {
+              const projName = p.project.split(/[/\\]/).pop() || p.project;
+              const hasStats = p.total_lines_added > 0 || p.total_lines_deleted > 0;
+              const netColor = p.net_lines > 0 ? "#4ade80" : p.net_lines < 0 ? "#f87171" : "var(--tt-fg-faint)";
+              return (
+                <Card key={p.project} className="space-y-3">
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono text-[12px] font-semibold text-[var(--tt-fg)] truncate" title={p.project}>
+                        {projName}
+                      </div>
+                      {p.branch && (
+                        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-[var(--tt-fg-faint)]">
+                          <GitBranch size={9} />
+                          <span className="truncate">{p.branch}</span>
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[10px] tabular text-[var(--tt-fg-dim)] whitespace-nowrap shrink-0">
+                      {p.session_count} sess
+                    </span>
+                  </div>
+
+                  {/* Latest commit */}
+                  {p.latest_commit_sha && (
+                    <div className="flex items-start gap-1.5">
+                      <GitCommit size={10} className="text-[var(--tt-fg-faint)] mt-0.5 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="font-mono text-[10px] text-[var(--tt-brand)]">{p.latest_commit_sha}</span>
+                        <span className="ml-1.5 text-[10px] text-[var(--tt-fg-muted)] truncate block" title={p.latest_commit_msg ?? ""}>
+                          {p.latest_commit_msg}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Line stats */}
+                  {hasStats && (
+                    <div className="flex items-center gap-3 pt-1 border-t border-[var(--tt-border)]">
+                      <div className="flex items-center gap-1 text-[10px] text-emerald-400">
+                        <Plus size={9} />
+                        <span className="tabular">{p.total_lines_added.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] text-red-400">
+                        <Minus size={9} />
+                        <span className="tabular">{p.total_lines_deleted.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px]" style={{ color: netColor }}>
+                        <span className="tabular font-medium">
+                          {p.net_lines > 0 ? "+" : ""}{p.net_lines.toLocaleString()} net
+                        </span>
+                      </div>
+                      <div className="ml-auto text-[10px] text-[var(--tt-fg-faint)] tabular">
+                        {p.total_files_changed} files
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
         </Section>
       )}
     </div>
