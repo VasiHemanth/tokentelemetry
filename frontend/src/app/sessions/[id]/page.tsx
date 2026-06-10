@@ -13,6 +13,7 @@ import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { apiFetch, artifactUrl } from "@/lib/api";
+import { formatTokens, formatCost } from "@/lib/format";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 
 interface Artifact {
@@ -158,6 +159,7 @@ export default function SessionDetailPage() {
   const [hermesOverlay, setHermesOverlay] = useState<any | null>(null);
   const [allHermesSessions, setAllHermesSessions] = useState<Session[] | null>(null);
   const [grokForensics, setGrokForensics] = useState<any | null>(null);
+  const [delegation, setDelegation] = useState<any | null>(null);
 
   // Trace View States
   const [splitView, setSplitView] = useState(false);
@@ -248,6 +250,16 @@ export default function SessionDetailPage() {
           .then(res => res.json())
           .then(data => setGrokForensics(data))
           .catch(() => setGrokForensics(null));
+      }
+
+      // 5. Delegation overlay: subagent spawns + delegated token/cost attribution.
+      // Only agents whose logs record spawns at all (claude full, cursor count-only,
+      // opencode/hermes parent-child links).
+      if (agent === "claude" || agent === "cursor" || agent === "opencode" || agent === "hermes") {
+        apiFetch(`/sessions/${id}/delegation?agent=${agent}`)
+          .then(res => res.json())
+          .then(data => setDelegation(data && data.supported ? data : null))
+          .catch(() => setDelegation(null));
       }
     }
   }, [id, agent]);
@@ -535,6 +547,12 @@ export default function SessionDetailPage() {
                       <TokenStat label="Output" value={sessionInfo.tokens.output.toLocaleString()} />
                       <span className="w-px h-5 bg-[var(--tt-border)]" />
                       <TokenStat label="Cached" value={sessionInfo.tokens.cached.toLocaleString()} accent="text-[var(--tt-cyan-fg)]" />
+                      {delegation?.totals?.total > 0 && (
+                        <>
+                          <span className="w-px h-5 bg-[var(--tt-border)]" />
+                          <TokenStat label="Delegated" value={`+${formatTokens(delegation.totals.total)}`} accent="text-[var(--tt-brand)]" />
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -653,6 +671,8 @@ export default function SessionDetailPage() {
              {agent === "hermes" && hermesOverlay && <HermesOverlayCard overlay={hermesOverlay} />}
              {/* Grok Build forensics — token growth, permissions, tool lifecycle, plan mode */}
              {agent === "grok" && grokForensics && <GrokForensicsCard forensics={grokForensics} cost={sessionInfo?.tokens?.cost ?? sessionInfo?.cost} />}
+             {/* Delegated work — subagent spawns and what they actually cost */}
+             {delegation && agent && <DelegationCard delegation={delegation} agent={agent} />}
              <div className={splitView ? "grid grid-cols-2 gap-8" : "space-y-8"}>
                 <div className="space-y-8">
                    {splitView && <h3 className="text-[10px] font-black text-[var(--tt-fg-dim)] uppercase tracking-[0.2em] ml-2 mb-2 flex items-center gap-2"><User size={14}/> User & Agent Dialogue</h3>}
@@ -1807,6 +1827,82 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
       >
         {mode === "md" ? "View Raw" : "View MD"}
       </button>
+    </div>
+  );
+}
+
+function DelegationCard({ delegation, agent }: { delegation: any; agent: string }) {
+  const subagents: any[] = delegation?.subagents || [];
+  const spawnCount: number = delegation?.spawn_count ?? 0;
+  const children: string[] = delegation?.child_session_ids || [];
+  const parentId: string | null = delegation?.parent_session_id || null;
+  // Nothing delegated and not itself a child → no card, no fake zeros.
+  if (spawnCount === 0 && children.length === 0 && !parentId) return null;
+  const totals = delegation?.totals;
+  return (
+    <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-brand)] flex items-center gap-2">
+          <GitBranch size={12} strokeWidth={3} /> Delegated work
+        </div>
+        {!delegation.tokens_recorded && spawnCount > 0 && (
+          <span className="text-[10px] font-mono text-[var(--tt-fg-dim)]">tokens not recorded by {agent}</span>
+        )}
+      </div>
+
+      {/* Claude: full per-subagent attribution */}
+      {totals && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+          <Stat label="Subagents" value={String(spawnCount)} />
+          <Stat label="Delegated tokens" value={formatTokens(totals.total)} />
+          <Stat label="Cache writes" value={formatTokens(totals.cache_creation)} />
+          <Stat label="Delegated cost" value={formatCost(delegation.cost)} />
+        </div>
+      )}
+      {subagents.length > 0 && delegation.tokens_recorded && (
+        <div className="space-y-1">
+          {subagents.map((s: any, i: number) => (
+            <div key={s.agent_id ?? i} className="flex items-center justify-between gap-3 text-[11px] font-mono text-[var(--tt-fg-muted)] py-1.5 px-2 hover:bg-[var(--tt-sunken)] rounded">
+              <span className="flex items-center gap-2 min-w-0">
+                <Badge>{s.agent_type}</Badge>
+                <span className="truncate text-[var(--tt-fg)]">{s.description || s.agent_id}</span>
+              </span>
+              <span className="flex items-center gap-3 shrink-0">
+                {s.model && <span className="text-[var(--tt-fg-dim)]">{s.model.replace(/-\d{8}$/, "")}</span>}
+                <span>in/out {formatTokens(s.tokens?.input)}/{formatTokens(s.tokens?.output)}</span>
+                <span className="text-[var(--tt-cyan-fg)]">{formatTokens(s.tokens?.cached)} cached</span>
+                <span className="text-[var(--tt-fg)]">{formatCost(s.cost)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Cursor: spawn count only — transcripts carry no usage data */}
+      {spawnCount > 0 && !delegation.tokens_recorded && (
+        <div className="text-[11px] text-[var(--tt-fg-muted)]">
+          {spawnCount} subagent run{spawnCount === 1 ? "" : "s"} recorded. {agent === "cursor" ? "Cursor's subagent transcripts contain no token usage, so their cost can't be attributed." : ""}
+        </div>
+      )}
+
+      {/* OpenCode / Hermes: linked child sessions (already counted as sessions) */}
+      {(children.length > 0 || parentId) && (
+        <div className="space-y-1 text-[11px] font-mono">
+          {parentId && (
+            <div className="text-[var(--tt-fg-muted)]">
+              Spawned by{" "}
+              <Link href={`/sessions/${parentId}?agent=${agent}`} className="text-[var(--tt-brand)] hover:underline">{parentId}</Link>
+            </div>
+          )}
+          {children.map((cid) => (
+            <div key={cid} className="text-[var(--tt-fg-muted)]">
+              Child session{" "}
+              <Link href={`/sessions/${cid}?agent=${agent}`} className="text-[var(--tt-brand)] hover:underline">{cid}</Link>
+              <span className="text-[var(--tt-fg-dim)]"> · tokens counted in its own session</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
