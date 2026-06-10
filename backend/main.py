@@ -3046,6 +3046,7 @@ from scoring import score_session, score_label
 from smells import detect_smells
 from forecast import compute_forecast
 from prompt_analysis import extract_features, analyse_prompt_dna
+from model_comparison import compare_models
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3189,6 +3190,26 @@ async def get_prompt_dna(project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return analyse_prompt_dna(sessions)
+
+
+@app.get("/insights/model-comparison")
+async def get_model_comparison(
+    task_type: Optional[str] = None,
+    project: Optional[str] = None,
+):
+    """
+    Multi-model efficiency comparison.
+    Groups sessions by model name, computes avg/median/p75/best efficiency,
+    token stats, and per-task-type breakdown.
+
+    Query params:
+      task_type  filter to a single task type (fix|build|refactor|analyze|test|deploy|other)
+      project    filter to a single project path
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compare_models(sessions, task_type=task_type)
 
 
 @app.get("/remote-access")

@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
-  Zap, AlertTriangle, Flame, TrendingDown, Sparkles,
+  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -79,6 +79,28 @@ interface PromptDnaResponse {
   top_negative: DnaCorrelation[];
 }
 
+interface ModelRow {
+  model: string;
+  agent: string;
+  session_count: number;
+  avg_efficiency: number;
+  median_efficiency: number;
+  p75_efficiency: number;
+  best_efficiency: number;
+  total_tokens: number;
+  avg_tokens: number;
+  task_breakdown: Record<string, { count: number; avg_efficiency: number }>;
+}
+
+interface ModelComparisonResponse {
+  task_type_filter: string | null;
+  models_compared: number;
+  sessions_used: number;
+  sessions_skipped: number;
+  models: ModelRow[];
+  task_types_available: string[];
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -122,6 +144,20 @@ export default function Home() {
     window.addEventListener("storage", check);
     return () => window.removeEventListener("storage", check);
   }, []);
+
+  const [modelTaskFilter, setModelTaskFilter] = useState<string>("all");
+  const [modelComparison, setModelComparison] = useState<ModelComparisonResponse | null>(null);
+  const [modelCompLoading, setModelCompLoading] = useState(true);
+  useEffect(() => {
+    setModelCompLoading(true);
+    const url = modelTaskFilter === "all"
+      ? "/insights/model-comparison"
+      : `/insights/model-comparison?task_type=${modelTaskFilter}`;
+    fetch(`http://localhost:8000${url}`)
+      .then((r) => r.json())
+      .then((d) => { setModelComparison(d); setModelCompLoading(false); })
+      .catch(() => setModelCompLoading(false));
+  }, [modelTaskFilter]);
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -687,6 +723,174 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* ── Model Comparison ─────────────────────────────────────── */}
+      {(modelComparison?.models_compared ?? 0) > 0 && (
+        <Section
+          title="Model comparison"
+          description="Efficiency breakdown across models — how productively each model converts tokens into output."
+        >
+          <Card padding="none" className="overflow-hidden">
+            {/* Filter pills */}
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--tt-border)] overflow-x-auto">
+              <BarChart3 size={12} className="text-[var(--tt-brand)] shrink-0" />
+              <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] shrink-0 mr-1">
+                Task type
+              </span>
+              {["all", ...(modelComparison?.task_types_available ?? [])].map((tt) => (
+                <button
+                  key={tt}
+                  onClick={() => setModelTaskFilter(tt)}
+                  className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium capitalize transition-colors"
+                  style={{
+                    backgroundColor: modelTaskFilter === tt
+                      ? "var(--tt-brand)"
+                      : "var(--tt-tint-1, rgba(255,255,255,0.05))",
+                    color: modelTaskFilter === tt
+                      ? "white"
+                      : "var(--tt-fg-muted)",
+                    border: `1px solid ${modelTaskFilter === tt ? "var(--tt-brand)" : "var(--tt-border)"}`,
+                  }}
+                >
+                  {tt}
+                </button>
+              ))}
+              <span className="ml-auto text-[10px] text-[var(--tt-fg-faint)] whitespace-nowrap shrink-0">
+                {modelComparison?.sessions_used ?? 0} sessions
+              </span>
+            </div>
+
+            {/* Model rows */}
+            {modelCompLoading ? (
+              <div className="p-5 space-y-4">
+                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full" />)}
+              </div>
+            ) : (modelComparison?.models ?? []).length === 0 ? (
+              <div className="py-10 text-center text-[12px] text-[var(--tt-fg-faint)]">
+                No sessions match this filter.
+              </div>
+            ) : (
+              <div className="divide-y divide-[var(--tt-border)]">
+                {(modelComparison?.models ?? []).map((m, rank) => {
+                  const meta = getAgent(m.agent);
+                  const effColor =
+                    m.avg_efficiency >= 70 ? "#22c55e" :
+                    m.avg_efficiency >= 40 ? "#f59e0b" : "#ef4444";
+                  const bestInSet = modelComparison!.models[0].avg_efficiency || 1;
+                  const barPct = (m.avg_efficiency / bestInSet) * 100;
+                  const p75Pct = (m.p75_efficiency / bestInSet) * 100;
+                  return (
+                    <div key={m.model} className="px-5 py-4 flex items-center gap-4 hover:bg-[var(--tt-sunken)] transition-colors">
+                      {/* Rank */}
+                      <span
+                        className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold shrink-0"
+                        style={{
+                          backgroundColor: rank === 0 ? `${meta.hex}22` : "var(--tt-tint-1,rgba(255,255,255,0.05))",
+                          color: rank === 0 ? meta.hex : "var(--tt-fg-faint)",
+                        }}
+                      >
+                        {rank + 1}
+                      </span>
+
+                      {/* Model name + agent */}
+                      <div className="min-w-0 w-44 shrink-0">
+                        <div className="font-mono text-[12px] text-[var(--tt-fg)] truncate" title={m.model}>
+                          {m.model}
+                        </div>
+                        <div
+                          className="text-[10px] uppercase tracking-[0.14em] mt-0.5"
+                          style={{ color: meta.hex }}
+                        >
+                          {m.agent}
+                        </div>
+                      </div>
+
+                      {/* Bars */}
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        {/* Avg bar */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)] w-6 shrink-0">avg</span>
+                          <div className="flex-1 h-2 rounded-full tt-tint-1 overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-[width] duration-700"
+                              style={{ width: `${barPct}%`, backgroundColor: effColor }}
+                            />
+                          </div>
+                          <span
+                            className="text-[11px] font-semibold tabular shrink-0 w-8 text-right"
+                            style={{ color: effColor }}
+                          >
+                            {m.avg_efficiency}
+                          </span>
+                        </div>
+                        {/* P75 bar */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)] w-6 shrink-0">p75</span>
+                          <div className="flex-1 h-1 rounded-full tt-tint-1 overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-[width] duration-700"
+                              style={{ width: `${p75Pct}%`, backgroundColor: `${effColor}88` }}
+                            />
+                          </div>
+                          <span className="text-[10px] tabular text-[var(--tt-fg-faint)] shrink-0 w-8 text-right">
+                            {m.p75_efficiency}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Stats */}
+                      <div className="flex items-center gap-4 shrink-0 ml-2">
+                        <div className="text-center hidden sm:block">
+                          <div className="text-[11px] font-semibold tabular text-[var(--tt-fg)]">
+                            {m.best_efficiency}
+                          </div>
+                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">best</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-[11px] tabular text-[var(--tt-fg-muted)]">
+                            {m.session_count}
+                          </div>
+                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">sess</div>
+                        </div>
+                        <div className="text-center hidden md:block">
+                          <div className="text-[11px] tabular text-[var(--tt-fg-muted)]">
+                            {(m.avg_tokens / 1_000).toFixed(0)}k
+                          </div>
+                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">avg tok</div>
+                        </div>
+                        {/* Task breakdown pills */}
+                        <div className="hidden lg:flex items-center gap-1 flex-wrap max-w-[180px]">
+                          {Object.entries(m.task_breakdown)
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .slice(0, 3)
+                            .map(([tt, { count, avg_efficiency: te }]) => {
+                              const tc = te >= 70 ? "#22c55e" : te >= 40 ? "#f59e0b" : "#ef4444";
+                              return (
+                                <span
+                                  key={tt}
+                                  title={`${tt}: ${te} avg efficiency (${count} sessions)`}
+                                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium capitalize"
+                                  style={{
+                                    backgroundColor: `${tc}12`,
+                                    color: tc,
+                                    border: `1px solid ${tc}30`,
+                                  }}
+                                >
+                                  {tt}
+                                  <span className="opacity-70">{count}</span>
+                                </span>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </Section>
+      )}
     </div>
   );
 }
