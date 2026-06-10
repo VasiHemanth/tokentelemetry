@@ -2098,6 +2098,7 @@ def _scan_sessions_sync():
                                 if usage:
                                     cr = usage.get("cache_read_input_tokens", 0) or 0
                                     cc = usage.get("cache_creation_input_tokens", 0) or 0
+                                    cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                                     sess["tokens"]["input"]  += usage.get("input_tokens", 0) or 0
                                     sess["tokens"]["output"] += usage.get("output_tokens", 0) or 0
                                     # cached = unique cached-prefix size (high-water-mark), NOT per-turn sum
@@ -2105,8 +2106,9 @@ def _scan_sessions_sync():
                                     sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
                                     # cache_creation (write) IS billed per event → cumulative, like input.
                                     sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
+                                    sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
                                 sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
-                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0))
+                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
                                 for item in msg.get("content", []):
                                     if item.get("type") == "tool_use":
                                         tool = item.get("name")
@@ -2152,12 +2154,12 @@ def _scan_sessions_sync():
         codex_file_map = {}
         try:
             for f in (CODEX_DIR / "sessions").rglob("rollout-*.jsonl"):
-                # stem: rollout-2025-10-21T16-55-35-019a0684-74e3-7423-af75-41c73aab7d68
-                # sid: 019a0684-74e3-7423-af75-41c73aab7d68
                 parts = f.stem.split("-")
                 if len(parts) >= 6:
                     sid = "-".join(parts[-5:])
-                    codex_file_map[sid] = f
+                    if sid not in codex_file_map:
+                        codex_file_map[sid] = []
+                    codex_file_map[sid].append(f)
         except Exception: pass
 
         try:
@@ -2174,8 +2176,10 @@ def _scan_sessions_sync():
         
         # Process the 100 most recent sessions
         for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True)[:100]:
-            rollout_file = codex_file_map.get(sid)
-            if rollout_file:
+            rollout_files = codex_file_map.get(sid, [])
+            rollout_files.sort(key=lambda f: f.name)
+            day_snap = {}
+            for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
                         for line in f:
@@ -2191,6 +2195,14 @@ def _scan_sessions_sync():
                             if data.get("type") == "turn_context" and not sess.get("model"):
                                 sess["model"] = data.get("payload", {}).get("model")
                             if data.get("type") == "event_msg":
+                                ts_str = data.get("timestamp")
+                                event_day = None
+                                if ts_str:
+                                    try:
+                                        event_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                                        event_day = _aware(event_dt).strftime("%Y-%m-%d")
+                                    except Exception: pass
+
                                 usage = ((data.get("payload") or {}).get("info") or {}).get("total_token_usage") or {}
                                 if usage:
                                     # OpenAI/Codex semantics differ from Anthropic:
@@ -2208,6 +2220,9 @@ def _scan_sessions_sync():
                                     # If total_tokens > gross_input + output, the API is reporting reasoning as
                                     # extra (not folded into output_tokens). Otherwise reasoning is implicit.
                                     output_billable = output + (reasoning if total_record > gross_input + output else 0)
+
+                                    if event_day:
+                                        day_snap[event_day] = (gross_input, cached, output_billable)
 
                                     sess["tokens"]["input"]  = max(sess["tokens"]["input"],  net_input)
                                     sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cached)
@@ -2231,6 +2246,24 @@ def _scan_sessions_sync():
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
                 except Exception: pass
+            
+            if day_snap:
+                tbd = {}
+                pg = pc = po = 0
+                model_for_cost = sess.get("model") or sess.get("_provider")
+                for day in sorted(day_snap.keys()):
+                    g, c, o = day_snap[day]
+                    dg, dc, do = max(0, g - pg), max(0, c - pc), max(0, o - po)
+                    pg, pc, po = max(pg, g), max(pc, c), max(po, o)
+                    net_in = max(0, dg - dc)
+                    tbd[day] = {
+                        "input": net_in,
+                        "cached": dc,
+                        "output": do,
+                        "total": net_in + dc + do,
+                        "cost": calculate_cost(model_for_cost, net_in, do, dc)
+                    }
+                sess["tokens_by_day"] = tbd
         for s in codex_sessions.values():
             if not s.get("model") and s.get("_provider"):
                 s["model"] = s["_provider"]
@@ -2525,12 +2558,14 @@ def _scan_sessions_sync():
                                         usage = data.get("message", {}).get("usage", {})
                                         cr = usage.get("cache_read_input_tokens", 0) or 0
                                         cc = usage.get("cache_creation_input_tokens", 0) or 0
+                                        cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                                         tokens["input"]  += usage.get("input_tokens", 0) or 0
                                         tokens["output"] += usage.get("output_tokens", 0) or 0
                                         tokens["cached"] = max(tokens["cached"], cr)
                                         tokens["_cached_sum"] = tokens.get("_cached_sum", 0) + cr
                                         # cache_creation (write) IS billed per event → cumulative, like input.
                                         tokens["cache_creation"] = tokens.get("cache_creation", 0) + cc
+                                        tokens["cache_creation_1h"] = tokens.get("cache_creation_1h", 0) + cc_1h
                                         for item in data.get("message", {}).get("content", []):
                                             if item.get("type") == "tool_use":
                                                 if item.get("name") not in mcp_tools: mcp_tools.append(item.get("name"))
@@ -2541,7 +2576,7 @@ def _scan_sessions_sync():
                                                     plans.append({"session_id": sid, "agent": "qwen", "timestamp": last_ts, "content": t_text})
                                 except Exception: continue
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0))
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0))
                         sessions.append({"id": sid, "agent": "qwen", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                     except Exception: continue
 
@@ -2630,12 +2665,14 @@ def _scan_sessions_sync():
                                             usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
                                             cr = usage.get("cache_read_input_tokens", 0) or 0
                                             cc = usage.get("cache_creation_input_tokens", 0) or 0
+                                            cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                                             tokens["input"]  += usage.get("input_tokens", 0) or 0
                                             tokens["output"] += usage.get("output_tokens", 0) or 0
                                             tokens["cached"] = max(tokens["cached"], cr)
                                             tokens["_cached_sum"] = tokens.get("_cached_sum", 0) + cr
                                             # cache_creation (write) IS billed per event → cumulative, like input.
                                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + cc
+                                            tokens["cache_creation_1h"] = tokens.get("cache_creation_1h", 0) + cc_1h
                                             for item in msg.get("content", []) if isinstance(msg.get("content"), list) else []:
                                                 if item.get("type") == "tool_use":
                                                     name = item.get("name")
@@ -2651,7 +2688,7 @@ def _scan_sessions_sync():
                                                         has_plan = True
                                                         plans.append({"session_id": sid, "agent": "cursor", "timestamp": mtime, "content": t_text})
                                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0))
+                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0))
                                 sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "subagents": subagents, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
                             except Exception: continue
 
@@ -2945,12 +2982,12 @@ def _scan_sessions_sync():
                     model = srow["model"]
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
+                    _measured_tps = None
                     if cost is None:
                         # Only when TT has to compute the cost itself AND the session
                         # is local do we parse the agent log for a MEASURED tok/s
                         # (out/latency per call). This keeps the common path cheap —
                         # most Hermes sessions carry their own cost and skip this.
-                        _measured_tps = None
                         try:
                             from power_config import is_local_session
                             if is_local_session(model, srow["billing_base_url"], srow["billing_provider"]):
@@ -2993,8 +3030,8 @@ def _scan_sessions_sync():
                         "cost_anomaly": cost_anomaly,
                         "parent_session_id": srow["parent_session_id"],
                         "end_reason": srow["end_reason"],
-                        "provider": srow.get("billing_provider", None),
-                        "endpoint": srow.get("billing_base_url", None),
+                        "provider": srow["billing_provider"],
+                        "endpoint": srow["billing_base_url"],
                         "tok_per_sec": _measured_tps,
                     })
             finally:
