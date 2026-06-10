@@ -213,6 +213,54 @@ interface ToolFootprintResponse {
   sessions_skipped: number;
 }
 
+interface CostModelRow {
+  model: string;
+  agent: string;
+  session_count: number;
+  avg_cost: number;
+  total_cost: number;
+  avg_efficiency: number;
+  cost_per_eff_pt: number | null;
+  avg_cache_hit_pct: number | null;
+}
+
+interface CostTaskRow {
+  task_type: string;
+  session_count: number;
+  avg_cost: number;
+  avg_efficiency: number;
+  cost_per_eff_pt: number | null;
+}
+
+interface CostCacheTier {
+  tier: string;
+  avg_efficiency: number;
+  avg_cost: number;
+  session_count: number;
+}
+
+interface CostWasteful {
+  session_id: string;
+  model: string;
+  cost: number;
+  efficiency: number;
+  task_type: string;
+  waste_score: number;
+}
+
+interface CostIntelResponse {
+  by_model: CostModelRow[];
+  by_task_type: CostTaskRow[];
+  cache_tiers: CostCacheTier[];
+  wasteful: CostWasteful[];
+  best_value_model: string | null;
+  total_cost: number;
+  avg_cost_per_session: number;
+  avg_cache_hit_pct: number | null;
+  sessions_analysed: number;
+  sessions_skipped: number;
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -232,6 +280,7 @@ export default function Home() {
   const trendsRes    = useResource<TrendsResponse>(`/insights/trends?days=${trendsDays}`, { pollMs: 120_000 });
   const timeRes      = useResource<TimeIntelResponse>("/insights/time", { pollMs: 120_000 });
   const toolRes      = useResource<ToolFootprintResponse>("/insights/tool-footprint", { pollMs: 120_000 });
+  const costRes      = useResource<CostIntelResponse>("/insights/cost", { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -1440,6 +1489,165 @@ export default function Home() {
                   ))}
                 </div>
               </Card>
+            </div>
+          </Section>
+        );
+      })()}
+
+      {/* ── Cost Intelligence ─────────────────────────────────── */}
+      {(costRes.data?.sessions_analysed ?? 0) >= 2 && (() => {
+        const ci = costRes.data!;
+
+        const fmtCost = (v: number) =>
+          v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
+
+        const fmtCpp = (v: number | null) => {
+          if (v === null) return "—";
+          if (v < 0.01) return `$${v.toFixed(5)}/pt`;
+          return `$${v.toFixed(3)}/pt`;
+        };
+
+        const effColor = (v: number) =>
+          v >= 70 ? "#4ade80" : v >= 40 ? "#facc15" : "#f87171";
+
+        // max cpp for bar scaling
+        const maxCpp = Math.max(
+          ...ci.by_model.filter(r => r.cost_per_eff_pt !== null).map(r => r.cost_per_eff_pt as number),
+          0.001,
+        );
+
+        return (
+          <Section
+            title="Cost intelligence"
+            description={`${fmtCost(ci.total_cost)} total spend · ${ci.sessions_analysed} sessions · ${ci.avg_cache_hit_pct?.toFixed(0) ?? "—"}% avg cache hit`}
+          >
+            {/* Stats strip */}
+            <div className="flex flex-wrap gap-3 mb-4">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                <DollarSign size={12} className="text-emerald-400" />
+                <span className="text-[var(--tt-fg-muted)]">Total spend</span>
+                <span className="font-semibold text-[var(--tt-fg)]">{fmtCost(ci.total_cost)}</span>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                <span className="text-[var(--tt-fg-muted)]">Avg / session</span>
+                <span className="font-semibold text-[var(--tt-fg)]">{fmtCost(ci.avg_cost_per_session)}</span>
+              </div>
+              {ci.best_value_model && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                  <span className="text-emerald-400 font-semibold">Best value</span>
+                  <span className="font-mono text-[var(--tt-fg)]">{ci.best_value_model}</span>
+                </div>
+              )}
+              {ci.avg_cache_hit_pct !== null && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                  <span className="text-[var(--tt-fg-muted)]">Cache hit</span>
+                  <span className="font-semibold text-[var(--tt-fg)]">{ci.avg_cache_hit_pct.toFixed(0)}%</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* By model — cost per efficiency point */}
+              <Card className="space-y-3">
+                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
+                  Cost per efficiency point <span className="normal-case font-normal text-[var(--tt-fg-faint)]">(lower = better value)</span>
+                </div>
+                <div className="space-y-2.5">
+                  {ci.by_model.map((m) => (
+                    <div key={m.model} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-mono text-[11px] text-[var(--tt-fg)] truncate">{m.model}</span>
+                          <span className="text-[10px] text-[var(--tt-fg-faint)]">×{m.session_count}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 ml-2">
+                          <span className="text-[10px]" style={{ color: effColor(m.avg_efficiency) }}>
+                            {m.avg_efficiency.toFixed(1)} eff
+                          </span>
+                          <span className="text-[11px] font-mono text-[var(--tt-fg-muted)] tabular">
+                            {fmtCpp(m.cost_per_eff_pt)}
+                          </span>
+                        </div>
+                      </div>
+                      {m.cost_per_eff_pt !== null && (
+                        <div className="h-1.5 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
+                          <div
+                            className="h-full rounded"
+                            style={{
+                              width: `${Math.min((m.cost_per_eff_pt / maxCpp) * 100, 100)}%`,
+                              background: m.cost_per_eff_pt / maxCpp < 0.3
+                                ? "#4ade80"
+                                : m.cost_per_eff_pt / maxCpp < 0.7
+                                ? "#facc15"
+                                : "#f87171",
+                              opacity: 0.8,
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              {/* Right column: cache tiers + wasteful */}
+              <div className="space-y-4">
+                {/* Cache tier analysis */}
+                {ci.cache_tiers.length >= 2 && (
+                  <Card className="space-y-3">
+                    <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
+                      Cache hit rate vs efficiency
+                    </div>
+                    <div className="space-y-1.5">
+                      {ci.cache_tiers.map((t) => (
+                        <div key={t.tier} className="flex items-center gap-2">
+                          <div className="w-16 text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">{t.tier}</div>
+                          <div className="flex-1 h-4 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
+                            <div
+                              className="h-full rounded"
+                              style={{
+                                width: `${t.avg_efficiency}%`,
+                                background: effColor(t.avg_efficiency),
+                                opacity: 0.75,
+                              }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-mono w-8 text-right tabular" style={{ color: effColor(t.avg_efficiency) }}>
+                            {t.avg_efficiency.toFixed(0)}
+                          </span>
+                          <span className="text-[10px] text-[var(--tt-fg-faint)] w-14 text-right tabular shrink-0">
+                            {fmtCost(t.avg_cost)}
+                          </span>
+                          <span className="text-[10px] text-[var(--tt-fg-faint)] shrink-0">×{t.session_count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+
+                {/* Wasteful sessions */}
+                {ci.wasteful.length > 0 && (
+                  <Card className="space-y-3">
+                    <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide flex items-center gap-1.5">
+                      <AlertTriangle size={11} className="text-red-400" />
+                      Expensive flops
+                      <span className="normal-case font-normal text-[var(--tt-fg-faint)]">high cost, low efficiency</span>
+                    </div>
+                    <div className="space-y-2">
+                      {ci.wasteful.map((w) => (
+                        <div key={w.session_id} className="flex items-center gap-2 py-1 border-b border-[var(--tt-border)] last:border-0">
+                          <span className="font-mono text-[10px] text-[var(--tt-fg-faint)] shrink-0">{w.session_id.slice(0, 8)}</span>
+                          <span className="font-mono text-[10px] text-[var(--tt-fg)] truncate flex-1">{w.model}</span>
+                          <span className="text-[11px] font-mono text-red-400 tabular shrink-0">{fmtCost(w.cost)}</span>
+                          <span className="text-[10px] tabular shrink-0" style={{ color: effColor(w.efficiency) }}>
+                            {w.efficiency.toFixed(1)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </div>
             </div>
           </Section>
         );

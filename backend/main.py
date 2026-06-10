@@ -3055,6 +3055,7 @@ from git_context import get_git_info, git_summary
 from trends import compute_trends
 from time_intel import analyse_time
 from tool_footprint import analyse_tool_footprint
+from cost_intel import analyse_cost
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3225,6 +3226,18 @@ async def get_trends(days: int = 60, project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return compute_trends(sessions, days=days)
+
+
+@app.get("/insights/cost")
+async def get_cost_intel(project: Optional[str] = None):
+    """
+    Cost Intelligence: efficiency per dollar, best-value model, cache-tier
+    analysis, and wasteful session detection.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_cost(sessions)
 
 
 @app.get("/insights/time")
