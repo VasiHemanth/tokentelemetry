@@ -161,6 +161,58 @@ interface TrendsResponse {
   days_with_data: number;
 }
 
+interface TimeHourRow {
+  hour: number;
+  label: string;
+  avg_efficiency: number;
+  session_count: number;
+}
+
+interface TimeDowRow {
+  dow: number;
+  label: string;
+  avg_efficiency: number;
+  session_count: number;
+}
+
+interface TimeIntelResponse {
+  by_hour: TimeHourRow[];
+  by_dow: TimeDowRow[];
+  peak_hour: TimeHourRow | null;
+  worst_hour: TimeHourRow | null;
+  peak_dow: TimeDowRow | null;
+  worst_dow: TimeDowRow | null;
+  peak_period: string;
+  sessions_analysed: number;
+  sessions_skipped: number;
+}
+
+interface ToolSizeBucket {
+  bucket: string;
+  avg_efficiency: number;
+  session_count: number;
+  label: string;
+}
+
+interface ToolRow {
+  tool: string;
+  session_count: number;
+  avg_efficiency: number;
+  category: string;
+}
+
+interface ToolFootprintResponse {
+  by_size: ToolSizeBucket[];
+  by_category_presence: Record<string, {
+    with: { avg: number; n: number } | null;
+    without: { avg: number; n: number } | null;
+  }>;
+  top_tools: ToolRow[];
+  optimal_range: string | null;
+  sessions_analysed: number;
+  sessions_skipped: number;
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -178,6 +230,8 @@ export default function Home() {
   const gitRes       = useResource<GitSummaryResponse>("/insights/git-summary", { pollMs: 60_000 });
   const [trendsDays, setTrendsDays] = useState<30 | 60>(30);
   const trendsRes    = useResource<TrendsResponse>(`/insights/trends?days=${trendsDays}`, { pollMs: 120_000 });
+  const timeRes      = useResource<TimeIntelResponse>("/insights/time", { pollMs: 120_000 });
+  const toolRes      = useResource<ToolFootprintResponse>("/insights/tool-footprint", { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -1189,6 +1243,207 @@ export default function Home() {
           </div>
         </Section>
       )}
+      {/* ── Time Intelligence ─────────────────────────────────── */}
+      {(timeRes.data?.sessions_analysed ?? 0) >= 3 && (() => {
+        const ti = timeRes.data!;
+        const barColor = (v: number) => v >= 70 ? "#4ade80" : v >= 40 ? "#facc15" : "#f87171";
+        const periodEmoji: Record<string, string> = {
+          morning: "🌅", afternoon: "☀️", evening: "🌆", night: "🌙",
+        };
+
+        return (
+          <Section
+            title="Time intelligence"
+            description={`When you code best · ${ti.sessions_analysed} sessions analysed`}
+          >
+            {/* Stats strip */}
+            <div className="flex flex-wrap gap-3 mb-4">
+              {ti.peak_hour && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                  <span className="text-emerald-400 font-semibold">Peak hour</span>
+                  <span className="text-[var(--tt-fg)] font-mono">{ti.peak_hour.label}</span>
+                  <span className="text-[var(--tt-fg-faint)]">{ti.peak_hour.avg_efficiency.toFixed(1)} avg</span>
+                </div>
+              )}
+              {ti.peak_dow && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                  <span className="text-emerald-400 font-semibold">Peak day</span>
+                  <span className="text-[var(--tt-fg)] font-mono">{ti.peak_dow.label}</span>
+                  <span className="text-[var(--tt-fg-faint)]">{ti.peak_dow.avg_efficiency.toFixed(1)} avg</span>
+                </div>
+              )}
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                <span className="text-[var(--tt-fg-muted)]">Best period</span>
+                <span className="text-[var(--tt-fg)] font-semibold capitalize">
+                  {periodEmoji[ti.peak_period] ?? ""} {ti.peak_period}
+                </span>
+              </div>
+              {ti.worst_hour && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
+                  <span className="text-red-400 font-semibold">Avoid</span>
+                  <span className="text-[var(--tt-fg)] font-mono">{ti.worst_hour.label}</span>
+                  <span className="text-[var(--tt-fg-faint)]">{ti.worst_hour.avg_efficiency.toFixed(1)} avg</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* By hour of day */}
+              <Card className="space-y-2">
+                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">By hour of day</div>
+                <div style={{ height: 180 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={ti.by_hour} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }}
+                        tickLine={false}
+                        axisLine={false}
+                        interval={0}
+                        angle={-45}
+                        textAnchor="end"
+                        height={36}
+                      />
+                      <YAxis domain={[0, 100]} tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }} tickLine={false} axisLine={false} tickCount={4} />
+                      <ReTooltip
+                        contentStyle={{ background: "var(--tt-surface)", border: "1px solid var(--tt-border)", borderRadius: 8, fontSize: 11, color: "var(--tt-fg)" }}
+                        formatter={(v, n) => [typeof v === "number" ? v.toFixed(1) : v, n === "avg_efficiency" ? "Avg efficiency" : String(n)]}
+                      />
+                      <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
+                      <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={28}>
+                        {ti.by_hour.map((row) => (
+                          <Cell key={row.hour} fill={barColor(row.avg_efficiency)} fillOpacity={0.85} />
+                        ))}
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              {/* By day of week */}
+              <Card className="space-y-2">
+                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">By day of week</div>
+                <div style={{ height: 180 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={ti.by_dow} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
+                      <XAxis dataKey="label" tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }} tickLine={false} axisLine={false} />
+                      <YAxis domain={[0, 100]} tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }} tickLine={false} axisLine={false} tickCount={4} />
+                      <ReTooltip
+                        contentStyle={{ background: "var(--tt-surface)", border: "1px solid var(--tt-border)", borderRadius: 8, fontSize: 11, color: "var(--tt-fg)" }}
+                        formatter={(v, n) => [typeof v === "number" ? v.toFixed(1) : v, n === "avg_efficiency" ? "Avg efficiency" : String(n)]}
+                      />
+                      <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
+                      <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={40}>
+                        {ti.by_dow.map((row) => (
+                          <Cell key={row.dow} fill={barColor(row.avg_efficiency)} fillOpacity={0.85} />
+                        ))}
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            </div>
+          </Section>
+        );
+      })()}
+
+      {/* ── Tool Footprint ────────────────────────────────────── */}
+      {(toolRes.data?.sessions_analysed ?? 0) >= 3 && (() => {
+        const tf = toolRes.data!;
+        const sizeColor: Record<string, string> = {
+          lean: "#4ade80", standard: "#60a5fa", heavy: "#facc15", bloated: "#f87171",
+        };
+        const catColor: Record<string, string> = {
+          core: "#4ade80", agent: "#a78bfa", browser: "#60a5fa", mcp: "#fb923c", meta: "#94a3b8",
+        };
+        const shortTool = (t: string) => {
+          if (t.startsWith("mcp__")) {
+            const parts = t.split("__");
+            return parts[parts.length - 1].replace(/_/g, " ");
+          }
+          return t;
+        };
+
+        return (
+          <Section
+            title="Tool footprint"
+            description={`How toolset size and composition affect efficiency · ${tf.sessions_analysed} sessions`}
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* By toolset size */}
+              <Card className="space-y-3">
+                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
+                  Efficiency by toolset size
+                  {tf.optimal_range && (
+                    <span className="ml-2 normal-case font-normal text-[var(--tt-fg-faint)]">
+                      · optimal: <span className="font-semibold text-[var(--tt-fg)]">{tf.optimal_range} tools</span>
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {tf.by_size.map((b) => (
+                    <div key={b.bucket} className="flex items-center gap-2">
+                      <div className="w-16 text-[11px] text-[var(--tt-fg-muted)] tabular shrink-0">{b.bucket}</div>
+                      <div className="flex-1 h-5 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
+                        <div
+                          className="h-full rounded transition-all"
+                          style={{
+                            width: `${b.avg_efficiency}%`,
+                            background: sizeColor[b.label] ?? "#60a5fa",
+                            opacity: 0.8,
+                          }}
+                        />
+                      </div>
+                      <div className="w-10 text-right text-[11px] font-mono text-[var(--tt-fg)] tabular shrink-0">
+                        {b.avg_efficiency.toFixed(1)}
+                      </div>
+                      <div className="w-8 text-right text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">
+                        {b.session_count}s
+                      </div>
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full capitalize shrink-0"
+                        style={{ background: (sizeColor[b.label] ?? "#60a5fa") + "22", color: sizeColor[b.label] ?? "#60a5fa" }}
+                      >
+                        {b.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              {/* Top tools */}
+              <Card className="space-y-3">
+                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">Top tools by frequency</div>
+                <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 220 }}>
+                  {tf.top_tools.map((t, i) => (
+                    <div key={t.tool} className="flex items-center gap-2 py-1 border-b border-[var(--tt-border)] last:border-0">
+                      <span className="text-[10px] text-[var(--tt-fg-faint)] w-4 tabular shrink-0">{i + 1}</span>
+                      <span
+                        className="text-[10px] px-1 py-0.5 rounded shrink-0 capitalize"
+                        style={{ background: (catColor[t.category] ?? "#94a3b8") + "22", color: catColor[t.category] ?? "#94a3b8" }}
+                      >
+                        {t.category}
+                      </span>
+                      <span className="text-[11px] text-[var(--tt-fg)] truncate flex-1 font-mono" title={t.tool}>
+                        {shortTool(t.tool)}
+                      </span>
+                      <span className="text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">{t.session_count}s</span>
+                      <span
+                        className="text-[10px] font-mono tabular shrink-0 w-10 text-right"
+                        style={{ color: t.avg_efficiency >= 70 ? "#4ade80" : t.avg_efficiency >= 40 ? "#facc15" : "#f87171" }}
+                      >
+                        {t.avg_efficiency.toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          </Section>
+        );
+      })()}
     </div>
   );
 }

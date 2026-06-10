@@ -3053,6 +3053,8 @@ from prompt_analysis import extract_features, analyse_prompt_dna
 from model_comparison import compare_models
 from git_context import get_git_info, git_summary
 from trends import compute_trends
+from time_intel import analyse_time
+from tool_footprint import analyse_tool_footprint
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3223,6 +3225,32 @@ async def get_trends(days: int = 60, project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return compute_trends(sessions, days=days)
+
+
+@app.get("/insights/time")
+async def get_time_intel(project: Optional[str] = None):
+    """
+    Time Intelligence: efficiency by hour-of-day and day-of-week.
+    Returns peak/worst hour, peak/worst day, peak period (morning/afternoon/
+    evening/night), and per-bucket stats for heatmap/bar visualisations.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_time(sessions)
+
+
+@app.get("/insights/tool-footprint")
+async def get_tool_footprint(project: Optional[str] = None):
+    """
+    Tool Footprint: how toolset size and composition correlate with efficiency.
+    Returns by-size buckets, per-category presence effect, and top-15 tools
+    by session frequency with their average efficiency scores.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_tool_footprint(sessions)
 
 
 @app.get("/insights/model-comparison")
