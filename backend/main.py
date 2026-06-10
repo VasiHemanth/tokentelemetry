@@ -1970,6 +1970,112 @@ def _opencode_resolve_model(val):
     return None
 
 
+# Agents whose local logs record subagent/child-session spawns at all.
+# claude: full token rollup; cursor: spawn count only (transcripts carry no
+# usage fields); opencode/hermes: parent/child linkage between real sessions.
+_DELEGATION_CAPABLE_AGENTS = {"claude", "cursor", "opencode", "hermes"}
+
+
+def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, Any]]:
+    """Roll up subagent (Task/Agent tool) usage for one Claude Code session.
+
+    Claude Code writes each spawned subagent's full transcript to
+      <project-dir>/<sessionId>/subagents/agent-<agentId>.jsonl
+    with a sibling agent-<agentId>.meta.json {agentType, description, toolUseId}.
+    These files are NOT sessions — their usage is counted nowhere else, so this
+    rollup is the only place it surfaces (count-once invariant: the parent's own
+    token fields stay untouched; delegated usage is a separate bucket).
+
+    Each subagent runs its own context and often a DIFFERENT model than the
+    parent (e.g. Explore on Haiku under an Opus session), so cost is computed
+    per file with that file's model. Cache semantics match the main scanner:
+    cached = high-water-mark of cache_read per transcript, cache writes are
+    billed per event and accumulate.
+
+    Returns None when the session has no subagents/ dir; otherwise
+    {spawn_count, subagents: [...], totals: {...}, cost}.
+    """
+    sub_dir = session_file.parent / sid / "subagents"
+    try:
+        if not sub_dir.is_dir():
+            return None
+    except Exception:
+        return None
+    entries: List[Dict[str, Any]] = []
+    for f in sorted(sub_dir.glob("agent-*.jsonl")):
+        agent_id = f.stem[len("agent-"):]
+        agent_type = None
+        description = None
+        tool_use_id = None
+        try:
+            with open(f.with_name(f.stem + ".meta.json"), "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            if isinstance(meta, dict):
+                agent_type = meta.get("agentType")
+                description = meta.get("description")
+                tool_use_id = meta.get("toolUseId")
+        except Exception:
+            pass
+        tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+                  "cache_creation_1h": 0, "total": 0}
+        model = None
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        continue
+                    if data.get("type") != "assistant":
+                        continue
+                    msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                    m = msg.get("model")
+                    if m and m != "<synthetic>" and not model:
+                        model = m
+                    # Fallback identity when meta.json is missing/corrupt.
+                    if not agent_type and data.get("attributionAgent"):
+                        agent_type = data.get("attributionAgent")
+                    usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
+                    if not usage:
+                        continue
+                    cr = usage.get("cache_read_input_tokens", 0) or 0
+                    cc = usage.get("cache_creation_input_tokens", 0) or 0
+                    cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
+                    tokens["input"] += usage.get("input_tokens", 0) or 0
+                    tokens["output"] += usage.get("output_tokens", 0) or 0
+                    tokens["cached"] = max(tokens["cached"], cr)
+                    tokens["cache_creation"] += cc
+                    tokens["cache_creation_1h"] += cc_1h
+        except Exception:
+            continue
+        tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+        cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
+                              cache_creation_tokens=tokens["cache_creation"],
+                              cache_creation_1h_tokens=tokens["cache_creation_1h"])
+        entries.append({
+            "agent_id": agent_id,
+            "agent_type": agent_type or "unknown",
+            "description": description,
+            "tool_use_id": tool_use_id,
+            "model": model,
+            "tokens": tokens,
+            "cost": cost,
+        })
+    if not entries:
+        return None
+    totals = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+              "cache_creation_1h": 0, "total": 0}
+    for e in entries:
+        for k in totals:
+            totals[k] += e["tokens"][k]
+    return {
+        "spawn_count": len(entries),
+        "subagents": entries,
+        "totals": totals,
+        "cost": round(sum(e["cost"] or 0 for e in entries), 6),
+    }
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -2145,6 +2251,23 @@ def _scan_sessions_sync():
                                 #     prior_edit_failed = False
                                 #     pending_edit_tool_ids = set()
                 except Exception: continue
+                # Subagent (Task/Agent) rollup — separate "delegated" bucket so the
+                # parent's own token fields stay exactly as before. Full per-subagent
+                # breakdown is served by /sessions/{id}/delegation, the list carries
+                # only the summary.
+                deleg = _claude_subagent_usage(session_file, sid)
+                sess["delegation"] = {
+                    "supported": True,
+                    "tokens_recorded": True,
+                    "spawn_count": deleg["spawn_count"] if deleg else 0,
+                    "delegated_total": deleg["totals"]["total"] if deleg else 0,
+                }
+                if deleg:
+                    sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
+                    sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
+                    sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
+                    sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
+                    sess["delegated_cost"] = deleg["cost"]
         sessions.extend(claude_sessions.values())
     # 2. Codex
     codex_index = CODEX_DIR / "session_index.jsonl"
@@ -2689,7 +2812,16 @@ def _scan_sessions_sync():
                                                         plans.append({"session_id": sid, "agent": "cursor", "timestamp": mtime, "content": t_text})
                                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                                 tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0))
-                                sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "subagents": subagents, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]})
+                                # Cursor writes subagent transcripts to <sid>/subagents/
+                                # but they carry NO usage fields (verified), so we can
+                                # only count spawns — never estimate their tokens.
+                                spawn_count = 0
+                                try:
+                                    spawn_count = sum(1 for _ in (trans_dir / "subagents").glob("*.jsonl"))
+                                except Exception: pass
+                                delegation = {"supported": True, "tokens_recorded": False,
+                                              "spawn_count": max(spawn_count, len(subagents))}
+                                sessions.append({"id": sid, "agent": "cursor", "project": project_path, "timestamp": mtime, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "subagents": subagents, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"], "delegation": delegation})
                             except Exception: continue
 
     # 7. Copilot
@@ -2830,7 +2962,14 @@ def _scan_sessions_sync():
                 except Exception:
                     _sess_cols = set()
                 _has_sess_model = "model" in _sess_cols
-                rows = conn.execute("SELECT id, directory, title, time_created, time_updated FROM session").fetchall()
+                # parent_id links child (delegated) sessions to their parent. Children
+                # are full sessions already counted in aggregates, so hierarchy here is
+                # annotation-only — never re-summed (count-once invariant).
+                _has_parent = "parent_id" in _sess_cols
+                _parent_sel = ", parent_id" if _has_parent else ""
+                oc_by_id: Dict[str, Dict[str, Any]] = {}
+                oc_parent_of: Dict[str, str] = {}
+                rows = conn.execute(f"SELECT id, directory, title, time_created, time_updated{_parent_sel} FROM session").fetchall()
                 for srow in rows:
                     sid = srow["id"]
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
@@ -2922,14 +3061,31 @@ def _scan_sessions_sync():
                         has_plan = True
                         plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
                         plans.append({"session_id": sid, "agent": "opencode", "timestamp": ts, "content": plan_text})
-                    sessions.append({
+                    oc_sess = {
                         "id": sid, "agent": "opencode", "project": apply_alias(srow["directory"] or "unknown"), "timestamp": ts,
                         "display": display, "tokens": tokens, "mcp_tools": mcp_tools,
                         "has_plan": has_plan, "plans": plans, "model": model,
                         "models_used": models_used, "artifacts": [],
                         "provider": provider_id,  # expose runtime (e.g. "ollama") so analytics can detect local sessions
                         "cost": tokens["cost"],
-                    })
+                    }
+                    if _has_parent and srow["parent_id"]:
+                        oc_sess["parent_session_id"] = srow["parent_id"]
+                        oc_parent_of[sid] = srow["parent_id"]
+                    oc_by_id[sid] = oc_sess
+                    sessions.append(oc_sess)
+                # Annotate parents with their children (display-only; child tokens
+                # are already counted as their own sessions).
+                for child_id, parent_id in oc_parent_of.items():
+                    parent = oc_by_id.get(parent_id)
+                    if parent is None:
+                        continue
+                    parent.setdefault("child_session_ids", []).append(child_id)
+                for oc_sess in oc_by_id.values():
+                    kids = oc_sess.get("child_session_ids") or []
+                    if kids:
+                        oc_sess["delegation"] = {"supported": True, "tokens_recorded": False,
+                                                 "linked_children": len(kids)}
             finally:
                 conn.close()
         except Exception:
@@ -2940,6 +3096,7 @@ def _scan_sessions_sync():
 
     # 9. Hermes Agent (SQLite: sessions / messages, pre-aggregated tokens)
     hermes_cwd_map = _hermes_cwd_by_session() if _hermes_dbs() else {}
+    hermes_by_id: Dict[str, Dict[str, Any]] = {}
     for db_path in _hermes_dbs():
         try:
             uri = f"file:{db_path}?mode=ro"
@@ -3021,7 +3178,7 @@ def _scan_sessions_sync():
                         "WHERE session_id=? AND tool_name IS NOT NULL AND tool_name != ''",
                         (sid,)).fetchall()]
                     cwd = hermes_cwd_map.get(sid)
-                    sessions.append({
+                    hermes_by_id[sid] = {
                         "id": sid, "agent": "hermes",
                         "project": apply_alias(cwd or "unknown"),
                         "project_inferred": cwd is not None,
@@ -3035,11 +3192,30 @@ def _scan_sessions_sync():
                         "provider": srow["billing_provider"],
                         "endpoint": srow["billing_base_url"],
                         "tok_per_sec": _measured_tps,
-                    })
+                    }
+                    sessions.append(hermes_by_id[sid])
             finally:
                 conn.close()
         except Exception:
             pass
+    # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
+    # of their own, already in totals) — annotate parents, never re-sum.
+    for h_sess in hermes_by_id.values():
+        pid = h_sess.get("parent_session_id")
+        if pid and pid in hermes_by_id:
+            hermes_by_id[pid].setdefault("child_session_ids", []).append(h_sess["id"])
+    for h_sess in hermes_by_id.values():
+        kids = h_sess.get("child_session_ids") or []
+        if kids:
+            h_sess["delegation"] = {"supported": True, "tokens_recorded": False,
+                                    "linked_children": len(kids)}
+
+    # Every session gets an explicit delegation marker: agents whose logs carry
+    # no spawn signal report supported=False (an honest "n/a", never a fake 0).
+    # Capability is per-agent — a claude session outside the parsed top-100 is
+    # still "supported", just not scanned yet.
+    for s in sessions:
+        s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -3689,6 +3865,83 @@ async def get_session_detail(session_id: str, agent: str):
     #                 })
     #             return events
     return {"error": "Invalid agent"}
+
+
+@app.get("/sessions/{session_id}/delegation")
+async def session_delegation(session_id: str, agent: str):
+    """Per-session subagent/delegation breakdown (overlay, like hermes-overlay).
+
+    claude: full per-subagent usage + cost from <sid>/subagents/agent-*.jsonl.
+    cursor: spawn count only — its subagent transcripts carry no usage fields.
+    opencode/hermes: parent/child session linkage from their SQLite hierarchies.
+    Everything else: {"supported": False} — the agent's logs don't record spawns.
+    """
+    if agent == "claude":
+        files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl"))
+        if not files:
+            return {"error": "Not found"}
+        deleg = _claude_subagent_usage(files[0], session_id)
+        if not deleg:
+            return {"supported": True, "tokens_recorded": True, "spawn_count": 0,
+                    "subagents": [], "totals": None, "cost": 0.0}
+        return {"supported": True, "tokens_recorded": True, **deleg}
+
+    if agent == "cursor":
+        for pd in (CURSOR_DIR / "projects").glob("*"):
+            trans_dir = pd / "agent-transcripts" / session_id
+            if trans_dir.is_dir():
+                sub_files = sorted((trans_dir / "subagents").glob("*.jsonl")) if (trans_dir / "subagents").is_dir() else []
+                return {"supported": True, "tokens_recorded": False,
+                        "spawn_count": len(sub_files),
+                        "subagents": [{"agent_id": f.stem, "agent_type": "unknown",
+                                       "tokens": None, "cost": None} for f in sub_files]}
+        return {"error": "Not found"}
+
+    if agent == "opencode":
+        if not OPENCODE_DB.exists():
+            return {"error": "Not found"}
+        try:
+            conn = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=1.0)
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+                if "parent_id" not in cols:
+                    return {"supported": False}
+                row = conn.execute("SELECT parent_id FROM session WHERE id=?", (session_id,)).fetchone()
+                if row is None:
+                    return {"error": "Not found"}
+                children = [r[0] for r in conn.execute(
+                    "SELECT id FROM session WHERE parent_id=?", (session_id,))]
+                return {"supported": True, "tokens_recorded": False,
+                        "parent_session_id": row[0],
+                        "child_session_ids": children,
+                        "linked_children": len(children)}
+            finally:
+                conn.close()
+        except Exception:
+            return {"error": "Not found"}
+
+    if agent == "hermes":
+        for db_path in _hermes_dbs():
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+                try:
+                    row = conn.execute("SELECT parent_session_id FROM sessions WHERE id=?", (session_id,)).fetchone()
+                    if row is None:
+                        continue
+                    children = [r[0] for r in conn.execute(
+                        "SELECT id FROM sessions WHERE parent_session_id=?", (session_id,))]
+                    return {"supported": True, "tokens_recorded": False,
+                            "parent_session_id": row[0],
+                            "child_session_ids": children,
+                            "linked_children": len(children)}
+                finally:
+                    conn.close()
+            except Exception:
+                continue
+        return {"error": "Not found"}
+
+    return {"supported": False}
+
 
 @app.get("/projects")
 async def get_projects(include_hidden: bool = False):
