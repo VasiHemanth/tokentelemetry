@@ -143,7 +143,7 @@ def compute_trends(sessions: list[dict], days: int = 60) -> dict:
             trend = "steady"
     else:
         delta = 0.0
-        trend = "steady"
+        trend = "new"
 
     # Current streak: consecutive most-recent days with avg_efficiency >= 60
     streak = 0

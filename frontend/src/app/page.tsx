@@ -620,7 +620,7 @@ function ActivityLoading() {
 
 interface SnapRec { total: number; high_count: number; }
 interface SnapHealth { healthy_projects: number; at_risk_projects: number; total_projects: number; }
-interface SnapAnomaly { total_anomalies: number; }
+interface SnapAnomaly { total_anomalies: number; affected_sessions: number; }
 
 function IntelligenceSnapshot() {
   const recRes    = useResource<SnapRec>("/insights/recommendations", { pollMs: 120_000 });
@@ -669,8 +669,8 @@ function IntelligenceSnapshot() {
                 <AlertTriangle size={15} className="text-yellow-400" />
               </div>
               <div>
-                <div className="text-sm font-semibold text-[var(--tt-fg)]">{anomaly.total_anomalies} anomalies</div>
-                <div className="text-[11px] text-[var(--tt-fg-faint)]">detected this cycle</div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{anomaly.affected_sessions ?? anomaly.total_anomalies} sessions flagged</div>
+                <div className="text-[11px] text-[var(--tt-fg-faint)]">{anomaly.total_anomalies} signals total</div>
               </div>
             </div>
           )}

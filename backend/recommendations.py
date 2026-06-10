@@ -105,12 +105,17 @@ def generate_recommendations(sessions: list[dict]) -> dict:
         ratio = (worst["cost_per_eff_pt"] or 1) / (best["cost_per_eff_pt"] or 1)
         if ratio >= 5:
             saving = round((worst["avg_cost"] - best["avg_cost"]), 2)
+            eff_gain = round(best["avg_efficiency"] - worst["avg_efficiency"], 0)
+            if saving > 0:
+                impact_str = f"Save ~${saving:.2f}/session"
+            else:
+                impact_str = f"+{eff_gain:.0f} pts efficiency"
             add("cost_model_switch", "cost", "high",
                 f"Replace {worst['model']} — {ratio:.0f}× worse value",
                 f"{worst['model']} costs ${worst['cost_per_eff_pt']:.3f}/eff-pt vs "
                 f"${best['cost_per_eff_pt']:.3f}/eff-pt for {best['model']}. "
-                f"Switch for similar tasks to save ~${abs(saving):.2f}/session.",
-                impact=f"Save ~${abs(saving):.2f}/session" if saving > 0 else None)
+                f"Switch for similar tasks to gain ~{eff_gain:.0f} pts efficiency per session.",
+                impact=impact_str)
 
     wasteful = cost_data.get("wasteful", [])
     if len(wasteful) >= 3:

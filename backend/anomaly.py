@@ -79,6 +79,7 @@ def detect_anomalies(sessions: list[dict]) -> dict:
         return {
             "anomalies": [],
             "total_anomalies": 0,
+            "affected_sessions": 0,
             "sessions_checked": len(sessions),
             "baseline": {},
         }
@@ -163,9 +164,11 @@ def detect_anomalies(sessions: list[dict]) -> dict:
 
     anomalies.sort(key=_sort_key)
 
+    affected_sessions = len({a["session_id"] for a in anomalies})
     return {
         "anomalies":         anomalies,
         "total_anomalies":   len(anomalies),
+        "affected_sessions": affected_sessions,
         "sessions_checked":  len(sessions),
         "baseline": {
             "mean_cost":       round(mean_c, 4),

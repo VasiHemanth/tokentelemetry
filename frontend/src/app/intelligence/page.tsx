@@ -71,18 +71,21 @@ interface Anomaly {
 interface AnomalyResponse {
   anomalies: Anomaly[];
   total_anomalies: number;
+  affected_sessions: number;
   sessions_checked: number;
   baseline: { mean_cost: number; mean_efficiency: number; mean_tokens: number; median_cost: number };
 }
 
-interface TrendDay { date: string; avg_efficiency: number; session_count: number; rolling_7d: number | null; }
+interface TrendDay { date: string; avg_efficiency: number; session_count: number; total_tokens: number; best: number; worst: number; rolling_7d: number | null; }
 interface TrendsResponse {
   days: TrendDay[];
   trend: string;
   trend_delta: number;
+  week_over_week: number;
   overall_avg: number | null;
   current_streak: number;
   best_day: { date: string; avg_efficiency: number } | null;
+  worst_day: { date: string; avg_efficiency: number } | null;
   days_with_data: number;
   total_sessions: number;
 }
@@ -94,7 +97,7 @@ interface ModelRow {
   task_breakdown: Record<string, { count: number; avg_efficiency: number }>;
 }
 interface ModelComparisonResponse {
-  models_compared: number; sessions_used: number; sessions_skipped: number;
+  task_type_filter: string | null; models_compared: number; sessions_used: number; sessions_skipped: number;
   models: ModelRow[]; task_types_available: string[];
 }
 
@@ -105,26 +108,27 @@ interface CostModelRow {
 }
 interface CostCacheTier { tier: string; avg_efficiency: number; avg_cost: number; session_count: number; }
 interface CostWasteful { session_id: string; model: string; cost: number; efficiency: number; task_type: string; waste_score: number; }
+interface CostTaskRow { task_type: string; session_count: number; avg_cost: number; avg_efficiency: number; cost_per_eff_pt: number | null; }
 interface CostIntelResponse {
-  by_model: CostModelRow[]; cache_tiers: CostCacheTier[]; wasteful: CostWasteful[];
+  by_model: CostModelRow[]; by_task_type: CostTaskRow[]; cache_tiers: CostCacheTier[]; wasteful: CostWasteful[];
   best_value_model: string | null; total_cost: number; avg_cost_per_session: number;
-  avg_cache_hit_pct: number | null; sessions_analysed: number;
+  avg_cache_hit_pct: number | null; sessions_analysed: number; sessions_skipped: number;
 }
 
-interface TimeHourRow { hour: number; label: string; avg_efficiency: number; session_count: number; }
+interface TimeHourRow { hour: number; label: string; avg_efficiency: number; session_count: number; total_tokens: number; }
 interface TimeDowRow { dow: number; label: string; avg_efficiency: number; session_count: number; }
 interface TimeIntelResponse {
   by_hour: TimeHourRow[]; by_dow: TimeDowRow[];
   peak_hour: TimeHourRow | null; worst_hour: TimeHourRow | null;
-  peak_dow: TimeDowRow | null; peak_period: string;
-  sessions_analysed: number;
+  peak_dow: TimeDowRow | null; worst_dow: TimeDowRow | null; peak_period: string;
+  sessions_analysed: number; sessions_skipped: number;
 }
 
 interface ToolSizeBucket { bucket: string; avg_efficiency: number; session_count: number; label: string; }
 interface ToolRow { tool: string; session_count: number; avg_efficiency: number; category: string; }
 interface ToolFootprintResponse {
   by_size: ToolSizeBucket[]; top_tools: ToolRow[];
-  optimal_range: string | null; sessions_analysed: number;
+  optimal_range: string | null; sessions_analysed: number; sessions_skipped: number;
 }
 
 interface DnaCorrelation { feature: string; label: string; r: number; direction: string; insight: string; }
@@ -140,7 +144,7 @@ interface GitProjectSummary {
   project: string; branch: string | null; session_count: number;
   total_files_changed: number; total_lines_added: number; total_lines_deleted: number;
   net_lines: number; latest_commit_sha: string | null; latest_commit_msg: string | null;
-  avg_files_per_session: number;
+  latest_commit_time: string | null; avg_files_per_session: number;
 }
 interface GitSummaryResponse {
   projects: GitProjectSummary[]; total_lines_added: number; total_lines_deleted: number;
@@ -348,7 +352,7 @@ export default function IntelligencePage() {
       {(anomalyRes.data?.total_anomalies ?? 0) > 0 && (
         <Section
           title="Anomaly detection"
-          description={`${anomalyRes.data!.total_anomalies} anomalies detected across ${anomalyRes.data!.sessions_checked} sessions`}
+          description={`${anomalyRes.data!.total_anomalies} signals across ${anomalyRes.data!.affected_sessions ?? anomalyRes.data!.total_anomalies} sessions · ${anomalyRes.data!.sessions_checked} checked`}
         >
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {anomalyRes.data!.anomalies.map((a, i) => (
@@ -388,8 +392,8 @@ export default function IntelligencePage() {
       {/* ── Session Trends ────────────────────────────────────────── */}
       {(trendsRes.data?.days_with_data ?? 0) >= 2 && (() => {
         const td = trendsRes.data!;
-        const trendColor = td.trend === "improving" ? "#4ade80" : td.trend === "declining" ? "#f87171" : "#facc15";
-        const trendIcon  = td.trend === "improving" ? "↑" : td.trend === "declining" ? "↓" : "→";
+        const trendColor = td.trend === "improving" ? "#4ade80" : td.trend === "declining" ? "#f87171" : td.trend === "new" ? "#60a5fa" : "#facc15";
+        const trendIcon  = td.trend === "improving" ? "↑" : td.trend === "declining" ? "↓" : td.trend === "new" ? "✦" : "→";
         return (
           <Section
             title="Session trends"
@@ -782,7 +786,8 @@ export default function IntelligencePage() {
                       <GitCommit size={10} className="text-[var(--tt-fg-faint)] mt-0.5 shrink-0" />
                       <div className="min-w-0">
                         <span className="font-mono text-[10px] text-[var(--tt-brand)]">{p.latest_commit_sha}</span>
-                        <span className="ml-1.5 text-[10px] text-[var(--tt-fg-muted)] truncate block" title={p.latest_commit_msg ?? ""}>{p.latest_commit_msg}</span>
+                        {p.latest_commit_time && <span className="ml-1.5 text-[10px] text-[var(--tt-fg-faint)]">{new Date(p.latest_commit_time).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>}
+                        <span className="mt-0.5 text-[10px] text-[var(--tt-fg-muted)] truncate block" title={p.latest_commit_msg ?? ""}>{p.latest_commit_msg}</span>
                       </div>
                     </div>
                   )}
