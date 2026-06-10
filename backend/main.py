@@ -3007,7 +3007,7 @@ def _scan_sessions_sync():
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # ── Intelligence layer: efficiency score + smell detection ───────────────
+    # ── Intelligence layer: efficiency score + smell detection + prompt DNA ──
     for s in sessions:
         try:
             score = score_session(s)
@@ -3020,6 +3020,14 @@ def _scan_sessions_sync():
             s["smells"] = detect_smells(s)
         except Exception:
             s["smells"] = []
+        try:
+            msg = (s.get("display") or s.get("text") or "").strip()
+            feats = extract_features(msg)
+            s["task_type"] = feats["task_type"]
+            s["prompt_features"] = feats
+        except Exception:
+            s["task_type"] = "other"
+            s["prompt_features"] = {}
 
     return sessions
 
@@ -3037,6 +3045,7 @@ from pricing import calculate_cost, PRICING, PRICING_UPDATED
 from scoring import score_session, score_label
 from smells import detect_smells
 from forecast import compute_forecast
+from prompt_analysis import extract_features, analyse_prompt_dna
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3167,6 +3176,19 @@ async def get_efficiency(project: Optional[str] = None):
         })
     result.sort(key=lambda x: x["efficiency"], reverse=True)
     return result
+
+
+@app.get("/insights/prompt-dna")
+async def get_prompt_dna(project: Optional[str] = None):
+    """
+    Prompt DNA: correlate prompt features with efficiency scores.
+    Returns top positive/negative traits, per-task-type breakdown,
+    and full Pearson correlation table.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_prompt_dna(sessions)
 
 
 @app.get("/remote-access")

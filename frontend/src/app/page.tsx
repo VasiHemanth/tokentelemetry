@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
-  Zap, AlertTriangle, Flame, TrendingDown,
+  Zap, AlertTriangle, Flame, TrendingDown, Sparkles,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -62,6 +62,23 @@ interface ForecastResponse {
   buckets_30d: Record<string, number>;
 }
 
+interface DnaCorrelation {
+  feature: string;
+  label: string;
+  r: number;
+  direction: "positive" | "negative";
+  insight: string;
+}
+
+interface PromptDnaResponse {
+  sessions_analysed: number;
+  sessions_skipped: number;
+  correlations: DnaCorrelation[];
+  by_task_type: Record<string, { avg_efficiency: number; count: number }>;
+  top_positive: DnaCorrelation[];
+  top_negative: DnaCorrelation[];
+}
+
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -75,6 +92,7 @@ export default function Home() {
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
   const billingRes   = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
   const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
+  const dnaRes       = useResource<PromptDnaResponse>("/insights/prompt-dna", { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -507,6 +525,127 @@ export default function Home() {
                   {fc.days_until_limit === null && (
                     <div className="text-[10px] text-[var(--tt-fg-faint)]">
                       On track — no limit exceeded at current pace
+                    </div>
+                  )}
+                </div>
+              </Card>
+            );
+          })()}
+
+          {/* Prompt DNA card */}
+          {(() => {
+            const dna = dnaRes.data;
+            if (!dna && dnaRes.loading) return (
+              <Card>
+                <CardHeader>
+                  <CardTitle><Sparkles size={14} className="text-purple-400" />Prompt DNA</CardTitle>
+                </CardHeader>
+                <Skeleton className="h-24 w-full" />
+              </Card>
+            );
+            if (!dna || dna.sessions_analysed < 3) return null;
+            const topPos = dna.top_positive.slice(0, 2);
+            const topNeg = dna.top_negative.slice(0, 2);
+            const taskRows = Object.entries(dna.by_task_type).sort((a, b) => b[1].avg_efficiency - a[1].avg_efficiency);
+            const maxEff = Math.max(...taskRows.map(([, v]) => v.avg_efficiency), 1);
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>
+                    <Sparkles size={14} className="text-purple-400" />
+                    Prompt DNA
+                  </CardTitle>
+                  <CardEyebrow>{dna.sessions_analysed} sessions</CardEyebrow>
+                </CardHeader>
+
+                <div className="space-y-4">
+                  {/* Positive correlates */}
+                  {topPos.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
+                        Boosts efficiency
+                      </div>
+                      <div className="space-y-1.5">
+                        {topPos.map((c) => (
+                          <div
+                            key={c.feature}
+                            className="group relative rounded-md px-2.5 py-2"
+                            style={{ backgroundColor: "#4ade8012", border: "1px solid #4ade8025" }}
+                            title={c.insight}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-[#4ade80] font-medium truncate">{c.label}</span>
+                              <span className="text-[10px] tabular font-semibold text-[#4ade80] shrink-0">
+                                r={c.r.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[9px] leading-snug text-[var(--tt-fg-faint)] line-clamp-2">
+                              {c.insight}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Negative correlates */}
+                  {topNeg.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
+                        Hurts efficiency
+                      </div>
+                      <div className="space-y-1.5">
+                        {topNeg.map((c) => (
+                          <div
+                            key={c.feature}
+                            className="group relative rounded-md px-2.5 py-2"
+                            style={{ backgroundColor: "#f8717112", border: "1px solid #f8717125" }}
+                            title={c.insight}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-[#f87171] font-medium truncate">{c.label}</span>
+                              <span className="text-[10px] tabular font-semibold text-[#f87171] shrink-0">
+                                r={c.r.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[9px] leading-snug text-[var(--tt-fg-faint)] line-clamp-2">
+                              {c.insight}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Task type breakdown */}
+                  {taskRows.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
+                        By task type
+                      </div>
+                      <div className="space-y-2">
+                        {taskRows.map(([tt, { avg_efficiency, count }]) => {
+                          const pct = (avg_efficiency / maxEff) * 100;
+                          const barColor = avg_efficiency >= 70 ? "#4ade80" : avg_efficiency >= 40 ? "#f59e0b" : "#f87171";
+                          return (
+                            <div key={tt} className="space-y-1">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="capitalize text-[var(--tt-fg-muted)]">{tt}</span>
+                                <span className="tabular text-[var(--tt-fg-faint)]">
+                                  {avg_efficiency.toFixed(0)}
+                                  <span className="text-[var(--tt-fg-dim)]"> / {count}</span>
+                                </span>
+                              </div>
+                              <div className="h-1 rounded-full tt-tint-1 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full transition-[width] duration-500"
+                                  style={{ width: `${pct}%`, backgroundColor: barColor }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
