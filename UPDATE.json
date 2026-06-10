@@ -1,6 +1,31 @@
 {
   "releases": [
     {
+      "tag": "2026-06-10",
+      "title": "See what your subagents, skills & MCPs cost",
+      "highlights": [
+        {
+          "title": "Subagent spend, finally visible",
+          "description": "When a Claude Code session spawns subagents (Explore, general-purpose, custom agents), their tokens were invisible until now — on a typical machine that's millions of tokens. Session pages show a \"Delegated work\" card with each subagent's task, model, tokens and cost, priced by the model the subagent actually ran (an Explore on Haiku no longer hides inside an Opus session).",
+          "href": "/"
+        },
+        {
+          "title": "Which subagent types earn their keep",
+          "description": "Analytics gains a Delegation & ecosystem section: total delegated tokens and cost, plus a per-type ranking. If general-purpose agents cost you 5× what Explore agents do for similar work, you'll see it — and can change how you delegate.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Skill & MCP usage, cross-linked to your inventory",
+          "description": "Sessions now record which skills you invoked and how often each MCP server was actually called. Your project's Config page overlays that usage on every installed skill, command, subagent and MCP server — anything marked \"no recorded use\" is a candidate to clean up.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Honest gaps, not fake zeros",
+          "description": "Cursor records subagent runs but not their tokens; OpenCode and Hermes link parent and child sessions; other agents don't log spawns at all. The dashboard says exactly which of these applies instead of showing a misleading 0 — and existing session totals are unchanged, delegated usage is always a separate bucket."
+        }
+      ]
+    },
+    {
       "tag": "2026-06-08",
       "title": "View the dashboard from another device",
       "highlights": [
