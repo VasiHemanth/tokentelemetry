@@ -27,6 +27,14 @@ def test_cache_write_priced_at_1_25x_input():
     assert cost == input_only * 1.25
 
 
+def test_cache_write_1h_priced_at_2x_input():
+    """1h TTL cache-write tokens cost exactly 2x the input rate."""
+    cost = calculate_cost(SONNET, 0, 0, 0, cache_creation_tokens=MTOK, cache_creation_1h_tokens=MTOK)
+    assert cost == IN_RATE * 2.0
+    input_only = calculate_cost(SONNET, MTOK, 0, 0)
+    assert cost == input_only * 2.0
+
+
 def test_cache_read_still_priced_at_cached_read_rate():
     """Cache-read tokens keep using the cached_read rate, not the write rate."""
     cost = calculate_cost(SONNET, 0, 0, MTOK)
@@ -71,3 +79,14 @@ def test_cache_write_uses_input_rate_even_without_cached_read_config():
     in_rate = 0.59
     write = calculate_cost(model, 0, 0, 0, provider="groq", cache_creation_tokens=MTOK)
     assert write == in_rate * 1.25
+
+if __name__ == "__main__":
+    test_cache_write_priced_at_1_25x_input()
+    test_cache_write_1h_priced_at_2x_input()
+    test_cache_read_still_priced_at_cached_read_rate()
+    test_cache_write_not_priced_at_read_rate_regression()
+    test_backward_compat_default_param_unchanged()
+    test_backward_compat_positional_provider_still_works()
+    test_combined_read_and_write()
+    test_cache_write_uses_input_rate_even_without_cached_read_config()
+    print("All tests passed!")
