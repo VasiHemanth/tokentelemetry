@@ -113,6 +113,7 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - ⚡ **Efficiency Scoring** — 0–100 score per session measuring how productively tokens were spent *(Intelligence Layer)*
 - 🦨 **AI Smell Detection** — rule-based warnings for context rot, loop traps, tool thrash, high error rate, and massive sessions *(Intelligence Layer)*
 - 🔥 **Burn Rate Forecasting** — daily token trends projected to month-end with plan limit alerts *(Intelligence Layer)*
+- 🧬 **Prompt DNA** — correlates prompt structure (file refs, length, vagueness, task type) against efficiency scores to show what makes sessions good or bad *(Intelligence Layer)*
 - 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
@@ -242,17 +243,71 @@ Response:
 
 ---
 
+### 🧬 Prompt DNA
+
+Extracts **10 structural features** from each session's first message and computes Pearson correlation against efficiency scores, revealing which prompt habits make sessions succeed or fail.
+
+**Features extracted per prompt:**
+
+| Feature | Description |
+|---------|-------------|
+| `msg_length` | Character count |
+| `word_count` | Approximate word count |
+| `has_file_ref` | References a file path or @ mention |
+| `has_code_block` | Contains a triple-backtick block |
+| `has_markdown` | Uses `#` headers or `- / *` bullets |
+| `has_numbered_steps` | Uses `1.` / `2.` numbered lists |
+| `has_question` | Prompt ends with `?` |
+| `is_vague` | < 60 chars, no file ref, no code |
+| `is_detailed` | > 300 characters |
+| `has_context_link` | References previous session / last time / continue |
+
+**Task classification:** `fix` · `build` · `refactor` · `analyze` · `test` · `deploy` · `other` (regex-matched, first match wins).
+
+**In the UI:** a **Prompt DNA** card in the right sidebar shows the top 2 positive and top 2 negative correlates with r-values and one-line insights, plus a mini bar chart breaking down average efficiency by task type.
+
+**API:**
+```
+GET /insights/prompt-dna    → full correlation analysis over all sessions
+```
+
+Response:
+```json
+{
+  "sessions_analysed": 14,
+  "sessions_skipped": 24,
+  "correlations": [
+    {
+      "feature": "is_vague",
+      "label": "Vague / short prompt",
+      "r": -0.871,
+      "direction": "negative",
+      "insight": "Sessions with 'vague / short prompt' score 53.6 pts lower on average (13.7 vs 67.3)."
+    }
+  ],
+  "by_task_type": {
+    "other":   { "avg_efficiency": 69.7, "count": 8 },
+    "build":   { "avg_efficiency": 20.6, "count": 4 }
+  },
+  "top_positive": [...],
+  "top_negative": [...]
+}
+```
+
+---
+
 ### Implementation notes
 
-All three features live in three new standalone Python modules — no changes to existing data collection or parsing logic:
+All four features live in standalone Python modules — no changes to existing data collection or parsing logic:
 
 | Module | Responsibility |
 |--------|---------------|
 | `backend/scoring.py` | Efficiency score computation |
 | `backend/smells.py` | Smell rule evaluation |
 | `backend/forecast.py` | Daily bucketing + linear projection |
+| `backend/prompt_analysis.py` | Feature extraction + Pearson correlation |
 
-**No new required dependencies.** Everything uses Python stdlib (`math`, `datetime`, `collections`). Ollama, scipy, numpy — none needed.
+**No new required dependencies.** Everything uses Python stdlib (`math`, `datetime`, `collections`, `re`). Ollama, scipy, numpy — none needed.
 
 Smells and efficiency scores are computed in-memory after the session cache is built, so they add no I/O overhead. Forecast runs over the already-loaded session list.
 
