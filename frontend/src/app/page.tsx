@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
-  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3, GitBranch, GitCommit, Plus, Minus, Brain,
+  Zap, AlertTriangle, Flame, TrendingDown, BarChart3, GitBranch, GitCommit, Plus, Minus, Brain,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -21,10 +21,6 @@ import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
 } from "@/components/ui";
-import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip as ReTooltip, ResponsiveContainer, ReferenceLine, Cell,
-} from "recharts";
 
 interface Smell {
   type: string;
@@ -67,23 +63,6 @@ interface ForecastResponse {
   buckets_30d: Record<string, number>;
 }
 
-interface DnaCorrelation {
-  feature: string;
-  label: string;
-  r: number;
-  direction: "positive" | "negative";
-  insight: string;
-}
-
-interface PromptDnaResponse {
-  sessions_analysed: number;
-  sessions_skipped: number;
-  correlations: DnaCorrelation[];
-  by_task_type: Record<string, { avg_efficiency: number; count: number }>;
-  top_positive: DnaCorrelation[];
-  top_negative: DnaCorrelation[];
-}
-
 interface ModelRow {
   model: string;
   agent: string;
@@ -95,15 +74,6 @@ interface ModelRow {
   total_tokens: number;
   avg_tokens: number;
   task_breakdown: Record<string, { count: number; avg_efficiency: number }>;
-}
-
-interface ModelComparisonResponse {
-  task_type_filter: string | null;
-  models_compared: number;
-  sessions_used: number;
-  sessions_skipped: number;
-  models: ModelRow[];
-  task_types_available: string[];
 }
 
 interface GitInfo {
@@ -129,138 +99,6 @@ interface GitProjectSummary {
   avg_files_per_session: number;
 }
 
-interface GitSummaryResponse {
-  projects: GitProjectSummary[];
-  total_lines_added: number;
-  total_lines_deleted: number;
-  total_files_changed: number;
-  git_sessions: number;
-  non_git_sessions: number;
-}
-
-interface TrendDay {
-  date: string;
-  avg_efficiency: number;
-  session_count: number;
-  total_tokens: number;
-  best: number;
-  worst: number;
-  rolling_7d: number | null;
-}
-
-interface TrendsResponse {
-  days: TrendDay[];
-  trend: "improving" | "steady" | "declining";
-  trend_delta: number;
-  week_over_week: number;
-  overall_avg: number | null;
-  current_streak: number;
-  best_day: { date: string; avg_efficiency: number } | null;
-  worst_day: { date: string; avg_efficiency: number } | null;
-  total_sessions: number;
-  days_with_data: number;
-}
-
-interface TimeHourRow {
-  hour: number;
-  label: string;
-  avg_efficiency: number;
-  session_count: number;
-}
-
-interface TimeDowRow {
-  dow: number;
-  label: string;
-  avg_efficiency: number;
-  session_count: number;
-}
-
-interface TimeIntelResponse {
-  by_hour: TimeHourRow[];
-  by_dow: TimeDowRow[];
-  peak_hour: TimeHourRow | null;
-  worst_hour: TimeHourRow | null;
-  peak_dow: TimeDowRow | null;
-  worst_dow: TimeDowRow | null;
-  peak_period: string;
-  sessions_analysed: number;
-  sessions_skipped: number;
-}
-
-interface ToolSizeBucket {
-  bucket: string;
-  avg_efficiency: number;
-  session_count: number;
-  label: string;
-}
-
-interface ToolRow {
-  tool: string;
-  session_count: number;
-  avg_efficiency: number;
-  category: string;
-}
-
-interface ToolFootprintResponse {
-  by_size: ToolSizeBucket[];
-  by_category_presence: Record<string, {
-    with: { avg: number; n: number } | null;
-    without: { avg: number; n: number } | null;
-  }>;
-  top_tools: ToolRow[];
-  optimal_range: string | null;
-  sessions_analysed: number;
-  sessions_skipped: number;
-}
-
-interface CostModelRow {
-  model: string;
-  agent: string;
-  session_count: number;
-  avg_cost: number;
-  total_cost: number;
-  avg_efficiency: number;
-  cost_per_eff_pt: number | null;
-  avg_cache_hit_pct: number | null;
-}
-
-interface CostTaskRow {
-  task_type: string;
-  session_count: number;
-  avg_cost: number;
-  avg_efficiency: number;
-  cost_per_eff_pt: number | null;
-}
-
-interface CostCacheTier {
-  tier: string;
-  avg_efficiency: number;
-  avg_cost: number;
-  session_count: number;
-}
-
-interface CostWasteful {
-  session_id: string;
-  model: string;
-  cost: number;
-  efficiency: number;
-  task_type: string;
-  waste_score: number;
-}
-
-interface CostIntelResponse {
-  by_model: CostModelRow[];
-  by_task_type: CostTaskRow[];
-  cache_tiers: CostCacheTier[];
-  wasteful: CostWasteful[];
-  best_value_model: string | null;
-  total_cost: number;
-  avg_cost_per_session: number;
-  avg_cache_hit_pct: number | null;
-  sessions_analysed: number;
-  sessions_skipped: number;
-}
-
 interface AnalyticsResponse {
   by_model?: Record<string, { total: number; session_count: number; agent: string }>;
   pricing_updated?: string;
@@ -274,7 +112,6 @@ export default function Home() {
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
   const billingRes   = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
   const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
-  const dnaRes       = useResource<PromptDnaResponse>("/insights/prompt-dna", { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -716,127 +553,6 @@ export default function Home() {
                   {fc.days_until_limit === null && (
                     <div className="text-[10px] text-[var(--tt-fg-faint)]">
                       On track — no limit exceeded at current pace
-                    </div>
-                  )}
-                </div>
-              </Card>
-            );
-          })()}
-
-          {/* Prompt DNA card */}
-          {(() => {
-            const dna = dnaRes.data;
-            if (!dna && dnaRes.loading) return (
-              <Card>
-                <CardHeader>
-                  <CardTitle><Sparkles size={14} className="text-purple-400" />Prompt DNA</CardTitle>
-                </CardHeader>
-                <Skeleton className="h-24 w-full" />
-              </Card>
-            );
-            if (!dna || dna.sessions_analysed < 3) return null;
-            const topPos = dna.top_positive.slice(0, 2);
-            const topNeg = dna.top_negative.slice(0, 2);
-            const taskRows = Object.entries(dna.by_task_type).sort((a, b) => b[1].avg_efficiency - a[1].avg_efficiency);
-            const maxEff = Math.max(...taskRows.map(([, v]) => v.avg_efficiency), 1);
-            return (
-              <Card>
-                <CardHeader>
-                  <CardTitle>
-                    <Sparkles size={14} className="text-purple-400" />
-                    Prompt DNA
-                  </CardTitle>
-                  <CardEyebrow>{dna.sessions_analysed} sessions</CardEyebrow>
-                </CardHeader>
-
-                <div className="space-y-4">
-                  {/* Positive correlates */}
-                  {topPos.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
-                        Boosts efficiency
-                      </div>
-                      <div className="space-y-1.5">
-                        {topPos.map((c) => (
-                          <div
-                            key={c.feature}
-                            className="group relative rounded-md px-2.5 py-2"
-                            style={{ backgroundColor: "#4ade8012", border: "1px solid #4ade8025" }}
-                            title={c.insight}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] text-[#4ade80] font-medium truncate">{c.label}</span>
-                              <span className="text-[10px] tabular font-semibold text-[#4ade80] shrink-0">
-                                r={c.r.toFixed(2)}
-                              </span>
-                            </div>
-                            <div className="mt-1 text-[9px] leading-snug text-[var(--tt-fg-faint)] line-clamp-2">
-                              {c.insight}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Negative correlates */}
-                  {topNeg.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
-                        Hurts efficiency
-                      </div>
-                      <div className="space-y-1.5">
-                        {topNeg.map((c) => (
-                          <div
-                            key={c.feature}
-                            className="group relative rounded-md px-2.5 py-2"
-                            style={{ backgroundColor: "#f8717112", border: "1px solid #f8717125" }}
-                            title={c.insight}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] text-[#f87171] font-medium truncate">{c.label}</span>
-                              <span className="text-[10px] tabular font-semibold text-[#f87171] shrink-0">
-                                r={c.r.toFixed(2)}
-                              </span>
-                            </div>
-                            <div className="mt-1 text-[9px] leading-snug text-[var(--tt-fg-faint)] line-clamp-2">
-                              {c.insight}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Task type breakdown */}
-                  {taskRows.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] mb-2">
-                        By task type
-                      </div>
-                      <div className="space-y-2">
-                        {taskRows.map(([tt, { avg_efficiency, count }]) => {
-                          const pct = (avg_efficiency / maxEff) * 100;
-                          const barColor = avg_efficiency >= 70 ? "#4ade80" : avg_efficiency >= 40 ? "#f59e0b" : "#f87171";
-                          return (
-                            <div key={tt} className="space-y-1">
-                              <div className="flex items-center justify-between text-[10px]">
-                                <span className="capitalize text-[var(--tt-fg-muted)]">{tt}</span>
-                                <span className="tabular text-[var(--tt-fg-faint)]">
-                                  {avg_efficiency.toFixed(0)}
-                                  <span className="text-[var(--tt-fg-dim)]"> / {count}</span>
-                                </span>
-                              </div>
-                              <div className="h-1 rounded-full tt-tint-1 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full transition-[width] duration-500"
-                                  style={{ width: `${pct}%`, backgroundColor: barColor }}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
                     </div>
                   )}
                 </div>
