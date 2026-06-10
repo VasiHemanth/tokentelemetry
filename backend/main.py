@@ -3056,6 +3056,9 @@ from trends import compute_trends
 from time_intel import analyse_time
 from tool_footprint import analyse_tool_footprint
 from cost_intel import analyse_cost
+from anomaly import detect_anomalies
+from recommendations import generate_recommendations
+from project_health import compute_project_health
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3226,6 +3229,42 @@ async def get_trends(days: int = 60, project: Optional[str] = None):
     if project:
         sessions = [s for s in sessions if s.get("project") == project]
     return compute_trends(sessions, days=days)
+
+
+@app.get("/insights/anomalies")
+async def get_anomalies(project: Optional[str] = None):
+    """
+    Anomaly detection: sessions that are statistical outliers in cost,
+    efficiency, or token usage. Uses z-scores with configurable thresholds.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return detect_anomalies(sessions)
+
+
+@app.get("/insights/recommendations")
+async def get_recommendations(project: Optional[str] = None):
+    """
+    AI recommendations: cross-module actionable insights synthesising
+    cost, timing, prompt DNA, tool footprint, trends, and smell patterns.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return generate_recommendations(sessions)
+
+
+@app.get("/insights/project-health")
+async def get_project_health(project: Optional[str] = None):
+    """
+    Project health scores: per-project composite 0–100 score (A–F grade)
+    combining efficiency, smell rate, recent trend, and cost value.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compute_project_health(sessions)
 
 
 @app.get("/insights/cost")

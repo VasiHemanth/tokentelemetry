@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
-  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3, GitBranch, GitCommit, Plus, Minus,
+  Zap, AlertTriangle, Flame, TrendingDown, Sparkles, BarChart3, GitBranch, GitCommit, Plus, Minus, Brain,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -275,12 +275,6 @@ export default function Home() {
   const billingRes   = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
   const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
   const dnaRes       = useResource<PromptDnaResponse>("/insights/prompt-dna", { pollMs: 120_000 });
-  const gitRes       = useResource<GitSummaryResponse>("/insights/git-summary", { pollMs: 60_000 });
-  const [trendsDays, setTrendsDays] = useState<30 | 60>(30);
-  const trendsRes    = useResource<TrendsResponse>(`/insights/trends?days=${trendsDays}`, { pollMs: 120_000 });
-  const timeRes      = useResource<TimeIntelResponse>("/insights/time", { pollMs: 120_000 });
-  const toolRes      = useResource<ToolFootprintResponse>("/insights/tool-footprint", { pollMs: 120_000 });
-  const costRes      = useResource<CostIntelResponse>("/insights/cost", { pollMs: 120_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -311,19 +305,6 @@ export default function Home() {
     return () => window.removeEventListener("storage", check);
   }, []);
 
-  const [modelTaskFilter, setModelTaskFilter] = useState<string>("all");
-  const [modelComparison, setModelComparison] = useState<ModelComparisonResponse | null>(null);
-  const [modelCompLoading, setModelCompLoading] = useState(true);
-  useEffect(() => {
-    setModelCompLoading(true);
-    const url = modelTaskFilter === "all"
-      ? "/insights/model-comparison"
-      : `/insights/model-comparison?task_type=${modelTaskFilter}`;
-    fetch(`http://localhost:8000${url}`)
-      .then((r) => r.json())
-      .then((d) => { setModelComparison(d); setModelCompLoading(false); })
-      .catch(() => setModelCompLoading(false));
-  }, [modelTaskFilter]);
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -898,760 +879,8 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Model Comparison ─────────────────────────────────────── */}
-      {(modelComparison?.models_compared ?? 0) > 0 && (
-        <Section
-          title="Model comparison"
-          description="Efficiency breakdown across models — how productively each model converts tokens into output."
-        >
-          <Card padding="none" className="overflow-hidden">
-            {/* Filter pills */}
-            <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--tt-border)] overflow-x-auto">
-              <BarChart3 size={12} className="text-[var(--tt-brand)] shrink-0" />
-              <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-faint)] shrink-0 mr-1">
-                Task type
-              </span>
-              {["all", ...(modelComparison?.task_types_available ?? [])].map((tt) => (
-                <button
-                  key={tt}
-                  onClick={() => setModelTaskFilter(tt)}
-                  className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium capitalize transition-colors"
-                  style={{
-                    backgroundColor: modelTaskFilter === tt
-                      ? "var(--tt-brand)"
-                      : "var(--tt-tint-1, rgba(255,255,255,0.05))",
-                    color: modelTaskFilter === tt
-                      ? "white"
-                      : "var(--tt-fg-muted)",
-                    border: `1px solid ${modelTaskFilter === tt ? "var(--tt-brand)" : "var(--tt-border)"}`,
-                  }}
-                >
-                  {tt}
-                </button>
-              ))}
-              <span className="ml-auto text-[10px] text-[var(--tt-fg-faint)] whitespace-nowrap shrink-0">
-                {modelComparison?.sessions_used ?? 0} sessions
-              </span>
-            </div>
-
-            {/* Model rows */}
-            {modelCompLoading ? (
-              <div className="p-5 space-y-4">
-                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full" />)}
-              </div>
-            ) : (modelComparison?.models ?? []).length === 0 ? (
-              <div className="py-10 text-center text-[12px] text-[var(--tt-fg-faint)]">
-                No sessions match this filter.
-              </div>
-            ) : (
-              <div className="divide-y divide-[var(--tt-border)]">
-                {(modelComparison?.models ?? []).map((m, rank) => {
-                  const meta = getAgent(m.agent);
-                  const effColor =
-                    m.avg_efficiency >= 70 ? "#22c55e" :
-                    m.avg_efficiency >= 40 ? "#f59e0b" : "#ef4444";
-                  const bestInSet = modelComparison!.models[0].avg_efficiency || 1;
-                  const barPct = (m.avg_efficiency / bestInSet) * 100;
-                  const p75Pct = (m.p75_efficiency / bestInSet) * 100;
-                  return (
-                    <div key={m.model} className="px-5 py-4 flex items-center gap-4 hover:bg-[var(--tt-sunken)] transition-colors">
-                      {/* Rank */}
-                      <span
-                        className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold shrink-0"
-                        style={{
-                          backgroundColor: rank === 0 ? `${meta.hex}22` : "var(--tt-tint-1,rgba(255,255,255,0.05))",
-                          color: rank === 0 ? meta.hex : "var(--tt-fg-faint)",
-                        }}
-                      >
-                        {rank + 1}
-                      </span>
-
-                      {/* Model name + agent */}
-                      <div className="min-w-0 w-44 shrink-0">
-                        <div className="font-mono text-[12px] text-[var(--tt-fg)] truncate" title={m.model}>
-                          {m.model}
-                        </div>
-                        <div
-                          className="text-[10px] uppercase tracking-[0.14em] mt-0.5"
-                          style={{ color: meta.hex }}
-                        >
-                          {m.agent}
-                        </div>
-                      </div>
-
-                      {/* Bars */}
-                      <div className="flex-1 min-w-0 space-y-1.5">
-                        {/* Avg bar */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)] w-6 shrink-0">avg</span>
-                          <div className="flex-1 h-2 rounded-full tt-tint-1 overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-[width] duration-700"
-                              style={{ width: `${barPct}%`, backgroundColor: effColor }}
-                            />
-                          </div>
-                          <span
-                            className="text-[11px] font-semibold tabular shrink-0 w-8 text-right"
-                            style={{ color: effColor }}
-                          >
-                            {m.avg_efficiency}
-                          </span>
-                        </div>
-                        {/* P75 bar */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)] w-6 shrink-0">p75</span>
-                          <div className="flex-1 h-1 rounded-full tt-tint-1 overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-[width] duration-700"
-                              style={{ width: `${p75Pct}%`, backgroundColor: `${effColor}88` }}
-                            />
-                          </div>
-                          <span className="text-[10px] tabular text-[var(--tt-fg-faint)] shrink-0 w-8 text-right">
-                            {m.p75_efficiency}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Stats */}
-                      <div className="flex items-center gap-4 shrink-0 ml-2">
-                        <div className="text-center hidden sm:block">
-                          <div className="text-[11px] font-semibold tabular text-[var(--tt-fg)]">
-                            {m.best_efficiency}
-                          </div>
-                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">best</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-[11px] tabular text-[var(--tt-fg-muted)]">
-                            {m.session_count}
-                          </div>
-                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">sess</div>
-                        </div>
-                        <div className="text-center hidden md:block">
-                          <div className="text-[11px] tabular text-[var(--tt-fg-muted)]">
-                            {(m.avg_tokens / 1_000).toFixed(0)}k
-                          </div>
-                          <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-faint)]">avg tok</div>
-                        </div>
-                        {/* Task breakdown pills */}
-                        <div className="hidden lg:flex items-center gap-1 flex-wrap max-w-[180px]">
-                          {Object.entries(m.task_breakdown)
-                            .sort((a, b) => b[1].count - a[1].count)
-                            .slice(0, 3)
-                            .map(([tt, { count, avg_efficiency: te }]) => {
-                              const tc = te >= 70 ? "#22c55e" : te >= 40 ? "#f59e0b" : "#ef4444";
-                              return (
-                                <span
-                                  key={tt}
-                                  title={`${tt}: ${te} avg efficiency (${count} sessions)`}
-                                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium capitalize"
-                                  style={{
-                                    backgroundColor: `${tc}12`,
-                                    color: tc,
-                                    border: `1px solid ${tc}30`,
-                                  }}
-                                >
-                                  {tt}
-                                  <span className="opacity-70">{count}</span>
-                                </span>
-                              );
-                            })}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </Section>
-      )}
-      {/* ── Session Trends ────────────────────────────────────── */}
-      {(trendsRes.data?.days_with_data ?? 0) >= 2 && (() => {
-        const td = trendsRes.data!;
-        const trendColor = td.trend === "improving" ? "#4ade80" : td.trend === "declining" ? "#f87171" : "#facc15";
-        const trendIcon = td.trend === "improving" ? "↑" : td.trend === "declining" ? "↓" : "→";
-        const formatDate = (d: string) => {
-          const dt = new Date(d + "T12:00:00Z");
-          return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        };
-        const barColor = (val: number) =>
-          val >= 70 ? "#4ade80" : val >= 40 ? "#facc15" : "#f87171";
-
-        return (
-          <Section
-            title="Session trends"
-            description={`Efficiency over the last ${trendsDays} days · ${td.days_with_data} active days · ${td.total_sessions} sessions`}
-          >
-            <Card className="space-y-4">
-              {/* Header row: trend badge + stats chips + day toggle */}
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Trend badge */}
-                <div
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold"
-                  style={{ background: trendColor + "22", color: trendColor, border: `1px solid ${trendColor}44` }}
-                >
-                  <span className="text-sm leading-none">{trendIcon}</span>
-                  <span className="capitalize">{td.trend}</span>
-                  {Math.abs(td.trend_delta) >= 1 && (
-                    <span className="opacity-80 font-mono">
-                      {td.trend_delta > 0 ? "+" : ""}{td.trend_delta.toFixed(1)} pts WoW
-                    </span>
-                  )}
-                </div>
-
-                {/* Overall avg chip */}
-                {td.overall_avg !== null && (
-                  <div className="text-xs text-[var(--tt-fg-muted)] px-2 py-1 rounded bg-[var(--tt-surface-raised)]">
-                    Avg <span className="font-semibold text-[var(--tt-fg)]">{td.overall_avg.toFixed(1)}</span>
-                  </div>
-                )}
-
-                {/* Streak chip */}
-                {td.current_streak >= 2 && (
-                  <div className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-[var(--tt-surface-raised)] text-amber-400">
-                    <Flame size={11} />
-                    <span className="font-semibold">{td.current_streak}d</span>
-                    <span className="text-[var(--tt-fg-faint)]">streak</span>
-                  </div>
-                )}
-
-                {/* Best day chip */}
-                {td.best_day && (
-                  <div className="text-xs text-[var(--tt-fg-muted)] px-2 py-1 rounded bg-[var(--tt-surface-raised)]">
-                    Best <span className="font-semibold text-emerald-400">{td.best_day.avg_efficiency.toFixed(1)}</span>
-                    <span className="ml-1 text-[var(--tt-fg-faint)]">on {formatDate(td.best_day.date)}</span>
-                  </div>
-                )}
-
-                {/* Day range toggle */}
-                <div className="ml-auto flex items-center gap-1 text-xs">
-                  {([30, 60] as const).map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => setTrendsDays(n)}
-                      className="px-2.5 py-1 rounded transition-colors"
-                      style={{
-                        background: trendsDays === n ? "var(--tt-brand)" : "var(--tt-surface-raised)",
-                        color: trendsDays === n ? "var(--tt-bg)" : "var(--tt-fg-muted)",
-                        fontWeight: trendsDays === n ? 600 : 400,
-                      }}
-                    >
-                      {n}d
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Chart */}
-              <div style={{ height: 200 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={td.days} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
-                    <XAxis
-                      dataKey="date"
-                      tickFormatter={formatDate}
-                      tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }}
-                      tickLine={false}
-                      axisLine={false}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }}
-                      tickLine={false}
-                      axisLine={false}
-                      tickCount={5}
-                    />
-                    <ReTooltip
-                      contentStyle={{
-                        background: "var(--tt-surface)",
-                        border: "1px solid var(--tt-border)",
-                        borderRadius: 8,
-                        fontSize: 12,
-                        color: "var(--tt-fg)",
-                      }}
-                      labelFormatter={(l) => formatDate(String(l))}
-                      formatter={(value, name) => {
-                        const v = typeof value === "number" ? value.toFixed(1) : String(value);
-                        if (name === "avg_efficiency") return [v, "Avg efficiency"];
-                        if (name === "rolling_7d") return [v, "7d rolling avg"];
-                        return [v, String(name)];
-                      }}
-                    />
-                    {/* 60pt "good" threshold line */}
-                    <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.5} />
-                    <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={32}>
-                      {td.days.map((day) => (
-                        <Cell key={day.date} fill={barColor(day.avg_efficiency)} fillOpacity={0.85} />
-                      ))}
-                    </Bar>
-                    <Line
-                      type="monotone"
-                      dataKey="rolling_7d"
-                      stroke="var(--tt-brand)"
-                      strokeWidth={2}
-                      dot={false}
-                      connectNulls
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Legend */}
-              <div className="flex items-center gap-4 text-[10px] text-[var(--tt-fg-faint)]">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-emerald-400 opacity-85" />
-                  Good (≥70)
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-yellow-400 opacity-85" />
-                  Fair (40–69)
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-red-400 opacity-85" />
-                  Poor (&lt;40)
-                </div>
-                <div className="flex items-center gap-1.5 ml-2">
-                  <div className="w-6 h-0.5 rounded" style={{ background: "var(--tt-brand)" }} />
-                  7d rolling avg
-                </div>
-              </div>
-            </Card>
-          </Section>
-        );
-      })()}
-
-      {/* ── Git Activity ──────────────────────────────────────── */}
-      {(gitRes.data?.git_sessions ?? 0) > 0 && (
-        <Section
-          title="Repository activity"
-          description={`${gitRes.data!.git_sessions} git-tracked sessions · +${gitRes.data!.total_lines_added.toLocaleString()} / −${gitRes.data!.total_lines_deleted.toLocaleString()} lines across ${gitRes.data!.projects.length} repos`}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {gitRes.data!.projects.filter(p => p.session_count > 0).map((p) => {
-              const projName = p.project.split(/[/\\]/).pop() || p.project;
-              const hasStats = p.total_lines_added > 0 || p.total_lines_deleted > 0;
-              const netColor = p.net_lines > 0 ? "#4ade80" : p.net_lines < 0 ? "#f87171" : "var(--tt-fg-faint)";
-              return (
-                <Card key={p.project} className="space-y-3">
-                  {/* Header */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-mono text-[12px] font-semibold text-[var(--tt-fg)] truncate" title={p.project}>
-                        {projName}
-                      </div>
-                      {p.branch && (
-                        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-[var(--tt-fg-faint)]">
-                          <GitBranch size={9} />
-                          <span className="truncate">{p.branch}</span>
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-[10px] tabular text-[var(--tt-fg-dim)] whitespace-nowrap shrink-0">
-                      {p.session_count} sess
-                    </span>
-                  </div>
-
-                  {/* Latest commit */}
-                  {p.latest_commit_sha && (
-                    <div className="flex items-start gap-1.5">
-                      <GitCommit size={10} className="text-[var(--tt-fg-faint)] mt-0.5 shrink-0" />
-                      <div className="min-w-0">
-                        <span className="font-mono text-[10px] text-[var(--tt-brand)]">{p.latest_commit_sha}</span>
-                        <span className="ml-1.5 text-[10px] text-[var(--tt-fg-muted)] truncate block" title={p.latest_commit_msg ?? ""}>
-                          {p.latest_commit_msg}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Line stats */}
-                  {hasStats && (
-                    <div className="flex items-center gap-3 pt-1 border-t border-[var(--tt-border)]">
-                      <div className="flex items-center gap-1 text-[10px] text-emerald-400">
-                        <Plus size={9} />
-                        <span className="tabular">{p.total_lines_added.toLocaleString()}</span>
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px] text-red-400">
-                        <Minus size={9} />
-                        <span className="tabular">{p.total_lines_deleted.toLocaleString()}</span>
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px]" style={{ color: netColor }}>
-                        <span className="tabular font-medium">
-                          {p.net_lines > 0 ? "+" : ""}{p.net_lines.toLocaleString()} net
-                        </span>
-                      </div>
-                      <div className="ml-auto text-[10px] text-[var(--tt-fg-faint)] tabular">
-                        {p.total_files_changed} files
-                      </div>
-                    </div>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
-        </Section>
-      )}
-      {/* ── Time Intelligence ─────────────────────────────────── */}
-      {(timeRes.data?.sessions_analysed ?? 0) >= 3 && (() => {
-        const ti = timeRes.data!;
-        const barColor = (v: number) => v >= 70 ? "#4ade80" : v >= 40 ? "#facc15" : "#f87171";
-        const periodEmoji: Record<string, string> = {
-          morning: "🌅", afternoon: "☀️", evening: "🌆", night: "🌙",
-        };
-
-        return (
-          <Section
-            title="Time intelligence"
-            description={`When you code best · ${ti.sessions_analysed} sessions analysed`}
-          >
-            {/* Stats strip */}
-            <div className="flex flex-wrap gap-3 mb-4">
-              {ti.peak_hour && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                  <span className="text-emerald-400 font-semibold">Peak hour</span>
-                  <span className="text-[var(--tt-fg)] font-mono">{ti.peak_hour.label}</span>
-                  <span className="text-[var(--tt-fg-faint)]">{ti.peak_hour.avg_efficiency.toFixed(1)} avg</span>
-                </div>
-              )}
-              {ti.peak_dow && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                  <span className="text-emerald-400 font-semibold">Peak day</span>
-                  <span className="text-[var(--tt-fg)] font-mono">{ti.peak_dow.label}</span>
-                  <span className="text-[var(--tt-fg-faint)]">{ti.peak_dow.avg_efficiency.toFixed(1)} avg</span>
-                </div>
-              )}
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                <span className="text-[var(--tt-fg-muted)]">Best period</span>
-                <span className="text-[var(--tt-fg)] font-semibold capitalize">
-                  {periodEmoji[ti.peak_period] ?? ""} {ti.peak_period}
-                </span>
-              </div>
-              {ti.worst_hour && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                  <span className="text-red-400 font-semibold">Avoid</span>
-                  <span className="text-[var(--tt-fg)] font-mono">{ti.worst_hour.label}</span>
-                  <span className="text-[var(--tt-fg-faint)]">{ti.worst_hour.avg_efficiency.toFixed(1)} avg</span>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* By hour of day */}
-              <Card className="space-y-2">
-                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">By hour of day</div>
-                <div style={{ height: 180 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={ti.by_hour} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
-                      <XAxis
-                        dataKey="label"
-                        tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }}
-                        tickLine={false}
-                        axisLine={false}
-                        interval={0}
-                        angle={-45}
-                        textAnchor="end"
-                        height={36}
-                      />
-                      <YAxis domain={[0, 100]} tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }} tickLine={false} axisLine={false} tickCount={4} />
-                      <ReTooltip
-                        contentStyle={{ background: "var(--tt-surface)", border: "1px solid var(--tt-border)", borderRadius: 8, fontSize: 11, color: "var(--tt-fg)" }}
-                        formatter={(v, n) => [typeof v === "number" ? v.toFixed(1) : v, n === "avg_efficiency" ? "Avg efficiency" : String(n)]}
-                      />
-                      <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
-                      <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={28}>
-                        {ti.by_hour.map((row) => (
-                          <Cell key={row.hour} fill={barColor(row.avg_efficiency)} fillOpacity={0.85} />
-                        ))}
-                      </Bar>
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-
-              {/* By day of week */}
-              <Card className="space-y-2">
-                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">By day of week</div>
-                <div style={{ height: 180 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={ti.by_dow} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--tt-border)" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fill: "var(--tt-fg-faint)", fontSize: 10 }} tickLine={false} axisLine={false} />
-                      <YAxis domain={[0, 100]} tick={{ fill: "var(--tt-fg-faint)", fontSize: 9 }} tickLine={false} axisLine={false} tickCount={4} />
-                      <ReTooltip
-                        contentStyle={{ background: "var(--tt-surface)", border: "1px solid var(--tt-border)", borderRadius: 8, fontSize: 11, color: "var(--tt-fg)" }}
-                        formatter={(v, n) => [typeof v === "number" ? v.toFixed(1) : v, n === "avg_efficiency" ? "Avg efficiency" : String(n)]}
-                      />
-                      <ReferenceLine y={60} stroke="var(--tt-fg-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
-                      <Bar dataKey="avg_efficiency" radius={[3, 3, 0, 0]} maxBarSize={40}>
-                        {ti.by_dow.map((row) => (
-                          <Cell key={row.dow} fill={barColor(row.avg_efficiency)} fillOpacity={0.85} />
-                        ))}
-                      </Bar>
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-            </div>
-          </Section>
-        );
-      })()}
-
-      {/* ── Tool Footprint ────────────────────────────────────── */}
-      {(toolRes.data?.sessions_analysed ?? 0) >= 3 && (() => {
-        const tf = toolRes.data!;
-        const sizeColor: Record<string, string> = {
-          lean: "#4ade80", standard: "#60a5fa", heavy: "#facc15", bloated: "#f87171",
-        };
-        const catColor: Record<string, string> = {
-          core: "#4ade80", agent: "#a78bfa", browser: "#60a5fa", mcp: "#fb923c", meta: "#94a3b8",
-        };
-        const shortTool = (t: string) => {
-          if (t.startsWith("mcp__")) {
-            const parts = t.split("__");
-            return parts[parts.length - 1].replace(/_/g, " ");
-          }
-          return t;
-        };
-
-        return (
-          <Section
-            title="Tool footprint"
-            description={`How toolset size and composition affect efficiency · ${tf.sessions_analysed} sessions`}
-          >
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* By toolset size */}
-              <Card className="space-y-3">
-                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
-                  Efficiency by toolset size
-                  {tf.optimal_range && (
-                    <span className="ml-2 normal-case font-normal text-[var(--tt-fg-faint)]">
-                      · optimal: <span className="font-semibold text-[var(--tt-fg)]">{tf.optimal_range} tools</span>
-                    </span>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  {tf.by_size.map((b) => (
-                    <div key={b.bucket} className="flex items-center gap-2">
-                      <div className="w-16 text-[11px] text-[var(--tt-fg-muted)] tabular shrink-0">{b.bucket}</div>
-                      <div className="flex-1 h-5 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
-                        <div
-                          className="h-full rounded transition-all"
-                          style={{
-                            width: `${b.avg_efficiency}%`,
-                            background: sizeColor[b.label] ?? "#60a5fa",
-                            opacity: 0.8,
-                          }}
-                        />
-                      </div>
-                      <div className="w-10 text-right text-[11px] font-mono text-[var(--tt-fg)] tabular shrink-0">
-                        {b.avg_efficiency.toFixed(1)}
-                      </div>
-                      <div className="w-8 text-right text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">
-                        {b.session_count}s
-                      </div>
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded-full capitalize shrink-0"
-                        style={{ background: (sizeColor[b.label] ?? "#60a5fa") + "22", color: sizeColor[b.label] ?? "#60a5fa" }}
-                      >
-                        {b.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Top tools */}
-              <Card className="space-y-3">
-                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">Top tools by frequency</div>
-                <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 220 }}>
-                  {tf.top_tools.map((t, i) => (
-                    <div key={t.tool} className="flex items-center gap-2 py-1 border-b border-[var(--tt-border)] last:border-0">
-                      <span className="text-[10px] text-[var(--tt-fg-faint)] w-4 tabular shrink-0">{i + 1}</span>
-                      <span
-                        className="text-[10px] px-1 py-0.5 rounded shrink-0 capitalize"
-                        style={{ background: (catColor[t.category] ?? "#94a3b8") + "22", color: catColor[t.category] ?? "#94a3b8" }}
-                      >
-                        {t.category}
-                      </span>
-                      <span className="text-[11px] text-[var(--tt-fg)] truncate flex-1 font-mono" title={t.tool}>
-                        {shortTool(t.tool)}
-                      </span>
-                      <span className="text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">{t.session_count}s</span>
-                      <span
-                        className="text-[10px] font-mono tabular shrink-0 w-10 text-right"
-                        style={{ color: t.avg_efficiency >= 70 ? "#4ade80" : t.avg_efficiency >= 40 ? "#facc15" : "#f87171" }}
-                      >
-                        {t.avg_efficiency.toFixed(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            </div>
-          </Section>
-        );
-      })()}
-
-      {/* ── Cost Intelligence ─────────────────────────────────── */}
-      {(costRes.data?.sessions_analysed ?? 0) >= 2 && (() => {
-        const ci = costRes.data!;
-
-        const fmtCost = (v: number) =>
-          v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
-
-        const fmtCpp = (v: number | null) => {
-          if (v === null) return "—";
-          if (v < 0.01) return `$${v.toFixed(5)}/pt`;
-          return `$${v.toFixed(3)}/pt`;
-        };
-
-        const effColor = (v: number) =>
-          v >= 70 ? "#4ade80" : v >= 40 ? "#facc15" : "#f87171";
-
-        // max cpp for bar scaling
-        const maxCpp = Math.max(
-          ...ci.by_model.filter(r => r.cost_per_eff_pt !== null).map(r => r.cost_per_eff_pt as number),
-          0.001,
-        );
-
-        return (
-          <Section
-            title="Cost intelligence"
-            description={`${fmtCost(ci.total_cost)} total spend · ${ci.sessions_analysed} sessions · ${ci.avg_cache_hit_pct?.toFixed(0) ?? "—"}% avg cache hit`}
-          >
-            {/* Stats strip */}
-            <div className="flex flex-wrap gap-3 mb-4">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                <DollarSign size={12} className="text-emerald-400" />
-                <span className="text-[var(--tt-fg-muted)]">Total spend</span>
-                <span className="font-semibold text-[var(--tt-fg)]">{fmtCost(ci.total_cost)}</span>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                <span className="text-[var(--tt-fg-muted)]">Avg / session</span>
-                <span className="font-semibold text-[var(--tt-fg)]">{fmtCost(ci.avg_cost_per_session)}</span>
-              </div>
-              {ci.best_value_model && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                  <span className="text-emerald-400 font-semibold">Best value</span>
-                  <span className="font-mono text-[var(--tt-fg)]">{ci.best_value_model}</span>
-                </div>
-              )}
-              {ci.avg_cache_hit_pct !== null && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--tt-surface-raised)] text-xs">
-                  <span className="text-[var(--tt-fg-muted)]">Cache hit</span>
-                  <span className="font-semibold text-[var(--tt-fg)]">{ci.avg_cache_hit_pct.toFixed(0)}%</span>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* By model — cost per efficiency point */}
-              <Card className="space-y-3">
-                <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
-                  Cost per efficiency point <span className="normal-case font-normal text-[var(--tt-fg-faint)]">(lower = better value)</span>
-                </div>
-                <div className="space-y-2.5">
-                  {ci.by_model.map((m) => (
-                    <div key={m.model} className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-mono text-[11px] text-[var(--tt-fg)] truncate">{m.model}</span>
-                          <span className="text-[10px] text-[var(--tt-fg-faint)]">×{m.session_count}</span>
-                        </div>
-                        <div className="flex items-center gap-3 shrink-0 ml-2">
-                          <span className="text-[10px]" style={{ color: effColor(m.avg_efficiency) }}>
-                            {m.avg_efficiency.toFixed(1)} eff
-                          </span>
-                          <span className="text-[11px] font-mono text-[var(--tt-fg-muted)] tabular">
-                            {fmtCpp(m.cost_per_eff_pt)}
-                          </span>
-                        </div>
-                      </div>
-                      {m.cost_per_eff_pt !== null && (
-                        <div className="h-1.5 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
-                          <div
-                            className="h-full rounded"
-                            style={{
-                              width: `${Math.min((m.cost_per_eff_pt / maxCpp) * 100, 100)}%`,
-                              background: m.cost_per_eff_pt / maxCpp < 0.3
-                                ? "#4ade80"
-                                : m.cost_per_eff_pt / maxCpp < 0.7
-                                ? "#facc15"
-                                : "#f87171",
-                              opacity: 0.8,
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Right column: cache tiers + wasteful */}
-              <div className="space-y-4">
-                {/* Cache tier analysis */}
-                {ci.cache_tiers.length >= 2 && (
-                  <Card className="space-y-3">
-                    <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide">
-                      Cache hit rate vs efficiency
-                    </div>
-                    <div className="space-y-1.5">
-                      {ci.cache_tiers.map((t) => (
-                        <div key={t.tier} className="flex items-center gap-2">
-                          <div className="w-16 text-[10px] text-[var(--tt-fg-faint)] tabular shrink-0">{t.tier}</div>
-                          <div className="flex-1 h-4 bg-[var(--tt-surface-raised)] rounded overflow-hidden">
-                            <div
-                              className="h-full rounded"
-                              style={{
-                                width: `${t.avg_efficiency}%`,
-                                background: effColor(t.avg_efficiency),
-                                opacity: 0.75,
-                              }}
-                            />
-                          </div>
-                          <span className="text-[11px] font-mono w-8 text-right tabular" style={{ color: effColor(t.avg_efficiency) }}>
-                            {t.avg_efficiency.toFixed(0)}
-                          </span>
-                          <span className="text-[10px] text-[var(--tt-fg-faint)] w-14 text-right tabular shrink-0">
-                            {fmtCost(t.avg_cost)}
-                          </span>
-                          <span className="text-[10px] text-[var(--tt-fg-faint)] shrink-0">×{t.session_count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                )}
-
-                {/* Wasteful sessions */}
-                {ci.wasteful.length > 0 && (
-                  <Card className="space-y-3">
-                    <div className="text-xs font-semibold text-[var(--tt-fg-dim)] uppercase tracking-wide flex items-center gap-1.5">
-                      <AlertTriangle size={11} className="text-red-400" />
-                      Expensive flops
-                      <span className="normal-case font-normal text-[var(--tt-fg-faint)]">high cost, low efficiency</span>
-                    </div>
-                    <div className="space-y-2">
-                      {ci.wasteful.map((w) => (
-                        <div key={w.session_id} className="flex items-center gap-2 py-1 border-b border-[var(--tt-border)] last:border-0">
-                          <span className="font-mono text-[10px] text-[var(--tt-fg-faint)] shrink-0">{w.session_id.slice(0, 8)}</span>
-                          <span className="font-mono text-[10px] text-[var(--tt-fg)] truncate flex-1">{w.model}</span>
-                          <span className="text-[11px] font-mono text-red-400 tabular shrink-0">{fmtCost(w.cost)}</span>
-                          <span className="text-[10px] tabular shrink-0" style={{ color: effColor(w.efficiency) }}>
-                            {w.efficiency.toFixed(1)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                )}
-              </div>
-            </div>
-          </Section>
-        );
-      })()}
+      {/* ── Intelligence Snapshot ────────────────────────────────── */}
+      <IntelligenceSnapshot />
     </div>
   );
 }
@@ -1668,6 +897,75 @@ function ActivityLoading() {
         </div>
       ))}
     </div>
+  );
+}
+
+// ── Intelligence Snapshot ─────────────────────────────────────────────────────
+
+interface SnapRec { total: number; high_count: number; }
+interface SnapHealth { healthy_projects: number; at_risk_projects: number; total_projects: number; }
+interface SnapAnomaly { total_anomalies: number; }
+
+function IntelligenceSnapshot() {
+  const recRes    = useResource<SnapRec>("/insights/recommendations", { pollMs: 120_000 });
+  const healthRes = useResource<SnapHealth>("/insights/project-health", { pollMs: 120_000 });
+  const anomalyRes = useResource<SnapAnomaly>("/insights/anomalies", { pollMs: 60_000 });
+
+  const recs    = recRes.data;
+  const health  = healthRes.data;
+  const anomaly = anomalyRes.data;
+
+  if (!recs && !health && !anomaly) return null;
+
+  return (
+    <Section title="Intelligence" description="Cross-session analytics and recommendations">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-5 rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface-raised)]">
+        <div className="flex flex-wrap gap-6 flex-1">
+          {recs && recs.total > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-[var(--tt-brand)]/10 flex items-center justify-center">
+                <Brain size={15} className="text-[var(--tt-brand)]" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{recs.total} recommendations</div>
+                {recs.high_count > 0 && (
+                  <div className="text-[11px] text-red-400">{recs.high_count} high priority</div>
+                )}
+              </div>
+            </div>
+          )}
+          {health && health.total_projects > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-emerald-400/10 flex items-center justify-center">
+                <Activity size={15} className="text-emerald-400" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{health.healthy_projects}/{health.total_projects} projects healthy</div>
+                {health.at_risk_projects > 0 && (
+                  <div className="text-[11px] text-red-400">{health.at_risk_projects} at risk</div>
+                )}
+              </div>
+            </div>
+          )}
+          {anomaly && anomaly.total_anomalies > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-yellow-400/10 flex items-center justify-center">
+                <AlertTriangle size={15} className="text-yellow-400" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{anomaly.total_anomalies} anomalies</div>
+                <div className="text-[11px] text-[var(--tt-fg-faint)]">detected this cycle</div>
+              </div>
+            </div>
+          )}
+        </div>
+        <Link href="/intelligence">
+          <Button variant="secondary" size="md">
+            View Intelligence <ArrowUpRight size={14} />
+          </Button>
+        </Link>
+      </div>
+    </Section>
   );
 }
 
