@@ -111,10 +111,10 @@ def generate_recommendations(sessions: list[dict]) -> dict:
             else:
                 impact_str = f"+{eff_gain:.0f} pts efficiency"
             add("cost_model_switch", "cost", "high",
-                f"Replace {worst['model']} — {ratio:.0f}× worse value",
-                f"{worst['model']} costs ${worst['cost_per_eff_pt']:.3f}/eff-pt vs "
-                f"${best['cost_per_eff_pt']:.3f}/eff-pt for {best['model']}. "
-                f"Switch for similar tasks to gain ~{eff_gain:.0f} pts efficiency per session.",
+                f"{worst['model']} gives {ratio:.0f}× less output for the same cost — switch to {best['model']}",
+                f"{worst['model']} costs ${worst['cost_per_eff_pt']:.3f} per quality point vs "
+                f"${best['cost_per_eff_pt']:.3f} for {best['model']}. "
+                f"Switching models for similar tasks could improve your quality score by ~{eff_gain:.0f} points.",
                 impact=impact_str)
 
     wasteful = cost_data.get("wasteful", [])
@@ -122,10 +122,10 @@ def generate_recommendations(sessions: list[dict]) -> dict:
         models_wasted = list({w["model"] for w in wasteful[:3]})
         total_wasted  = sum(w["cost"] for w in wasteful[:5])
         add("cost_wasteful", "cost", "high" if total_wasted > 20 else "medium",
-            f"${total_wasted:.2f} spent on low-efficiency sessions",
-            f"Your top 5 expensive flops (avg efficiency {sum(w['efficiency'] for w in wasteful[:5])/5:.1f}) "
-            f"cost ${total_wasted:.2f} total. "
-            f"Review what went wrong in these {', '.join(models_wasted[:2])} sessions.",
+            f"${total_wasted:.2f} spent on sessions that got poor results",
+            f"Your top 5 most expensive sessions had an average quality score of only {sum(w['efficiency'] for w in wasteful[:5])/5:.0f}/100, "
+            f"costing ${total_wasted:.2f} total. "
+            f"Review what went wrong in these {', '.join(models_wasted[:2])} sessions to avoid repeating it.",
             impact=f"Recover ~${total_wasted:.2f}")
 
     cache_tiers = cost_data.get("cache_tiers", [])
@@ -133,10 +133,10 @@ def generate_recommendations(sessions: list[dict]) -> dict:
     low_cache   = next((t for t in cache_tiers if "0–20" in t["tier"] or "0-20" in t["tier"]), None)
     if high_cache and low_cache and low_cache["avg_efficiency"] > high_cache["avg_efficiency"] + 15:
         add("cost_cache_insight", "cost", "low",
-            "Low-cache sessions score higher — they're your deep work",
-            f"Sessions with 0–20% cache hit average {low_cache['avg_efficiency']:.0f} efficiency "
-            f"vs {high_cache['avg_efficiency']:.0f} for 80–100% cached. "
-            f"High-cache sessions are likely quick edits — optimise deep work sessions for quality.",
+            "Fresh-start sessions do better quality work — they're your deep focus tasks",
+            f"Sessions where the AI starts fresh (little memory reuse) average {low_cache['avg_efficiency']:.0f}/100 quality "
+            f"vs {high_cache['avg_efficiency']:.0f}/100 for heavily cached sessions. "
+            f"High-cache sessions are likely quick edits — save important tasks for fresh sessions.",
             impact=None)
 
     # ── Quality / prompt recommendations ──────────────────────────────────
@@ -213,11 +213,11 @@ def generate_recommendations(sessions: list[dict]) -> dict:
         diff = best_sz["avg_efficiency"] - worst_sz["avg_efficiency"]
         if diff >= 20 and best_sz["bucket"] != worst_sz["bucket"]:
             add("tools_optimal_size", "tools", "medium",
-                f"Optimal toolset size: {best_sz['bucket']} tools ({best_sz['label']})",
-                f"Sessions with {best_sz['bucket']} tools average {best_sz['avg_efficiency']:.1f} efficiency "
-                f"vs {worst_sz['avg_efficiency']:.1f} for {worst_sz['bucket']} — "
-                f"a {diff:.0f}-pt gap. Aim for {best_sz['label']} tool configurations.",
-                impact=f"+{diff:.0f} pts efficiency")
+                f"Sweet spot: {best_sz['bucket']} tools gives the best results",
+                f"Sessions with {best_sz['bucket']} tools score {best_sz['avg_efficiency']:.0f}/100 quality "
+                f"vs only {worst_sz['avg_efficiency']:.0f}/100 for {worst_sz['bucket']} tools — "
+                f"a {diff:.0f}-point difference. Try to stay in the {best_sz['label'].lower()} range.",
+                impact=f"+{diff:.0f} pts quality")
 
     # ── Health / trend recommendations ─────────────────────────────────────
     trend_data = data["trend"]
@@ -226,16 +226,16 @@ def generate_recommendations(sessions: list[dict]) -> dict:
 
     if trend == "declining" and delta <= -10:
         add("health_declining", "health", "high",
-            f"Efficiency declining — down {abs(delta):.1f} pts week-over-week",
-            f"Your 7-day average has dropped {abs(delta):.1f} pts vs the prior week. "
-            f"Review recent sessions for common smell patterns (context rot, loop traps).",
+            f"Quality is going down — dropped {abs(delta):.1f} points vs last week",
+            f"Your average quality score has dropped {abs(delta):.1f} points compared to the prior week. "
+            f"Check your recent sessions — common causes are running too many tools or sessions that ran too long.",
             impact=None)
     elif trend == "improving" and delta >= 10:
         add("health_improving", "health", "low",
-            f"Efficiency improving — up {delta:.1f} pts week-over-week",
-            f"Your recent sessions average {delta:.1f} pts higher than the prior week. "
-            f"Keep up the current patterns.",
-            impact=f"+{delta:.1f} pts WoW")
+            f"Quality is improving — up {delta:.1f} points vs last week",
+            f"Your recent sessions are scoring {delta:.1f} points higher than the prior week. "
+            f"Keep doing what you're doing!",
+            impact=f"+{delta:.1f} pts")
 
     # ── Smell recommendations ──────────────────────────────────────────────
     from smells import detect_smells as _detect_smells
@@ -248,17 +248,17 @@ def generate_recommendations(sessions: list[dict]) -> dict:
         top_smell, top_count = max(smell_counts.items(), key=lambda x: x[1])
         pct = round(top_count / max(len(sessions), 1) * 100)
         smell_labels = {
-            "context_rot":   "Context rot — sessions accumulating too much old context",
-            "loop_trap":     "Loop traps — repeated similar patterns without progress",
-            "tool_thrash":   "Tool thrash — excessive tool retries",
-            "high_error":    "High error rate",
-            "massive_session": "Oversized sessions",
+            "context_rot":     "Too much old context building up",
+            "loop_trap":       "AI repeating itself without making progress",
+            "tool_thrash":     "AI retrying tools too many times",
+            "high_error":      "High error rate",
+            "massive_session": "Sessions running way too long",
         }
         if pct >= 20:
             add(f"smell_{top_smell}", "health", "medium",
-                f"{smell_labels.get(top_smell, top_smell)} in {pct}% of sessions",
+                f"{smell_labels.get(top_smell, top_smell)} — happening in {pct}% of sessions",
                 f"'{smell_labels.get(top_smell, top_smell)}' was detected in {top_count} of your "
-                f"{len(sessions)} sessions ({pct}%). This pattern correlates with lower efficiency.",
+                f"{len(sessions)} sessions ({pct}%). This pattern tends to lower the quality score.",
                 impact=None)
 
     # Sort: high → medium → low

@@ -115,7 +115,7 @@ def detect_anomalies(sessions: list[dict]) -> dict:
                     "value":    round(float(cost), 4),
                     "baseline": round(mean_c, 4),
                     "z_score":  round(z, 2),
-                    "detail":   f"Cost ${float(cost):.2f} is {z:.1f}σ above your ${mean_c:.2f} mean",
+                    "detail":   f"Cost ${float(cost):.2f} is {z:.1f}× above your usual ${mean_c:.2f} — unusually expensive session",
                 })
 
         # Efficiency crash
@@ -128,7 +128,7 @@ def detect_anomalies(sessions: list[dict]) -> dict:
                     "value":    round(float(eff), 1),
                     "baseline": round(mean_e, 1),
                     "z_score":  round(z, 2),
-                    "detail":   f"Efficiency {float(eff):.1f} is {abs(z):.1f}σ below your {mean_e:.1f} mean",
+                    "detail":   f"Quality score {float(eff):.0f}/100 is {abs(z):.1f}× below your usual {mean_e:.0f} — this session performed poorly",
                 })
 
         # Token overflow
@@ -141,7 +141,7 @@ def detect_anomalies(sessions: list[dict]) -> dict:
                     "value":    int(tok),
                     "baseline": round(mean_t),
                     "z_score":  round(z, 2),
-                    "detail":   f"{int(tok):,} tokens is {z:.1f}σ above your {int(mean_t):,} mean",
+                    "detail":   f"Used {int(tok):,} tokens — {z:.1f}× more than your usual {int(mean_t):,} — very long session",
                 })
 
         # Waste: cost > 5× median AND efficiency < 10
@@ -153,7 +153,7 @@ def detect_anomalies(sessions: list[dict]) -> dict:
                     "value":    round(float(cost), 4),
                     "baseline": round(median_c, 4),
                     "z_score":  None,
-                    "detail":   f"${float(cost):.2f} spent for only {float(eff):.1f} efficiency — high cost, no output",
+                    "detail":   f"Spent ${float(cost):.2f} but only got a quality score of {float(eff):.0f}/100 — expensive with poor results",
                 })
 
     # Sort: critical first, then by z_score desc (or value for waste)
