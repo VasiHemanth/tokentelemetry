@@ -230,6 +230,56 @@ Turn it off either way:
 
 ---
 
+## Remote Access
+
+TokenTelemetry is **local-first** and binds to `127.0.0.1` by default so that your agent logs, prompts, and costs never leave the machine. Remote access is an opt-in feature with clear security boundaries (loopback is always exempt; non-loopback requests require a token).
+
+### Direct remote / tailnet / LAN access
+
+Use the built-in flags when you can reach the machine directly (tailnet, LAN, or a VPS with ports open):
+
+```bash
+./start.sh --host 0.0.0.0 \
+  --allowed-origins your-laptop.tailnet.ts.net,192.168.1.42 \
+  --port 3000 --api-port 8000
+```
+
+- `--host 0.0.0.0` (or a concrete IP) makes the backend listen on all interfaces.
+- `--allowed-origins` configures CORS on the backend and allowed dev origins for Next.js.
+- On a non-loopback `--host`, a random token is **auto-generated and printed once** (unless you pass `--auth-token` or `--insecure-no-auth`).
+- The launcher prints a connect URL (`http://.../?token=...`) and the dashboard shows a "Connect a device" panel with a QR code.
+- Your own browser on the server machine (loopback) never needs the token. Remote clients send it as `Authorization: Bearer <token>` (or `?token=...` for images and artifacts).
+
+**Security note:** Only use `--insecure-no-auth` on a fully trusted private network. See the warning printed by the launcher and run `./start.sh --help` for the full flag reference and examples.
+
+When you load the dashboard from the remote address (e.g. the Network URL printed by Next.js), the frontend automatically derives the backend URL from `window.location` + the API port, so everything just works.
+
+### SSH tunnel access (VPS / "only SSH exposed" / no port changes)
+
+This pattern is common when your agents (and their logs) run on a remote VPS or server and you only have SSH access, or you prefer to keep the dashboard bound to localhost on the remote side.
+
+**On the remote machine** (where the agent logs live — this is required because TokenTelemetry reads files locally):
+
+```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+```
+
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is inherited by the Next.js dev server.
+
+**On your laptop:**
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+```
+
+Then open **http://localhost:3000** on your laptop.
+
+Both the UI and all data fetches are forwarded over the single SSH connection. The old single-port example (`-L 3000:...` only) produced a page skeleton with no data because the frontend would try to reach the backend on the laptop's localhost instead of the remote.
+
+This method requires no firewall changes on the remote machine and reuses your existing SSH authentication.
+
+---
+
 ## Project Structure
 
 ```
@@ -272,7 +322,10 @@ A: Yes. Cursor and GitHub Copilot sessions are detected and tracked.
 A: Not really. Hermes ships its own `/usage` + `/insights` and a bundled Langfuse plugin, but no third-party tool treats it as a first-class agent with a dedicated dashboard. Tracking: [`NousResearch/hermes-agent#6642`](https://github.com/NousResearch/hermes-agent/issues/6642).
 
 **Q: Will it work for my Hermes bot on a VPS?**  
-A: Yes — run TokenTelemetry on the same host (it reads local files), then `ssh -L 3000:localhost:3000 your-vps` to view from your laptop.
+A: Yes — run TokenTelemetry on the same host (it reads local files). See the **[Remote Access](#remote-access)** section above for the two supported methods:
+
+- Direct exposure with `--host 0.0.0.0` + token (recommended when the network allows it).
+- SSH tunnel with the correct dual-port forward (`-L 3000:... -L 8000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote (the previously documented single-port command produced a blank dashboard).
 
 **Q: Is "Hermes Agent" the same as the Hermes-3 LLMs?**  
 A: No. Hermes Agent is the [open-source agent framework](https://github.com/NousResearch/hermes-agent); Hermes-3 is a family of fine-tuned models. TokenTelemetry observes the agent — it can be running any model.
