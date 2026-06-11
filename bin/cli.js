@@ -258,10 +258,25 @@ function ensureBackend() {
 
 function ensureFrontend() {
   if (!which('npm')) die('npm is required but was not found in PATH.');
-  if (!fs.existsSync(path.join(frontendDir, 'node_modules'))) {
-    console.log('→ installing frontend dependencies (first run can take a minute)…');
-    run('npm', ['install'], { cwd: frontendDir });
-  }
+  // Reinstall when package.json changed since the last install — not just when
+  // node_modules is missing. A bare existence check let stale installs linger:
+  // users who installed before a new dependency was declared (e.g. qrcode.react,
+  // issue #92) kept an old node_modules and hit "Module not found" at runtime.
+  // Mirrors ensureBackend()'s requirements.txt SHA stamp. A missing stamp (old
+  // install predating this check) hashes to a mismatch, so affected users
+  // self-heal on their next launch.
+  const nmDir = path.join(frontendDir, 'node_modules');
+  const pkgPath = path.join(frontendDir, 'package.json');
+  const stampPath = path.join(nmDir, '.package-json.sha');
+  const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(pkgPath)).digest('hex');
+  let cachedSha = null;
+  try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
+  if (fs.existsSync(nmDir) && cachedSha === currentSha) return;
+  console.log(fs.existsSync(nmDir)
+    ? '→ frontend dependencies changed; updating…'
+    : '→ installing frontend dependencies (first run can take a minute)…');
+  run('npm', ['install'], { cwd: frontendDir });
+  try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
 async function start() {
