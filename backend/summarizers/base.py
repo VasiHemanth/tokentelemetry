@@ -39,6 +39,25 @@ def _ensure_cwd() -> str:
     return str(SUMMARIZER_CWD)
 
 
+def _resolve_executable(name: str) -> str:
+    """Resolve a bare CLI name to its full path on PATH, honouring PATHEXT.
+
+    On Windows the coding CLIs are installed by npm as batch shims
+    (``claude.cmd``, ``codex.cmd``, …) — there is no ``.exe``. ``shutil.which``
+    finds them because it consults ``PATHEXT``, but a bare-name
+    ``subprocess.run(["claude", …])`` with ``shell=False`` goes straight to
+    Win32 ``CreateProcess``, which only appends ``.exe`` and so raises
+    ``FileNotFoundError`` / ``[WinError 2]`` even though the CLI works in the
+    shell. Handing subprocess the fully-resolved ``…\\claude.cmd`` path launches
+    correctly (CreateProcess runs the batch shim by full path). On macOS/Linux
+    ``which`` just returns the plain executable path, so this is a no-op there.
+
+    Falls back to the original name when nothing is found, so the existing
+    "failed to launch" error still surfaces with the same wording.
+    """
+    return shutil.which(name) or name
+
+
 def run_cli(
     cmd: list[str],
     *,
@@ -51,6 +70,10 @@ def run_cli(
     stdout is returned even on a non-zero exit when it is non-empty — some CLIs
     print a usable result and then exit non-zero on a teardown warning.
     """
+    # Keep the friendly name for error messages; launch with the resolved path.
+    name = cmd[0] if cmd else ""
+    if cmd:
+        cmd = [_resolve_executable(cmd[0]), *cmd[1:]]
     try:
         proc = subprocess.run(
             cmd,
@@ -61,9 +84,9 @@ def run_cli(
             cwd=cwd,
         )
     except subprocess.TimeoutExpired as e:
-        raise SummarizerError(f"{cmd[0]} timed out after {timeout}s") from e
+        raise SummarizerError(f"{name} timed out after {timeout}s") from e
     except (OSError, ValueError) as e:
-        raise SummarizerError(f"failed to launch {cmd[0]}: {e}") from e
+        raise SummarizerError(f"failed to launch {name}: {e}") from e
 
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 and not out:
@@ -77,9 +100,9 @@ def run_cli(
             err = "\n".join(err_lines[-5:])[:2000]
         else:
             err = stderr[-2000:] if len(stderr) > 2000 else stderr
-        raise SummarizerError(f"{cmd[0]} exited {proc.returncode}: {err}")
+        raise SummarizerError(f"{name} exited {proc.returncode}: {err}")
     if not out:
-        raise SummarizerError(f"{cmd[0]} produced no output")
+        raise SummarizerError(f"{name} produced no output")
     return out
 
 
