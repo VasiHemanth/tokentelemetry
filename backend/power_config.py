@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -82,6 +83,41 @@ LOCAL_PROVIDERS = {
 DEFAULT_TOK_PER_SEC = 30.0
 
 
+@lru_cache(maxsize=1)
+def device_default() -> Dict[str, Any]:
+    """The default load wattage for THIS machine, detected once per process.
+
+    Prefers a chip-aware estimate (``power_meter.estimated_watts`` — e.g. Apple
+    Silicon tier) over the flat ``DEFAULT_LOAD_WATTS``, so the electricity cost
+    uses a realistic per-device baseline instead of a generic 80 W when the user
+    hasn't set a wattage. Returns ``{watts, source, detail}`` — ``source`` is
+    ``"apple-silicon-default"`` (etc.) when device-derived, else ``"default"``.
+
+    Cached because the underlying detection shells out to ``sysctl``; this is
+    called on the hot cost path. Call ``device_default.cache_clear()`` in tests.
+    """
+    watts, source, detail = DEFAULT_LOAD_WATTS, "default", None
+    try:
+        from power_meter import estimated_watts
+        est = estimated_watts(with_detail=False)
+        if est and est.get("watts"):
+            watts = int(round(est["watts"]))
+            source = est.get("source", "device")
+            detail = est.get("detail")
+    except Exception:
+        pass
+    # `detected` is False on environments we can't auto-detect (Intel Macs, AMD,
+    # Linux/Windows CPU boxes) — the UI uses this to prompt the user to enter
+    # their own wattage instead of presenting the flat fallback as if detected.
+    return {"watts": watts, "source": source, "detail": detail,
+            "detected": source != "default"}
+
+
+def device_default_watts() -> int:
+    """Device-aware default load wattage (chip estimate or flat fallback)."""
+    return device_default()["watts"]
+
+
 def _config_path() -> Path:
     return data_dir() / "power.json"
 
@@ -129,6 +165,9 @@ def load_power_config() -> Dict[str, Any]:
     """
     config = dict(DEFAULTS)
     config["subscriptionEndpoints"] = list(DEFAULT_SUBSCRIPTION_ENDPOINTS)
+    # Baseline wattage is device-aware (chip estimate) — an explicit value in
+    # power.json below still overrides it.
+    config["loadWatts"] = device_default_watts()
 
     path = _config_path()
     if not path.exists():
@@ -336,7 +375,7 @@ def electricity_cost(
         config = load_power_config()
     if output_tokens <= 0 or not tok_per_sec or tok_per_sec <= 0:
         return 0.0
-    watts = config.get("loadWatts", DEFAULT_LOAD_WATTS)
+    watts = config.get("loadWatts", device_default_watts())
     cost_per_kwh = config.get("costPerKwh", DEFAULT_COST_PER_KWH)
     gen_seconds = output_tokens / tok_per_sec
     # watts * seconds = watt-seconds (joules); /3_600_000 converts Wh->kWh and
@@ -362,7 +401,7 @@ def co2_for_session(
         config = load_power_config()
     if output_tokens <= 0 or not tok_per_sec or tok_per_sec <= 0:
         return 0.0
-    watts = config.get("loadWatts", DEFAULT_LOAD_WATTS)
+    watts = config.get("loadWatts", device_default_watts())
     gen_seconds = output_tokens / tok_per_sec
     kwh = (watts * gen_seconds) / 3_600_000
     intensity = config.get("gridCarbonIntensity", DEFAULT_CARBON_INTENSITY)

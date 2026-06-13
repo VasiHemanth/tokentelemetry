@@ -35,6 +35,93 @@ export const setBillingMode = (agent: string, mode: BillingMode | null) =>
     body: JSON.stringify({ agent, mode }),
   });
 
+// ---------------------------------------------------------------------------
+// Drain-priority routes (/config/billing-route): which credit *bucket* pays,
+// in what order, split by task type. Structure only (Stage 1) — pool fill
+// meters need per-session task-type data and come later.
+// ---------------------------------------------------------------------------
+
+export type TaskType = "interactive" | "programmatic";
+
+/** What the user pays at the margin while a bucket is active. */
+export type BucketCharges = "included" | "api_rate" | "electricity";
+
+export interface RouteBucket {
+  id: string;
+  label: string;
+  charges: BucketCharges;
+  task_types: TaskType[];
+  /** Prepaid pool size in USD/month at API rates, or null = no dollar cap. */
+  pool_usd: number | null;
+  /** Request-count cap (e.g. Gemini's 1,000/day free tier), or null. */
+  pool_requests: number | null;
+  pool_period: "day" | "month" | null;
+  /** Pool exhaustion STOPS requests — no automatic fall-through. */
+  no_spillover: boolean;
+  note: string;
+}
+
+export interface BillingRoute {
+  agent: string;
+  task_type: TaskType;
+  plan: string;
+  buckets: RouteBucket[];
+  active: RouteBucket | null;
+  charges: BucketCharges | null;
+  marginal_cost_zero: boolean;
+  capped: boolean;
+}
+
+export interface AgentRouteOverview {
+  agent: string;
+  plan: string;
+  /** Plan tiers this agent's provider offers ([] = no plan knob). */
+  plans: string[];
+  buckets: RouteBucket[];
+  routes: Record<TaskType, BillingRoute>;
+}
+
+export interface BillingRouteConfig {
+  agents: Record<string, AgentRouteOverview>;
+  task_types: TaskType[];
+  charges: BucketCharges[];
+  /** When the provider billing snapshot was last verified (staleness note). */
+  as_of: string;
+}
+
+export const getBillingRouteConfig = () =>
+  api<BillingRouteConfig>("/config/billing-route");
+
+/** Set an agent's plan tier, or `null` to revert to the provider default. */
+export const setBillingPlan = (agent: string, plan: string | null) =>
+  api<BillingRouteConfig>("/config/billing-route", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent, plan }),
+  });
+
+export const PLAN_LABEL: Record<string, string> = {
+  default: "Default",
+  pro: "Pro",
+  max5x: "Max 5x",
+  max20x: "Max 20x",
+  pro_plus: "Pro+",
+  business: "Business",
+  enterprise: "Enterprise",
+  ultra: "Ultra",
+};
+
+export const TASK_TYPE_LABEL: Record<TaskType, string> = {
+  interactive: "Interactive — you, in the terminal/editor",
+  programmatic: "Programmatic — headless: scripts, SDK, CI",
+};
+
+export const CHARGES_LABEL: Record<BucketCharges, string> = {
+  included: "$0 marginal",
+  api_rate: "API rate",
+  electricity: "power estimate",
+};
+
 export const MODE_LABEL: Record<BillingMode, string> = {
   subscription: "Subscription (flat fee)",
   api: "API (pay-per-token)",

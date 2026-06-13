@@ -1,6 +1,22 @@
 {
   "releases": [
     {
+      "tag": "2026-06-13",
+      "title": "Truer costs: local power + which credit pool pays",
+      "highlights": [
+        {
+          "title": "Local-model power cost now reads your actual chip",
+          "description": "Self-hosted models are priced by electricity, and the default wattage now comes from your detected chip (e.g. an Apple M-series part) instead of a one-size-fits-all 80 W. On machines we can't auto-detect, the field stops pretending and asks you to enter your draw under load (or click Measure) — so the estimate is honest rather than a silent placeholder.",
+          "href": "/local-models"
+        },
+        {
+          "title": "See which credit pool each agent actually drains",
+          "description": "Providers no longer bill an agent through one bucket. Expand any agent under Settings to see its drain order, split by interactive vs programmatic use — including Claude's separate Agent-SDK credit pool (claude -p, SDK, CI) that has no auto-fallback, plus pool sizes and stops-at-$0 warnings. Pick your plan tier to size the pools. It explains the cost framing; it doesn't change the math.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-10",
       "title": "See what your subagents, skills & MCPs cost",
       "highlights": [

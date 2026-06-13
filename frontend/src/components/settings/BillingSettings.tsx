@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Wallet, Check, Loader2 } from "lucide-react";
+import { Wallet, Check, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { getAgent } from "@/lib/agents";
 import { Card, CardHeader, CardTitle, Badge, Skeleton } from "@/components/ui";
 import {
   getBillingConfig, setBillingMode, MODE_LABEL,
+  getBillingRouteConfig, setBillingPlan,
   type BillingConfig, type AgentBilling, type BillingMode,
+  type BillingRouteConfig,
 } from "@/lib/billing";
+import { DrainOrder } from "./DrainOrder";
 
 // Modes a user can pick explicitly (plus the implicit "auto" = clear override).
 const SELECTABLE: BillingMode[] = ["subscription", "api", "local"];
@@ -20,6 +23,8 @@ function sourceNote(b: AgentBilling): string {
 
 export function BillingSettings() {
   const [config, setConfig] = useState<BillingConfig | null>(null);
+  const [routes, setRoutes] = useState<BillingRouteConfig | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingAgent, setSavingAgent] = useState<string | null>(null);
   const [savedAgent, setSavedAgent] = useState<string | null>(null);
@@ -34,8 +39,27 @@ export function BillingSettings() {
         setError(e instanceof Error ? e.message : "Failed to load billing config.");
         setLoading(false);
       });
+    // Drain-order routes load separately and degrade gracefully — an older
+    // backend without /config/billing-route just hides the expandable section.
+    getBillingRouteConfig()
+      .then((r) => { if (!cancelled) setRoutes(r); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  const onPlanChange = async (agent: string, plan: string | null) => {
+    setSavingAgent(agent);
+    setError(null);
+    try {
+      setRoutes(await setBillingPlan(agent, plan));
+      setSavedAgent(agent);
+      setTimeout(() => setSavedAgent((a) => (a === agent ? null : a)), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save plan.");
+    } finally {
+      setSavingAgent((a) => (a === agent ? null : a));
+    }
+  };
 
   const onChange = async (agent: string, raw: string) => {
     // "auto" clears the override → revert to auto-detection.
@@ -45,6 +69,8 @@ export function BillingSettings() {
     try {
       const next = await setBillingMode(agent, mode);
       setConfig(next);
+      // Mode changes can reroute buckets (e.g. "local" → electricity) — refresh.
+      getBillingRouteConfig().then(setRoutes).catch(() => {});
       setSavedAgent(agent);
       setTimeout(() => setSavedAgent((a) => (a === agent ? null : a)), 2000);
     } catch (e) {
@@ -78,42 +104,66 @@ export function BillingSettings() {
             const meta = getAgent(agent);
             const Icon = meta.icon;
             const value = b.source === "user" ? b.mode : "auto";
+            const overview = routes?.agents[agent];
+            const isExpanded = expanded === agent;
             return (
-              <div key={agent} className="flex items-center justify-between gap-4 py-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
-                    style={{ background: `${meta.hex}1a`, color: meta.hex }}
-                  >
-                    <Icon size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-[var(--tt-fg)]">{meta.label}</div>
-                    <div className="text-[11px] text-[var(--tt-fg-muted)] truncate">{sourceNote(b)}</div>
+              <div key={agent} className="py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+                      style={{ background: `${meta.hex}1a`, color: meta.hex }}
+                    >
+                      <Icon size={15} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium text-[var(--tt-fg)]">{meta.label}</div>
+                      <div className="text-[11px] text-[var(--tt-fg-muted)] truncate">{sourceNote(b)}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {savedAgent === agent && (
+                      <span className="flex items-center gap-1 text-[11px] text-[var(--tt-success-fg)]">
+                        <Check size={12} /> Saved
+                      </span>
+                    )}
+                    {savingAgent === agent && <Loader2 size={13} className="animate-spin text-[var(--tt-fg-muted)]" />}
+                    <select
+                      value={value}
+                      disabled={savingAgent === agent}
+                      onChange={(e) => onChange(agent, e.target.value)}
+                      className="rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[12px] text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)] cursor-pointer"
+                    >
+                      <option value="auto">
+                        Auto{b.detected ? ` · ${MODE_LABEL[b.detected]}` : b.source === "default" ? ` · ${MODE_LABEL[b.default]}` : ""}
+                      </option>
+                      {SELECTABLE.map((m) => (
+                        <option key={m} value={m}>{MODE_LABEL[m]}</option>
+                      ))}
+                    </select>
+                    {overview && (
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(isExpanded ? null : agent)}
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? "Hide" : "Show"} ${meta.label} drain order`}
+                        className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] cursor-pointer"
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {savedAgent === agent && (
-                    <span className="flex items-center gap-1 text-[11px] text-[var(--tt-success-fg)]">
-                      <Check size={12} /> Saved
-                    </span>
-                  )}
-                  {savingAgent === agent && <Loader2 size={13} className="animate-spin text-[var(--tt-fg-muted)]" />}
-                  <select
-                    value={value}
-                    disabled={savingAgent === agent}
-                    onChange={(e) => onChange(agent, e.target.value)}
-                    className="rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[12px] text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)] cursor-pointer"
-                  >
-                    <option value="auto">
-                      Auto{b.detected ? ` · ${MODE_LABEL[b.detected]}` : b.source === "default" ? ` · ${MODE_LABEL[b.default]}` : ""}
-                    </option>
-                    {SELECTABLE.map((m) => (
-                      <option key={m} value={m}>{MODE_LABEL[m]}</option>
-                    ))}
-                  </select>
-                </div>
+                {isExpanded && overview && routes && (
+                  <DrainOrder
+                    overview={overview}
+                    asOf={routes.as_of}
+                    saving={savingAgent === agent}
+                    onPlanChange={(plan) => onPlanChange(agent, plan)}
+                  />
+                )}
               </div>
             );
           })}

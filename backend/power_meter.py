@@ -100,6 +100,88 @@ def _macos_battery_watts() -> Optional[float]:
     return watts if watts > 0 else None
 
 
+# ---------------------------------------------------------------------------
+# Apple Silicon estimated default (userspace, no root)
+# ---------------------------------------------------------------------------
+# There is no root-free way to MEASURE watts on Apple Silicon (powermetrics is
+# root-only; on AC the battery current is ~0). But the chip itself is readable in
+# userspace via sysctl + system_profiler. We use that to seed a far better
+# DEFAULT than the generic 80 W: a laptop M-series package under sustained
+# inference draws ~20-45 W, so 80 W overestimates electricity cost by ~2x on the
+# machines most likely to run local models. This is an ESTIMATE
+# (confidence="estimated"), never a measurement — the user overrides it if they
+# know their real draw. Cf. llama-swap discussion #814.
+
+# Typical whole-package draw (watts) under sustained inference load by chip tier.
+# Deliberately mid-range, conservative ballpark figures — they exist so the
+# default isn't wildly wrong for Apple Silicon, not to claim precision.
+_APPLE_TIER_WATTS = {
+    "ultra": 120.0,
+    "max": 65.0,
+    "pro": 35.0,
+    "base": 22.0,
+}
+
+_APPLE_BRAND_RE = re.compile(r"\bApple\s+M(\d+)\s*(Pro|Max|Ultra)?\b", re.IGNORECASE)
+
+
+def _apple_silicon_chip(with_gpu_cores: bool = True) -> Optional[Dict[str, Any]]:
+    """Identify the Apple Silicon chip from userspace (no root). None if not AS.
+
+    Returns ``{chip, generation, tier, gpu_cores}`` where ``tier`` is one of
+    base/pro/max/ultra and ``gpu_cores`` may be None if unreadable. The wattage
+    only needs ``tier`` (from the fast sysctl call); ``with_gpu_cores=False``
+    skips the slower ``system_profiler`` call used purely for the human label.
+    """
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return None
+    brand = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
+    if not brand:
+        return None
+    m = _APPLE_BRAND_RE.search(brand.strip())
+    if not m:
+        return None
+    tier = (m.group(2) or "base").lower()
+    chip = " ".join(m.group(0).split())  # normalise internal whitespace
+    # GPU core count (userspace) — refines the human label only, not the wattage.
+    gpu_cores: Optional[int] = None
+    if with_gpu_cores:
+        sp = _run(["system_profiler", "SPDisplaysDataType"], timeout=5.0)
+        if sp:
+            cm = re.search(r"Total Number of Cores:\s*(\d+)", sp)
+            if cm:
+                gpu_cores = int(cm.group(1))
+    return {
+        "chip": chip,
+        "generation": int(m.group(1)),
+        "tier": tier,
+        "gpu_cores": gpu_cores,
+    }
+
+
+def estimated_watts(with_detail: bool = True) -> Optional[Dict[str, Any]]:
+    """A best-effort DEFAULT wattage when no real reading is possible.
+
+    On Apple Silicon, derived from the (userspace-readable) chip tier; elsewhere
+    None. Always ``confidence="estimated"`` — a starting point the user reviews
+    and overrides, not a measurement. Returns
+    ``{watts, source, confidence, detail}`` or None. ``with_detail=False`` skips
+    the slower GPU-core lookup when only the wattage is needed (hot path).
+    """
+    chip = _apple_silicon_chip(with_gpu_cores=with_detail)
+    if not chip:
+        return None
+    watts = _APPLE_TIER_WATTS.get(chip["tier"], _APPLE_TIER_WATTS["base"])
+    cores = chip.get("gpu_cores")
+    label = chip["chip"] + (f" ({cores}-core GPU)" if cores else "")
+    return {
+        "watts": watts,
+        "source": "apple-silicon-default",
+        "confidence": "estimated",
+        "detail": label,
+    }
+
+
 # A personal machine's draw under inference load realistically sits well under
 # this. Anything outside (0, MAX] is treated as a bad reading and discarded — a
 # guard against parsing glitches (e.g. unsigned battery counters) reaching cost.
@@ -171,7 +253,9 @@ def capability() -> Dict[str, Any]:
         if out:
             m = re.search(r'(?<![A-Za-z0-9])"?ExternalConnected"?\s*=\s*(Yes|No)', out)
             on_ac = not (m and m.group(1) == "No")
-        return {
+        # No measurement on AC, but we can still suggest a chip-aware default.
+        est = estimated_watts() if on_ac else None
+        cap = {
             "available": not on_ac,
             "method": "macos-battery" if not on_ac else None,
             "system": system,
@@ -179,10 +263,17 @@ def capability() -> Dict[str, Any]:
                 "On battery: whole-system power is read from the battery."
                 if not on_ac else
                 "On Apple Silicon, accurate GPU power needs admin (powermetrics). "
-                "Unplug to read battery-based power, or set/calibrate a wattage manually."
+                "Unplug to read battery-based power, or use the chip-based estimate below."
             ),
         }
-    return {
+        if est:
+            cap["estimated"] = est
+        return cap
+    est = estimated_watts()
+    cap = {
         "available": False, "method": None, "system": system,
         "reason": "No root-free power source detected; set a wattage manually.",
     }
+    if est:
+        cap["estimated"] = est
+    return cap

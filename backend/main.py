@@ -4527,11 +4527,14 @@ async def get_power_config():
 
     `configured` tells the UI whether a power.json exists yet — when false the
     returned values are the shipped defaults and the local-model electricity
-    branch is inactive until the user saves.
+    branch is inactive until the user saves. `deviceDefault` is the chip-aware
+    wattage detected for this machine (e.g. Apple M5 → 22 W); it's the baseline
+    `loadWatts` falls back to when the user hasn't set one, so the UI can show
+    "default for your machine" instead of a generic number.
     """
-    from power_config import load_power_config, has_user_config
+    from power_config import load_power_config, has_user_config, device_default
     cfg = load_power_config()
-    return {**cfg, "configured": has_user_config()}
+    return {**cfg, "configured": has_user_config(), "deviceDefault": device_default()}
 
 
 @app.put("/config/power")
@@ -4570,14 +4573,23 @@ async def get_power_meter():
 async def calibrate_power():
     """Sample real power for a few seconds and return it as a SUGGESTION.
 
-    Does NOT persist — the UI fills the loadWatts field with the measured value
-    for the user to review and Save. When no root-free source is available (e.g.
-    Apple Silicon on AC), returns `{measured: null, reason: …}`.
+    Does NOT persist — the UI fills the loadWatts field with the value for the
+    user to review and Save. When no root-free *measurement* is available (e.g.
+    Apple Silicon on AC) we fall back to a chip-aware *estimate* so the field
+    still gets a sensible starting value: `{measured: null, estimated: <watts>,
+    source, detail, reason}`. When nothing is derivable, `estimated` is null too.
     """
-    from power_meter import sample_average_watts, capability
+    from power_meter import sample_average_watts, capability, estimated_watts
     sample = sample_average_watts(duration_s=4.0, interval_s=1.0)
     if not sample:
-        return {"measured": None, "reason": capability().get("reason")}
+        est = estimated_watts()
+        return {
+            "measured": None,
+            "estimated": est["watts"] if est else None,
+            "source": est["source"] if est else None,
+            "detail": est.get("detail") if est else None,
+            "reason": capability().get("reason"),
+        }
     return {
         "measured": sample["watts"], "source": sample["source"],
         "samples": sample.get("samples"),
@@ -4623,6 +4635,77 @@ async def put_billing_config(payload: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Could not save billing config to disk.")
     _invalidate_sessions_cache()
     return {"agents": get_all(_list_available_agents()), "modes": list(MODES)}
+
+
+@app.get("/config/billing-route")
+async def get_billing_route_config():
+    """Drain-priority billing routes per agent: which credit *bucket* pays, and
+    in what order, split by task type (interactive vs programmatic).
+
+    For each detected agent this returns the full ordered bucket list plus the
+    resolved `routes.{interactive,programmatic}` (active bucket, marginal-cost
+    flag, and whether the active bucket is a capped pool to warn on). The agent's
+    resolved billing `mode` is threaded in so a user-marked `local` agent routes
+    to the electricity bucket, and each agent's persisted *plan* (set via PUT)
+    sizes its pools — plan vocabularies are per-provider, so there is no global
+    plan knob. Date-gated policies (Anthropic's June-15 SDK split) flip on the
+    real clock. This drives the Settings drain-order view; it does not change
+    cost math on its own. `as_of` is when the provider snapshot was last
+    verified — the UI shows it as a staleness disclaimer.
+    """
+    from billing_mode import get_all
+    from billing_route import (
+        get_route_overview, load_plans, TASK_TYPES, CHARGES,
+        DEFAULT_PLAN, SNAPSHOT_AS_OF,
+    )
+    agents = _list_available_agents()
+    modes = get_all(agents)
+    plans = load_plans()
+    overview = {
+        a: get_route_overview(
+            a,
+            plan=plans.get(a, DEFAULT_PLAN),
+            mode=modes.get(a, {}).get("mode"),
+        )
+        for a in agents
+    }
+    return {
+        "agents": overview,
+        "task_types": list(TASK_TYPES),
+        "charges": list(CHARGES),
+        "as_of": SNAPSHOT_AS_OF,
+    }
+
+
+@app.put("/config/billing-route")
+async def put_billing_route_config(payload: dict = Body(...)):
+    """Set or clear one agent's plan tier (sizes its credit pools).
+
+    Body: {"agent": "<agent>", "plan": "<plan>" | null}. A null/absent plan
+    clears the choice and reverts the agent to its provider's default tier.
+    Plans are validated against that agent's own vocabulary (e.g. "max5x" is
+    Anthropic-only). Invalid input is rejected with a plain message.
+    """
+    from fastapi import HTTPException
+    from billing_route import save_plan, AGENT_PLANS
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    agent = payload.get("agent")
+    if not isinstance(agent, str) or not agent.strip():
+        raise HTTPException(status_code=400, detail="'agent' is required")
+    agent = agent.strip()
+    plan = payload.get("plan")
+    valid = AGENT_PLANS.get(agent, ())
+    if plan is not None and plan not in valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'plan' for {agent} must be one of {list(valid)} or null",
+        )
+    try:
+        save_plan(agent, plan)
+    except OSError:
+        raise HTTPException(status_code=500, detail="Could not save plan to disk.")
+    return await get_billing_route_config()
 
 
 @app.get("/config/aliases")

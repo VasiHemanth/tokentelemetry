@@ -42,10 +42,50 @@ def test_defaults_when_no_file():
     with tempfile.TemporaryDirectory() as home:
         pc, _ = _fresh_modules(home)
         cfg = pc.load_power_config()
-        assert cfg["loadWatts"] == pc.DEFAULT_LOAD_WATTS
+        # Default wattage is now device-aware (chip estimate where available,
+        # else the flat DEFAULT_LOAD_WATTS) — assert against that source of truth.
+        assert cfg["loadWatts"] == pc.device_default_watts()
         assert cfg["costPerKwh"] == pc.DEFAULT_COST_PER_KWH
         assert cfg["subscriptionEndpoints"] == []
         assert pc.has_user_config() is False
+
+
+def test_device_default_drives_loadwatts_when_unset(monkeypatch):
+    """A chip-aware estimate becomes the default loadWatts (not the flat 80)."""
+    with tempfile.TemporaryDirectory() as home:
+        pc, pr = _fresh_modules(home)
+        import power_meter
+        # Pretend we're on an Apple M-series box → 22 W estimate.
+        monkeypatch.setattr(
+            power_meter, "estimated_watts",
+            lambda with_detail=True: {
+                "watts": 22.0, "source": "apple-silicon-default",
+                "confidence": "estimated", "detail": "Apple M5 (10-core GPU)",
+            },
+        )
+        pc.device_default.cache_clear()
+        assert pc.device_default_watts() == 22
+        assert pc.device_default()["detected"] is True
+        # No power.json → electricity cost uses the 22 W device default, not 80.
+        cfg = pc.load_power_config()
+        assert cfg["loadWatts"] == 22
+        cost = pc.electricity_cost(900, cfg, tok_per_sec=90.0)  # 10 s of gen
+        assert abs(cost - (10 * 22 / 3_600_000 * pc.DEFAULT_COST_PER_KWH)) < 1e-12
+        # An explicit power.json value still wins over the device default.
+        _write_power_json(home, {"loadWatts": 150})
+        pc.device_default.cache_clear()
+        assert pc.load_power_config()["loadWatts"] == 150
+
+
+def test_device_default_falls_back_to_flat_when_no_estimate(monkeypatch):
+    with tempfile.TemporaryDirectory() as home:
+        pc, _ = _fresh_modules(home)
+        import power_meter
+        monkeypatch.setattr(power_meter, "estimated_watts", lambda with_detail=True: None)
+        pc.device_default.cache_clear()
+        assert pc.device_default_watts() == pc.DEFAULT_LOAD_WATTS
+        assert pc.device_default()["source"] == "default"
+        assert pc.device_default()["detected"] is False
 
 
 def test_malformed_file_falls_back_to_defaults():
@@ -55,7 +95,7 @@ def test_malformed_file_falls_back_to_defaults():
         (d / "power.json").write_text("{not valid json", encoding="utf-8")
         pc, _ = _fresh_modules(home)
         cfg = pc.load_power_config()  # must not raise
-        assert cfg["loadWatts"] == pc.DEFAULT_LOAD_WATTS
+        assert cfg["loadWatts"] == pc.device_default_watts()
         # File exists, so it counts as user-configured even though it's garbage.
         assert pc.has_user_config() is True
 

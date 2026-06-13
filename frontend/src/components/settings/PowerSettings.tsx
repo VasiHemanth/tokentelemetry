@@ -73,6 +73,12 @@ export function PowerSettings() {
       if (r.measured != null) {
         setWatts(String(Math.round(r.measured)));
         setCalibMsg(`✓ Measured ${r.measured} W via ${r.source} — review and click Save.`);
+      } else if (r.estimated != null) {
+        // No root-free measurement (e.g. Apple Silicon on AC), but we derived a
+        // chip-aware estimate. Prefill it as a starting point to override.
+        setWatts(String(Math.round(r.estimated)));
+        const from = r.detail ? ` from ${r.detail}` : "";
+        setCalibMsg(`≈ Estimated ${r.estimated} W${from} — this is a rough default; override with your real draw if you know it, then Save.`);
       } else {
         const why = r.reason ? ` (${r.reason})` : "";
         setCalibMsg(`Couldn't read power automatically on this machine — type your watts in “Load watts” above and Save.${why}`);
@@ -114,6 +120,23 @@ export function PowerSettings() {
                 type="number" inputMode="decimal" value={watts} onChange={(e) => setWatts(e.target.value)}
                 className="mt-1 w-full rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[13px] text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)]"
               />
+              {cfg?.deviceDefault && (
+                cfg.deviceDefault.detected ? (
+                  <button
+                    type="button"
+                    onClick={() => setWatts(String(cfg.deviceDefault!.watts))}
+                    className="mt-1 text-[11px] text-[var(--tt-fg-muted)] hover:text-[var(--tt-brand)] transition-colors"
+                    title="Use the detected default for this machine"
+                  >
+                    Default for {cfg.deviceDefault.detail ?? "this machine"}: {cfg.deviceDefault.watts} W (estimated)
+                  </button>
+                ) : (
+                  <span className="mt-1 block text-[11px] text-[var(--tt-fg-muted)]">
+                    Couldn&apos;t auto-detect your hardware — enter your machine&apos;s draw under load
+                    (or click Measure). Using a generic {cfg.deviceDefault.watts} W until you do.
+                  </span>
+                )
+              )}
             </label>
             <label className="block">
               <span className="text-[11px] uppercase tracking-wide text-[var(--tt-fg-muted)]">Cost per kWh ($)</span>
