@@ -72,6 +72,43 @@ Want to add support for a new coding agent? The backend reads log files from kno
 4. Write a clear PR description explaining what and why
 5. Submit against the `main` branch
 
+### Documentation — keep it minimal
+
+**For most PRs (fixes, small features, chores, docs): you don't need to write any
+formal docs.** Just explain *what* you changed and *why* in the PR description.
+Maintainers handle the rest — adding it to the [Roadmap board](https://github.com/users/VasiHemanth/projects/1),
+writing any decision record, and the `UPDATE.json` release note.
+
+You also don't need to touch the board or `UPDATE.json` yourself.
+
+### Adding a big feature? Include an ADR + design doc
+
+A change is "big" if it does any of these:
+- introduces a new module, storage layer, or external dependency;
+- changes a data shape, API contract, or how an agent's data is read;
+- has more than one reasonable approach, or is hard to reverse later.
+
+If so, add two short markdown files **in the same PR as the code** so the *why* and
+*how* travel with the change (this is how Kubernetes/Rust/Python-scale projects work):
+
+1. **ADR** — copy [`docs/adr/0000-template.md`](docs/adr/0000-template.md) to
+   `docs/adr/NNNN-short-title.md` (next number) and fill in:
+   > **Context** — what problem/constraint forced this?
+   > **Decision** — what are you doing? ("We will …")
+   > **Alternatives considered** — what else you weighed, and why you rejected it.
+   > **Consequences** — the upsides, the costs/limitations, and what would have to
+   > change to undo it.
+
+   Keep it to ~1 page. See [`docs/adr/README.md`](docs/adr/README.md).
+
+2. **Design doc** — add `docs/design/<feature>.md` (the *what & how*: components,
+   data shapes, key invariants). See [`docs/design/durable-history.md`](docs/design/durable-history.md)
+   for the shape.
+
+Not sure if your change counts as "big"? Open it without the docs and ask in the
+PR — a maintainer will tell you, or write the ADR with you. Better to ship than to
+stall on paperwork.
+
 ## Code Style
 - **Python**: follow PEP8, use type hints where possible
 - **TypeScript/JS**: follow the existing patterns in `frontend/`

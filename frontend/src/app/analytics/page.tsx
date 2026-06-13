@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   BarChart3, TrendingUp, ArrowDownToLine, ArrowUpFromLine,
@@ -33,6 +33,12 @@ interface AnalyticsData {
     by_agent?: Record<string, { parents: number; spawns: number; children: number; child_tokens: number; child_cost: number; delegated_tokens: number; delegated_cost: number }>;
   };
   total: { input: number; output: number; cached: number; total: number; cost: number };
+  coverage?: {
+    earliest: string | null;
+    total_sessions: number;
+    by_agent: Record<string, { present: number; pruned: number; summarized: number }>;
+  };
+  granularity?: string;
   pricing_updated?: string;
 }
 
@@ -63,41 +69,87 @@ function useChartTheme() {
   };
 }
 
-type DayRange = "7d" | "30d" | "90d" | "all";
-const RANGES: { key: DayRange; label: string; days: number | null }[] = [
-  { key: "7d",  label: "7d",  days: 7 },
-  { key: "30d", label: "30d", days: 30 },
-  { key: "90d", label: "90d", days: 90 },
-  { key: "all", label: "All", days: null },
+type RangeKey = "7d" | "30d" | "90d" | "month" | "year" | "all" | "custom";
+const PRESETS: { key: RangeKey; label: string }[] = [
+  { key: "7d",    label: "7d" },
+  { key: "30d",   label: "30d" },
+  { key: "90d",   label: "90d" },
+  { key: "month", label: "Month" },
+  { key: "year",  label: "Year" },
+  { key: "all",   label: "All" },
 ];
+type Granularity = "day" | "week" | "month";
+const GRANULARITIES: Granularity[] = ["day", "week", "month"];
+
+// Local YYYY-MM-DD — matches the backend's local-day bucket keys.
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function presetBounds(key: RangeKey): { from: string | null; to: string | null } {
+  const now = new Date();
+  const to = ymd(now);
+  if (key === "all") return { from: null, to: null };
+  if (key === "month") return { from: ymd(new Date(now.getFullYear(), now.getMonth(), 1)), to };
+  if (key === "year")  return { from: ymd(new Date(now.getFullYear(), 0, 1)), to };
+  const days = key === "7d" ? 7 : key === "30d" ? 30 : 90;
+  const f = new Date(now); f.setDate(f.getDate() - (days - 1));
+  return { from: ymd(f), to };
+}
 
 export default function AnalyticsPage() {
-  const { data, loading } = useResource<AnalyticsData>("/analytics", { pollMs: 30_000 });
+  // Filter state. The query string is derived from it and used as the
+  // useResource path — changing any filter refetches a freshly-windowed,
+  // server-aggregated dataset (history store + live scan merged on the backend).
+  const [range, setRange] = useState<RangeKey>("30d");
+  const [granularity, setGranularity] = useState<Granularity>("day");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [selAgents, setSelAgents] = useState<string[]>([]);
+  const [selModels, setSelModels] = useState<string[]>([]);
+
+  const queryPath = useMemo(() => {
+    const p = new URLSearchParams();
+    let from: string | null, to: string | null;
+    if (range === "custom") { from = customFrom || null; to = customTo || null; }
+    else ({ from, to } = presetBounds(range));
+    if (from) p.set("from", from);
+    if (to) p.set("to", to);
+    if (granularity !== "day") p.set("granularity", granularity);
+    selAgents.forEach(a => p.append("agents", a));
+    selModels.forEach(m => p.append("models", m));
+    const qs = p.toString();
+    return qs ? `/analytics?${qs}` : "/analytics";
+  }, [range, granularity, customFrom, customTo, selAgents, selModels]);
+
+  const { data, loading } = useResource<AnalyticsData>(queryPath, { pollMs: 30_000 });
+  const agentOptions = useResource<string[]>("/agents").data ?? [];
   const ct = useChartTheme();
   const AXIS = { stroke: ct.axisStroke, fontSize: 10, tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
-  const [range, setRange] = useState<DayRange>("30d");
 
-  // Filter by_day to the selected window. Dates are local "YYYY-MM-DD"
-  // strings (see backend A10 fix), so a lex compare against a cutoff string works.
-  const filteredByDay = useMemo(() => {
-    if (!data?.by_day) return [];
-    const cfg = RANGES.find(r => r.key === range);
-    if (!cfg?.days) return data.by_day;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - (cfg.days - 1));
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-    return data.by_day.filter(d => d.date >= cutoffStr);
-  }, [data, range]);
+  // Accumulate every model we've seen so selecting one doesn't collapse the
+  // option list (the response only carries models in the current window).
+  const [allModels, setAllModels] = useState<string[]>([]);
+  useEffect(() => {
+    if (data?.by_model) {
+      setAllModels(prev => {
+        const next = new Set(prev);
+        Object.keys(data.by_model!).forEach(m => next.add(m));
+        return next.size === prev.length ? prev : Array.from(next).sort();
+      });
+    }
+  }, [data]);
 
+  const toggle = (list: string[], v: string, set: (x: string[]) => void) =>
+    set(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
+
+  // Server already returns by_day windowed to the selected range/granularity.
   const rangeTotals = useMemo(() => {
-    return filteredByDay.reduce(
-      (acc, d) => ({
-        total: acc.total + (d.total || 0),
-        cost:  acc.cost  + (d.cost  || 0),
-      }),
+    return (data?.by_day ?? []).reduce(
+      (acc, d) => ({ total: acc.total + (d.total || 0), cost: acc.cost + (d.cost || 0) }),
       { total: 0, cost: 0 }
     );
-  }, [filteredByDay]);
+  }, [data]);
 
   const modelData = useMemo(() => {
     if (!data?.by_model) return [];
@@ -144,6 +196,105 @@ export default function AnalyticsPage() {
         }
       />
 
+      {/* Filter toolbar: granularity + custom range + agent/model selection.
+          The date-range presets live on the consumption chart header. */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 -mt-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Bucket</span>
+          <div className="flex gap-0.5 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-0.5">
+            {GRANULARITIES.map(g => (
+              <button
+                key={g}
+                onClick={() => setGranularity(g)}
+                className={cn(
+                  "px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] rounded-[calc(var(--tt-radius)-2px)] transition-colors",
+                  granularity === g
+                    ? "bg-[var(--tt-panel)] text-[var(--tt-fg)] shadow-sm"
+                    : "text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
+                )}
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Custom</span>
+          <input
+            type="date" value={customFrom}
+            onChange={e => { setCustomFrom(e.target.value); setRange("custom"); }}
+            className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-2 py-1 text-[11px] text-[var(--tt-fg)]"
+          />
+          <span className="text-[var(--tt-fg-dim)] text-[11px]">→</span>
+          <input
+            type="date" value={customTo}
+            onChange={e => { setCustomTo(e.target.value); setRange("custom"); }}
+            className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-2 py-1 text-[11px] text-[var(--tt-fg)]"
+          />
+        </div>
+
+        {agentOptions.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Agents</span>
+            {agentOptions.map(a => (
+              <button
+                key={a}
+                onClick={() => toggle(selAgents, a, setSelAgents)}
+                className={cn(
+                  "px-2 py-0.5 text-[10px] font-medium rounded-full border transition-colors",
+                  selAgents.includes(a)
+                    ? "border-[var(--tt-brand)] text-[var(--tt-fg)] bg-[var(--tt-brand)]/10"
+                    : "border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
+                )}
+              >
+                {getAgent(a).label}
+              </button>
+            ))}
+            {selAgents.length > 0 && (
+              <button onClick={() => setSelAgents([])} className="text-[10px] text-[var(--tt-fg-dim)] underline ml-1">clear</button>
+            )}
+          </div>
+        )}
+
+        {allModels.length > 1 && (
+          <div className="flex items-center gap-1.5 flex-wrap max-w-full">
+            <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Models</span>
+            {allModels.map(m => (
+              <button
+                key={m}
+                onClick={() => toggle(selModels, m, setSelModels)}
+                className={cn(
+                  "px-2 py-0.5 text-[10px] font-medium rounded-full border transition-colors truncate max-w-[180px]",
+                  selModels.includes(m)
+                    ? "border-[var(--tt-brand)] text-[var(--tt-fg)] bg-[var(--tt-brand)]/10"
+                    : "border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
+                )}
+              >
+                {m}
+              </button>
+            ))}
+            {selModels.length > 0 && (
+              <button onClick={() => setSelModels([])} className="text-[10px] text-[var(--tt-fg-dim)] underline ml-1">clear</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Data-availability notice: history only accrues from the first run, and
+          agents prune their own transcripts — older rows are summary-only. */}
+      {data.coverage?.earliest && (
+        <div className="flex items-start gap-2 text-[11px] text-[var(--tt-fg-dim)] rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-3 py-2 -mt-4">
+          <BarChart3 size={13} className="mt-0.5 shrink-0 text-[var(--tt-fg-dim)]" />
+          <span>
+            Durable history since <span className="text-[var(--tt-fg)]">{data.coverage.earliest.slice(0, 10)}</span>.
+            TokenTelemetry only records sessions present on disk from its first run — usage before then can't be
+            recovered, and agents prune their own transcripts over time, so older entries may be summary-only
+            (no transcript drill-in).
+          </span>
+        </div>
+      )}
+
       {/* KPI strip */}
       <Section title="Totals">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -188,7 +339,7 @@ export default function AnalyticsPage() {
                 {compact(rangeTotals.total)} tokens · ${rangeTotals.cost.toFixed(2)}
               </span>
               <div className="flex gap-0.5 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-0.5">
-                {RANGES.map(r => (
+                {PRESETS.map(r => (
                   <button
                     key={r.key}
                     onClick={() => setRange(r.key)}
@@ -207,7 +358,7 @@ export default function AnalyticsPage() {
           </CardHeader>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={filteredByDay} margin={{ top: 10, right: 16, bottom: 0, left: 0 }}>
+              <AreaChart data={data.by_day} margin={{ top: 10, right: 16, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="ttArea" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%"   stopColor="#60a5fa" stopOpacity={0.45} />

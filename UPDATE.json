@@ -2,6 +2,22 @@
   "releases": [
     {
       "tag": "2026-06-13",
+      "title": "Analytics by date — and history that survives cleanup",
+      "highlights": [
+        {
+          "title": "Filter analytics by date range, week, or month",
+          "description": "The graph is no longer stuck at the last 7 days. Pick a preset (7d, 30d, this month, this year), set a custom range, or switch the buckets to weekly/monthly — and narrow to specific agents or models. Everything is filtered server-side, so even a full year stays fast.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Your history no longer disappears when agents prune it",
+          "description": "Coding agents quietly delete their own session transcripts on a schedule (Claude Code after 30 days by default), which used to erase your older analytics with them. TokenTelemetry now keeps a tiny durable summary of every session it sees, so long-range trends survive. Under Settings you can see each agent's cleanup window, opt to keep full transcripts past it, and reclaim space anytime without losing your stats.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-06-13",
       "title": "Truer costs: local power + which credit pool pays",
       "highlights": [
         {

@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import { BillingSettings } from "@/components/settings/BillingSettings";
+import { RetentionSettings } from "@/components/settings/RetentionSettings";
 import { ConnectDevice } from "@/components/ConnectDevice";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
@@ -211,6 +212,13 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <BillingSettings />
         </div>
+      </Section>
+
+      <Section
+        title="Agent history & retention"
+        description="Keep analytics history alive after agents prune their own transcripts. Core session stats are always retained; opt in per agent to also archive full transcripts, and reclaim space anytime without losing your history."
+      >
+        <RetentionSettings />
       </Section>
 
       <Section
