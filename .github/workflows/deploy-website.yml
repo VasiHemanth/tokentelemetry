@@ -36,6 +36,10 @@ jobs:
           BING_VERIFICATION: ${{ secrets.BING_VERIFICATION }}
           GOOGLE_VERIFICATION: ${{ secrets.GOOGLE_VERIFICATION }}
           NEXT_PUBLIC_GA_ID: ${{ secrets.NEXT_PUBLIC_GA_ID }}
+          # Without this, NEXT_PUBLIC_CLARITY_ID is empty at build time and the
+          # Clarity <script> in Analytics.tsx never renders, so Clarity's
+          # dashboard stays stuck on "Almost There" with no insights.
+          NEXT_PUBLIC_CLARITY_ID: ${{ secrets.NEXT_PUBLIC_CLARITY_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: website/out
