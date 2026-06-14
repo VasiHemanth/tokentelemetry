@@ -110,9 +110,261 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
 - 🧠 **Plan Capture** — view plan-mode outputs from Claude Code and other agents
 - 📈 **Model Analytics** — compare GPT-5.4 vs Claude 4.6 Sonnet vs Gemini 3.1 Flash efficiency
+- ⚡ **Efficiency Scoring** — 0–100 score per session measuring how productively tokens were spent *(Intelligence Layer)*
+- 🦨 **AI Smell Detection** — rule-based warnings for context rot, loop traps, tool thrash, high error rate, and massive sessions *(Intelligence Layer)*
+- 🔥 **Burn Rate Forecasting** — daily token trends projected to month-end with plan limit alerts *(Intelligence Layer)*
+- 🧬 **Prompt DNA** — correlates prompt structure (file refs, length, vagueness, task type) against efficiency scores to show what makes sessions good or bad *(Intelligence Layer)*
+- 🏆 **Multi-Model Comparison** — side-by-side efficiency ranking of every model you've used, with avg/p75/best scores and task-type filter pills *(Intelligence Layer)*
 - 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
+
+---
+
+## Intelligence Layer
+
+> **Branch:** `tokentelemetry-intelligence-layer` — pure computation on top of existing session data. No new required dependencies.
+
+Three analytical capabilities that turn raw token counts into actionable insight:
+
+---
+
+### ⚡ Agent Efficiency Score
+
+Every session now carries a **0–100 score** measuring how productively tokens were spent:
+
+```
+score = output_ratio × error_penalty × turn_penalty × 100
+```
+
+| Factor | Formula | Rationale |
+|--------|---------|-----------|
+| `output_ratio` | output tokens ÷ total tokens | More output per token = more productive work |
+| `error_penalty` | 1 ÷ (1 + errors × 0.15) | Tool failures waste tokens |
+| `turn_penalty` | 1 ÷ (1 + log(turns) × 0.18) | Fewer turns = clearer prompts |
+
+**Labels:** `good` (≥ 70) · `fair` (40–69) · `poor` (< 40)
+
+**In the UI:** a colour-coded `⚡ Score` badge appears on every row in the Recent Activity table — green, amber, or red at a glance.
+
+**API:**
+```
+GET /sessions          → each session now includes: efficiency, efficiency_label
+GET /efficiency        → all sessions sorted best-first (great for leaderboards)
+GET /efficiency?project=/path/to/repo   → filtered by project
+```
+
+---
+
+### 🦨 AI Smell Detection
+
+Rule-based detection of **5 anti-patterns** that indicate wasted tokens or a stuck agent:
+
+| Smell | Trigger | Severity |
+|-------|---------|----------|
+| `context_rot` | Session > 200 turns | warning (> 400 turns → critical) |
+| `loop_trap` | Same tool called with identical input ≥ 8 times in a row | critical |
+| `tool_thrash` | Same file read ≥ 25 times across a session | warning |
+| `high_error_rate` | Errors > 20% of turns | warning (> 40% → critical) |
+| `massive_session` | Total tokens > 2 M | warning (> 5 M → critical) |
+
+Each smell is a structured dict `{ type, title, detail, severity }` — the `detail` field explains what happened and what to do about it.
+
+**In the UI:** an `⚠` icon appears on session rows that have at least one smell — orange for warnings, red for critical. Hovering shows the count and worst severity.
+
+**API:**
+```
+GET /smells             → sessions with at least one smell (all projects)
+GET /smells?project=/path/to/repo   → filtered by project
+```
+
+Each entry:
+```json
+{
+  "session_id": "abc123",
+  "agent": "claude",
+  "project": "/Users/me/myapp",
+  "timestamp": "2026-06-09T14:30:00Z",
+  "efficiency": 42.3,
+  "smells": [
+    {
+      "type": "context_rot",
+      "title": "Context rot (247 turns)",
+      "detail": "This session ran for 247 turns. Context quality typically degrades past 200 turns — consider breaking long tasks into focused sub-sessions.",
+      "severity": "warning"
+    }
+  ]
+}
+```
+
+---
+
+### 🔥 Burn Rate Forecasting
+
+Linear projection of your token consumption toward your subscription's monthly limit:
+
+- **Daily buckets** — aggregates total tokens per calendar day over the last 60 days
+- **7-day average** used for projection (recent pace, not historical average)
+- **Trend detection** — compares last 7 days vs prior 7 days → `accelerating` / `steady` / `slowing`
+- **Days-until-limit** — how many days at current pace before hitting your plan quota
+
+**Supported plans:**
+
+| Plan | Monthly token limit |
+|------|-------------------|
+| `claude_pro` | 500 M |
+| `claude_max` | 2 B |
+| `codex_plus` | 200 M |
+| `copilot` | 100 M |
+| `api_unlimited` | No limit |
+
+**In the UI:** a **Burn Rate** card in the dashboard sidebar shows your daily rate, projected month-end total, a colour-coded progress bar (green → amber → red as you approach the limit), and an urgency alert when you're ≤ 7 days from hitting the cap.
+
+**API:**
+```
+GET /forecast                       → forecast at default plan (claude_pro)
+GET /forecast?plan=claude_max       → forecast against Claude Max 2B limit
+```
+
+Response:
+```json
+{
+  "daily_avg_7d": 18500000,
+  "daily_avg_30d": 14200000,
+  "projected_month": 412000000,
+  "used_this_month": 227000000,
+  "days_until_limit": 14,
+  "trend": "accelerating",
+  "trend_pct": 30.2,
+  "limit": 500000000,
+  "plan": "claude_pro",
+  "buckets_30d": { "2026-06-01": 15200000, "2026-06-02": 19400000, "..." : "..." }
+}
+```
+
+---
+
+### 🧬 Prompt DNA
+
+Extracts **10 structural features** from each session's first message and computes Pearson correlation against efficiency scores, revealing which prompt habits make sessions succeed or fail.
+
+**Features extracted per prompt:**
+
+| Feature | Description |
+|---------|-------------|
+| `msg_length` | Character count |
+| `word_count` | Approximate word count |
+| `has_file_ref` | References a file path or @ mention |
+| `has_code_block` | Contains a triple-backtick block |
+| `has_markdown` | Uses `#` headers or `- / *` bullets |
+| `has_numbered_steps` | Uses `1.` / `2.` numbered lists |
+| `has_question` | Prompt ends with `?` |
+| `is_vague` | < 60 chars, no file ref, no code |
+| `is_detailed` | > 300 characters |
+| `has_context_link` | References previous session / last time / continue |
+
+**Task classification:** `fix` · `build` · `refactor` · `analyze` · `test` · `deploy` · `other` (regex-matched, first match wins).
+
+**In the UI:** a **Prompt DNA** card in the right sidebar shows the top 2 positive and top 2 negative correlates with r-values and one-line insights, plus a mini bar chart breaking down average efficiency by task type.
+
+**API:**
+```
+GET /insights/prompt-dna    → full correlation analysis over all sessions
+```
+
+Response:
+```json
+{
+  "sessions_analysed": 14,
+  "sessions_skipped": 24,
+  "correlations": [
+    {
+      "feature": "is_vague",
+      "label": "Vague / short prompt",
+      "r": -0.871,
+      "direction": "negative",
+      "insight": "Sessions with 'vague / short prompt' score 53.6 pts lower on average (13.7 vs 67.3)."
+    }
+  ],
+  "by_task_type": {
+    "other":   { "avg_efficiency": 69.7, "count": 8 },
+    "build":   { "avg_efficiency": 20.6, "count": 4 }
+  },
+  "top_positive": [...],
+  "top_negative": [...]
+}
+```
+
+---
+
+### 🏆 Multi-Model Comparison
+
+Side-by-side efficiency ranking of every model you've used, filterable by task type.
+
+**Stats per model:**
+
+| Stat | Description |
+|------|-------------|
+| `avg_efficiency` | Mean efficiency score across sessions |
+| `median_efficiency` | Median (robust to outliers) |
+| `p75_efficiency` | 75th percentile — typical good session for this model |
+| `best_efficiency` | Highest single session score |
+| `avg_tokens` | Average tokens per session |
+| `task_breakdown` | Per-task-type count and avg efficiency |
+
+**In the UI:** a full-width **Model comparison** section below the main grid shows ranked model rows with dual efficiency bars (avg + p75) and colour-coded task breakdown pills. Task type filter pills (All / build / refactor / analyze / other) refetch instantly.
+
+**API:**
+```
+GET /insights/model-comparison                      → all task types
+GET /insights/model-comparison?task_type=build      → build tasks only
+GET /insights/model-comparison?task_type=refactor   → refactor tasks only
+```
+
+Response:
+```json
+{
+  "task_type_filter": null,
+  "models_compared": 3,
+  "sessions_used": 13,
+  "sessions_skipped": 25,
+  "models": [
+    {
+      "model": "claude-sonnet-4-6",
+      "agent": "claude",
+      "session_count": 5,
+      "avg_efficiency": 68.4,
+      "median_efficiency": 73.6,
+      "p75_efficiency": 76.6,
+      "best_efficiency": 80.4,
+      "total_tokens": 13258141,
+      "avg_tokens": 2651628,
+      "task_breakdown": {
+        "other": { "count": 5, "avg_efficiency": 68.4 }
+      }
+    }
+  ],
+  "task_types_available": ["build", "refactor", "analyze", "other"]
+}
+```
+
+---
+
+### Implementation notes
+
+All five features live in standalone Python modules — no changes to existing data collection or parsing logic:
+
+| Module | Responsibility |
+|--------|---------------|
+| `backend/scoring.py` | Efficiency score computation |
+| `backend/smells.py` | Smell rule evaluation |
+| `backend/forecast.py` | Daily bucketing + linear projection |
+| `backend/prompt_analysis.py` | Feature extraction + Pearson correlation |
+| `backend/model_comparison.py` | Per-model efficiency stats + task breakdown |
+
+**No new required dependencies.** Everything uses Python stdlib (`math`, `datetime`, `collections`, `re`). Ollama, scipy, numpy — none needed.
+
+Smells and efficiency scores are computed in-memory after the session cache is built, so they add no I/O overhead. Forecast runs over the already-loaded session list.
 
 ---
 

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
+  Zap, AlertTriangle, Flame, TrendingDown, BarChart3, GitBranch, GitCommit, Plus, Minus, Brain,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -21,6 +22,13 @@ import {
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
 } from "@/components/ui";
 
+interface Smell {
+  type: string;
+  title: string;
+  detail: string;
+  severity: "warning" | "critical";
+}
+
 interface Session {
   id: string;
   agent: string;
@@ -30,12 +38,65 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  efficiency?: number | null;
+  efficiency_label?: "good" | "fair" | "poor" | "unknown";
+  smells?: Smell[];
   /** Copilot-only: cli / vscode */
   copilot_source?: string;
   /** Antigravity-only: cli / ide / app */
   antigravity_source?: string;
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
+  git_info?: GitInfo;
+}
+
+interface ForecastResponse {
+  daily_avg_7d: number;
+  daily_avg_30d: number;
+  projected_month: number;
+  used_this_month: number;
+  days_until_limit: number | null;
+  trend: "accelerating" | "steady" | "slowing";
+  trend_pct: number;
+  limit: number;
+  plan: string;
+  buckets_30d: Record<string, number>;
+}
+
+interface ModelRow {
+  model: string;
+  agent: string;
+  session_count: number;
+  avg_efficiency: number;
+  median_efficiency: number;
+  p75_efficiency: number;
+  best_efficiency: number;
+  total_tokens: number;
+  avg_tokens: number;
+  task_breakdown: Record<string, { count: number; avg_efficiency: number }>;
+}
+
+interface GitInfo {
+  is_git: boolean;
+  branch: string | null;
+  commit_sha: string | null;
+  commit_msg: string | null;
+  files_changed: number;
+  lines_added: number;
+  lines_deleted: number;
+}
+
+interface GitProjectSummary {
+  project: string;
+  branch: string | null;
+  session_count: number;
+  total_files_changed: number;
+  total_lines_added: number;
+  total_lines_deleted: number;
+  net_lines: number;
+  latest_commit_sha: string | null;
+  latest_commit_msg: string | null;
+  avg_files_per_session: number;
 }
 
 interface AnalyticsResponse {
@@ -46,10 +107,11 @@ interface AnalyticsResponse {
 
 export default function Home() {
   const pathname = usePathname();
-  const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
-  const agentsRes   = useResource<string[]>("/agents", { pollMs: 30_000, initial: [] });
+  const sessionsRes  = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
+  const agentsRes    = useResource<string[]>("/agents", { pollMs: 30_000, initial: [] });
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
-  const billingRes  = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
+  const billingRes   = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
+  const forecastRes  = useResource<ForecastResponse>("/forecast?plan=claude_pro", { pollMs: 60_000 });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -79,6 +141,7 @@ export default function Home() {
     window.addEventListener("storage", check);
     return () => window.removeEventListener("storage", check);
   }, []);
+
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -249,25 +312,58 @@ export default function Home() {
                     <TH className="pl-5">Agent</TH>
                     <TH>Project</TH>
                     <TH>Context</TH>
+                    <TH className="text-right">
+                      <span className="flex items-center justify-end gap-1">
+                        <Zap size={10} className="text-[var(--tt-brand)]" />
+                        Score
+                      </span>
+                    </TH>
                     <TH className="text-right pr-5">Time</TH>
                   </TR>
                 </THead>
                 <TBody>
-                  {sessions.slice(0, 50).map((s, i) => (
+                  {sessions.slice(0, 50).map((s, i) => {
+                    const smellCount = s.smells?.length ?? 0;
+                    const hasCritical = s.smells?.some((w) => w.severity === "critical") ?? false;
+                    const effLabel = s.efficiency_label;
+                    const effScore = s.efficiency;
+                    const effColor =
+                      effLabel === "good"  ? "#22c55e" :
+                      effLabel === "fair"  ? "#f59e0b" :
+                      effLabel === "poor"  ? "#ef4444" : "var(--tt-fg-faint)";
+                    return (
                     <TR key={`${s.agent}-${s.id}-${i}`} interactive>
                       <TD className="pl-5">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                           <AgentBadge agent={s.agent} />
                           {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                           {s.agent === "antigravity" && <AntigravitySourceBadge source={s.antigravity_source} size="xs" />}
+                          {smellCount > 0 && (
+                            <span
+                              title={`${smellCount} smell${smellCount > 1 ? "s" : ""} detected${hasCritical ? " (critical)" : ""}`}
+                              className="ml-0.5 flex items-center gap-0.5"
+                              style={{ color: hasCritical ? "#ef4444" : "#f59e0b" }}
+                            >
+                              <AlertTriangle size={10} />
+                              {smellCount > 1 && <span className="text-[9px] font-semibold leading-none">{smellCount}</span>}
+                            </span>
+                          )}
                         </Link>
                       </TD>
-                      <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
-                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
-                          {s.agent === "hermes" ? (
-                            <SourceBadge source={s.source_subtype} size="xs" />
-                          ) : (
-                            s.project.split("/").pop()
+                      <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[180px]" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex flex-col gap-0.5 truncate">
+                          <span className="truncate">
+                            {s.agent === "hermes" ? (
+                              <SourceBadge source={s.source_subtype} size="xs" />
+                            ) : (
+                              s.project.split(/[/\\]/).pop()
+                            )}
+                          </span>
+                          {s.git_info?.is_git && s.git_info.branch && (
+                            <span className="flex items-center gap-0.5 text-[9px] text-[var(--tt-fg-faint)]">
+                              <GitBranch size={8} />
+                              <span className="truncate max-w-[120px]">{s.git_info.branch}</span>
+                            </span>
                           )}
                         </Link>
                       </TD>
@@ -275,6 +371,26 @@ export default function Home() {
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.display || s.text || (
                             <span className="italic text-[var(--tt-fg-faint)]">No message content</span>
+                          )}
+                        </Link>
+                      </TD>
+                      <TD className="text-right">
+                        <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex justify-end">
+                          {effScore != null ? (
+                            <span
+                              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular leading-none"
+                              style={{
+                                backgroundColor: `${effColor}18`,
+                                color: effColor,
+                                border: `1px solid ${effColor}30`,
+                              }}
+                              title={`Efficiency: ${effScore}/100 (${effLabel})`}
+                            >
+                              <Zap size={8} />
+                              {effScore}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-[var(--tt-fg-faint)]">—</span>
                           )}
                         </Link>
                       </TD>
@@ -287,7 +403,8 @@ export default function Home() {
                         </Link>
                       </TD>
                     </TR>
-                  ))}
+                    );
+                  })}
                 </TBody>
               </Table>
             </div>
@@ -345,6 +462,104 @@ export default function Home() {
             </Link>
           </Card>
 
+          {/* Burn Rate Forecast card */}
+          {(() => {
+            const fc = forecastRes.data;
+            if (!fc && forecastRes.loading) return (
+              <Card>
+                <CardHeader>
+                  <CardTitle><Flame size={14} className="text-orange-400" />Burn rate</CardTitle>
+                </CardHeader>
+                <Skeleton className="h-16 w-full" />
+              </Card>
+            );
+            if (!fc) return null;
+            const trendIcon =
+              fc.trend === "accelerating" ? <TrendingUp size={11} className="text-red-400" /> :
+              fc.trend === "slowing"      ? <TrendingDown size={11} className="text-emerald-400" /> :
+                                           <span className="w-2.5 h-0.5 rounded bg-[var(--tt-fg-faint)]" />;
+            const trendColor =
+              fc.trend === "accelerating" ? "#f87171" :
+              fc.trend === "slowing"      ? "#4ade80" : "var(--tt-fg-dim)";
+            const dailyM = (fc.daily_avg_7d / 1e6).toFixed(1);
+            const projM  = (fc.projected_month / 1e6).toFixed(0);
+            const limitM = fc.limit > 0 ? (fc.limit / 1e6).toFixed(0) : null;
+            const pctUsed = fc.limit > 0
+              ? Math.min((fc.used_this_month / fc.limit) * 100, 100)
+              : null;
+            const urgentLimit = fc.days_until_limit != null && fc.days_until_limit <= 7;
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>
+                    <Flame size={14} className="text-orange-400" />
+                    Burn rate
+                  </CardTitle>
+                  <CardEyebrow className="flex items-center gap-1" style={{ color: trendColor }}>
+                    {trendIcon}
+                    {fc.trend}
+                    {Math.abs(fc.trend_pct) >= 5 && (
+                      <span className="ml-0.5">({fc.trend_pct > 0 ? "+" : ""}{fc.trend_pct.toFixed(0)}%)</span>
+                    )}
+                  </CardEyebrow>
+                </CardHeader>
+
+                <div className="space-y-3">
+                  {/* Daily rate */}
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <div className="text-[22px] font-semibold tabular text-[var(--tt-fg)] leading-none">{dailyM}M</div>
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-faint)] mt-0.5">tokens / day (7d avg)</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[13px] font-medium tabular text-[var(--tt-fg-muted)]">{projM}M</div>
+                      <div className="text-[10px] text-[var(--tt-fg-faint)]">proj. this month</div>
+                    </div>
+                  </div>
+
+                  {/* Limit bar */}
+                  {pctUsed != null && limitM && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-[var(--tt-fg-faint)]">
+                        <span>{(fc.used_this_month / 1e6).toFixed(0)}M used</span>
+                        <span>{limitM}M limit (Claude Pro)</span>
+                      </div>
+                      <div className="h-1.5 rounded-full tt-tint-1 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-[width] duration-700"
+                          style={{
+                            width: `${pctUsed}%`,
+                            backgroundColor: pctUsed > 80 ? "#f87171" : pctUsed > 50 ? "#f59e0b" : "#4ade80",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Days until limit */}
+                  {fc.days_until_limit != null && (
+                    <div
+                      className="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: urgentLimit ? "#ef444420" : "#f59e0b12",
+                        color: urgentLimit ? "#f87171" : "#f59e0b",
+                        border: `1px solid ${urgentLimit ? "#ef444430" : "#f59e0b25"}`,
+                      }}
+                    >
+                      <AlertTriangle size={11} />
+                      Limit in ~{fc.days_until_limit} day{fc.days_until_limit !== 1 ? "s" : ""} at current pace
+                    </div>
+                  )}
+                  {fc.days_until_limit === null && (
+                    <div className="text-[10px] text-[var(--tt-fg-faint)]">
+                      On track — no limit exceeded at current pace
+                    </div>
+                  )}
+                </div>
+              </Card>
+            );
+          })()}
+
           {modelRows.length > 0 && (
             <Card>
               <CardHeader>
@@ -379,6 +594,9 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* ── Intelligence Snapshot ────────────────────────────────── */}
+      <IntelligenceSnapshot />
     </div>
   );
 }
@@ -395,6 +613,75 @@ function ActivityLoading() {
         </div>
       ))}
     </div>
+  );
+}
+
+// ── Intelligence Snapshot ─────────────────────────────────────────────────────
+
+interface SnapRec { total: number; high_count: number; }
+interface SnapHealth { healthy_projects: number; at_risk_projects: number; total_projects: number; }
+interface SnapAnomaly { total_anomalies: number; affected_sessions: number; }
+
+function IntelligenceSnapshot() {
+  const recRes    = useResource<SnapRec>("/insights/recommendations", { pollMs: 120_000 });
+  const healthRes = useResource<SnapHealth>("/insights/project-health", { pollMs: 120_000 });
+  const anomalyRes = useResource<SnapAnomaly>("/insights/anomalies", { pollMs: 60_000 });
+
+  const recs    = recRes.data;
+  const health  = healthRes.data;
+  const anomaly = anomalyRes.data;
+
+  if (!recs && !health && !anomaly) return null;
+
+  return (
+    <Section title="Intelligence" description="Cross-session analytics and recommendations">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-5 rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface-raised)]">
+        <div className="flex flex-wrap gap-6 flex-1">
+          {recs && recs.total > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-[var(--tt-brand)]/10 flex items-center justify-center">
+                <Brain size={15} className="text-[var(--tt-brand)]" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{recs.total} recommendations</div>
+                {recs.high_count > 0 && (
+                  <div className="text-[11px] text-red-400">{recs.high_count} high priority</div>
+                )}
+              </div>
+            </div>
+          )}
+          {health && health.total_projects > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-emerald-400/10 flex items-center justify-center">
+                <Activity size={15} className="text-emerald-400" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{health.healthy_projects}/{health.total_projects} projects healthy</div>
+                {health.at_risk_projects > 0 && (
+                  <div className="text-[11px] text-red-400">{health.at_risk_projects} at risk</div>
+                )}
+              </div>
+            </div>
+          )}
+          {anomaly && anomaly.total_anomalies > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-yellow-400/10 flex items-center justify-center">
+                <AlertTriangle size={15} className="text-yellow-400" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[var(--tt-fg)]">{anomaly.affected_sessions ?? anomaly.total_anomalies} sessions flagged</div>
+                <div className="text-[11px] text-[var(--tt-fg-faint)]">{anomaly.total_anomalies} signals total</div>
+              </div>
+            </div>
+          )}
+        </div>
+        <Link href="/intelligence">
+          <Button variant="secondary" size="md">
+            View Intelligence <ArrowUpRight size={14} />
+          </Button>
+        </Link>
+      </div>
+    </Section>
   );
 }
 

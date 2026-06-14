@@ -3547,6 +3547,33 @@ def _scan_sessions_sync():
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    # ── Intelligence layer: efficiency score + smell detection + prompt DNA ──
+    for s in sessions:
+        try:
+            score = score_session(s)
+            s["efficiency"] = score
+            s["efficiency_label"] = score_label(score)
+        except Exception:
+            s["efficiency"] = None
+            s["efficiency_label"] = "unknown"
+        try:
+            s["smells"] = detect_smells(s)
+        except Exception:
+            s["smells"] = []
+        try:
+            msg = (s.get("display") or s.get("text") or "").strip()
+            feats = extract_features(msg)
+            s["task_type"] = feats["task_type"]
+            s["prompt_features"] = feats
+        except Exception:
+            s["task_type"] = "other"
+            s["prompt_features"] = {}
+        try:
+            s["git_info"] = get_git_info(s.get("project", ""), s.get("timestamp"))
+        except Exception:
+            s["git_info"] = {"is_git": False}
+
     return sessions
 
 
@@ -3560,6 +3587,19 @@ def _scan_sessions_sync():
 import asyncio as _asyncio
 import time as _time
 from pricing import calculate_cost, PRICING, PRICING_UPDATED
+from scoring import score_session, score_label
+from smells import detect_smells
+from forecast import compute_forecast
+from prompt_analysis import extract_features, analyse_prompt_dna
+from model_comparison import compare_models
+from git_context import get_git_info, git_summary
+from trends import compute_trends
+from time_intel import analyse_time
+from tool_footprint import analyse_tool_footprint
+from cost_intel import analyse_cost
+from anomaly import detect_anomalies
+from recommendations import generate_recommendations
+from project_health import compute_project_health
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -3693,6 +3733,202 @@ async def get_sessions(fresh: bool = False):
 async def get_pricing():
     """Return the static pricing table and the date it was last refreshed."""
     return {"updated": PRICING_UPDATED, "models": PRICING}
+
+
+@app.get("/forecast")
+async def get_forecast(plan: str = "claude_pro"):
+    """
+    Burn-rate forecast: daily token averages, projected monthly usage,
+    days until plan limit, and trend direction.
+    plan: claude_pro | claude_max | codex_plus | copilot | api_unlimited
+    """
+    sessions = await get_sessions_cached()
+    return compute_forecast(sessions, plan=plan)
+
+
+@app.get("/smells")
+async def get_smells(project: Optional[str] = None):
+    """
+    Return sessions that have at least one AI smell warning.
+    Each entry: { session_id, agent, project, timestamp, smells: [...] }
+    """
+    sessions = await get_sessions_cached()
+    result = []
+    for s in sessions:
+        if project and s.get("project") != project:
+            continue
+        smells = s.get("smells") or []
+        if not smells:
+            continue
+        result.append({
+            "session_id": s.get("id"),
+            "agent":      s.get("agent"),
+            "project":    s.get("project"),
+            "timestamp":  s.get("timestamp"),
+            "efficiency": s.get("efficiency"),
+            "smells":     smells,
+        })
+    return result
+
+
+@app.get("/efficiency")
+async def get_efficiency(project: Optional[str] = None):
+    """
+    Return efficiency scores for all sessions, sorted best-first.
+    Useful for leaderboard views and detecting worst-performing sessions.
+    """
+    sessions = await get_sessions_cached()
+    result = []
+    for s in sessions:
+        if project and s.get("project") != project:
+            continue
+        score = s.get("efficiency")
+        if score is None:
+            continue
+        result.append({
+            "session_id":       s.get("id"),
+            "agent":            s.get("agent"),
+            "project":          s.get("project"),
+            "timestamp":        s.get("timestamp"),
+            "efficiency":       score,
+            "efficiency_label": s.get("efficiency_label"),
+        })
+    result.sort(key=lambda x: x["efficiency"], reverse=True)
+    return result
+
+
+@app.get("/insights/prompt-dna")
+async def get_prompt_dna(project: Optional[str] = None):
+    """
+    Prompt DNA: correlate prompt features with efficiency scores.
+    Returns top positive/negative traits, per-task-type breakdown,
+    and full Pearson correlation table.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_prompt_dna(sessions)
+
+
+
+@app.get("/insights/git-summary")
+async def get_git_summary(project: Optional[str] = None):
+    """
+    Git activity summary grouped by project.
+    Returns per-project: branch, latest commit, total files/lines changed
+    across all sessions that sit inside a git work-tree.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return git_summary(sessions)
+
+
+@app.get("/insights/trends")
+async def get_trends(days: int = 60, project: Optional[str] = None):
+    """
+    Session efficiency trends over the last N calendar days (default 60).
+    Returns per-day buckets with rolling 7-day average, trend direction,
+    current streak, best/worst days, and week-over-week delta.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compute_trends(sessions, days=days)
+
+
+@app.get("/insights/anomalies")
+async def get_anomalies(project: Optional[str] = None):
+    """
+    Anomaly detection: sessions that are statistical outliers in cost,
+    efficiency, or token usage. Uses z-scores with configurable thresholds.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return detect_anomalies(sessions)
+
+
+@app.get("/insights/recommendations")
+async def get_recommendations(project: Optional[str] = None):
+    """
+    AI recommendations: cross-module actionable insights synthesising
+    cost, timing, prompt DNA, tool footprint, trends, and smell patterns.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return generate_recommendations(sessions)
+
+
+@app.get("/insights/project-health")
+async def get_project_health(project: Optional[str] = None):
+    """
+    Project health scores: per-project composite 0–100 score (A–F grade)
+    combining efficiency, smell rate, recent trend, and cost value.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compute_project_health(sessions)
+
+
+@app.get("/insights/cost")
+async def get_cost_intel(project: Optional[str] = None):
+    """
+    Cost Intelligence: efficiency per dollar, best-value model, cache-tier
+    analysis, and wasteful session detection.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_cost(sessions)
+
+
+@app.get("/insights/time")
+async def get_time_intel(project: Optional[str] = None):
+    """
+    Time Intelligence: efficiency by hour-of-day and day-of-week.
+    Returns peak/worst hour, peak/worst day, peak period (morning/afternoon/
+    evening/night), and per-bucket stats for heatmap/bar visualisations.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_time(sessions)
+
+
+@app.get("/insights/tool-footprint")
+async def get_tool_footprint(project: Optional[str] = None):
+    """
+    Tool Footprint: how toolset size and composition correlate with efficiency.
+    Returns by-size buckets, per-category presence effect, and top-15 tools
+    by session frequency with their average efficiency scores.
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return analyse_tool_footprint(sessions)
+
+
+@app.get("/insights/model-comparison")
+async def get_model_comparison(
+    task_type: Optional[str] = None,
+    project: Optional[str] = None,
+):
+    """
+    Multi-model efficiency comparison.
+    Groups sessions by model name, computes avg/median/p75/best efficiency,
+    token stats, and per-task-type breakdown.
+
+    Query params:
+      task_type  filter to a single task type (fix|build|refactor|analyze|test|deploy|other)
+      project    filter to a single project path
+    """
+    sessions = await get_sessions_cached()
+    if project:
+        sessions = [s for s in sessions if s.get("project") == project]
+    return compare_models(sessions, task_type=task_type)
 
 
 @app.get("/remote-access")
