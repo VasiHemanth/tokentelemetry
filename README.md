@@ -12,7 +12,7 @@
 [![Website](https://img.shields.io/badge/Website-tokentelemetry.com-blue)](https://tokentelemetry.com)
 [![GitHub Stars](https://img.shields.io/github/stars/VasiHemanth/tokentelemetry?style=social)](https://github.com/VasiHemanth/tokentelemetry)
 
-**TokenTelemetry** is a free, open-source, 100% local observability dashboard that tracks **token usage**, **LLM costs**, **tool calls**, **session traces**, and **reasoning steps** across all your AI coding agents — in one unified place. No signup. No cloud. No telemetry.
+**TokenTelemetry** is a free, open-source, 100% local observability dashboard that tracks **token usage**, **LLM costs**, **tool calls**, **session traces**, and **reasoning steps** across all your AI coding agents — in one unified place. No signup. No cloud. Your logs never leave your machine.
 
 🌐 **Website & Docs:** [https://tokentelemetry.com](https://tokentelemetry.com)  
 🖥️ **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.sh | bash`
@@ -110,7 +110,7 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
 - 🧠 **Plan Capture** — view plan-mode outputs from Claude Code and other agents
 - 📈 **Model Analytics** — compare GPT-5.4 vs Claude 4.6 Sonnet vs Gemini 3.1 Flash efficiency
-- 🔒 **100% Local** — all data stays on your machine, zero cloud dependency
+- 🔒 **Your data stays local** — your AI-usage logs, sessions, tokens, costs, and prompts never leave your machine; optional anonymous product-usage stats (on by default, one-click off) are the only outbound signal
 - ⚡ **Zero Config** — auto-detects agents from their default log locations
 - 🆓 **Free & Open Source** — MIT licensed, forever free
 
@@ -212,21 +212,39 @@ Everything — aliases, hidden projects, preferences, billing/power overrides,
 summaries cache, the update-check stamp — moves together, so a single setting
 relocates *all* state. The default remains `~/.tokentelemetry/`.
 
-### Update check
+### Privacy & outbound calls
 
-TokenTelemetry does **not** collect or transmit your logs, sessions, tokens, or
-costs — those never leave your machine. The one outbound call it makes is an
-**optional update check**: about once an hour the dashboard fetches the latest
-version and curated release notes from GitHub, so you know when new features
-land. It sends no usage data — only a version request, which (like any web
-request) exposes your IP and the app name to GitHub.
+Your AI-usage data — logs, sessions, tokens, costs, prompts, file paths, and
+project names — **never leaves your machine**. TokenTelemetry makes two
+optional outbound calls:
 
-Turn it off either way:
+1. **Update check** — about once an hour the dashboard fetches the latest
+   version and curated release notes from GitHub so you know when new features
+   land. Only a version request; your IP and app name reach GitHub like any
+   web request.
+
+2. **Anonymous product-usage telemetry** (on by default, one-click off) —
+   content-free usage signals sent to a Cloudflare Worker: which pages you
+   open, which features you use, summary success/engine, OS + CPU arch + app
+   version, approximate country (derived at Cloudflare's edge — never your
+   IP), which AI agents are detected (generic names), and a random per-launch
+   session id that is not linked across launches. It never collects your code,
+   prompts, model output, file/directory paths, project names, token counts,
+   costs, IP address, or any stable user or device identifier. Full details:
+   [tokentelemetry.com/privacy](https://tokentelemetry.com/privacy) and
+   Settings → *Usage & privacy* in the app.
+
+**Turning off telemetry:**
+
+- **In the app** — Settings → *Usage & privacy* → toggle off.
+- **Via environment** — `DO_NOT_TRACK=1` or `TT_NO_TELEMETRY=1` (hard off;
+  useful for enterprise or egress-restricted environments). Auto-disabled in
+  CI / non-interactive sessions.
+
+**Turning off the update check:**
 
 - **In the app** — Settings → *Updates & privacy* → toggle off *Check for updates*.
-- **Via environment** — set `TT_NO_UPDATE_CHECK=1` before launching. This wins
-  over the in-app toggle, so admins can enforce it (e.g. in air-gapped or
-  egress-monitored environments).
+- **Via environment** — `TT_NO_UPDATE_CHECK=1` (wins over the in-app toggle).
 
 ---
 
@@ -296,7 +314,7 @@ tokentelemetry/
 ## FAQ
 
 **Q: Does TokenTelemetry send any data to the cloud?**  
-A: No usage data, ever. It reads log files from your filesystem and serves a local web dashboard — your logs, sessions, tokens, and costs never leave your machine. The only outbound call is an optional update check that fetches the latest version and release notes from GitHub (no usage data sent); disable it in Settings → *Updates & privacy* or with `TT_NO_UPDATE_CHECK=1`. See [Update check](#update-check).
+A: Your AI-usage data — logs, sessions, tokens, costs, prompts — never leaves your machine. There are two optional outbound calls: (1) an **update check** that fetches the latest version from GitHub (no usage data), and (2) **anonymous product-usage telemetry** (on by default) that sends content-free signals — pages visited, features used, OS/arch/version, approximate country, detected agent names — but never your code, prompts, costs, paths, or any stable identifier. Turn off telemetry in Settings → *Usage & privacy* or set `DO_NOT_TRACK=1` / `TT_NO_TELEMETRY=1`. Turn off the update check in Settings → *Updates & privacy* or set `TT_NO_UPDATE_CHECK=1`. See [Privacy & outbound calls](#privacy--outbound-calls).
 
 **Q: How does it track Claude Code token usage?**  
 A: Claude Code writes JSONL session logs to `~/.claude/`. TokenTelemetry watches those files and parses token counts, tool calls, and reasoning in real time.
