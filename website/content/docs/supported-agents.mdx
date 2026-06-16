@@ -1,0 +1,72 @@
+---
+title: Supported Agents
+description: The 10 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+---
+
+TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
+
+## Coding agents
+
+| Agent | Vendor | Log path | Captures |
+| --- | --- | --- | --- |
+| **Claude Code** | Anthropic | `~/.claude/projects/` | tokens, traces, reasoning, cost, subagents |
+| **Codex** | OpenAI | `~/.codex/sessions/` | tokens, traces, reasoning, cost |
+| **Gemini CLI** | Google | `~/.gemini/` | tokens, traces, cost |
+| **Antigravity** | Google | `~/.gemini/antigravity/` | traces, artifacts, screenshots, browser recordings |
+| **Qwen CLI** | Alibaba | `~/.qwen/` | tokens, traces |
+| **Vibe** | Local | `~/.vibe/` | tokens, traces, model |
+| **Cursor** | Cursor | `~/.cursor/` + workspaceStorage | tokens, traces, plans |
+| **GitHub Copilot** | GitHub | VS Code `chatSessions/` | tokens, traces, cost |
+| **OpenCode** | OpenCode | `~/.local/share/opencode/` | tokens, traces |
+| **Grok Build** | xAI | `~/.grok/sessions/` | tokens, traces, reasoning, cost |
+
+## Autonomous agents
+
+| Agent | Vendor | Log path | Captures |
+| --- | --- | --- | --- |
+| **Hermes Agent** | Nous Research | `~/.hermes/` | tokens, traces, cost, subagents, skills, memory, cron, 38 sources |
+
+Hermes has a dedicated dashboard at `/hermes` — see [Hermes Agent](/docs/features/hermes) for details.
+
+## Detection notes
+
+### Claude Code
+
+Reads JSONL session files from `~/.claude/projects/<dir>/`. Captures input and output tokens, cost, tool calls, plan-mode output, reasoning blocks (with honest labelling if encrypted), and subagent delegation cards.
+
+### Codex
+
+Reads session JSON from `~/.codex/sessions/`. Captures tokens, tool calls, and reasoning steps including extended thinking when enabled.
+
+### Gemini CLI
+
+Reads session files from `~/.gemini/`. Captures token counts (input/output), cost, and the conversation trace. Note: Gemini CLI does not expose per-call cache-hit data.
+
+### Antigravity
+
+Antigravity is Google's browser automation agent. TokenTelemetry reads its sessions from `~/.gemini/antigravity/` and additionally captures browser screenshots and Antigravity recording strips (thumbnail sequences from `browser_recordings`). See [Artifacts](/docs/features/artifacts).
+
+### Cursor
+
+Cursor stores its chat sessions in `~/.cursor/` and VS Code's `workspaceStorage/`. TokenTelemetry merges sessions from both locations. Plans extracted from Cursor's `/plan` output are available in the Projects → Plans tab.
+
+### GitHub Copilot
+
+Reads Copilot's chat session files from VS Code's `chatSessions/` directory (inside the VS Code user data folder). Token counts and cost are captured where the session log includes them.
+
+### OpenCode
+
+Reads session data from `~/.local/share/opencode/`. Token counts and traces are captured; OpenCode children sessions are included in the relayed-session count (they are already counted in the parent session's token totals).
+
+### Hermes Agent
+
+Hermes writes its state to `~/.hermes/` (or the directory pointed to by `$HERMES_HOME`). TokenTelemetry reads:
+
+- `sessions.db` / session JSON for per-call token and cost data
+- `agent.log` for per-API-call latency and cache-hit percentages
+- `skills/`, `memory/`, and `soul/` directories for the configuration pages
+- Cron schedule files for the Schedules sub-page
+
+## Requesting a new agent
+
+Don't see your agent? [Open a GitHub issue](https://github.com/VasiHemanth/tokentelemetry/issues) with the agent name and its log file format and we'll add support.

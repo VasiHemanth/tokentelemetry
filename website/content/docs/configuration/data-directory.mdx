@@ -1,0 +1,86 @@
+---
+title: Custom Data Directory
+description: Move TokenTelemetry's config and state to a different directory using --data-dir, TOKENTELEMETRY_DATA_DIR, or TOKENTELEMETRY_HOME.
+---
+
+By default, TokenTelemetry stores all its config and state in `~/.tokentelemetry/`. You can move this to any directory you like — useful for keeping your system drive clear, isolating tool state on a secondary drive, or running multiple independent instances.
+
+## Precedence
+
+Three mechanisms control the data directory location. **First match wins:**
+
+1. `--data-dir <path>` (or `-d <path>`) — launcher flag, highest precedence.
+2. `TOKENTELEMETRY_DATA_DIR=<path>` — environment variable, used verbatim (no `.tokentelemetry` suffix appended).
+3. `TOKENTELEMETRY_HOME=<path>` — environment variable, appends `.tokentelemetry` as a subdirectory under the given path.
+4. Default: `~/.tokentelemetry/`.
+
+## Using the flag
+
+```bash
+./start.sh --data-dir /mnt/d/tt-data
+# or shorthand:
+./start.sh -d /mnt/d/tt-data
+```
+
+The directory is created on first write. Subsequent launches use the same path if you pass the same flag.
+
+> **Windows tip:** Avoid a trailing backslash when quoting a path in `cmd.exe`. `--data-dir "D:\tt\"` fails because `\"` escapes the closing quote. Use `--data-dir D:\tt` or `--data-dir "D:/tt"` instead.
+
+## Using environment variables
+
+```bash
+# Exact path (no suffix appended):
+export TOKENTELEMETRY_DATA_DIR=/mnt/d/tt-data
+./start.sh
+
+# Home override (appends .tokentelemetry):
+export TOKENTELEMETRY_HOME=/mnt/d
+# → data dir: /mnt/d/.tokentelemetry
+./start.sh
+```
+
+An explicit `--data-dir` flag wins over both env vars.
+
+## What lives in the data directory
+
+Everything moves together when you change the data directory:
+
+| File / folder | Contents |
+| --- | --- |
+| `aliases.json` | Path aliases — rename or merge project folder paths |
+| `hidden.json` | Projects excluded from the dashboard |
+| `preferences.json` | App preferences (update check, telemetry toggles) |
+| `billing.json` | Per-agent billing-mode overrides |
+| `power.json` | Local-model wattage and electricity settings |
+| `summarizer.json` | Summarizer backend selection and model settings |
+| `summaries.db` | Cached session summaries (SQLite) |
+| `history.db` | Durable session history (SQLite, if enabled) |
+| `VERSION` | Schema version integer for future migrations |
+| `.update-check.json` | Timestamp and SHA of last update check result |
+
+None of these files contain session transcript data by default. `history.db` may contain transcripts if you enable [transcript archival](/docs/configuration/retention).
+
+## Moving an existing data directory
+
+Stop TokenTelemetry, move the directory, then relaunch with the new path:
+
+```bash
+mv ~/.tokentelemetry /mnt/d/tt-data
+./start.sh --data-dir /mnt/d/tt-data
+```
+
+All your aliases, preferences, summaries, and history move with it.
+
+## Running multiple instances
+
+To run two independent TokenTelemetry instances (e.g. one per project or one per user on a shared machine), give each a different data directory and different ports:
+
+```bash
+# Instance A
+./start.sh --data-dir ~/tt-work --port 3000 --api-port 8000
+
+# Instance B
+./start.sh --data-dir ~/tt-personal --port 3001 --api-port 8001
+```
+
+Both read the same agent log files, but maintain separate aliases, preferences, and summaries.

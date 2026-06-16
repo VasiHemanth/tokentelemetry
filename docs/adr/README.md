@@ -35,3 +35,4 @@ sync with the code because it ships in the same commit.
 |-----|-------|--------|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions in the repo | Accepted |
 | [0002](0002-durable-history-rollup.md) | Durable SQLite rollup for analytics history | Accepted |
+| [0003](0003-docs-site-fumadocs.md) | Docs + resources site with Fumadocs in the marketing app | Proposed |

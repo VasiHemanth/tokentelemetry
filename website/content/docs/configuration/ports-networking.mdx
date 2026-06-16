@@ -1,0 +1,90 @@
+---
+title: Ports & Networking
+description: Change the frontend and backend ports, understand NEXT_PUBLIC_API_PORT, and what happens when a port is already in use.
+---
+
+TokenTelemetry runs two services:
+
+- **Frontend** (Next.js) — default port **3000**
+- **Backend** (FastAPI) — default port **8000**
+
+Both ports are configurable.
+
+## Changing ports
+
+Use the `--port` / `-p` flag for the frontend and `--api-port` / `-a` flag for the backend:
+
+```bash
+# Custom frontend port only (backend stays 8000):
+./start.sh --port 4000
+./start.sh -p 4000
+
+# Custom backend port only (frontend stays 3000):
+./start.sh --api-port 9000
+./start.sh -a 9000
+
+# Both:
+./start.sh --port 4000 --api-port 9000
+```
+
+Valid port range: 1–65535.
+
+## How the frontend finds the backend
+
+The frontend derives the backend URL from `window.location` at runtime:
+
+- It takes the hostname from the browser URL (e.g. `localhost`, `192.168.1.42`, `box.tailnet.ts.net`).
+- It substitutes the API port from `NEXT_PUBLIC_API_PORT` (which the launcher sets automatically to match `--api-port`).
+
+This means that if you open the dashboard from a remote address (because you used `--host`), the frontend automatically talks to the backend at that same remote address on the API port. You don't need to configure anything extra.
+
+### NEXT_PUBLIC_API_PORT
+
+`NEXT_PUBLIC_API_PORT` is set by the launcher to match the `--api-port` value. You can override it manually if you're running the frontend separately from the backend (e.g. in development):
+
+```bash
+NEXT_PUBLIC_API_PORT=9000 npm run dev
+```
+
+### NEXT_PUBLIC_API_BASE (explicit override)
+
+`NEXT_PUBLIC_API_BASE` lets you pin the full backend URL, overriding the auto-derived value. This is useful for SSH-tunnel setups where the frontend and backend are on different hosts from the browser's perspective:
+
+```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+```
+
+See [Remote Access](/docs/configuration/remote-access) for the SSH-tunnel pattern where this is needed.
+
+## Port-in-use behaviour
+
+The launcher checks both ports before starting. If either port is already occupied, it prints an error and exits:
+
+```
+ERROR: required port(s) already in use: 3000
+Stop whatever is listening on those ports and try again.
+Tip: `lsof -iTCP:3000 -sTCP:LISTEN` shows the culprit.
+```
+
+On Windows:
+```
+Tip: `netstat -ano | findstr :3000` shows the culprit PID.
+```
+
+This fail-fast behavior prevents the common problem where Next.js silently bumps to port 3001 and the auto-opened browser lands on the wrong URL.
+
+To free a port:
+
+```bash
+# macOS / Linux — find the process:
+lsof -iTCP:3000 -sTCP:LISTEN
+
+# Kill it:
+kill <PID>
+```
+
+Or just pick a different port with `--port`.
+
+## Loopback-only by default
+
+Both services bind to `127.0.0.1` by default. They are not reachable from other devices on your network without explicitly using `--host`. See [Remote Access](/docs/configuration/remote-access) for instructions on exposing the dashboard to other devices.

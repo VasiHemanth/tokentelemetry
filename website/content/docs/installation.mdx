@@ -1,0 +1,98 @@
+---
+title: Installation
+description: Install TokenTelemetry with a one-line curl command, a Windows PowerShell script, or by cloning the repo.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Requirements
+
+Before installing, make sure you have:
+
+- **Node.js 18+** — [nodejs.org](https://nodejs.org)
+- **Python 3.9+** — [python.org](https://www.python.org/downloads/)
+- **npm** (comes with Node.js)
+- At least one supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)
+
+## Option 1: One-line installer (recommended)
+
+The installer clones TokenTelemetry into a `tokentelemetry/` folder in your current directory, sets up its Python and Node dependencies, and **launches it automatically** — your browser opens to the dashboard once it's ready.
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://tokentelemetry.com/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://tokentelemetry.com/install.ps1 | iex
+```
+
+To start it again later, run the launcher **from inside the cloned folder**:
+
+```bash
+cd tokentelemetry
+./start.sh          # macOS / Linux   (or: node bin/cli.js)
+```
+
+<Callout title="There is no global `tokentelemetry` command">
+TokenTelemetry runs from its own folder and deliberately installs nothing globally — it never touches your PATH. Always launch it with `./start.sh` (or `node bin/cli.js`) from inside the `tokentelemetry/` directory; typing `tokentelemetry` on its own will give `command not found`.
+</Callout>
+
+<Callout title="The dashboard is local-only" type="info">
+TokenTelemetry binds to `127.0.0.1`, so the dashboard is reachable only from the same machine. To open it from another device (phone, another laptop, a VPS), set that up explicitly — see [Remote Access](/docs/configuration/remote-access).
+</Callout>
+
+<Callout title="Port already in use?" type="warn">
+If you see `required port(s) already in use: 3000, 8000`, another process is on those ports. Free them (`lsof -iTCP:3000 -sTCP:LISTEN` shows the culprit) or start on different ports: `./start.sh --port 3100 --api-port 8100`.
+</Callout>
+
+## Option 2: Clone & run
+
+Use this path if you want to hack on the source, pin to a specific commit, or inspect what you're running before executing it.
+
+```bash
+git clone https://github.com/VasiHemanth/tokentelemetry.git
+cd tokentelemetry
+./start.sh        # macOS / Linux
+```
+
+```bat
+start.bat         # Windows
+```
+
+Or cross-platform via Node:
+
+```bash
+node bin/cli.js
+```
+
+The launcher creates a Python virtual environment and installs dependencies on first run. Subsequent starts skip the setup step if nothing has changed.
+
+## What gets installed
+
+TokenTelemetry does **not** add any global npm package or modify your agent's config. It installs:
+
+- A clone of the repo (or the release archive)
+- A Python venv under `backend/venv/` (created on first launch)
+- A `node_modules/` folder under `frontend/` (created on first launch)
+- A data directory at `~/.tokentelemetry/` (created on first write)
+
+Your agent logs are never modified — TokenTelemetry only reads them.
+
+## Updating
+
+Re-run the one-liner to update to the latest version, or `git pull` inside the repo directory if you cloned.
+
+## Uninstalling
+
+Stop TokenTelemetry (Ctrl+C), then remove the cloned folder (wherever you ran the installer) and the data directory:
+
+```bash
+# from the directory where you installed it:
+rm -rf tokentelemetry ~/.tokentelemetry
+```
+
+That's everything — no system packages, no daemons, no registry entries.

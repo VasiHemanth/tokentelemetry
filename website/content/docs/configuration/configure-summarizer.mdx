@@ -1,0 +1,84 @@
+---
+title: Configure the Summarizer
+description: Pick a summarization backend (Claude, Codex, Gemini, Qwen, Ollama, Antigravity, or OpenAI-compatible) and configure model settings.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The Summarizer generates readable summaries of session traces. It's optional — you only need to configure it if you want one-click summaries on the [Summarization](/docs/features/summarization) tab. Token counting, cost tracking, and traces all work without a summarizer.
+
+Open Settings → Summarizer in the TokenTelemetry UI to configure your backend.
+
+## Choosing a backend
+
+| Backend | Requirement | Best for |
+| --- | --- | --- |
+| **Claude** | `claude` CLI installed and authenticated | Best narrative quality; uses your Claude subscription |
+| **Codex** | `codex` CLI with API key or Pro subscription | Good quality; uses your OpenAI account |
+| **Gemini** | `gemini` CLI authenticated | Good quality; uses your Google account |
+| **Qwen** | `qwen` CLI with DashScope API key | Alternative to the above |
+| **Ollama** | `ollama serve` running locally | Fully local, no API costs |
+| **Antigravity** | Antigravity agent installed | Useful if you're already running Antigravity |
+| **OpenAI-compatible** | Any server speaking `/v1/chat/completions` | Maximum flexibility: llama.cpp, vLLM, LM Studio, Groq, OpenRouter, and more |
+
+All backends are invoked locally. For CLI-based backends (Claude, Codex, Gemini, Qwen, Antigravity), TokenTelemetry shells out to the CLI binary you already have installed. The OpenAI-compatible backend uses stdlib `urllib` — no new Python dependencies.
+
+## Model pickers
+
+For each backend, a model picker lets you choose which model to use for summarization. The picker shows the models available to the backend's CLI. You can also type a model name directly.
+
+The selected model is stored in `~/.tokentelemetry/summarizer.json` and applied to all future summarization requests.
+
+## OpenAI-compatible backend settings
+
+The OpenAI-compatible backend has additional settings because it supports a wide variety of server configurations:
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| **Endpoint** | `http://localhost:8080/v1` | The base URL of the server (must be http or https) |
+| **API key** | _(empty)_ | Bearer token for authenticated gateways; also readable from `OPENAI_COMPAT_API_KEY` env var |
+| **Max tokens** | `512` | Maximum tokens in the summary response |
+| **Temperature** | `0.7` | Sampling temperature |
+| **Top-p** | `0.95` | Nucleus sampling probability |
+| **Top-k** | `20` | Top-k sampling (ignored by strict OpenAI gateways) |
+| **Min-p** | `0.0` | Min-p sampling threshold |
+| **Presence penalty** | `1.5` | Repetition reduction |
+| **Repetition penalty** | `1.0` | Alternative repetition reduction (llama.cpp style) |
+| **Enable thinking** | Off | Send `chat_template_kwargs: {enable_thinking: true}` for Qwen3 thinking mode via vLLM |
+
+<Callout type="info">
+Non-OpenAI parameters (top_k, min_p, repetition_penalty, enable_thinking) are sent first. If the server rejects them with HTTP 400, TokenTelemetry automatically retries with a clean OpenAI-only payload so the summary still goes through. You don't need to toggle this manually.
+</Callout>
+
+The API key can also be set via the `OPENAI_COMPAT_API_KEY` environment variable. The env var takes precedence over the stored value, so secrets don't have to live in `summarizer.json`.
+
+## Timeout environment variables
+
+Long traces and slow models can exceed the backend's default timeout. Override per backend with:
+
+| Backend | Env var | Default |
+| --- | --- | --- |
+| Ollama | `TT_OLLAMA_TIMEOUT` | `360` (6 minutes) |
+| Codex | `TT_CODEX_TIMEOUT` | `300` (5 minutes) |
+| OpenAI-compatible | `TT_OPENAI_COMPAT_TIMEOUT` | `120` (2 minutes) |
+
+Set them before launching TokenTelemetry:
+
+```bash
+TT_OLLAMA_TIMEOUT=600 tokentelemetry
+```
+
+Or export them in your shell profile.
+
+## Testing the connection
+
+After configuring a backend, use the **Test connection** button in Settings → Summarizer. It sends a short probe request to the backend and shows either a success tick or a classified error card. Fix any auth or network issues before trying to summarize a real session.
+
+## Where settings are stored
+
+Summarizer configuration is stored in `~/.tokentelemetry/summarizer.json`. You can edit it directly if needed — it's plain JSON. The file is created on first save.
+
+## Related
+
+- [Summarization](/docs/features/summarization) — how to use the summarizer once configured
+- [Troubleshooting](/docs/reference/troubleshooting) — common summarizer errors

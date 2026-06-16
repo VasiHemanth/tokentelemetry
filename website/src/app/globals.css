@@ -1,5 +1,52 @@
 @import "tailwindcss";
 
+/* Fumadocs UI colour tokens + preset.
+   Import order matters: colours must be defined BEFORE preset.css so that
+   @apply rules inside shiki.css (e.g. @apply bg-fd-diff-remove) resolve.
+   neutral.css also imports default-colors.css which sets the colours as
+   @theme (not @theme static) — giving Tailwind v4 the utility classes. */
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* Teach Tailwind to scan fumadocs-ui component classes. */
+@source "../../node_modules/fumadocs-ui/dist/**/*.js";
+
+/* Re-skin the Fumadocs docs chrome (sidebar, nav, cards, search) to the
+   TokenTelemetry token system so /docs matches the rest of the site instead of
+   the stock neutral preset. We force dark (see app/docs/layout.tsx), so we only
+   need to override the dark values. `:root, .dark` placed AFTER the preset
+   imports wins on source order at equal specificity. */
+:root,
+.dark {
+  --color-fd-background: var(--tt-canvas);
+  --color-fd-foreground: var(--tt-fg);
+  --color-fd-muted: var(--tt-panel);
+  --color-fd-muted-foreground: var(--tt-fg-muted);
+  --color-fd-popover: var(--tt-raised);
+  --color-fd-popover-foreground: var(--tt-fg);
+  --color-fd-card: var(--tt-panel);
+  --color-fd-card-foreground: var(--tt-fg);
+  --color-fd-border: var(--tt-border);
+  --color-fd-primary: var(--tt-brand);
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: var(--tt-raised);
+  --color-fd-secondary-foreground: var(--tt-fg);
+  --color-fd-accent: var(--tt-raised);
+  --color-fd-accent-foreground: var(--tt-fg);
+  --color-fd-ring: var(--tt-brand);
+  --color-fd-error: var(--tt-danger);
+}
+
+/* Unify the docs sidebar with the page: same canvas background as the content
+   (Fumadocs defaults the sidebar to `bg-fd-card`, a lighter panel, which read
+   as a two-tone split). Drop the floating "card" border/radius so the menu and
+   content are one continuous surface separated only by a hairline divider. */
+#nd-sidebar {
+  background-color: var(--tt-canvas) !important;
+  border-color: var(--tt-border) !important;
+  border-radius: 0 !important;
+}
+
 /* =========================================================================
    TokenTelemetry website — same token system as the app (dark only).
    ========================================================================= */

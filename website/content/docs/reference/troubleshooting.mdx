@@ -1,0 +1,199 @@
+---
+title: Troubleshooting
+description: Solutions for common problems — agent not detected, ports in use, summarizer failures, and remote access issues.
+---
+
+## `command not found: tokentelemetry`
+
+**Symptom:** After installing, you run `tokentelemetry` and get `zsh: command not found: tokentelemetry` (or `bash: tokentelemetry: command not found`).
+
+**Cause:** There is no global `tokentelemetry` command. The installer clones the app into a `tokentelemetry/` folder and deliberately installs nothing on your PATH.
+
+**Fix:** Launch it from inside that folder:
+
+```bash
+cd tokentelemetry
+./start.sh            # macOS / Linux  (or: node bin/cli.js)
+```
+
+The one-line installer also starts the app for you on first install — you only need this when starting it again later. See [Installation](/docs/installation).
+
+## Agent not detected
+
+**Symptom:** You've run an agent session but it doesn't appear in the dashboard.
+
+**Checks:**
+
+1. **Wait for a session to complete.** TokenTelemetry reads log files after a session ends (or after it creates a new log entry). Active sessions may not appear until the next 15-second dashboard refresh.
+
+2. **Confirm the log directory exists.** Each agent writes to a default location:
+   - Claude Code: `~/.claude/projects/`
+   - Codex: `~/.codex/sessions/`
+   - Gemini CLI: `~/.gemini/`
+   - Antigravity: `~/.gemini/antigravity/`
+   - Cursor: `~/.cursor/` + workspaceStorage
+   - GitHub Copilot: VS Code `chatSessions/`
+   - OpenCode: `~/.local/share/opencode/`
+   - Qwen CLI: `~/.qwen/`
+   - Vibe: `~/.vibe/`
+   - Grok Build: `~/.grok/sessions/`
+   - Hermes Agent: `~/.hermes/` (or `$HERMES_HOME`)
+
+   Check that the directory exists and contains session files:
+   ```bash
+   ls ~/.claude/projects/
+   ```
+
+3. **Run at least one session.** TokenTelemetry needs existing log files. Launch your agent, send a message, and wait for the session to complete before opening the dashboard.
+
+4. **Check for permission issues.** On macOS, Full Disk Access may be required to read some agent log directories. Check System Settings → Privacy & Security → Full Disk Access.
+
+5. **Restart TokenTelemetry.** If you installed the agent after starting TokenTelemetry, restart so the new log paths are picked up.
+
+---
+
+## Ports in use
+
+**Symptom:** TokenTelemetry fails to start with "required port(s) already in use: 3000" (or 8000).
+
+**Fix:**
+
+Find and stop the process using the port:
+
+```bash
+# macOS / Linux:
+lsof -iTCP:3000 -sTCP:LISTEN
+kill <PID>
+
+# Windows:
+netstat -ano | findstr :3000
+taskkill /PID <PID> /F
+```
+
+Or use a different port:
+
+```bash
+./start.sh --port 4000 --api-port 9000
+```
+
+See [Ports & Networking](/docs/configuration/ports-networking).
+
+---
+
+## Summarizer failures
+
+**Symptom:** Clicking "Generate" on a trace shows an error card instead of a summary.
+
+### API key invalid
+
+**Error card title:** "API key invalid"
+
+**Fix:** Authenticate the backend CLI:
+- Claude: `claude login` or `export ANTHROPIC_API_KEY=sk-...`
+- Codex: `codex login` or `export OPENAI_API_KEY=sk-...`
+- Gemini: `gemini auth` or `export GEMINI_API_KEY=...`
+- Qwen: `qwen auth` or `export DASHSCOPE_API_KEY=...`
+- OpenAI-compatible: set the API key in Settings → Summarizer or via `OPENAI_COMPAT_API_KEY`.
+
+### Network error (Ollama)
+
+**Error card title:** "Network error"
+
+**Fix:** Start the Ollama server:
+```bash
+ollama serve
+```
+Then try regenerating.
+
+### Trace too large
+
+**Error card title:** "Trace too large for this model"
+
+**Fixes:**
+- Switch to a model with a larger context window in Settings → Summarizer.
+- Use the Ollama backend with a model that supports 32k+ context (e.g. `llama3.1:8b-instruct`).
+- Use the OpenAI-compatible backend pointing to a local server with no per-minute token cap.
+
+### Timed out
+
+**Error card title:** "Summarizer timed out"
+
+**Fixes:**
+- Try a smaller / faster model.
+- Increase the timeout via env var:
+  - Ollama: `TT_OLLAMA_TIMEOUT=600`
+  - Codex: `TT_CODEX_TIMEOUT=600`
+  - OpenAI-compatible: `TT_OPENAI_COMPAT_TIMEOUT=300`
+
+### Empty response
+
+**Error card title:** "Empty response"
+
+**Fix:** The backend completed but returned no text. This is usually a model-specific issue. Try regenerating, or switch to a different model in Settings → Summarizer.
+
+---
+
+## Remote access issues
+
+**Symptom:** The dashboard shows a blank page when opened from another device, or the browser shows CORS errors.
+
+### Blank dashboard (data not loading)
+
+The frontend loaded but can't reach the backend. Most commonly caused by a missing `NEXT_PUBLIC_API_BASE` in an SSH-tunnel setup.
+
+**Fix for SSH tunnel:** Make sure you're forwarding **both** ports and have set `NEXT_PUBLIC_API_BASE`:
+
+```bash
+# On the remote machine:
+NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+
+# On your laptop:
+ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+```
+
+A single `-L 3000:...` forward without `-L 8000:...` produces a blank dashboard.
+
+### CORS error in browser console
+
+**Fix:** Add the hostname you're accessing the dashboard from to `--allowed-origins`:
+
+```bash
+./start.sh --host 0.0.0.0 --allowed-origins 192.168.1.42,box.tailnet.ts.net
+```
+
+### Token not accepted (HTTP 401)
+
+The remote browser is sending the wrong token or no token.
+
+**Fix:** Copy the token from the terminal output and paste it when the dashboard prompts, or use the QR code to auto-fill it. If you need a predictable token, use `--auth-token`:
+
+```bash
+./start.sh --host 0.0.0.0 --auth-token my-stable-token
+```
+
+---
+
+## Python not found
+
+**Symptom:** The launcher exits with "Python 3.9+ is required."
+
+**Fix:** Install Python 3.9 or later from [python.org](https://www.python.org/downloads/) and ensure `python3` (or `python` on Windows) is in your PATH.
+
+```bash
+python3 --version   # should show 3.9+
+```
+
+---
+
+## No sessions showing after first install
+
+**Symptom:** The dashboard shows zero sessions immediately after installing.
+
+**This is expected.** TokenTelemetry needs agent log files to read. Start an AI agent session (Claude Code, Gemini CLI, etc.), let it run for at least one exchange, then refresh the dashboard. The first session will appear within 15 seconds.
+
+---
+
+## Still stuck?
+
+- [GitHub Discussions](https://github.com/VasiHemanth/tokentelemetry/discussions) — ask questions and share what you're seeing
+- [GitHub Issues](https://github.com/VasiHemanth/tokentelemetry/issues) — report bugs with the dashboard or a specific agent

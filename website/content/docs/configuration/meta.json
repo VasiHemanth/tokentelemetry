@@ -1,0 +1,14 @@
+{
+  "title": "Configuration",
+  "pages": [
+    "configure-summarizer",
+    "local-models",
+    "billing",
+    "retention",
+    "privacy",
+    "data-directory",
+    "ports-networking",
+    "remote-access"
+  ],
+  "defaultOpen": true
+}

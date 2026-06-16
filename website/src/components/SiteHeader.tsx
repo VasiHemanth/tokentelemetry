@@ -22,6 +22,18 @@ export default function SiteHeader() {
         </Link>
 
         <div className="flex items-center gap-2">
+          <Link
+            href="/docs"
+            className="hidden sm:inline-flex items-center h-[34px] px-3 rounded-[var(--tt-radius)] text-[12.5px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
+          >
+            Docs
+          </Link>
+          <Link
+            href="/resources"
+            className="hidden sm:inline-flex items-center h-[34px] px-3 rounded-[var(--tt-radius)] text-[12.5px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
+          >
+            Resources
+          </Link>
           <a
             href={GITHUB_URL}
             target="_blank" rel="noopener noreferrer"

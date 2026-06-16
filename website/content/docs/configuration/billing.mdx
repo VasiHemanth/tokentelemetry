@@ -1,0 +1,72 @@
+---
+title: Billing & Cost Modes
+description: How TokenTelemetry classifies sessions as subscription, API, local, or unknown — and how to override the detection per agent.
+---
+
+TokenTelemetry attaches a **billing mode** to every session to help you understand the nature of the cost. The mode is a label only — it never changes the token math or the API-equivalent cost calculation.
+
+## Billing modes
+
+| Mode | Meaning |
+| --- | --- |
+| `subscription` | Sessions billed via a flat monthly subscription (e.g. Claude Pro, Copilot) |
+| `api` | Sessions billed per-token via an API key (e.g. direct Anthropic API, OpenAI API) |
+| `local` | Sessions run on a local model (Ollama, llama.cpp, etc.) with no per-token cloud cost |
+| `unknown` | Mode could not be determined |
+
+The billing mode affects how the cost column is interpreted:
+
+- `api` sessions show an exact API-equivalent cost based on current model pricing.
+- `subscription` sessions show an API-equivalent cost too, but it's labeled as an estimate — your actual cost depends on your subscription plan and usage tier.
+- `local` sessions show electricity cost (if configured) and an API-equivalent "what this would have cost" figure.
+- `unknown` sessions show an API-equivalent estimate.
+
+## Auto-detection
+
+TokenTelemetry detects the billing mode for each agent automatically:
+
+| Agent | Default mode |
+| --- | --- |
+| Claude Code | `subscription` (Claude Pro) or `api` (API key) — detected from auth config |
+| Codex | `subscription` (ChatGPT Plus) or `api` (OpenAI API key) |
+| Gemini CLI | `api` |
+| GitHub Copilot | `subscription` |
+| Cursor | `subscription` |
+| OpenCode | `api` |
+| Qwen CLI | `api` |
+| Vibe | `local` (if using a local endpoint) or `api` |
+| Antigravity | `api` |
+| Grok Build | `api` |
+| Hermes Agent | `api` or `local` depending on provider config |
+
+Detection is best-effort. If the agent's auth configuration can't be read, the mode defaults to `unknown`.
+
+## Manual override
+
+If auto-detection gets it wrong, you can override the billing mode for any agent in **Settings → Billing** or by editing `~/.tokentelemetry/billing.json` directly:
+
+```json
+{
+  "cursor": "subscription",
+  "opencode": "api",
+  "vibe": "local"
+}
+```
+
+Valid values are `subscription`, `api`, `local`, and `unknown`.
+
+The override applies to all sessions from that agent — there's no per-session override.
+
+## "Label only, never changes the math" caveat
+
+The billing mode is purely informational. It does not affect:
+
+- The token count shown for a session.
+- The API-equivalent cost shown in the cost column.
+- Analytics totals.
+
+If you're a Claude Pro subscriber, your actual bill doesn't change based on token usage (within plan limits), but TokenTelemetry still shows you the API-equivalent cost as a reference — it's a useful signal for understanding how much value you're getting from your subscription vs what you'd pay on the API.
+
+## Where settings are stored
+
+Billing mode overrides are stored in `~/.tokentelemetry/billing.json`. The file is created the first time you save an override.

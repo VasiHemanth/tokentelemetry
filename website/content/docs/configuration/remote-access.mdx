@@ -1,0 +1,151 @@
+---
+title: Remote Access
+description: Expose the TokenTelemetry dashboard to other devices — tailnet, LAN, or SSH tunnel — with token-based authentication.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+TokenTelemetry is **local-first** and binds to `127.0.0.1` by default. Remote access is opt-in and token-gated. Loopback requests (your browser on the same machine) are always exempt from the token requirement — the default local experience is unchanged.
+
+<Callout type="warn">
+**The token is the security boundary, not CORS.** CORS only restrains browsers; it doesn't stop direct HTTP clients (`curl`, scripts, other machines). Always use the token on any non-loopback bind. Only use `--insecure-no-auth` on a fully trusted private network.
+</Callout>
+
+## Direct access (tailnet, LAN, or VPS with open ports)
+
+Use this pattern when you can reach the machine directly:
+
+```bash
+./start.sh \
+  --host 0.0.0.0 \
+  --allowed-origins your-laptop.tailnet.ts.net,192.168.1.42 \
+  --port 3000 \
+  --api-port 8000
+```
+
+### What happens
+
+1. `--host 0.0.0.0` makes the backend listen on all interfaces (or use a specific IP like `--host 192.168.1.10`).
+2. `--allowed-origins` sets the CORS allowlist for the backend and Next.js dev-server origins. Pass a comma-separated list of hostnames or IPs that will load the dashboard.
+3. Because `--host` is non-loopback, **a random access token is auto-generated and printed once** in the terminal:
+   ```
+   ──────────────────────────────────────────────────────────
+   Remote access is ON. Other devices must enter this token:
+
+       abc123xyz...
+
+   Or skip the typing — open this link (or scan its QR from the
+   dashboard's "Connect a device" panel) on the other device:
+
+       http://192.168.1.10:3000/?token=abc123xyz...
+
+   The token is shown once — re-run to rotate it.
+   ──────────────────────────────────────────────────────────
+   ```
+4. The dashboard shows a **"Connect a device"** panel with a QR code. Scan it on a phone or tablet to open the dashboard without typing the token.
+
+### Using the token
+
+Remote clients can authenticate in two ways:
+
+- **Authorization header:** `Authorization: Bearer <token>` (for API clients)
+- **URL parameter:** `?token=<token>` (for the initial browser load and for image/artifact links)
+
+The frontend stores the token after the first load and strips it from the URL bar. Subsequent navigations within the same browser session are transparent.
+
+### Supplying a fixed token
+
+To avoid rotating the token on every restart, supply one explicitly:
+
+```bash
+./start.sh --host 0.0.0.0 --auth-token mysecrettoken
+```
+
+Or via env var (flag wins over env):
+
+```bash
+TT_AUTH_TOKEN=mysecrettoken ./start.sh --host 0.0.0.0
+```
+
+### Concrete host shortcut
+
+If you use a specific IP rather than `0.0.0.0`, you don't need to repeat it in `--allowed-origins`:
+
+```bash
+# --host 192.168.1.10 automatically adds 192.168.1.10 to the CORS allowlist:
+./start.sh --host 192.168.1.10
+```
+
+With `0.0.0.0` (wildcard), Next.js can't derive a single hostname, so you still need `--allowed-origins`.
+
+## SSH tunnel access (no port changes, VPS)
+
+Use this pattern when:
+- Your agents (and their logs) run on a remote VPS or server.
+- You only have SSH access and don't want to open ports.
+- You prefer to keep the dashboard bound to `localhost` on the remote side.
+
+**On the remote machine** (where the agent logs live):
+
+```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+```
+
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at `localhost:8000` regardless of what address the browser opened the dashboard from.
+
+**On your laptop:**
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+```
+
+Then open **http://localhost:3000** on your laptop.
+
+<Callout type="warn">
+Forward **both** ports (`3000` and `8000`). A single-port forward (`-L 3000:...` only) shows a blank dashboard because the frontend tries to reach the backend at `localhost:8000` on your laptop instead of the remote machine.
+</Callout>
+
+This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because both services stay on loopback.
+
+## Disabling the token (trusted tailnet only)
+
+If you're on a fully trusted private network (e.g. a Tailscale tailnet with device auth), you can disable the token entirely:
+
+```bash
+./start.sh --host 0.0.0.0 --insecure-no-auth
+```
+
+The launcher prints a prominent warning:
+
+```
+⚠  WARNING: --insecure-no-auth — the dashboard is exposed to the
+   network with NO access token. Anyone who can reach this host can
+   read your data and change settings. Only use this on a fully
+   trusted private network (e.g. a tailnet).
+```
+
+Only use this if you understand the risk and have network-level access controls.
+
+## Allowed origins configuration
+
+`--allowed-origins` accepts a comma-separated list of values used in two places:
+
+1. **Backend CORS** — origins allowed to make cross-origin requests to the API.
+2. **Next.js dev server** — origins allowed to load the frontend chunks.
+
+For the QR / connect URL, the launcher picks a concrete reachable address using this preference order:
+
+1. An explicit non-wildcard `--host` value.
+2. The first `--allowed-origins` entry.
+3. The primary non-internal IPv4 of the machine (autodetected).
+
+If none of these yield a concrete address, the QR URL is omitted and you must type the token manually.
+
+## Environment variable reference
+
+| Variable | Equivalent flag | Notes |
+| --- | --- | --- |
+| `TT_AUTH_TOKEN` | `--auth-token` | Flag wins if both are set |
+| `TT_ALLOWED_ORIGINS` | `--allowed-origins` | Set internally by the launcher; you can also export it |
+| `TT_HOST` | `--host` | Passed to the backend |
+| `TT_API_PORT` | `--api-port` | Passed to the backend |

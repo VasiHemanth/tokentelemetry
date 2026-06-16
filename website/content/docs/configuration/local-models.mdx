@@ -1,0 +1,96 @@
+---
+title: Local Models & Power Cost
+description: Configure wattage, electricity rate, and carbon intensity to see energy cost and CO₂ estimates alongside dollar cost for local model sessions.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+When you run AI models locally (via Ollama, llama.cpp, LM Studio, or any OpenAI-compatible server), TokenTelemetry can estimate the electricity cost and CO₂ emissions of each session alongside the usual token counts and API-equivalent cost.
+
+Open **Settings → Local Models** (or navigate to `/local-models` in the app) to configure these settings.
+
+## How it works
+
+TokenTelemetry multiplies:
+
+```
+energy (Wh) = wattage (W) × session_duration (hours)
+cost ($)    = energy (kWh) × electricity_rate ($/kWh)
+CO₂ (g)     = energy (kWh) × grid_carbon_intensity (gCO₂/kWh)
+```
+
+Session duration is measured as wall-clock time from session start to session end (total latency). For local models, this equals the time the hardware was running at inference load.
+
+## Wattage settings
+
+### Apple Silicon defaults
+
+TokenTelemetry ships chip-aware defaults for Apple Silicon, which accounts for the unified memory architecture where the GPU and CPU draw from the same power budget. The default is chosen by the chip **tier** (detected via `sysctl`), not the generation number — every M-series base chip uses the same estimate, and so on up the tiers:
+
+| Apple Silicon tier | Default wattage |
+| --- | --- |
+| Base (e.g. M1 / M2 / M3 / M4 / M5) | 22 W |
+| Pro | 35 W |
+| Max | 65 W |
+| Ultra | 120 W |
+
+These are typical whole-package draws under sustained inference load. On non-Apple hardware (Intel/AMD/ARM), where there is no root-free way to read power, the default is a flat **80 W** — override it with a measured or spec-sheet value for accuracy.
+
+### Measure button (calibration)
+
+For a more accurate reading, use the **Measure** button on the Local Models settings page. It runs a 4-second inference load test and reads the power draw from the system's power management interface (Apple Silicon only). The measured value replaces the default and is saved to `~/.tokentelemetry/power.json`.
+
+Remeasure after you upgrade your hardware or change which model tier you use most (a large 70B model on an M4 Max draws significantly more than a 7B model on an M2).
+
+### Manual override
+
+If you know your hardware's power draw (from a hardware power meter, or a manufacturer spec sheet), you can enter it directly in the wattage field. Enter the wattage at inference load, not idle.
+
+## Electricity rate
+
+Enter your electricity rate in **$/kWh**. Check your electricity bill or your utility's website for the current rate.
+
+The default is `0.15 $/kWh` (approximate US residential average). Rates vary widely by region:
+
+- US average: ~$0.12–$0.16 / kWh
+- EU average: ~$0.25–$0.35 / kWh
+- Australia: ~$0.25–$0.35 / kWh
+
+## Grid carbon intensity
+
+Enter your grid's **carbon intensity in gCO₂/kWh**. This is the average grams of CO₂ emitted per kilowatt-hour on your local grid. Find your region's value from [Electricity Maps](https://www.electricitymaps.com/) or your national grid operator.
+
+Common values:
+
+| Region | Approx. intensity |
+| --- | --- |
+| US average | ~390 gCO₂/kWh |
+| EU average | ~250 gCO₂/kWh |
+| Norway (hydropower) | ~25 gCO₂/kWh |
+| Poland (coal-heavy) | ~700 gCO₂/kWh |
+
+## Local vs subscription endpoint classification
+
+TokenTelemetry needs to know whether a session used a local model or a cloud API to decide whether to show power/CO₂ estimates. It classifies sessions by their **billing mode**:
+
+- `local` — model ran locally; power and CO₂ estimates are shown.
+- `subscription` / `api` / `unknown` — cloud session; power estimates are not shown (the energy cost is on the provider's side, not yours).
+
+Agent detection sets the billing mode automatically for most agents. If a session is misclassified, override it per agent in [Billing & Cost Modes](/docs/configuration/billing).
+
+## Energy, savings, and CO₂ readouts
+
+Once configured, the Dashboard and per-session traces show:
+
+- **Energy (Wh)** — electricity consumed
+- **Cost ($)** — electricity cost at your rate
+- **API-equivalent savings** — difference between what a cloud API call would have cost and your actual electricity cost (often a large positive number, because local inference is cheap)
+- **CO₂ (gCO₂)** — estimated carbon emissions
+
+## Where settings are stored
+
+Power and electricity settings are stored in `~/.tokentelemetry/power.json`. You can edit the file directly — it's plain JSON.
+
+<Callout type="info">
+Power estimates are only as accurate as the inputs. If your workload varies (e.g. you run a mix of small and large models), use the average wattage across your model sizes, or configure separate profiles and switch between them.
+</Callout>

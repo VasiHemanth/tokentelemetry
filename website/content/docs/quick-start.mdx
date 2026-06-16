@@ -1,0 +1,89 @@
+---
+title: Quick Start
+description: Launch TokenTelemetry for the first time, let it auto-detect your agents, and open the dashboard.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## 1. Start TokenTelemetry
+
+The one-line installer launches TokenTelemetry for you on first install. To start it again afterwards, run the launcher **from inside the `tokentelemetry/` folder** it cloned (there is no global `tokentelemetry` command):
+
+```bash
+cd tokentelemetry
+./start.sh            # macOS / Linux
+# start.bat           # Windows
+# node bin/cli.js     # cross-platform
+```
+
+On first launch the launcher:
+
+1. Creates a Python virtual environment under `backend/venv/` (takes ~30 seconds).
+2. Installs backend and frontend dependencies.
+3. Starts the FastAPI backend on port 8000.
+4. Starts the Next.js frontend on port 3000.
+5. Opens `http://localhost:3000` in your default browser automatically.
+
+Subsequent starts are fast — setup is skipped when nothing has changed.
+
+## 2. Open the dashboard
+
+If your browser doesn't open automatically, navigate to:
+
+```
+http://localhost:3000
+```
+
+You'll see the dashboard with KPI cards at the top (sessions, tokens, projects, cost) and charts below. If you haven't run any agents yet the counts will be zero — that's expected.
+
+<Callout title="The dashboard is local-only by default">
+TokenTelemetry binds to `127.0.0.1`, so `http://localhost:3000` works only on the machine running it. Opening it from your phone or another computer is opt-in and token-gated — see [Remote Access](/docs/configuration/remote-access) for the `--host` and SSH-tunnel options.
+</Callout>
+
+## 3. Run an agent session
+
+Open a project in your terminal and start an AI agent session as you normally would:
+
+```bash
+# Example: Claude Code
+claude
+
+# Example: Gemini CLI
+gemini
+
+# Example: OpenAI Codex
+codex
+```
+
+TokenTelemetry will detect the new session automatically. The dashboard refreshes every 15 seconds, so you'll see live token counts appear within a few seconds of starting the agent.
+
+## 4. Explore
+
+- Click **Traces** in the sidebar to replay the full session step by step.
+- Click **Projects** to see per-directory activity.
+- Click **Analytics** to see token trends over time.
+
+## Auto-detection
+
+TokenTelemetry looks for agent logs in their default locations:
+
+- `~/.claude/projects/` for Claude Code
+- `~/.codex/sessions/` for Codex
+- `~/.gemini/` for Gemini CLI
+- And so on — see [Supported Agents](/docs/supported-agents) for the full list.
+
+No configuration is needed. If you keep agent logs in a non-default location, see [Custom Data Directory](/docs/configuration/data-directory) — though that flag controls where TokenTelemetry stores *its own* state, not where it looks for agent logs.
+
+## Suppressing the auto-open browser
+
+If you're running TokenTelemetry in a headless environment (a CI box, a VPS, inside an agent harness), set:
+
+```bash
+AGENT_HARNESS_NO_OPEN=1 ./start.sh    # or: AGENT_HARNESS_NO_OPEN=1 node bin/cli.js
+```
+
+The launcher will start both services without trying to open a browser.
+
+## Stop
+
+Press **Ctrl+C** in the terminal where TokenTelemetry is running. Both the backend and frontend stop cleanly.

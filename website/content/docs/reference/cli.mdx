@@ -1,0 +1,89 @@
+---
+title: CLI & Environment Reference
+description: Complete table of every CLI flag and environment variable that TokenTelemetry recognizes.
+---
+
+This is the authoritative reference for the TokenTelemetry launcher CLI and every environment variable the launcher and backend recognize. Run it with `./start.sh` (or `node bin/cli.js`) from inside the cloned `tokentelemetry/` folder — there is no global `tokentelemetry` command.
+
+## Usage
+
+```bash
+# from inside the tokentelemetry/ folder:
+./start.sh [options]          # macOS / Linux
+node bin/cli.js [options]     # cross-platform
+```
+
+## CLI flags
+
+| Flag | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--port <N>` | `-p` | `3000` | Frontend (Next.js) port |
+| `--api-port <N>` | `-a` | `8000` | Backend (FastAPI) port |
+| `--data-dir <path>` | `-d` | `~/.tokentelemetry` | Where TokenTelemetry stores config and state. Sets `TOKENTELEMETRY_DATA_DIR`. |
+| `--host <addr>` | | `127.0.0.1` | Backend bind address. Use `0.0.0.0` (or a specific IP) to expose remotely. |
+| `--allowed-origins <list>` | | _(empty)_ | Comma-separated hosts allowed to load the dashboard from another machine (CORS + Next.js dev origins). |
+| `--auth-token <token>` | | _(auto-generated)_ | Access token required for remote requests. If `--host` is non-loopback and this is omitted, a random token is generated and printed once. |
+| `--insecure-no-auth` | | `false` | Disable the remote access token entirely. **Only safe on a fully trusted private network.** |
+| `--help` | `-h` | | Print help and exit. |
+
+### Flag examples
+
+```bash
+# Default: frontend on 3000, backend on 8000, localhost only
+./start.sh
+
+# Custom ports
+./start.sh --port 4000 --api-port 9000
+
+# Frontend on 4000, backend stays 8000
+./start.sh -p 4000
+
+# Expose on a tailnet/LAN with auto-generated token
+./start.sh --host 0.0.0.0 \
+  --allowed-origins box.tailnet.ts.net,100.64.0.1
+
+# Expose with a fixed token
+./start.sh --host 0.0.0.0 --auth-token my-secret
+
+# Store config and state on a secondary drive
+./start.sh --data-dir /mnt/d/tt-data
+```
+
+## Environment variables
+
+### Launcher (Node.js / `bin/cli.js`)
+
+| Variable | Description |
+| --- | --- |
+| `TOKENTELEMETRY_DATA_DIR` | Sets the data directory (used verbatim, no `.tokentelemetry` suffix). `--data-dir` flag wins. |
+| `TT_AUTH_TOKEN` | Access token for remote requests. `--auth-token` flag wins. |
+| `AGENT_HARNESS_NO_OPEN` | Set to any non-empty value to skip auto-opening the browser on startup. |
+| `NEXT_PUBLIC_API_PORT` | Passed to the Next.js dev server to tell the frontend which port the backend is on. Set automatically by the launcher from `--api-port`. |
+| `NEXT_PUBLIC_API_BASE` | Full backend URL override (e.g. `http://localhost:8000`). Overrides the runtime auto-detection from `window.location`. Useful in SSH-tunnel setups. |
+
+### Backend (Python / FastAPI)
+
+| Variable | Description |
+| --- | --- |
+| `TOKENTELEMETRY_DATA_DIR` | Data directory, used verbatim. Highest precedence. |
+| `TOKENTELEMETRY_HOME` | Override of the home directory; `.tokentelemetry` is appended as a subfolder. Lower precedence than `TOKENTELEMETRY_DATA_DIR`. |
+| `TT_AUTH_TOKEN` | Access token for the remote-auth gate. Empty string = no token required (set by the launcher when `--insecure-no-auth` is used). |
+| `TT_ALLOWED_ORIGINS` | Comma-separated CORS allowlist. Set by the launcher from `--allowed-origins`. |
+| `TT_REMOTE_CONNECT_URL` | Full URL (with token) printed for the QR code. Set by the launcher. |
+| `TT_NO_UPDATE_CHECK` | Set to `1` to disable the hourly update check entirely. Wins over the in-app toggle. |
+| `TT_NO_TELEMETRY` | Set to `1` to disable anonymous product telemetry. Wins over the in-app toggle. |
+| `DO_NOT_TRACK` | Set to `1` to disable product telemetry (same effect as `TT_NO_TELEMETRY`). |
+| `TT_PROJECT_ROOTS` | Comma-separated list of additional directories to scan for agent sessions (beyond the default `~/.claude/`, `~/.codex/`, etc.). |
+| `TT_API_PORT` | Backend port, as an alternative to `--api-port`. |
+| `TT_HOST` | Backend bind address, as an alternative to `--host`. |
+| `HERMES_HOME` | Path to the Hermes Agent data directory. Default: `~/.hermes/`. |
+
+### Summarizer backends
+
+| Variable | Backend | Description |
+| --- | --- | --- |
+| `TT_OLLAMA_TIMEOUT` | Ollama | Request timeout in seconds. Default: `360`. |
+| `TT_CODEX_TIMEOUT` | Codex | Request timeout in seconds. Default: `300`. |
+| `TT_OPENAI_COMPAT_TIMEOUT` | OpenAI-compatible | Request timeout in seconds. Default: `120`. |
+| `OPENAI_COMPAT_API_KEY` | OpenAI-compatible | Bearer token for the OpenAI-compatible endpoint. Wins over the value stored in `summarizer.json`. |
+| `OPENAI_COMPAT_USER_AGENT` | OpenAI-compatible | HTTP User-Agent header. Default: `TokenTelemetry/1.0 (+https://github.com/VasiHemanth/tokentelemetry)`. |

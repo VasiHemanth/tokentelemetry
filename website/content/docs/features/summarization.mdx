@@ -1,0 +1,88 @@
+---
+title: Summarization
+description: One-click LLM summaries of any session — a structured brief or a narrative, with caching by content hash and classified error cards.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Summarization lets you generate a human-readable summary of any session trace without reading through every event manually. You pick a backend (Claude, Codex, Gemini, Ollama, etc.), click Generate, and TokenTelemetry sends the session text to the model and displays the result.
+
+<Callout title="Video walkthrough">Coming soon.</Callout>
+
+## Two summary styles
+
+### Structured brief (deterministic)
+
+The structured brief uses a fixed four-section template:
+
+| Section | What it contains |
+| --- | --- |
+| **What** | A one-sentence description of what the session accomplished |
+| **Tools** | Which tools were called and how many times |
+| **Why** | The inferred goal or task context |
+| **Next** | Suggested follow-up steps or open questions |
+
+The brief is deterministic for a given session — regenerating it with the same backend and model produces the same output. It's fast and cheap because the prompt is compact.
+
+### LLM narrative
+
+The narrative asks the model to write a free-form prose summary of the session. It's more readable and captures nuance the brief template can't, but it costs more tokens and may vary between runs.
+
+## Generate and Regenerate
+
+- **Generate** — sends the session to the configured backend and displays the result. The first call may take several seconds depending on the model and backend.
+- **Regenerate** — discards the cached summary and generates a fresh one. Use this if you switched models or the first result wasn't useful.
+
+## Caching by content hash
+
+Summaries are cached by a hash of the session content. If you open the same session again, the cached summary is displayed instantly with no model call. The cache is stored in `~/.tokentelemetry/summaries.db`.
+
+Because the cache key is the content hash (not the session ID), summaries survive session record moves and renames. A session that hasn't changed will always get its cached summary back immediately, even after a restart.
+
+## Configuring a backend
+
+Summarization requires a backend. Configure one in Settings → Summarizer (or see [Configure Summarizer](/docs/configuration/configure-summarizer) for the full options). Backends include:
+
+- **Claude** — uses the `claude` CLI; requires Claude Code to be installed and authenticated.
+- **Codex** — uses the `codex` CLI; requires Codex to be installed with an OpenAI API key or Pro subscription.
+- **Gemini** — uses the `gemini` CLI; requires Gemini CLI to be installed and authenticated.
+- **Qwen** — uses the `qwen` CLI with a DashScope API key.
+- **Ollama** — calls a locally-running Ollama instance; requires `ollama serve` to be running.
+- **Antigravity** — uses the Antigravity agent backend.
+- **OpenAI-compatible** — calls any server that speaks the `/v1/chat/completions` API: llama.cpp, vLLM, LM Studio, LocalAI, Groq, OpenRouter, and more.
+
+## Error cards
+
+If a summary fails, TokenTelemetry shows a structured error card — never a raw stack trace or provider JSON blob. Each card contains:
+
+| Field | Description |
+| --- | --- |
+| **Title** | Short category label (e.g. "API key invalid") |
+| **Message** | Plain-English explanation |
+| **Hint** | Actionable step (e.g. "Run `claude login`") |
+| **Show raw error** | Disclosure triangle revealing the truncated raw output for bug reports |
+
+Error categories and their hints:
+
+| Category | Trigger | Hint |
+| --- | --- | --- |
+| `auth` | HTTP 401, invalid key | Backend-specific login command or env var |
+| `too_large` | HTTP 413, context overflow | Use a model with a larger context window |
+| `quota` | HTTP 429, rate limit | Wait and retry, or pick a cheaper model |
+| `model` | Model not found | Pick a model your account can access |
+| `timeout` | Request timed out | Use a faster model or increase `TT_<BACKEND>_TIMEOUT` |
+| `network` | Connection refused | Check the backend is running (e.g. `ollama serve`) |
+| `no_output` | Empty response | Try a different model or regenerate |
+| `unknown` | Anything else | Shows the provider's message, with the raw error available |
+
+## Tips
+
+- Start with the **structured brief** — it's fast, cheap, and gives you the essentials. Switch to the narrative only when you want more prose.
+- If you get a `too_large` error on a long Claude Code session, try the Ollama backend with a model that has a large context window (e.g. llama3.2 with 128k context), or break the session into shorter runs.
+- The summary cache persists across restarts. If you want to force a fresh summary with the same model (e.g. after updating the model version), use Regenerate.
+- For Ollama, the default timeout is 360 seconds (6 minutes) because local inference can be slow. Override with `TT_OLLAMA_TIMEOUT=<seconds>`.
+
+## Related
+
+- [Configure Summarizer](/docs/configuration/configure-summarizer) — pick a backend and set model options
+- [Traces](/docs/features/traces) — the full session view that summaries are generated from

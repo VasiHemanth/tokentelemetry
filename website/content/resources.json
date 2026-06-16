@@ -1,0 +1,72 @@
+[
+  {
+    "title": "awesome-claude-code",
+    "author": "hesreallyhim",
+    "url": "https://github.com/hesreallyhim/awesome-claude-code",
+    "summary": "A curated list of slash commands, hooks, CLAUDE.md templates, and tools for supercharging your Claude Code workflow.",
+    "tags": ["hook", "skill", "workflow", "guide"]
+  },
+  {
+    "title": "Claude Code Hooks Documentation",
+    "author": "Anthropic",
+    "url": "https://docs.anthropic.com/en/docs/claude-code/hooks",
+    "summary": "Official reference for wiring lifecycle hooks (PreToolUse, PostToolUse, Stop, Notification) into Claude Code sessions.",
+    "tags": ["hook", "guide"]
+  },
+  {
+    "title": "Model Context Protocol (MCP) Specification",
+    "author": "Anthropic",
+    "url": "https://modelcontextprotocol.io",
+    "summary": "The open standard that lets AI models connect to external tools and data sources — the foundation of most agent integrations.",
+    "tags": ["mcp", "guide"]
+  },
+  {
+    "title": "awesome-mcp-servers",
+    "author": "punkpeye",
+    "url": "https://github.com/punkpeye/awesome-mcp-servers",
+    "summary": "Community index of MCP servers covering databases, browsers, file systems, APIs, and developer tools.",
+    "tags": ["mcp", "workflow"]
+  },
+  {
+    "title": "Claude Code Skills & Sub-agents Guide",
+    "author": "Anthropic",
+    "url": "https://docs.anthropic.com/en/docs/claude-code/sub-agents",
+    "summary": "How to build reusable skill files and spawn specialised sub-agents from within a Claude Code session.",
+    "tags": ["skill", "guide", "workflow"]
+  },
+  {
+    "title": "claude-code-hooks-mastery",
+    "author": "disler",
+    "url": "https://github.com/disler/claude-code-hooks-mastery",
+    "summary": "Practical hook recipes for auto-formatting, test running, commit enforcement, and notification routing.",
+    "tags": ["hook", "workflow"]
+  },
+  {
+    "title": "multi-agent-orchestration patterns",
+    "author": "anthropics",
+    "url": "https://github.com/anthropics/anthropic-cookbook/tree/main/patterns/agents",
+    "summary": "Cookbook patterns for orchestrator–worker, fan-out, and verification agent topologies using the Claude API.",
+    "tags": ["workflow", "guide"]
+  },
+  {
+    "title": "mcp-framework (TypeScript SDK)",
+    "author": "QuantGeekDev",
+    "url": "https://github.com/QuantGeekDev/mcp-framework",
+    "summary": "Opinionated TypeScript framework for building MCP servers with automatic tool discovery and schema generation.",
+    "tags": ["mcp", "skill"]
+  },
+  {
+    "title": "CLAUDE.md Gallery",
+    "author": "Claude Code community",
+    "url": "https://github.com/hesreallyhim/awesome-claude-code?tab=readme-ov-file#claudemd-files",
+    "summary": "Real CLAUDE.md files from open-source projects — useful templates for setting project rules and conventions.",
+    "tags": ["workflow", "guide"]
+  },
+  {
+    "title": "Claude Code Best Practices",
+    "author": "Anthropic",
+    "url": "https://www.anthropic.com/engineering/claude-code-best-practices",
+    "summary": "Anthropic's own guidance on planning modes, sub-agents, headless CI usage, and agentic workflow design.",
+    "tags": ["guide", "workflow"]
+  }
+]

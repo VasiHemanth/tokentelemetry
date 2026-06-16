@@ -1,0 +1,13 @@
+{
+  "title": "TokenTelemetry",
+  "pages": [
+    "---Getting Started---",
+    "index",
+    "installation",
+    "quick-start",
+    "supported-agents",
+    "features",
+    "configuration",
+    "reference"
+  ]
+}

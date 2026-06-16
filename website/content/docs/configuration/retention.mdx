@@ -1,0 +1,74 @@
+---
+title: History & Retention
+description: Configure how long TokenTelemetry keeps session data, enable durable history, and manage transcript archival.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+By default, TokenTelemetry reads agent session files directly from their log directories on every request. Durable history is an optional mode that caches processed session data in a local SQLite database, enabling longer date ranges in Analytics and the Projects heatmap.
+
+Open **Settings → History & Retention** to configure these options.
+
+## Durable history
+
+When **Durable history** is enabled, TokenTelemetry writes parsed session data to `~/.tokentelemetry/history.db` as sessions are processed. This enables:
+
+- Date ranges beyond what's in the agent's live log directory (agents may roll or truncate their own logs)
+- The 365-day heatmap in Projects → Insights
+- Accurate date-range filtering in Analytics for older sessions
+
+<Callout type="info">
+Data for sessions processed before durable history was enabled is not backfilled. Only sessions from the point of enabling onwards appear in historical charts.
+</Callout>
+
+## Per-agent retention
+
+For each agent you can set a **retention period** — the number of days of session data to keep in the history database. Sessions older than the retention period are deleted from `history.db` on the next cleanup pass (the original agent log files are never touched).
+
+Retention defaults are:
+
+| Agent | Default retention |
+| --- | --- |
+| All agents | 90 days |
+
+Set a longer period if you want year-long trends; set a shorter period to keep `history.db` small.
+
+## Transcript archival
+
+By default, TokenTelemetry reads session transcripts live from the agent's log directory. If you enable **Transcript archival**, TokenTelemetry copies the full transcript text into `history.db` when a session is first processed.
+
+Archival lets you:
+- Read session traces even after the agent has deleted or rotated its own log file
+- Filter and search across transcript content in future (coming soon)
+
+Archival is off by default because it significantly increases the size of `history.db` for long sessions.
+
+## Storage readout
+
+The Settings → History page shows:
+
+- Current `history.db` file size
+- Number of sessions stored
+- Oldest session date
+- Estimated sessions per MB
+
+Use this to plan retention settings if disk space is a concern.
+
+## Delete transcripts (keep rollup)
+
+The **Delete transcripts** button removes the full transcript text from `history.db` for sessions older than a configurable date, while keeping the token and cost rollup data. After this operation:
+
+- Analytics charts and totals still work (they use the rollup).
+- Trace replay is not available for deleted sessions.
+- The Projects heatmap still shows activity on those days.
+
+This is the recommended way to free disk space while preserving analytics data.
+
+## Where data is stored
+
+| File | Contents |
+| --- | --- |
+| `~/.tokentelemetry/history.db` | Processed session rollups and (if archival is on) transcript text |
+| `~/.tokentelemetry/summaries.db` | Generated summaries (separate from transcripts) |
+
+Both are SQLite databases. You can inspect them with `sqlite3` or any SQLite viewer. The original agent log files (`~/.claude/`, `~/.codex/`, etc.) are never modified by TokenTelemetry.

@@ -1,0 +1,91 @@
+---
+title: FAQ
+description: Frequently asked questions about TokenTelemetry.
+---
+
+## General
+
+**Does TokenTelemetry send any data to the cloud?**
+
+No usage data, ever. It reads log files from your filesystem and serves a local web dashboard — your logs, sessions, tokens, and costs never leave your machine. The only outbound call is an optional update check that fetches the latest version and release notes from GitHub (no usage data sent). Disable it in Settings → *Updates & privacy* or with `TT_NO_UPDATE_CHECK=1`. See [Update Check & Privacy](/docs/configuration/privacy).
+
+**How does it track Claude Code token usage?**
+
+Claude Code writes JSONL session logs to `~/.claude/projects/`. TokenTelemetry watches those files and parses token counts, tool calls, and reasoning blocks in real time. No Claude API keys or authentication is required for tracking — it reads files directly.
+
+**Does it work with multiple agents at the same time?**
+
+Yes. TokenTelemetry detects all supported agents and shows them in a unified dashboard. You can filter by agent, model, or project anywhere in the UI.
+
+**Is there a cost to use TokenTelemetry?**
+
+No. It is free and open-source under the MIT license.
+
+**How is TokenTelemetry different from Langfuse, LangSmith, or Helicone?**
+
+Those tools require you to instrument your code, create an account, and send data to their cloud. TokenTelemetry is 100% local, zero-config, and works by reading the log files your agents already write — no SDK, no API key, no cloud.
+
+**Can I monitor Gemini CLI token usage?**
+
+Yes. TokenTelemetry supports Gemini CLI and shows token counts, costs, and session traces for Google's Gemini models.
+
+**Does it support Cursor or GitHub Copilot?**
+
+Yes. Both are automatically detected and tracked.
+
+**Where is my data stored?**
+
+In `~/.tokentelemetry/` by default. See [Custom Data Directory](/docs/configuration/data-directory) to change the location. The original agent log files are never modified.
+
+## Hermes Agent
+
+**Is there any other observability tool for Hermes Agent?**
+
+Not really. Hermes ships its own `/usage` + `/insights` pages and a bundled Langfuse plugin, but no third-party tool treats it as a first-class agent with a dedicated dashboard. TokenTelemetry provides the only dedicated `/hermes` surface.
+
+**Will it work for my Hermes bot on a VPS?**
+
+Yes — run TokenTelemetry on the same host (it reads local files). See [Remote Access](/docs/configuration/remote-access) for the two supported methods:
+
+- **Direct exposure** with `--host 0.0.0.0` + auto-generated token (recommended when the network allows it).
+- **SSH tunnel** with dual-port forward (`-L 3000:... -L 8000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote side. The single-port command (`-L 3000:...` only) produces a blank dashboard.
+
+**Is "Hermes Agent" the same as the Hermes-3 LLMs?**
+
+No. Hermes Agent is the [open-source agent framework](https://github.com/NousResearch/hermes-agent) by Nous Research; Hermes-3 is a family of fine-tuned models. TokenTelemetry observes the agent — it can be running any model.
+
+## Summarization
+
+**Do I need to configure a summarizer?**
+
+No. Summarization is optional. Token counting, cost tracking, traces, and analytics all work without any summarizer configured.
+
+**Which summarizer backend should I use?**
+
+If you already have Claude Code installed and authenticated, start with the Claude backend — it produces the best narrative quality. For fully local (no API costs), use Ollama. For maximum flexibility (any model, any provider), use the OpenAI-compatible backend. See [Configure Summarizer](/docs/configuration/configure-summarizer).
+
+**Why do I see "Trace too large for this model"?**
+
+The session transcript exceeded the model's context window or the provider's per-minute token budget. Try switching to a model with a larger context window, or use a local Ollama model with no per-minute cap.
+
+## Technical
+
+**What ports does TokenTelemetry use?**
+
+Frontend (Next.js): 3000. Backend (FastAPI): 8000. Both are configurable — see [Ports & Networking](/docs/configuration/ports-networking).
+
+**Can I run TokenTelemetry on a server and access it remotely?**
+
+Yes — see [Remote Access](/docs/configuration/remote-access) for two patterns: direct `--host` with a token, and SSH tunnel.
+
+**Does TokenTelemetry modify my agent's log files?**
+
+Never. It only reads them.
+
+**How do I update TokenTelemetry?**
+
+Re-run the installer (`curl -fsSL https://tokentelemetry.com/install.sh | bash` on macOS/Linux, or `irm https://tokentelemetry.com/install.ps1 | iex` on Windows), or `git pull` if you cloned the repo.
+
+**Is there a CLI or API I can use to query the data?**
+
+Not yet. The backend exposes a REST API at `http://localhost:8000` that the frontend uses — it's undocumented and may change. A stable public API is tracked on the [issue tracker](https://github.com/VasiHemanth/tokentelemetry/issues).
