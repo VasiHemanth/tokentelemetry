@@ -2114,6 +2114,64 @@ def _antigravity_link_subagents(sessions: List[Dict[str, Any]]) -> None:
                 if child is not None:
                     child["parent_session_id"] = sid
 
+
+# Brain dirs Antigravity itself manages — NOT user-facing artifacts.
+_ANTIGRAVITY_INTERNAL_DIRS = {".system_generated", ".agents"}
+_ANTIGRAVITY_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _antigravity_brain_reports(sess_dir: Path, existing_paths: set) -> List[Dict[str, str]]:
+    """Surface an Antigravity brain session's human-readable deliverables.
+
+    Antigravity drops markdown reports at the session root and screenshots under
+    one or more `screenshots*/` dirs. The base brain scanner only picks up the
+    three canonical docs (task/plan/walkthrough) plus root-level media, so the
+    audit/QA reports and the screenshot galleries are invisible in the UI. This
+    collects them as artifacts:
+
+      - every top-level `*.md` -> type "document"
+      - every image under any sibling `screenshots*/` dir -> type "image",
+        named "<dir>/<file>" when more than one screenshot dir exists (so the
+        gallery they came from is legible), else just the filename.
+
+    Internal Antigravity dirs (.system_generated, .agents) are skipped — they
+    hold transcripts/agent state, not deliverables. `existing_paths` (abs path
+    strings already added by the caller) dedups against the canonical docs so a
+    `task.md` isn't surfaced twice. Sorted docs-first, then screenshots in
+    (dir, filename) order. Best-effort — never raises."""
+    docs: List[Dict[str, str]] = []
+    images: List[Dict[str, str]] = []
+    try:
+        # Top-level markdown reports (anything beyond the canonical three).
+        for md in sorted(sess_dir.glob("*.md")):
+            if not md.is_file():
+                continue
+            ap = str(md)
+            if ap in existing_paths:
+                continue
+            docs.append({"name": md.name, "path": ap, "type": "document"})
+        # Screenshot galleries: every `screenshots*/` sibling dir.
+        shot_dirs = sorted(
+            d for d in sess_dir.iterdir()
+            if d.is_dir()
+            and d.name.startswith("screenshots")
+            and d.name not in _ANTIGRAVITY_INTERNAL_DIRS
+        )
+        multi = len(shot_dirs) > 1
+        for d in shot_dirs:
+            for img in sorted(d.iterdir()):
+                if not img.is_file() or img.suffix.lower() not in _ANTIGRAVITY_IMAGE_EXTS:
+                    continue
+                ap = str(img)
+                if ap in existing_paths:
+                    continue
+                name = f"{d.name}/{img.name}" if multi else img.name
+                images.append({"name": name, "path": ap, "type": "image"})
+    except OSError:
+        pass
+    return docs + images
+
+
 # Skill / slash-command invocations (Claude Code). Two structured signals:
 #   - assistant tool_use named "Skill" with input.skill = "<name>";
 #   - <command-name>/<name></command-name> tags echoed into user lines.
@@ -2914,6 +2972,12 @@ def _scan_sessions_sync():
                             elif ext in (".png", ".webp", ".jpg", ".jpeg", ".gif"):
                                 artifacts.append({"name": af.name, "path": str(af), "type": "image"})
                 except Exception: pass
+
+                # Markdown reports (giri_audit_report, qa_test_log, …) and the
+                # screenshots*/ galleries Antigravity writes alongside the canonical
+                # task/plan/walkthrough docs. Dedup against paths already added above.
+                _existing_paths = {a["path"] for a in artifacts}
+                artifacts.extend(_antigravity_brain_reports(sess_dir, _existing_paths))
 
                 # Pull in a sampled slice of browser_recordings/<sid> frames
                 try:

@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useEffect, useState, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -1199,8 +1200,11 @@ function ToolsPanel({ summary, onJump }: { summary: { name: string; count: numbe
 }
 
 function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
+  // The artifact currently expanded into the full-screen modal (null = closed).
+  const [expanded, setExpanded] = useState<Artifact | null>(null);
+
   if (!artifacts.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
-  
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
@@ -1211,21 +1215,32 @@ function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
           <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-[11px]">
             <div className="px-3 py-2 border-b border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 flex items-center justify-between">
                <div className="flex items-center gap-2 min-w-0">
-                  {a.type === 'video' ? <Play size={10} className="text-[var(--tt-brand)]" /> : 
+                  {a.type === 'video' ? <Play size={10} className="text-[var(--tt-brand)]" /> :
                    a.type === 'image' ? <LayoutPanelLeft size={10} className="text-[var(--tt-success-fg)]" /> :
                    a.type === 'terminal' ? <Terminal size={10} className="text-[var(--tt-violet-fg)]" /> :
                    <FileText size={10} className="text-[var(--tt-fg-muted)]" />}
                   <span className="text-[10px] font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
                </div>
-               <a
-                 href={artifactUrl(`/artifacts?path=${encodeURIComponent(a.path)}`)}
-                 download={a.name}
-                 className="text-[8px] font-black uppercase text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] transition-colors"
-               >
-                 DL
-               </a>
+               <div className="flex items-center gap-2 shrink-0">
+                 <button
+                   type="button"
+                   onClick={() => setExpanded(a)}
+                   title="Expand"
+                   aria-label={`Expand ${a.name}`}
+                   className="text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] transition-colors"
+                 >
+                   <Maximize2 size={11} />
+                 </button>
+                 <a
+                   href={artifactUrl(`/artifacts?path=${encodeURIComponent(a.path)}`)}
+                   download={a.name}
+                   className="text-[8px] font-black uppercase text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] transition-colors"
+                 >
+                   DL
+                 </a>
+               </div>
             </div>
-            
+
             <div className="p-3">
                {a.type === 'video' && (
                  <video controls className="w-full rounded-lg bg-black aspect-video">
@@ -1237,7 +1252,8 @@ function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
                  <img
                     src={artifactUrl(`/artifacts?path=${encodeURIComponent(a.path)}`)}
                     alt={a.name}
-                    className="w-full rounded-lg bg-[var(--tt-sunken)]" 
+                    onClick={() => setExpanded(a)}
+                    className="w-full rounded-lg bg-[var(--tt-sunken)] cursor-zoom-in"
                  />
                )}
                {(a.type === 'terminal' || a.type === 'document') && (
@@ -1249,7 +1265,68 @@ function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
           </div>
         ))}
       </div>
+      {expanded && <ArtifactModal artifact={expanded} onClose={() => setExpanded(null)} />}
     </div>
+  );
+}
+
+/** Full-screen lightbox for a single artifact (image / video / markdown doc).
+ *  Closes on backdrop click, the × button, or Escape. */
+function ArtifactModal({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+  const a = artifact;
+  const url = artifactUrl(`/artifacts?path=${encodeURIComponent(a.path)}`);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+  // Portal to <body> so the overlay isn't clipped by a transformed ancestor
+  // (the session layout uses backdrop-blur/transform, which would otherwise
+  // make `position: fixed` resolve to that container instead of the viewport).
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] flex flex-col bg-black/80 backdrop-blur-sm p-4 sm:p-8"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={a.name}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 mb-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 min-w-0">
+          {a.type === 'image' ? <LayoutPanelLeft size={13} className="text-[var(--tt-success-fg)]" /> :
+           a.type === 'video' ? <Play size={13} className="text-[var(--tt-brand)]" /> :
+           <FileText size={13} className="text-[var(--tt-fg-muted)]" />}
+          <span className="text-[12px] font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <a href={url} download={a.name} className="text-[10px] font-black uppercase text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] transition-colors">DL</a>
+          <button type="button" onClick={onClose} aria-label="Close" className="text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+      {/* Body */}
+      <div className="flex-1 min-h-0 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        {a.type === 'image' && (
+          <img src={url} alt={a.name} className="max-w-full max-h-full object-contain rounded-lg" />
+        )}
+        {a.type === 'video' && (
+          <video controls autoPlay className="max-w-full max-h-full rounded-lg bg-black">
+            <source src={url} type="video/mp4" />
+          </video>
+        )}
+        {(a.type === 'terminal' || a.type === 'document') && (
+          <div className="w-full max-w-3xl h-full overflow-y-auto scrollbar-thin rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)] p-5">
+            <ArtifactViewer path={a.path} />
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1268,6 +1345,39 @@ function ArtifactViewer({ path }: { path: string }) {
   }, [path]);
 
   if (loading) return <div className="animate-pulse h-4 tt-tint-2 rounded w-1/2"></div>;
+  // Markdown reports (Antigravity audit/QA logs, etc.) render as formatted
+  // markdown; everything else stays raw monospace text.
+  if (content && /\.md$/i.test(path)) {
+    return (
+      <div className="prose prose-sm max-w-none text-[var(--tt-fg)] text-[11px] leading-relaxed [&_pre]:text-[9px] [&_pre]:overflow-x-auto">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          // The reports embed screenshots as `file://` links. react-markdown
+          // strips the disallowed `file:` protocol to "" (the empty-src
+          // warning), so rewrite those to the token-gated /artifacts URL — the
+          // same local files are already servable — so they render inline.
+          urlTransform={(url) =>
+            url.startsWith("file://")
+              ? artifactUrl(`/artifacts?path=${encodeURIComponent(decodeURIComponent(url.slice(7)))}`)
+              : defaultUrlTransform(url)
+          }
+          components={{
+            // Never emit <img src="">; render nothing for an empty/invalid src.
+            img: ({ src, alt }) =>
+              typeof src === "string" && src ? (
+                <img
+                  src={src}
+                  alt={alt ?? ""}
+                  className="rounded-[6px] max-w-full my-2 border border-[var(--tt-border)]"
+                />
+              ) : null,
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    );
+  }
   return (
     <pre className="text-[9px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all leading-relaxed">
       {content || "Failed to load content."}

@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-06-17",
+      "title": "See an agent's files right in its trace",
+      "highlights": [
+        {
+          "title": "Antigravity session artifacts now show in the Artifacts tab",
+          "description": "Open an Antigravity session and the files it produced are right there in the trace's Artifacts tab — its markdown audit/QA reports render formatted (with their embedded screenshots inline) and every captured screenshot appears as a thumbnail. Click any artifact, or the new expand icon, to open it full-screen, and download any file in one click. No more digging through ~/.gemini to find what a run created.",
+          "href": "/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-15",
       "title": "Privacy you can see — and switch off",
       "highlights": [
