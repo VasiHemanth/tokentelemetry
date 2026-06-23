@@ -1,34 +1,60 @@
 {
   "releases": [
     {
+      "tag": "2026-06-23",
+      "title": "See exactly what your agents cost \u2014 and consume",
+      "highlights": [
+        {
+          "title": "Live agent process monitor",
+          "description": "A new System panel on the dashboard shows real-time disk IO, CPU, and memory for every AI agent process running on your machine (Claude Code, Codex, Ollama, local models). Write rates above 5 MB/s trigger a warning banner \u2014 the exact issue that caused Codex Desktop to write ~222 TB/year unnoticed.",
+          "href": "/"
+        },
+        {
+          "title": "Concurrency timeline",
+          "description": "See which agent sessions were running at the same time and the combined cost per hour during those overlaps. Useful when you run multiple agents in parallel and want to understand the cumulative burn rate.",
+          "href": "/"
+        },
+        {
+          "title": "Attribution cost tree",
+          "description": "When a parent agent spawns subagents, its session now shows the total cost of the entire delegation tree \u2014 not just its own tokens. Open any session that has children to see the full breakdown.",
+          "href": "/sessions"
+        },
+        {
+          "title": "Workflow grouping",
+          "description": "Tag sessions from any agent into a named workflow and see the total cost, token count, and active agents for that task. Great for understanding how much a feature, bug fix, or research task actually cost across all the agents you used.",
+          "href": "/workflows"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-17",
       "title": "See an agent's files right in its trace",
       "highlights": [
         {
           "title": "Antigravity session artifacts now show in the Artifacts tab",
-          "description": "Open an Antigravity session and the files it produced are right there in the trace's Artifacts tab — its markdown audit/QA reports render formatted (with their embedded screenshots inline) and every captured screenshot appears as a thumbnail. Click any artifact, or the new expand icon, to open it full-screen, and download any file in one click. No more digging through ~/.gemini to find what a run created.",
+          "description": "Open an Antigravity session and the files it produced are right there in the trace's Artifacts tab \u2014 its markdown audit/QA reports render formatted (with their embedded screenshots inline) and every captured screenshot appears as a thumbnail. Click any artifact, or the new expand icon, to open it full-screen, and download any file in one click. No more digging through ~/.gemini to find what a run created.",
           "href": "/sessions"
         }
       ]
     },
     {
       "tag": "2026-06-15",
-      "title": "Privacy you can see — and switch off",
+      "title": "Privacy you can see \u2014 and switch off",
       "highlights": [
         {
           "title": "Anonymous usage stats, explained plainly",
-          "description": "As TokenTelemetry evolves we need to understand how it's actually used — which features deliver value — so we can make it better for everyone. The app now shares a small set of anonymous usage signals: which pages and features you use, your OS and app version, and a coarse country derived at the network edge (never your IP). It carries nothing about your work — no code, prompts, file paths, project names, tokens, or costs. It's on by default so the picture is representative, but one click turns it off under Settings → Usage & privacy, and DO_NOT_TRACK=1 (or TT_NO_TELEMETRY=1) forces it off for restricted or enterprise environments.",
+          "description": "As TokenTelemetry evolves we need to understand how it's actually used \u2014 which features deliver value \u2014 so we can make it better for everyone. The app now shares a small set of anonymous usage signals: which pages and features you use, your OS and app version, and a coarse country derived at the network edge (never your IP). It carries nothing about your work \u2014 no code, prompts, file paths, project names, tokens, or costs. It's on by default so the picture is representative, but one click turns it off under Settings \u2192 Usage & privacy, and DO_NOT_TRACK=1 (or TT_NO_TELEMETRY=1) forces it off for restricted or enterprise environments.",
           "href": "/settings#usage-privacy"
         }
       ]
     },
     {
       "tag": "2026-06-13",
-      "title": "Analytics by date — and history that survives cleanup",
+      "title": "Analytics by date \u2014 and history that survives cleanup",
       "highlights": [
         {
           "title": "Filter analytics by date range, week, or month",
-          "description": "The graph is no longer stuck at the last 7 days. Pick a preset (7d, 30d, this month, this year), set a custom range, or switch the buckets to weekly/monthly — and narrow to specific agents or models. Everything is filtered server-side, so even a full year stays fast.",
+          "description": "The graph is no longer stuck at the last 7 days. Pick a preset (7d, 30d, this month, this year), set a custom range, or switch the buckets to weekly/monthly \u2014 and narrow to specific agents or models. Everything is filtered server-side, so even a full year stays fast.",
           "href": "/analytics"
         },
         {
@@ -44,12 +70,12 @@
       "highlights": [
         {
           "title": "Local-model power cost now reads your actual chip",
-          "description": "Self-hosted models are priced by electricity, and the default wattage now comes from your detected chip (e.g. an Apple M-series part) instead of a one-size-fits-all 80 W. On machines we can't auto-detect, the field stops pretending and asks you to enter your draw under load (or click Measure) — so the estimate is honest rather than a silent placeholder.",
+          "description": "Self-hosted models are priced by electricity, and the default wattage now comes from your detected chip (e.g. an Apple M-series part) instead of a one-size-fits-all 80 W. On machines we can't auto-detect, the field stops pretending and asks you to enter your draw under load (or click Measure) \u2014 so the estimate is honest rather than a silent placeholder.",
           "href": "/local-models"
         },
         {
           "title": "See which credit pool each agent actually drains",
-          "description": "Providers no longer bill an agent through one bucket. Expand any agent under Settings to see its drain order, split by interactive vs programmatic use — including Claude's separate Agent-SDK credit pool (claude -p, SDK, CI) that has no auto-fallback, plus pool sizes and stops-at-$0 warnings. Pick your plan tier to size the pools. It explains the cost framing; it doesn't change the math.",
+          "description": "Providers no longer bill an agent through one bucket. Expand any agent under Settings to see its drain order, split by interactive vs programmatic use \u2014 including Claude's separate Agent-SDK credit pool (claude -p, SDK, CI) that has no auto-fallback, plus pool sizes and stops-at-$0 warnings. Pick your plan tier to size the pools. It explains the cost framing; it doesn't change the math.",
           "href": "/settings"
         }
       ]
@@ -60,26 +86,26 @@
       "highlights": [
         {
           "title": "Subagent spend, finally visible",
-          "description": "When a Claude Code session spawns subagents (Explore, general-purpose, custom agents), their tokens were invisible until now — on a typical machine that's millions of tokens. Session pages show a \"Delegated work\" card with each subagent's task, model, tokens and cost, priced by the model the subagent actually ran (an Explore on Haiku no longer hides inside an Opus session).",
+          "description": "When a Claude Code session spawns subagents (Explore, general-purpose, custom agents), their tokens were invisible until now \u2014 on a typical machine that's millions of tokens. Session pages show a \"Delegated work\" card with each subagent's task, model, tokens and cost, priced by the model the subagent actually ran (an Explore on Haiku no longer hides inside an Opus session).",
           "href": "/"
         },
         {
           "title": "Which subagent types earn their keep",
-          "description": "Analytics gains a Delegation & ecosystem section: total delegated tokens and cost, plus a per-type ranking. If general-purpose agents cost you 5× what Explore agents do for similar work, you'll see it — and can change how you delegate.",
+          "description": "Analytics gains a Delegation & ecosystem section: total delegated tokens and cost, plus a per-type ranking. If general-purpose agents cost you 5\u00d7 what Explore agents do for similar work, you'll see it \u2014 and can change how you delegate.",
           "href": "/analytics"
         },
         {
           "title": "Skill & MCP usage, cross-linked to your inventory",
-          "description": "Sessions now record which skills you invoked and how often each MCP server was actually called. Your project's Config page overlays that usage on every installed skill, command, subagent and MCP server — anything marked \"no recorded use\" is a candidate to clean up.",
+          "description": "Sessions now record which skills you invoked and how often each MCP server was actually called. Your project's Config page overlays that usage on every installed skill, command, subagent and MCP server \u2014 anything marked \"no recorded use\" is a candidate to clean up.",
           "href": "/analytics"
         },
         {
           "title": "Delegation across Grok Build, Codex & Antigravity too",
-          "description": "Grok Build, Codex and Antigravity CLI all spawn subagents as separate sessions — those are now linked: the parent session shows each spawn (task, duration, role) with a jump to the child session, and children link back to their parent. Cursor shows spawn counts; agents that don't log spawns say so honestly instead of showing a misleading 0."
+          "description": "Grok Build, Codex and Antigravity CLI all spawn subagents as separate sessions \u2014 those are now linked: the parent session shows each spawn (task, duration, role) with a jump to the child session, and children link back to their parent. Cursor shows spawn counts; agents that don't log spawns say so honestly instead of showing a misleading 0."
         },
         {
-          "title": "Recent Codex sessions were missing — now found",
-          "description": "Newer Codex versions stopped updating the session index TokenTelemetry relied on, so sessions from the last weeks never appeared. Sessions are now discovered from the session files themselves — expect your Codex session count (and totals) to jump to reality."
+          "title": "Recent Codex sessions were missing \u2014 now found",
+          "description": "Newer Codex versions stopped updating the session index TokenTelemetry relied on, so sessions from the last weeks never appeared. Sessions are now discovered from the session files themselves \u2014 expect your Codex session count (and totals) to jump to reality."
         }
       ]
     },
@@ -94,11 +120,11 @@
         },
         {
           "title": "Protected by an access token",
-          "description": "Exposing the dashboard puts your data on the network, so remote access now requires a token: when you start with a non-loopback --host, a random token is printed once in the server console — enter it on the other device when prompted. Your own browser on the server is exempt, and a fully trusted private network can opt out with --insecure-no-auth."
+          "description": "Exposing the dashboard puts your data on the network, so remote access now requires a token: when you start with a non-loopback --host, a random token is printed once in the server console \u2014 enter it on the other device when prompted. Your own browser on the server is exempt, and a fully trusted private network can opt out with --insecure-no-auth."
         },
         {
-          "title": "Scan to connect — no typing",
-          "description": "When remote access is on, Settings shows a \"Connect a device\" panel with a QR code. Scan it from your phone or tablet and the dashboard opens already signed in — the token rides along in the link, gets stored on the device, and is cleared from the address bar automatically.",
+          "title": "Scan to connect \u2014 no typing",
+          "description": "When remote access is on, Settings shows a \"Connect a device\" panel with a QR code. Scan it from your phone or tablet and the dashboard opens already signed in \u2014 the token rides along in the link, gets stored on the device, and is cleared from the address bar automatically.",
           "href": "/settings"
         }
       ]
@@ -109,18 +135,18 @@
       "highlights": [
         {
           "title": "Choose where TokenTelemetry keeps its data",
-          "description": "Config and state no longer have to live in ~/.tokentelemetry on your system drive. Launch with --data-dir /your/path (or set TOKENTELEMETRY_DATA_DIR) and everything — aliases, hidden projects, preferences, billing/power overrides, the summaries cache — moves together to that folder. Handy for keeping your main drive clear or putting app data on a secondary disk.",
+          "description": "Config and state no longer have to live in ~/.tokentelemetry on your system drive. Launch with --data-dir /your/path (or set TOKENTELEMETRY_DATA_DIR) and everything \u2014 aliases, hidden projects, preferences, billing/power overrides, the summaries cache \u2014 moves together to that folder. Handy for keeping your main drive clear or putting app data on a secondary disk.",
           "href": "/settings"
         }
       ]
     },
     {
       "tag": "2026-06-08",
-      "title": "Local model insights: energy, savings & CO₂",
+      "title": "Local model insights: energy, savings & CO\u2082",
       "highlights": [
         {
           "title": "Dedicated Local & Power insights surface",
-          "description": "A new dashboard card brings your local model usage front and center — total local energy (Wh/kWh), estimated cloud savings from running locally, and a breakdown of which local models you use most.",
+          "description": "A new dashboard card brings your local model usage front and center \u2014 total local energy (Wh/kWh), estimated cloud savings from running locally, and a breakdown of which local models you use most.",
           "href": "/"
         },
         {
@@ -135,7 +161,7 @@
         },
         {
           "title": "Carbon footprint estimate",
-          "description": "Set your grid's carbon intensity alongside your power rate, and TokenTelemetry tracks the CO₂ grams generated by your local AI sessions based on real hardware draw and session duration.",
+          "description": "Set your grid's carbon intensity alongside your power rate, and TokenTelemetry tracks the CO\u2082 grams generated by your local AI sessions based on real hardware draw and session duration.",
           "href": "/settings"
         }
       ]
@@ -146,12 +172,12 @@
       "highlights": [
         {
           "title": "Local models priced by your actual hardware",
-          "description": "Sessions on Ollama, llama.cpp or vLLM are now detected by their endpoint/provider — not by guessing — so a local model is always costed by electricity, never at cloud API rates (even when it shares a name with a cloud model). Generation time uses each model's real throughput where measurable (a 4B isn't costed like a 70B).",
+          "description": "Sessions on Ollama, llama.cpp or vLLM are now detected by their endpoint/provider \u2014 not by guessing \u2014 so a local model is always costed by electricity, never at cloud API rates (even when it shares a name with a cloud model). Generation time uses each model's real throughput where measurable (a 4B isn't costed like a 70B).",
           "href": "/settings"
         },
         {
           "title": "Set or measure your machine's power",
-          "description": "A new Settings → Local power & electricity card lets you set your watts-under-load and kWh rate, mark local/LAN and flat-subscription endpoints, and — where your OS allows it without admin — measure real power draw directly. The estimate is honest about where its numbers come from.",
+          "description": "A new Settings \u2192 Local power & electricity card lets you set your watts-under-load and kWh rate, mark local/LAN and flat-subscription endpoints, and \u2014 where your OS allows it without admin \u2014 measure real power draw directly. The estimate is honest about where its numbers come from.",
           "href": "/settings"
         }
       ]
@@ -162,12 +188,12 @@
       "highlights": [
         {
           "title": "2000+ models priced for accurate cost estimates",
-          "description": "Cost estimates now draw on a much larger, regularly-refreshed pricing dataset (sourced from models.dev), so far more models — and provider-specific rates — get an accurate price instead of a generic fallback. The data ships with each update and is read entirely on your machine: no new outbound calls, same local-first privacy.",
+          "description": "Cost estimates now draw on a much larger, regularly-refreshed pricing dataset (sourced from models.dev), so far more models \u2014 and provider-specific rates \u2014 get an accurate price instead of a generic fallback. The data ships with each update and is read entirely on your machine: no new outbound calls, same local-first privacy.",
           "href": "/"
         },
         {
           "title": "Local models priced by electricity, not fake API rates",
-          "description": "Models you run yourself (Ollama, llama.cpp, vLLM) have no API bill — their real cost is power. Set your machine's watts under load and your kWh rate, and TokenTelemetry estimates the electricity cost instead of inventing a per-token charge."
+          "description": "Models you run yourself (Ollama, llama.cpp, vLLM) have no API bill \u2014 their real cost is power. Set your machine's watts under load and your kWh rate, and TokenTelemetry estimates the electricity cost instead of inventing a per-token charge."
         },
         {
           "title": "Flat subscriptions now show $0 per call",
@@ -175,23 +201,23 @@
         },
         {
           "title": "Full subscription-cost disclaimer",
-          "description": "The dashboard's \"API equiv. (est.)\" figure used to cut off mid-sentence at \"Subscription users p…\". The disclaimer now shows in full, plus a persistent callout makes clear the number re-prices your usage at API list rates for comparing sessions — it is not an invoice. On a flat-fee plan like Claude Pro/Max or Copilot, your actual spend is much lower.",
+          "description": "The dashboard's \"API equiv. (est.)\" figure used to cut off mid-sentence at \"Subscription users p\u2026\". The disclaimer now shows in full, plus a persistent callout makes clear the number re-prices your usage at API list rates for comparing sessions \u2014 it is not an invoice. On a flat-fee plan like Claude Pro/Max or Copilot, your actual spend is much lower.",
           "href": "/"
         },
         {
-          "title": "Per-agent billing mode — bill vs. estimate, framed right",
-          "description": "If you pay per token (API key) for an agent, the cost figure approximates your real bill; on a flat subscription it's only an API-list-price equivalent. TokenTelemetry now auto-detects which one you're on per agent (from each agent's own auth — e.g. ~/.codex/auth.json) and frames the number accordingly, with a Settings → Billing & cost control to override any agent.",
+          "title": "Per-agent billing mode \u2014 bill vs. estimate, framed right",
+          "description": "If you pay per token (API key) for an agent, the cost figure approximates your real bill; on a flat subscription it's only an API-list-price equivalent. TokenTelemetry now auto-detects which one you're on per agent (from each agent's own auth \u2014 e.g. ~/.codex/auth.json) and frames the number accordingly, with a Settings \u2192 Billing & cost control to override any agent.",
           "href": "/settings"
         }
       ]
     },
     {
       "tag": "2026-06-07",
-      "title": "Update check — now visible and yours to control",
+      "title": "Update check \u2014 now visible and yours to control",
       "highlights": [
         {
           "title": "Check-for-updates toggle",
-          "description": "TokenTelemetry's one outbound call — an optional check that tells you when new features ship — now has a switch in Settings → Updates & privacy. It sends no usage data; turn it off any time, or set TT_NO_UPDATE_CHECK=1 to enforce it off.",
+          "description": "TokenTelemetry's one outbound call \u2014 an optional check that tells you when new features ship \u2014 now has a switch in Settings \u2192 Updates & privacy. It sends no usage data; turn it off any time, or set TT_NO_UPDATE_CHECK=1 to enforce it off.",
           "href": "/settings"
         },
         {
@@ -202,7 +228,7 @@
     },
     {
       "tag": "2026-06-07",
-      "title": "Antigravity CLI — real model & accurate projects",
+      "title": "Antigravity CLI \u2014 real model & accurate projects",
       "highlights": [
         {
           "title": "Real model for Antigravity CLI sessions",
@@ -211,7 +237,7 @@
         },
         {
           "title": "Accurate, stable project for Antigravity CLI sessions",
-          "description": "CLI sessions are now grouped under the exact folder they worked in, read from each session's own saved record — so the grouping stays correct over time instead of guessing from task text. Sessions that genuinely never entered a project (pure chat/research) stay grouped separately, off the Projects view.",
+          "description": "CLI sessions are now grouped under the exact folder they worked in, read from each session's own saved record \u2014 so the grouping stays correct over time instead of guessing from task text. Sessions that genuinely never entered a project (pure chat/research) stay grouped separately, off the Projects view.",
           "href": "/"
         }
       ]
@@ -222,14 +248,14 @@
       "highlights": [
         {
           "title": "OpenAI-compatible summarizer backend",
-          "description": "Point TokenTelemetry at any server speaking the OpenAI /v1/chat/completions API — llama.cpp, vLLM, LM Studio, LocalAI, or Ollama's OpenAI endpoint — to generate trace summaries. No extra CLI to install: set the endpoint, model, and (optionally) an API key, tune sampling, and hit Test connection.",
+          "description": "Point TokenTelemetry at any server speaking the OpenAI /v1/chat/completions API \u2014 llama.cpp, vLLM, LM Studio, LocalAI, or Ollama's OpenAI endpoint \u2014 to generate trace summaries. No extra CLI to install: set the endpoint, model, and (optionally) an API key, tune sampling, and hit Test connection.",
           "href": "/settings"
         }
       ]
     },
     {
       "tag": "2026-06-04",
-      "title": "Antigravity — tokens, IDE coverage, surface labels",
+      "title": "Antigravity \u2014 tokens, IDE coverage, surface labels",
       "highlights": [
         {
           "title": "Antigravity token usage",
@@ -254,7 +280,7 @@
       "highlights": [
         {
           "title": "GitHub Copilot CLI sessions tracked",
-          "description": "TokenTelemetry now reads GitHub Copilot CLI / agent sessions from ~/.copilot/session-state, so your terminal Copilot usage shows up alongside everything else — model, tokens, project, and full trace.",
+          "description": "TokenTelemetry now reads GitHub Copilot CLI / agent sessions from ~/.copilot/session-state, so your terminal Copilot usage shows up alongside everything else \u2014 model, tokens, project, and full trace.",
           "href": "/"
         },
         {
@@ -270,7 +296,7 @@
       "highlights": [
         {
           "title": "Grok Build (xAI) support",
-          "description": "TokenTelemetry now tracks xAI's Grok Build coding agent — sessions, context usage, tool calls, permission decisions, and plan mode — with a dedicated forensics card. That's 11 agents tracked in total.",
+          "description": "TokenTelemetry now tracks xAI's Grok Build coding agent \u2014 sessions, context usage, tool calls, permission decisions, and plan mode \u2014 with a dedicated forensics card. That's 11 agents tracked in total.",
           "href": "/"
         },
         {
@@ -280,7 +306,7 @@
         },
         {
           "title": "Smarter 'Back' from a session",
-          "description": "Opening a session and hitting Back now returns you to the page you came from — e.g. the project you were viewing — instead of always jumping to the dashboard."
+          "description": "Opening a session and hitting Back now returns you to the page you came from \u2014 e.g. the project you were viewing \u2014 instead of always jumping to the dashboard."
         }
       ]
     },
@@ -305,7 +331,7 @@
       "highlights": [
         {
           "title": "Hermes Agent dashboard",
-          "description": "New sub-pages for Gateway, Memory, Profiles, Schedules, Skills, Soul, and Tools — all read directly from your local ~/.hermes state.",
+          "description": "New sub-pages for Gateway, Memory, Profiles, Schedules, Skills, Soul, and Tools \u2014 all read directly from your local ~/.hermes state.",
           "href": "/hermes"
         }
       ]

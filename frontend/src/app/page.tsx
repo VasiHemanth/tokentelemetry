@@ -13,7 +13,10 @@ import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
+import AddToWorkflowPopover from "@/components/AddToWorkflowPopover";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
+import AgentProcessCard from "@/components/AgentProcessCard";
+import ConcurrencyTimelineCard from "@/components/ConcurrencyTimelineCard";
 import { formatTokens, formatCost } from "@/lib/format";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
@@ -30,12 +33,18 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  /** Delegation cost rollup (own + descendants), set by _rollup_delegation_costs. */
+  total_cost_usd?: number;
+  children_cost_usd?: number;
+  child_count?: number;
   /** Copilot-only: cli / vscode */
   copilot_source?: string;
   /** Antigravity-only: cli / ide / app */
   antigravity_source?: string;
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
+  /** Workflows this session belongs to (annotated by the backend). */
+  workflow_ids?: string[];
 }
 
 interface AnalyticsResponse {
@@ -149,6 +158,11 @@ export default function Home() {
 
       {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
+      {/* Concurrency timeline — when multiple agents ran at once */}
+      <Section title="Concurrency timeline" description="When agents overlapped and the combined cost of running them at the same time.">
+        <ConcurrencyTimelineCard />
+      </Section>
+
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {
         const AUTONOMOUS = new Set(["hermes"]);
@@ -218,6 +232,14 @@ export default function Home() {
         );
       })()}
 
+      {/* System — live machine cost of running agents */}
+      <Section
+        title="System"
+        description="Live disk, CPU, and memory use of agent processes on this machine — the machine cost behind the token cost."
+      >
+        <AgentProcessCard />
+      </Section>
+
       {/* Activity + sidebars */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
         {/* Recent activity */}
@@ -249,6 +271,7 @@ export default function Home() {
                     <TH className="pl-5">Agent</TH>
                     <TH>Project</TH>
                     <TH>Context</TH>
+                    <TH className="text-center">Workflow</TH>
                     <TH className="text-right pr-5">Time</TH>
                   </TR>
                 </THead>
@@ -271,12 +294,23 @@ export default function Home() {
                           )}
                         </Link>
                       </TD>
-                      <TD className="text-[var(--tt-fg)] max-w-[480px] truncate">
+                      <TD className="text-[var(--tt-fg)] max-w-[480px]">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.display || s.text || (
                             <span className="italic text-[var(--tt-fg-faint)]">No message content</span>
                           )}
                         </Link>
+                        {(s.child_count ?? 0) > 0 && (s.total_cost_usd ?? 0) > (s.cost ?? 0) + 1e-9 && (
+                          <span
+                            className="mt-0.5 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium tabular-nums bg-[var(--tt-warn-bg)] text-[var(--tt-warn-fg)] border-[var(--tt-warn-bd)]"
+                            title={`${formatCost(s.cost)} own + ${formatCost(s.children_cost_usd)} across ${s.child_count} child session(s)`}
+                          >
+                            {formatCost(s.cost)} own + {formatCost(s.children_cost_usd)} children = {formatCost(s.total_cost_usd)} total
+                          </span>
+                        )}
+                      </TD>
+                      <TD className="text-center">
+                        <AddToWorkflowPopover sessionId={s.id} initialWorkflowIds={s.workflow_ids} />
                       </TD>
                       <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)] group-hover:text-[var(--tt-brand)] transition-colors">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">

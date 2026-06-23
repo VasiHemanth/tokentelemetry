@@ -18,6 +18,7 @@ from harness_config import (
     load_hidden, hide_project, unhide_project,
     list_aliases, save_aliases,
     load_preferences, save_preferences,
+    load_workflows, save_workflows,
 )
 from tt_paths import data_dir
 
@@ -2354,6 +2355,57 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     }
 
 
+def _rollup_delegation_costs(sessions: List[Dict[str, Any]]) -> None:
+    """Annotate each session with total_cost_usd = own cost + all descendant costs.
+
+    Sessions carry a `cost` field (USD) and a `child_session_ids` list linking the
+    parent -> spawned subagent sessions. This walks the delegation tree from each
+    root (a session with no parent_session_id) and records, per session:
+
+      - ``total_cost_usd``    own cost + recursive cost of every descendant
+      - ``children_cost_usd`` the descendant portion only
+      - ``child_count``       number of direct children
+
+    Idempotent: it always recomputes from `cost` + `child_session_ids`, so calling
+    it twice yields the same numbers (no accumulation). A `visited` set guards
+    against cycles in corrupt link data. Missing/None `cost` is treated as 0.
+    """
+    by_id = {s["id"]: s for s in sessions}
+
+    def _total_cost(session_id: str, visited: set) -> float:
+        if session_id in visited:
+            return 0.0  # cycle guard — don't re-enter a node on this path
+        visited.add(session_id)
+        s = by_id.get(session_id)
+        if s is None:
+            return 0.0
+        own = s.get("cost") or 0.0
+        children_cost = sum(
+            _total_cost(cid, visited)
+            for cid in (s.get("child_session_ids") or [])
+        )
+        s["children_cost_usd"] = children_cost
+        s["child_count"] = len(s.get("child_session_ids") or [])
+        s["total_cost_usd"] = own + children_cost
+        return s["total_cost_usd"]
+
+    # Compute from roots first so each subtree is walked once per root path.
+    roots = [s for s in sessions if not s.get("parent_session_id")]
+    for root in roots:
+        _total_cost(root["id"], set())
+
+    # Children whose parent isn't in our dataset never got visited above; give
+    # them a self-only (or own-subtree) total so every session carries the fields.
+    for s in sessions:
+        if "total_cost_usd" not in s:
+            if s.get("child_session_ids"):
+                _total_cost(s["id"], set())
+            else:
+                s["total_cost_usd"] = s.get("cost") or 0.0
+                s["children_cost_usd"] = 0.0
+                s["child_count"] = 0
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -3609,9 +3661,248 @@ def _scan_sessions_sync():
     for s in sessions:
         s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
 
+    # Roll up delegation/subagent costs: parent.total_cost_usd = own + descendants.
+    _rollup_delegation_costs(sessions)
+
+    # Concurrency: annotates sessions in place, stashes windows for /sessions/concurrency.
+    try:
+        windows, summary = _compute_concurrency(sessions)
+        _concurrency_cache["windows"] = windows
+        _concurrency_cache["summary"] = summary
+    except Exception:
+        _concurrency_cache["windows"] = []
+        _concurrency_cache["summary"] = {
+            "peak_concurrent_count": 0,
+            "peak_combined_cost_per_hour": 0.0,
+            "total_concurrent_hours": 0.0,
+        }
+
+    # Workflow membership: stamp each session with workflow_ids from inverted index.
+    try:
+        _wf_index: Dict[str, List[str]] = {}
+        for wf_id, wf in load_workflows().items():
+            if not isinstance(wf, dict):
+                continue
+            for sid in wf.get("session_ids", []) or []:
+                if isinstance(sid, str):
+                    _wf_index.setdefault(sid, []).append(wf_id)
+    except Exception:
+        _wf_index = {}
+    for s in sessions:
+        s["workflow_ids"] = _wf_index.get(s["id"], [])
+
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
     return sessions
+
+
+# ---------------------------------------------------------------------------
+# Concurrency timeline
+# ---------------------------------------------------------------------------
+# Sessions only carry a single `timestamp` (last-activity / end-of-session
+# datetime); there's no logged start or duration. We derive a window per
+# session: end = timestamp, and length = output_tokens / tok_per_sec (the same
+# generation-latency model the power feature uses), clamped to a sane floor/
+# ceiling so a token-less session still occupies a believable slice rather than
+# a zero-width point. A sweep line over the interval endpoints (sorted, so
+# O(n log n)) finds every moment where 2+ sessions were live, annotates each
+# session with its peak overlap, and emits the most expensive overlap windows.
+
+# Min/max derived session length (seconds). Floor keeps token-less or
+# instant sessions from collapsing to a point; ceiling stops a huge-output
+# session from swallowing the whole timeline.
+_CONCURRENCY_MIN_DURATION_SEC = 60.0          # 1 min
+_CONCURRENCY_MAX_DURATION_SEC = 6.0 * 3600.0  # 6 h
+_CONCURRENCY_DEFAULT_DURATION_SEC = 300.0     # 5 min when nothing else to go on
+
+# Filled by _scan_sessions_sync; read by GET /sessions/concurrency.
+_concurrency_cache: Dict[str, Any] = {"windows": [], "summary": {}}
+
+
+def _session_epoch(ts) -> Optional[float]:
+    """Best-effort epoch seconds from a session `timestamp` (datetime or ISO/epoch)."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        try:
+            return _aware(ts).timestamp()
+        except Exception:
+            return None
+    if isinstance(ts, (int, float)):
+        v = float(ts)
+        # Heuristic: values that look like milliseconds → seconds.
+        return v / 1000.0 if v > 1e11 else v
+    if isinstance(ts, str):
+        try:
+            return _aware(datetime.fromisoformat(ts.replace("Z", "+00:00"))).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _session_duration_sec(sess: Dict[str, Any]) -> float:
+    """Derive a session's wall-clock length in seconds.
+
+    Prefers an explicit ``duration_seconds`` if a future builder ever sets one;
+    otherwise estimates generation latency from output tokens / throughput, then
+    clamps to [min, max]."""
+    explicit = sess.get("duration_seconds")
+    if isinstance(explicit, (int, float)) and explicit > 0:
+        return max(_CONCURRENCY_MIN_DURATION_SEC,
+                   min(float(explicit), _CONCURRENCY_MAX_DURATION_SEC))
+    tokens = sess.get("tokens") or {}
+    out = tokens.get("output") or 0
+    tps = sess.get("tok_per_sec")
+    if not (isinstance(tps, (int, float)) and tps > 0):
+        try:
+            from power_config import default_tok_per_sec_for_model
+            tps = default_tok_per_sec_for_model(sess.get("model"))
+        except Exception:
+            tps = 0.0
+    if out and tps and tps > 0:
+        secs = float(out) / float(tps)
+    else:
+        secs = _CONCURRENCY_DEFAULT_DURATION_SEC
+    return max(_CONCURRENCY_MIN_DURATION_SEC,
+               min(secs, _CONCURRENCY_MAX_DURATION_SEC))
+
+
+def _compute_concurrency(sessions: List[Dict[str, Any]]):
+    """Annotate each session with its peak concurrency and return (windows, summary).
+
+    Each session gains:
+      - concurrent_sessions_count: # of OTHER sessions live at this session's peak
+      - concurrent_peak_cost_per_hour: combined $/hr of all sessions live at that peak
+      - concurrent_session_ids: ids of the other sessions in that peak overlap
+
+    Returns:
+      windows: top-10 most expensive overlap windows (2+ sessions), each
+        {start, end, session_ids, agent_types, combined_cost_usd, combined_write_mb_estimate}
+      summary: {peak_concurrent_count, peak_combined_cost_per_hour, total_concurrent_hours}
+    """
+    # 1. Build a clean interval per session (skip ones with no usable timestamp).
+    intervals = []  # (start_epoch, end_epoch, session_ref)
+    for s in sessions:
+        # Reset any stale annotations from a prior scan.
+        s["concurrent_sessions_count"] = 0
+        s["concurrent_peak_cost_per_hour"] = 0.0
+        s["concurrent_session_ids"] = []
+        end = _session_epoch(s.get("timestamp"))
+        if end is None:
+            continue
+        dur = _session_duration_sec(s)
+        start = end - dur
+        dur_hours = dur / 3600.0
+        cost = s.get("cost")
+        if not isinstance(cost, (int, float)):
+            cost = 0.0
+        cost_per_hour = (float(cost) / dur_hours) if dur_hours > 0 else 0.0
+        intervals.append({
+            "start": start, "end": end, "sess": s,
+            "cost": float(cost), "cost_per_hour": cost_per_hour,
+        })
+
+    if len(intervals) < 2:
+        return [], {
+            "peak_concurrent_count": 1 if intervals else 0,
+            "peak_combined_cost_per_hour": 0.0,
+            "total_concurrent_hours": 0.0,
+        }
+
+    # 2. Sweep line over endpoints. +1 at a start, -1 at an end. Sorting the
+    #    events is the O(n log n) step; the sweep itself is linear.
+    EPS = 1e-9
+    events = []  # (time, delta, ordinal) — process ends before starts at a tie
+    for idx, iv in enumerate(intervals):
+        events.append((iv["start"], 1, idx))
+        events.append((iv["end"], -1, idx))
+    # At equal timestamps, apply ends (-1) before starts (+1) so back-to-back
+    # sessions that merely touch don't count as overlapping.
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    active: Set[int] = set()
+    total_concurrent_seconds = 0.0
+    peak_count = 1
+    peak_combined_cph = 0.0
+    # Segments where 2+ were active: (seg_start, seg_end, frozenset(active idxs))
+    segments = []
+    prev_t = None
+    for t, delta, idx in events:
+        if prev_t is not None and t > prev_t and len(active) >= 1:
+            seg_len = t - prev_t
+            if len(active) >= 2:
+                total_concurrent_seconds += seg_len
+                segments.append((prev_t, t, frozenset(active)))
+                if len(active) > peak_count:
+                    peak_count = len(active)
+                cph = sum(intervals[i]["cost_per_hour"] for i in active)
+                if cph > peak_combined_cph:
+                    peak_combined_cph = cph
+        if delta == 1:
+            active.add(idx)
+        else:
+            active.discard(idx)
+        prev_t = t
+
+    # 3. Per-session peak overlap: for each session, scan the segments it
+    #    belongs to and keep the one with the most concurrent sessions.
+    for idx, iv in enumerate(intervals):
+        best_others: Set[int] = set()
+        best_n = 0
+        for seg_start, seg_end, members in segments:
+            if idx in members and len(members) > best_n:
+                best_n = len(members)
+                best_others = set(members) - {idx}
+        if best_n >= 2:
+            s = iv["sess"]
+            others = list(best_others)
+            s["concurrent_sessions_count"] = len(others)
+            s["concurrent_session_ids"] = [intervals[i]["sess"].get("id") for i in others]
+            s["concurrent_peak_cost_per_hour"] = round(
+                iv["cost_per_hour"] + sum(intervals[i]["cost_per_hour"] for i in others), 6)
+
+    # 4. Merge contiguous segments sharing the same member set into windows,
+    #    then rank by combined cost and keep the top 10.
+    windows = []
+    for seg_start, seg_end, members in segments:
+        mlist = sorted(members)
+        member_ids = [intervals[i]["sess"].get("id") for i in mlist]
+        agent_types = sorted({intervals[i]["sess"].get("agent") for i in mlist if intervals[i]["sess"].get("agent")})
+        # combined cost over this segment = sum(cost_per_hour) * segment_hours
+        seg_hours = (seg_end - seg_start) / 3600.0
+        combined_cost = sum(intervals[i]["cost_per_hour"] for i in mlist) * seg_hours
+        windows.append({
+            "start": int(seg_start),
+            "end": int(seg_end),
+            "session_ids": member_ids,
+            "agent_types": agent_types,
+            "combined_cost_usd": round(combined_cost, 6),
+            # Per-second write throughput isn't tracked per session yet.
+            "combined_write_mb_estimate": None,
+        })
+
+    # Collapse adjacent windows with identical membership (the sweep can split a
+    # single overlap into pieces when an unrelated session starts/ends nearby).
+    windows.sort(key=lambda w: w["start"])
+    merged: List[Dict[str, Any]] = []
+    for w in windows:
+        if (merged and merged[-1]["session_ids"] == w["session_ids"]
+                and abs(merged[-1]["end"] - w["start"]) <= 1):
+            merged[-1]["end"] = w["end"]
+            merged[-1]["combined_cost_usd"] = round(
+                merged[-1]["combined_cost_usd"] + w["combined_cost_usd"], 6)
+        else:
+            merged.append(dict(w))
+
+    merged.sort(key=lambda w: w["combined_cost_usd"], reverse=True)
+    top = merged[:10]
+
+    summary = {
+        "peak_concurrent_count": peak_count,
+        "peak_combined_cost_per_hour": round(peak_combined_cph, 6),
+        "total_concurrent_hours": round(total_concurrent_seconds / 3600.0, 4),
+    }
+    return top, summary
 
 
 # ---------------------------------------------------------------------------
@@ -3749,8 +4040,30 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
 
 @app.get("/sessions")
 async def get_sessions(fresh: bool = False):
-    """Return the session list. Pass ?fresh=1 to force a re-scan."""
+    """Return the session list. Pass ?fresh=1 to force a re-scan.
+
+    Each session is annotated with its peak concurrency
+    (``concurrent_sessions_count``, ``concurrent_peak_cost_per_hour``,
+    ``concurrent_session_ids``). The overlap *windows* themselves are served by
+    GET /sessions/concurrency so the timeline view can fetch them without
+    pulling the whole session list."""
     return await get_sessions_cached(fresh=fresh)
+
+
+@app.get("/sessions/concurrency")
+async def get_sessions_concurrency(fresh: bool = False):
+    """Concurrency timeline: when multiple agents ran at once and the combined
+    burn rate during those windows. Re-uses the cached session scan (which
+    computes this as a side effect), so it's cheap on a warm cache."""
+    # Ensure the cache (and thus _concurrency_cache) is populated/fresh.
+    await get_sessions_cached(fresh=fresh)
+    summary = _concurrency_cache.get("summary") or {}
+    return {
+        "windows": _concurrency_cache.get("windows") or [],
+        "peak_concurrent_count": summary.get("peak_concurrent_count", 0),
+        "peak_combined_cost_per_hour": summary.get("peak_combined_cost_per_hour", 0.0),
+        "total_concurrent_hours": summary.get("total_concurrent_hours", 0.0),
+    }
 
 
 @app.get("/pricing")
@@ -4534,6 +4847,46 @@ async def session_delegation(session_id: str, agent: str):
     return {"supported": False}
 
 
+@app.get("/sessions/{session_id}/tree")
+async def get_session_tree(session_id: str):
+    """Cost attribution tree for a session and all its descendants.
+
+    Returns the session plus a recursively-nested `children` array, each node
+    carrying its own cost and the rolled-up subtree total (computed in
+    `_rollup_delegation_costs` during the scan). Cycles in corrupt link data are
+    broken with a visited set. 404 if the session isn't in the cache.
+    """
+    sessions = await get_sessions_cached()
+    by_id = {s["id"]: s for s in sessions}
+    root = by_id.get(session_id)
+    if root is None:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    def _node(sid: str, depth: int, visited: set) -> Dict[str, Any]:
+        s = by_id.get(sid) or {}
+        children: List[Dict[str, Any]] = []
+        if sid not in visited:
+            visited.add(sid)
+            for cid in (s.get("child_session_ids") or []):
+                if cid in by_id and cid not in visited:
+                    children.append(_node(cid, depth + 1, visited))
+        own = s.get("cost") or 0.0
+        return {
+            "session_id": sid,
+            "agent": s.get("agent"),
+            "project": s.get("project"),
+            "display": s.get("display") or s.get("text"),
+            "cost_usd": own,
+            "total_cost_usd": s.get("total_cost_usd", own),
+            "children_cost_usd": s.get("children_cost_usd", 0.0),
+            "child_count": s.get("child_count", len(s.get("child_session_ids") or [])),
+            "depth": depth,
+            "children": children,
+        }
+
+    return _node(session_id, 0, set())
+
+
 @app.get("/projects")
 async def get_projects(include_hidden: bool = False):
     sessions = await get_sessions_cached(); projects = {}
@@ -4989,6 +5342,201 @@ async def post_aliases(aliases: Dict[str, str]):
     save_aliases(cleaned)
     _invalidate_sessions_cache()
     return {"ok": True, "aliases": cleaned}
+
+
+# ---------------------------------------------------------------------------
+# Workflow grouping
+# ---------------------------------------------------------------------------
+# Workflows let a user bundle N sessions (across agents) into a named task and
+# read the aggregated cost/tokens. Definitions live in workflows.json via
+# harness_config; stats are computed on read by joining against the cached
+# session list. Session IDs that no longer resolve are skipped, never fatal.
+import uuid as _uuid
+
+# Six preset colors offered in the UI; we don't validate against this list
+# server-side (any hex the client sends is stored), it's just the default.
+_DEFAULT_WORKFLOW_COLOR = "#6366f1"
+
+
+class WorkflowCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    color: Optional[str] = _DEFAULT_WORKFLOW_COLOR
+    session_ids: Optional[List[str]] = None
+
+
+class WorkflowUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    session_ids: Optional[List[str]] = None
+
+
+class WorkflowSessions(BaseModel):
+    session_ids: List[str]
+
+
+def _workflow_with_stats(wf_id: str, wf: Dict[str, Any], sessions_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Project a stored workflow into the API shape with aggregated stats.
+
+    Joins session_ids against the cached sessions. Sessions that no longer
+    exist (deleted logs, rotated history) are silently skipped — they stay in
+    the stored list so they reappear if the session comes back, but they don't
+    contribute to totals and never raise."""
+    session_ids = [s for s in (wf.get("session_ids") or []) if isinstance(s, str)]
+    total_cost = 0.0
+    total_tokens = 0
+    agent_types: List[str] = []
+    last_active: Optional[float] = None
+    for sid in session_ids:
+        sess = sessions_by_id.get(sid)
+        if not sess:
+            continue
+        total_cost += float(sess.get("cost") or 0.0)
+        total_tokens += int((sess.get("tokens") or {}).get("total") or 0)
+        agent = sess.get("agent")
+        if agent and agent not in agent_types:
+            agent_types.append(agent)
+        ts = sess.get("timestamp")
+        if isinstance(ts, datetime):
+            epoch = ts.timestamp()
+            if last_active is None or epoch > last_active:
+                last_active = epoch
+    return {
+        "id": wf_id,
+        "name": wf.get("name", ""),
+        "description": wf.get("description", ""),
+        "color": wf.get("color") or _DEFAULT_WORKFLOW_COLOR,
+        "session_ids": session_ids,
+        "session_count": len(session_ids),
+        "total_cost_usd": round(total_cost, 6),
+        "total_tokens": total_tokens,
+        "agent_types": agent_types,
+        "created_at": wf.get("created_at"),
+        "last_active": last_active,
+    }
+
+
+async def _sessions_by_id() -> Dict[str, Dict[str, Any]]:
+    """Index the cached session list by id for workflow stat joins."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for s in await get_sessions_cached():
+        out[s["id"]] = s
+    return out
+
+
+@app.get("/workflows")
+async def list_workflows():
+    """All workflows with aggregated cost/token/agent stats."""
+    sessions_by_id = await _sessions_by_id()
+    workflows = load_workflows()
+    out = [_workflow_with_stats(wf_id, wf, sessions_by_id)
+           for wf_id, wf in workflows.items() if isinstance(wf, dict)]
+    # Newest first by creation time (None sorts last).
+    out.sort(key=lambda w: w.get("created_at") or 0, reverse=True)
+    return out
+
+
+@app.post("/workflows")
+async def create_workflow(payload: WorkflowCreate):
+    from fastapi import HTTPException
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' is required")
+    wf_id = "wf_" + _uuid.uuid4().hex[:8]
+    # De-dupe session_ids while preserving order.
+    seen: Set[str] = set()
+    session_ids: List[str] = []
+    for sid in (payload.session_ids or []):
+        if isinstance(sid, str) and sid and sid not in seen:
+            seen.add(sid); session_ids.append(sid)
+    workflows = load_workflows()
+    workflows[wf_id] = {
+        "name": name,
+        "description": (payload.description or "").strip(),
+        "color": payload.color or _DEFAULT_WORKFLOW_COLOR,
+        "session_ids": session_ids,
+        "created_at": _now().timestamp(),
+    }
+    save_workflows(workflows)
+    _invalidate_sessions_cache()
+    return _workflow_with_stats(wf_id, workflows[wf_id], await _sessions_by_id())
+
+
+@app.put("/workflows/{workflow_id}")
+async def update_workflow(workflow_id: str, payload: WorkflowUpdate):
+    from fastapi import HTTPException
+    workflows = load_workflows()
+    wf = workflows.get(workflow_id)
+    if not isinstance(wf, dict):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="'name' cannot be empty")
+        wf["name"] = name
+    if payload.description is not None:
+        wf["description"] = payload.description.strip()
+    if payload.color is not None:
+        wf["color"] = payload.color or _DEFAULT_WORKFLOW_COLOR
+    if payload.session_ids is not None:
+        seen: Set[str] = set()
+        cleaned: List[str] = []
+        for sid in payload.session_ids:
+            if isinstance(sid, str) and sid and sid not in seen:
+                seen.add(sid); cleaned.append(sid)
+        wf["session_ids"] = cleaned
+    workflows[workflow_id] = wf
+    save_workflows(workflows)
+    _invalidate_sessions_cache()
+    return _workflow_with_stats(workflow_id, wf, await _sessions_by_id())
+
+
+@app.delete("/workflows/{workflow_id}")
+async def delete_workflow(workflow_id: str):
+    from fastapi import HTTPException
+    workflows = load_workflows()
+    if workflow_id not in workflows:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    del workflows[workflow_id]
+    save_workflows(workflows)
+    _invalidate_sessions_cache()
+    return {"ok": True}
+
+
+@app.post("/workflows/{workflow_id}/sessions")
+async def add_workflow_sessions(workflow_id: str, payload: WorkflowSessions):
+    from fastapi import HTTPException
+    workflows = load_workflows()
+    wf = workflows.get(workflow_id)
+    if not isinstance(wf, dict):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    existing = [s for s in (wf.get("session_ids") or []) if isinstance(s, str)]
+    seen = set(existing)
+    for sid in payload.session_ids:
+        if isinstance(sid, str) and sid and sid not in seen:
+            seen.add(sid); existing.append(sid)
+    wf["session_ids"] = existing
+    workflows[workflow_id] = wf
+    save_workflows(workflows)
+    _invalidate_sessions_cache()
+    return _workflow_with_stats(workflow_id, wf, await _sessions_by_id())
+
+
+@app.delete("/workflows/{workflow_id}/sessions/{session_id}")
+async def remove_workflow_session(workflow_id: str, session_id: str):
+    from fastapi import HTTPException
+    workflows = load_workflows()
+    wf = workflows.get(workflow_id)
+    if not isinstance(wf, dict):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    wf["session_ids"] = [s for s in (wf.get("session_ids") or [])
+                         if isinstance(s, str) and s != session_id]
+    workflows[workflow_id] = wf
+    save_workflows(workflows)
+    _invalidate_sessions_cache()
+    return _workflow_with_stats(workflow_id, wf, await _sessions_by_id())
+
 
 # def _quality_summary(edit_turns: int, retry_turns: int, measured_sessions: int) -> Dict[str, Any]:
 #     if edit_turns > 0:
@@ -6036,6 +6584,148 @@ async def summarize_recent(limit: int = 20):
         except HTTPException:
             failed += 1
     return {"requested": len(sessions), "summarized": done, "skipped": skipped, "failed": failed}
+
+# ---------------------------------------------------------------------------
+# Agent process resource monitor
+# ---------------------------------------------------------------------------
+# Token cost is only half the picture: agents running 24/7 also burn local disk,
+# CPU, and memory (e.g. Codex Desktop spinning ~7MB/s into its sqlite log). This
+# endpoint scans live processes for known agent runtimes and reports per-process
+# resource use. IO rates need two samples over time, so we cache the last
+# io_counters snapshot per PID and compute deltas across requests; the first hit
+# for a PID reports 0 until there's a prior reading to diff against.
+
+# (pattern, agent_type) — matched against lowercased name + full cmdline. Order
+# matters: more specific entries first so "claude" doesn't shadow nothing here,
+# but ".codex" paths win for codex before a generic match.
+_AGENT_PROCESS_PATTERNS = [
+    (".codex", "codex"),
+    ("codex", "codex"),
+    ("app-server", "codex"),
+    ("claude-code", "claude-code"),
+    ("claude", "claude-code"),
+    ("ollama", "ollama"),
+    ("llamafile", "local-models"),
+    ("lm-studio", "local-models"),
+    ("lmstudio", "local-models"),
+    ("llama", "local-models"),
+    ("hermes", "hermes"),
+    ("grok", "grok"),
+]
+
+# pid -> (io_read_bytes, io_write_bytes, monotonic_ts)
+_proc_io_cache: Dict[int, tuple] = {}
+
+
+def _classify_agent_process(name: str, cmdline: str) -> Optional[str]:
+    hay = f"{name}\n{cmdline}".lower()
+    for needle, agent_type in _AGENT_PROCESS_PATTERNS:
+        if needle in hay:
+            return agent_type
+    return None
+
+
+def _scan_agent_processes_sync() -> Dict[str, Any]:
+    try:
+        import psutil
+    except ImportError:
+        return {"error": "psutil not installed", "processes": []}
+
+    import time as _t
+
+    matched = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            info = proc.info
+            name = info.get("name") or ""
+            cmdline = " ".join(info.get("cmdline") or [])
+            agent_type = _classify_agent_process(name, cmdline)
+            if agent_type is None:
+                continue
+            matched.append((proc, name, agent_type))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    # Prime cpu_percent for every match, then sleep once so the next read covers
+    # a real interval. One shared 0.1s window keeps the whole scan well under 2s.
+    for proc, _name, _at in matched:
+        try:
+            proc.cpu_percent(None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+    _t.sleep(0.1)
+
+    now = _t.monotonic()
+    seen_pids = set()
+    processes = []
+    for proc, name, agent_type in matched:
+        try:
+            pid = proc.pid
+            seen_pids.add(pid)
+
+            try:
+                cpu = round(proc.cpu_percent(None), 1)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cpu = 0.0
+            try:
+                rss = round(proc.memory_info().rss / (1024 * 1024), 1)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                rss = 0.0
+            try:
+                status = proc.status()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                status = "unknown"
+            try:
+                uptime = max(0, int(_t.time() - proc.create_time()))
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                uptime = 0
+
+            read_rate = write_rate = 0.0
+            try:
+                io = proc.io_counters()
+                prev = _proc_io_cache.get(pid)
+                _proc_io_cache[pid] = (io.read_bytes, io.write_bytes, now)
+                if prev:
+                    dt = now - prev[2]
+                    if dt > 0:
+                        read_rate = round(max(0, io.read_bytes - prev[0]) / dt / (1024 * 1024), 2)
+                        write_rate = round(max(0, io.write_bytes - prev[1]) / dt / (1024 * 1024), 2)
+            except (psutil.AccessDenied, NotImplementedError, AttributeError):
+                pass
+
+            processes.append({
+                "pid": pid,
+                "name": name,
+                "agent_type": agent_type,
+                "cpu_percent": cpu,
+                "memory_rss_mb": rss,
+                "io_read_mb_s": read_rate,
+                "io_write_mb_s": write_rate,
+                "status": status,
+                "uptime_seconds": uptime,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    # Drop cache entries for dead PIDs so it doesn't grow unbounded.
+    for dead in [p for p in _proc_io_cache if p not in seen_pids]:
+        _proc_io_cache.pop(dead, None)
+
+    processes.sort(key=lambda p: p["io_write_mb_s"], reverse=True)
+
+    return {
+        "processes": processes,
+        "total_write_mb_s": round(sum(p["io_write_mb_s"] for p in processes), 2),
+        "total_read_mb_s": round(sum(p["io_read_mb_s"] for p in processes), 2),
+        "total_memory_rss_mb": round(sum(p["memory_rss_mb"] for p in processes), 1),
+        "sampled_at": int(_time.time()),
+    }
+
+
+@app.get("/api/agent-processes")
+async def get_agent_processes():
+    return await _asyncio.to_thread(_scan_agent_processes_sync)
+
 
 if __name__ == "__main__":
     import uvicorn

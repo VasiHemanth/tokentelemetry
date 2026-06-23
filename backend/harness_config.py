@@ -28,6 +28,7 @@ HARNESS_DIR = data_dir()
 ALIASES_FILE = HARNESS_DIR / "aliases.json"
 HIDDEN_FILE = HARNESS_DIR / "hidden.json"
 PREFERENCES_FILE = HARNESS_DIR / "preferences.json"
+WORKFLOWS_FILE = HARNESS_DIR / "workflows.json"
 VERSION_FILE = HARNESS_DIR / "VERSION"
 SCHEMA_VERSION = 1
 
@@ -168,3 +169,25 @@ def list_aliases() -> Dict[str, str]:
 def save_aliases(aliases: Dict[str, str]) -> None:
     """Overwrite the alias file. Caller is responsible for validation."""
     _atomic_write_json(ALIASES_FILE, aliases)
+
+
+def load_workflows() -> Dict[str, Any]:
+    """Load workflow definitions.
+
+    Returns {workflow_id: {name, description, session_ids, created_at, color}}.
+    Never raises: a missing or malformed file yields an empty dict so callers
+    can treat "no workflows" and "broken file" the same way."""
+    if not WORKFLOWS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(WORKFLOWS_FILE.read_text())
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def save_workflows(workflows: Dict[str, Any]) -> None:
+    """Persist the workflow map atomically (tmp + rename)."""
+    _atomic_write_json(WORKFLOWS_FILE, workflows)
