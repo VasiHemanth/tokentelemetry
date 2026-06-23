@@ -79,6 +79,21 @@ def test_build_event_never_contains_sensitive_content():
     assert payload["props"]["route"] == "other"
 
 
+def test_budget_feature_labels_survive_but_values_cannot():
+    # The two budget adoption/conversion labels are allowlisted enum values.
+    for label in ("budgets", "budget-set"):
+        out = telemetry._sanitize_props("feature.used", {"name": label})
+        assert out == {"name": label}
+    # A made-up label collapses to "other" — never the raw string.
+    assert telemetry._sanitize_props("feature.used", {"name": "budget-$150"}) == {"name": "other"}
+    # A budget limit/amount stuffed into props can never leak: "limit_value"
+    # isn't an allowlisted key for feature.used, so it's dropped entirely.
+    out = telemetry._sanitize_props("feature.used", {"name": "budget-set", "limit_value": 150})
+    assert out == {"name": "budget-set"}
+    payload = telemetry.build_event("feature.used", {"name": "budget-set", "limit_value": 150, "currency": "usd"})
+    assert "150" not in _blob(payload)
+
+
 def test_unknown_event_name_is_bucketed():
     payload = telemetry.build_event("evil.exfiltrate", {"x": "/etc/passwd"})
     assert payload["eventName"] == "other"

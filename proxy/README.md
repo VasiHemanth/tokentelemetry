@@ -67,6 +67,29 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
       GROUP BY event ORDER BY n DESC"
 ```
 
+#### Budgets & alerts adoption
+
+The budget feature emits `feature.used` with `blob8` set to one of two labels:
+`budgets` (opened the editor) and `budget-set` (saved a budget). No limit value
+or amount is ever sent — only the label. To see how many people use it and how
+often they configure one, over the last 30 days:
+
+```sql
+SELECT blob8 AS action,
+       count() AS events,
+       count(DISTINCT blob2) AS sessions   -- blob2 = per-launch session id
+FROM tt_telemetry
+WHERE blob1 = 'feature.used'
+  AND blob8 IN ('budgets', 'budget-set')
+  AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY action
+```
+
+`sessions` for `budgets` is the adoption number (how many launches opened the
+editor); `events` for `budget-set` is the configure count (the "clicks").
+sessionId resets every launch and isn't linkable, so this is a usage floor, not
+a unique-user count.
+
 ### 2. Grafana (the "holistic picture")
 Install the official **Cloudflare Analytics Engine** Grafana data-source plugin,
 point it at the SQL API with the same token, and build panels (DAU, top routes,

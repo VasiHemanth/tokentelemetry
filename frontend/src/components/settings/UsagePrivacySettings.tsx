@@ -134,7 +134,8 @@ export default function UsagePrivacySettings() {
                   <h3 className="text-[12px] font-medium text-[var(--tt-fg-muted)] mb-2">What we collect</h3>
                   <ul className="text-[12px] text-[var(--tt-fg-dim)] space-y-1 pl-4">
                     <li className="list-disc">Which pages you open</li>
-                    <li className="list-disc">Which features you use (summaries, filters, Hermes, etc.)</li>
+                    <li className="list-disc">Which features you use (summaries, filters, budgets, Hermes, etc.)</li>
+                    <li className="list-disc">When you open or save a budget — the count only, never the limit or amount</li>
                     <li className="list-disc">Whether a summary succeeded or failed, and which engine</li>
                     <li className="list-disc">Your OS, CPU type, and app version</li>
                     <li className="list-disc">Your country (from the network edge — never your IP)</li>

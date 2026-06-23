@@ -139,7 +139,12 @@ _ENUMS: Dict[str, set] = {
     "name": {
         "plan-library", "project-insights", "delegation-view", "power-cost",
         "billing-mode", "search", "artifact-viewer", "share-stats",
-        "hermes-dashboard", "other",
+        "hermes-dashboard",
+        # Budgets & alerts: "budgets" = opened the editor (adoption),
+        # "budget-set" = saved a budget (the configuring action). No limit
+        # value/cost ever rides along — only these two enum labels.
+        "budgets", "budget-set",
+        "other",
     },
     "tier": {"full", "rollup", "other"},
 }

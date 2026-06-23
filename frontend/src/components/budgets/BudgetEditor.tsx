@@ -5,6 +5,7 @@ import { Wallet, Plus, Trash2, Check, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { getAgent } from "@/lib/agents";
+import { trackEvent } from "@/lib/telemetry";
 import { Card, CardHeader, CardTitle, Button } from "@/components/ui";
 import {
   getBudgets, putBudgets,
@@ -60,6 +61,12 @@ export default function BudgetEditor({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Anonymous adoption signal: someone opened the budget editor. Content-free —
+  // just the "budgets" feature label; the backend re-sanitizes regardless.
+  useEffect(() => {
+    trackEvent("feature.used", { name: "budgets" });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +146,8 @@ export default function BudgetEditor({
       setRows(mineSaved);
       setOtherBudgets(others);
       setSaved(true);
+      // Conversion signal: a budget was actually configured (>=1 saved row).
+      if (mine.length > 0) trackEvent("feature.used", { name: "budget-set" });
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
