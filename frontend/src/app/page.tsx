@@ -15,6 +15,7 @@ import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
 import AgentProcessCard from "@/components/AgentProcessCard";
+import ConcurrencyTimelineCard from "@/components/ConcurrencyTimelineCard";
 import { formatTokens, formatCost } from "@/lib/format";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
@@ -149,6 +150,11 @@ export default function Home() {
       </Section>
 
       {showLocalPower && <LocalPowerInsights forceShow={true} />}
+
+      {/* Concurrency timeline — when multiple agents ran at once */}
+      <Section title="Concurrency timeline" description="When agents overlapped and the combined cost of running them at the same time.">
+        <ConcurrencyTimelineCard />
+      </Section>
 
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {

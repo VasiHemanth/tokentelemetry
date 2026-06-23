@@ -3609,9 +3609,233 @@ def _scan_sessions_sync():
     for s in sessions:
         s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
 
+    # Concurrency: which sessions overlapped in time and the combined burn rate
+    # during those windows. Annotates each session in place and stashes the
+    # top-10 windows + summary for the /sessions/concurrency endpoint.
+    try:
+        windows, summary = _compute_concurrency(sessions)
+        _concurrency_cache["windows"] = windows
+        _concurrency_cache["summary"] = summary
+    except Exception:
+        _concurrency_cache["windows"] = []
+        _concurrency_cache["summary"] = {
+            "peak_concurrent_count": 0,
+            "peak_combined_cost_per_hour": 0.0,
+            "total_concurrent_hours": 0.0,
+        }
+
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
     return sessions
+
+
+# ---------------------------------------------------------------------------
+# Concurrency timeline
+# ---------------------------------------------------------------------------
+# Sessions only carry a single `timestamp` (last-activity / end-of-session
+# datetime); there's no logged start or duration. We derive a window per
+# session: end = timestamp, and length = output_tokens / tok_per_sec (the same
+# generation-latency model the power feature uses), clamped to a sane floor/
+# ceiling so a token-less session still occupies a believable slice rather than
+# a zero-width point. A sweep line over the interval endpoints (sorted, so
+# O(n log n)) finds every moment where 2+ sessions were live, annotates each
+# session with its peak overlap, and emits the most expensive overlap windows.
+
+# Min/max derived session length (seconds). Floor keeps token-less or
+# instant sessions from collapsing to a point; ceiling stops a huge-output
+# session from swallowing the whole timeline.
+_CONCURRENCY_MIN_DURATION_SEC = 60.0          # 1 min
+_CONCURRENCY_MAX_DURATION_SEC = 6.0 * 3600.0  # 6 h
+_CONCURRENCY_DEFAULT_DURATION_SEC = 300.0     # 5 min when nothing else to go on
+
+# Filled by _scan_sessions_sync; read by GET /sessions/concurrency.
+_concurrency_cache: Dict[str, Any] = {"windows": [], "summary": {}}
+
+
+def _session_epoch(ts) -> Optional[float]:
+    """Best-effort epoch seconds from a session `timestamp` (datetime or ISO/epoch)."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        try:
+            return _aware(ts).timestamp()
+        except Exception:
+            return None
+    if isinstance(ts, (int, float)):
+        v = float(ts)
+        # Heuristic: values that look like milliseconds → seconds.
+        return v / 1000.0 if v > 1e11 else v
+    if isinstance(ts, str):
+        try:
+            return _aware(datetime.fromisoformat(ts.replace("Z", "+00:00"))).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _session_duration_sec(sess: Dict[str, Any]) -> float:
+    """Derive a session's wall-clock length in seconds.
+
+    Prefers an explicit ``duration_seconds`` if a future builder ever sets one;
+    otherwise estimates generation latency from output tokens / throughput, then
+    clamps to [min, max]."""
+    explicit = sess.get("duration_seconds")
+    if isinstance(explicit, (int, float)) and explicit > 0:
+        return max(_CONCURRENCY_MIN_DURATION_SEC,
+                   min(float(explicit), _CONCURRENCY_MAX_DURATION_SEC))
+    tokens = sess.get("tokens") or {}
+    out = tokens.get("output") or 0
+    tps = sess.get("tok_per_sec")
+    if not (isinstance(tps, (int, float)) and tps > 0):
+        try:
+            from power_config import default_tok_per_sec_for_model
+            tps = default_tok_per_sec_for_model(sess.get("model"))
+        except Exception:
+            tps = 0.0
+    if out and tps and tps > 0:
+        secs = float(out) / float(tps)
+    else:
+        secs = _CONCURRENCY_DEFAULT_DURATION_SEC
+    return max(_CONCURRENCY_MIN_DURATION_SEC,
+               min(secs, _CONCURRENCY_MAX_DURATION_SEC))
+
+
+def _compute_concurrency(sessions: List[Dict[str, Any]]):
+    """Annotate each session with its peak concurrency and return (windows, summary).
+
+    Each session gains:
+      - concurrent_sessions_count: # of OTHER sessions live at this session's peak
+      - concurrent_peak_cost_per_hour: combined $/hr of all sessions live at that peak
+      - concurrent_session_ids: ids of the other sessions in that peak overlap
+
+    Returns:
+      windows: top-10 most expensive overlap windows (2+ sessions), each
+        {start, end, session_ids, agent_types, combined_cost_usd, combined_write_mb_estimate}
+      summary: {peak_concurrent_count, peak_combined_cost_per_hour, total_concurrent_hours}
+    """
+    # 1. Build a clean interval per session (skip ones with no usable timestamp).
+    intervals = []  # (start_epoch, end_epoch, session_ref)
+    for s in sessions:
+        # Reset any stale annotations from a prior scan.
+        s["concurrent_sessions_count"] = 0
+        s["concurrent_peak_cost_per_hour"] = 0.0
+        s["concurrent_session_ids"] = []
+        end = _session_epoch(s.get("timestamp"))
+        if end is None:
+            continue
+        dur = _session_duration_sec(s)
+        start = end - dur
+        dur_hours = dur / 3600.0
+        cost = s.get("cost")
+        if not isinstance(cost, (int, float)):
+            cost = 0.0
+        cost_per_hour = (float(cost) / dur_hours) if dur_hours > 0 else 0.0
+        intervals.append({
+            "start": start, "end": end, "sess": s,
+            "cost": float(cost), "cost_per_hour": cost_per_hour,
+        })
+
+    if len(intervals) < 2:
+        return [], {
+            "peak_concurrent_count": 1 if intervals else 0,
+            "peak_combined_cost_per_hour": 0.0,
+            "total_concurrent_hours": 0.0,
+        }
+
+    # 2. Sweep line over endpoints. +1 at a start, -1 at an end. Sorting the
+    #    events is the O(n log n) step; the sweep itself is linear.
+    EPS = 1e-9
+    events = []  # (time, delta, ordinal) — process ends before starts at a tie
+    for idx, iv in enumerate(intervals):
+        events.append((iv["start"], 1, idx))
+        events.append((iv["end"], -1, idx))
+    # At equal timestamps, apply ends (-1) before starts (+1) so back-to-back
+    # sessions that merely touch don't count as overlapping.
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    active: Set[int] = set()
+    total_concurrent_seconds = 0.0
+    peak_count = 1
+    peak_combined_cph = 0.0
+    # Segments where 2+ were active: (seg_start, seg_end, frozenset(active idxs))
+    segments = []
+    prev_t = None
+    for t, delta, idx in events:
+        if prev_t is not None and t > prev_t and len(active) >= 1:
+            seg_len = t - prev_t
+            if len(active) >= 2:
+                total_concurrent_seconds += seg_len
+                segments.append((prev_t, t, frozenset(active)))
+                if len(active) > peak_count:
+                    peak_count = len(active)
+                cph = sum(intervals[i]["cost_per_hour"] for i in active)
+                if cph > peak_combined_cph:
+                    peak_combined_cph = cph
+        if delta == 1:
+            active.add(idx)
+        else:
+            active.discard(idx)
+        prev_t = t
+
+    # 3. Per-session peak overlap: for each session, scan the segments it
+    #    belongs to and keep the one with the most concurrent sessions.
+    for idx, iv in enumerate(intervals):
+        best_others: Set[int] = set()
+        best_n = 0
+        for seg_start, seg_end, members in segments:
+            if idx in members and len(members) > best_n:
+                best_n = len(members)
+                best_others = set(members) - {idx}
+        if best_n >= 2:
+            s = iv["sess"]
+            others = list(best_others)
+            s["concurrent_sessions_count"] = len(others)
+            s["concurrent_session_ids"] = [intervals[i]["sess"].get("id") for i in others]
+            s["concurrent_peak_cost_per_hour"] = round(
+                iv["cost_per_hour"] + sum(intervals[i]["cost_per_hour"] for i in others), 6)
+
+    # 4. Merge contiguous segments sharing the same member set into windows,
+    #    then rank by combined cost and keep the top 10.
+    windows = []
+    for seg_start, seg_end, members in segments:
+        mlist = sorted(members)
+        member_ids = [intervals[i]["sess"].get("id") for i in mlist]
+        agent_types = sorted({intervals[i]["sess"].get("agent") for i in mlist if intervals[i]["sess"].get("agent")})
+        # combined cost over this segment = sum(cost_per_hour) * segment_hours
+        seg_hours = (seg_end - seg_start) / 3600.0
+        combined_cost = sum(intervals[i]["cost_per_hour"] for i in mlist) * seg_hours
+        windows.append({
+            "start": int(seg_start),
+            "end": int(seg_end),
+            "session_ids": member_ids,
+            "agent_types": agent_types,
+            "combined_cost_usd": round(combined_cost, 6),
+            # Per-second write throughput isn't tracked per session yet.
+            "combined_write_mb_estimate": None,
+        })
+
+    # Collapse adjacent windows with identical membership (the sweep can split a
+    # single overlap into pieces when an unrelated session starts/ends nearby).
+    windows.sort(key=lambda w: w["start"])
+    merged: List[Dict[str, Any]] = []
+    for w in windows:
+        if (merged and merged[-1]["session_ids"] == w["session_ids"]
+                and abs(merged[-1]["end"] - w["start"]) <= 1):
+            merged[-1]["end"] = w["end"]
+            merged[-1]["combined_cost_usd"] = round(
+                merged[-1]["combined_cost_usd"] + w["combined_cost_usd"], 6)
+        else:
+            merged.append(dict(w))
+
+    merged.sort(key=lambda w: w["combined_cost_usd"], reverse=True)
+    top = merged[:10]
+
+    summary = {
+        "peak_concurrent_count": peak_count,
+        "peak_combined_cost_per_hour": round(peak_combined_cph, 6),
+        "total_concurrent_hours": round(total_concurrent_seconds / 3600.0, 4),
+    }
+    return top, summary
 
 
 # ---------------------------------------------------------------------------
@@ -3749,8 +3973,30 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
 
 @app.get("/sessions")
 async def get_sessions(fresh: bool = False):
-    """Return the session list. Pass ?fresh=1 to force a re-scan."""
+    """Return the session list. Pass ?fresh=1 to force a re-scan.
+
+    Each session is annotated with its peak concurrency
+    (``concurrent_sessions_count``, ``concurrent_peak_cost_per_hour``,
+    ``concurrent_session_ids``). The overlap *windows* themselves are served by
+    GET /sessions/concurrency so the timeline view can fetch them without
+    pulling the whole session list."""
     return await get_sessions_cached(fresh=fresh)
+
+
+@app.get("/sessions/concurrency")
+async def get_sessions_concurrency(fresh: bool = False):
+    """Concurrency timeline: when multiple agents ran at once and the combined
+    burn rate during those windows. Re-uses the cached session scan (which
+    computes this as a side effect), so it's cheap on a warm cache."""
+    # Ensure the cache (and thus _concurrency_cache) is populated/fresh.
+    await get_sessions_cached(fresh=fresh)
+    summary = _concurrency_cache.get("summary") or {}
+    return {
+        "windows": _concurrency_cache.get("windows") or [],
+        "peak_concurrent_count": summary.get("peak_concurrent_count", 0),
+        "peak_combined_cost_per_hour": summary.get("peak_combined_cost_per_hour", 0.0),
+        "total_concurrent_hours": summary.get("total_concurrent_hours", 0.0),
+    }
 
 
 @app.get("/pricing")
