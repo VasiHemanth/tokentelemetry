@@ -2354,6 +2354,57 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     }
 
 
+def _rollup_delegation_costs(sessions: List[Dict[str, Any]]) -> None:
+    """Annotate each session with total_cost_usd = own cost + all descendant costs.
+
+    Sessions carry a `cost` field (USD) and a `child_session_ids` list linking the
+    parent -> spawned subagent sessions. This walks the delegation tree from each
+    root (a session with no parent_session_id) and records, per session:
+
+      - ``total_cost_usd``    own cost + recursive cost of every descendant
+      - ``children_cost_usd`` the descendant portion only
+      - ``child_count``       number of direct children
+
+    Idempotent: it always recomputes from `cost` + `child_session_ids`, so calling
+    it twice yields the same numbers (no accumulation). A `visited` set guards
+    against cycles in corrupt link data. Missing/None `cost` is treated as 0.
+    """
+    by_id = {s["id"]: s for s in sessions}
+
+    def _total_cost(session_id: str, visited: set) -> float:
+        if session_id in visited:
+            return 0.0  # cycle guard — don't re-enter a node on this path
+        visited.add(session_id)
+        s = by_id.get(session_id)
+        if s is None:
+            return 0.0
+        own = s.get("cost") or 0.0
+        children_cost = sum(
+            _total_cost(cid, visited)
+            for cid in (s.get("child_session_ids") or [])
+        )
+        s["children_cost_usd"] = children_cost
+        s["child_count"] = len(s.get("child_session_ids") or [])
+        s["total_cost_usd"] = own + children_cost
+        return s["total_cost_usd"]
+
+    # Compute from roots first so each subtree is walked once per root path.
+    roots = [s for s in sessions if not s.get("parent_session_id")]
+    for root in roots:
+        _total_cost(root["id"], set())
+
+    # Children whose parent isn't in our dataset never got visited above; give
+    # them a self-only (or own-subtree) total so every session carries the fields.
+    for s in sessions:
+        if "total_cost_usd" not in s:
+            if s.get("child_session_ids"):
+                _total_cost(s["id"], set())
+            else:
+                s["total_cost_usd"] = s.get("cost") or 0.0
+                s["children_cost_usd"] = 0.0
+                s["child_count"] = 0
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -3609,6 +3660,10 @@ def _scan_sessions_sync():
     for s in sessions:
         s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
 
+    # Roll up delegation/subagent costs: parent.total_cost_usd = own + descendants.
+    # Runs after all parent/child linking above so child_session_ids are complete.
+    _rollup_delegation_costs(sessions)
+
     # Concurrency: which sessions overlapped in time and the combined burn rate
     # during those windows. Annotates each session in place and stashes the
     # top-10 windows + summary for the /sessions/concurrency endpoint.
@@ -4778,6 +4833,46 @@ async def session_delegation(session_id: str, agent: str):
                 "child_session_ids": kids, "linked_children": len(kids)}
 
     return {"supported": False}
+
+
+@app.get("/sessions/{session_id}/tree")
+async def get_session_tree(session_id: str):
+    """Cost attribution tree for a session and all its descendants.
+
+    Returns the session plus a recursively-nested `children` array, each node
+    carrying its own cost and the rolled-up subtree total (computed in
+    `_rollup_delegation_costs` during the scan). Cycles in corrupt link data are
+    broken with a visited set. 404 if the session isn't in the cache.
+    """
+    sessions = await get_sessions_cached()
+    by_id = {s["id"]: s for s in sessions}
+    root = by_id.get(session_id)
+    if root is None:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    def _node(sid: str, depth: int, visited: set) -> Dict[str, Any]:
+        s = by_id.get(sid) or {}
+        children: List[Dict[str, Any]] = []
+        if sid not in visited:
+            visited.add(sid)
+            for cid in (s.get("child_session_ids") or []):
+                if cid in by_id and cid not in visited:
+                    children.append(_node(cid, depth + 1, visited))
+        own = s.get("cost") or 0.0
+        return {
+            "session_id": sid,
+            "agent": s.get("agent"),
+            "project": s.get("project"),
+            "display": s.get("display") or s.get("text"),
+            "cost_usd": own,
+            "total_cost_usd": s.get("total_cost_usd", own),
+            "children_cost_usd": s.get("children_cost_usd", 0.0),
+            "child_count": s.get("child_count", len(s.get("child_session_ids") or [])),
+            "depth": depth,
+            "children": children,
+        }
+
+    return _node(session_id, 0, set())
 
 
 @app.get("/projects")

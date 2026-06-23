@@ -32,6 +32,10 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  /** Delegation cost rollup (own + descendants), set by _rollup_delegation_costs. */
+  total_cost_usd?: number;
+  children_cost_usd?: number;
+  child_count?: number;
   /** Copilot-only: cli / vscode */
   copilot_source?: string;
   /** Antigravity-only: cli / ide / app */
@@ -286,12 +290,20 @@ export default function Home() {
                           )}
                         </Link>
                       </TD>
-                      <TD className="text-[var(--tt-fg)] max-w-[480px] truncate">
+                      <TD className="text-[var(--tt-fg)] max-w-[480px]">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.display || s.text || (
                             <span className="italic text-[var(--tt-fg-faint)]">No message content</span>
                           )}
                         </Link>
+                        {(s.child_count ?? 0) > 0 && (s.total_cost_usd ?? 0) > (s.cost ?? 0) + 1e-9 && (
+                          <span
+                            className="mt-0.5 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium tabular-nums bg-[var(--tt-warn-bg)] text-[var(--tt-warn-fg)] border-[var(--tt-warn-bd)]"
+                            title={`${formatCost(s.cost)} own + ${formatCost(s.children_cost_usd)} across ${s.child_count} child session(s)`}
+                          >
+                            {formatCost(s.cost)} own + {formatCost(s.children_cost_usd)} children = {formatCost(s.total_cost_usd)} total
+                          </span>
+                        )}
                       </TD>
                       <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)] group-hover:text-[var(--tt-brand)] transition-colors">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block">

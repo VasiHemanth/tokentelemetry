@@ -13,6 +13,7 @@ import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
+import DelegationTreeCard from "@/components/DelegationTreeCard";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { resolveSessionBackTarget } from "@/lib/navigation";
@@ -680,6 +681,8 @@ export default function SessionDetailPage() {
              {agent === "grok" && grokForensics && <GrokForensicsCard forensics={grokForensics} cost={sessionInfo?.tokens?.cost ?? sessionInfo?.cost} />}
              {/* Delegated work — subagent spawns and what they actually cost */}
              {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
+             {/* Cost attribution tree — rolled-up cost of this session + all descendants */}
+             {id && <DelegationTreeCard sessionId={id} />}
              <div className={splitView ? "grid grid-cols-2 gap-8" : "space-y-8"}>
                 <div className="space-y-8">
                    {splitView && <h3 className="text-[10px] font-black text-[var(--tt-fg-dim)] uppercase tracking-[0.2em] ml-2 mb-2 flex items-center gap-2"><User size={14}/> User & Agent Dialogue</h3>}
