@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "tag": "2026-06-23",
+      "title": "Set spend budgets, get alerted at 80% & 100%",
+      "highlights": [
+        {
+          "title": "Per-project & per-agent spend budgets",
+          "description": "Set a monthly, weekly, or rolling-30-day limit (in dollars or tokens) on any project, and optionally per agent. It's observational — TokenTelemetry never blocks an agent — so it just tracks this period's spend against your limit: a colour-coded pill on the project header and a per-agent breakdown on the Insights tab."
+        },
+        {
+          "title": "Alerts when you cross your thresholds",
+          "description": "Each budget raises an alert when spend passes 80% and 100% of the limit (thresholds are configurable). Alerts collect in a new notification center — the bell at the bottom of the sidebar — and surface once as a banner, so you learn you're over without watching the dashboard."
+        }
+      ]
+    },
+    {
       "tag": "2026-06-13",
       "title": "Truer costs: local power + which credit pool pays",
       "highlights": [
