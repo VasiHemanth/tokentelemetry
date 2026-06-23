@@ -105,6 +105,7 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - ☤ **Hermes Agent dashboard** — autonomous-agent observability at `/hermes` (38 source platforms, gateway health, cron jobs, skills, memory, subagent cards — see the [section above](#hermes-agent-autonomous-observability))
 - 📊 **Token Usage Dashboard** — real-time tokens in/out per agent, model, and project
 - 💰 **Cost Tracking** — see exact LLM API costs per session and cumulative over time
+- 🎯 **Budgets & Alerts** — set monthly/weekly/rolling spend or token limits per project (and per agent); get alerted at 80% and 100%. Observational — never blocks an agent
 - 🔍 **Session Traces** — waterfall view of prompts, reasoning chains, tool calls, and responses
 - 🛠️ **Tool Call Analytics** — which tools your agents call most, success/failure rates
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
@@ -155,6 +156,22 @@ Connected agents, recent activity feed, model distribution pie chart, token burn
 ### Projects View
 
 Per-project heatmap, tool usage breakdown, agent leaderboard, session timeline.
+
+### Budgets & Alerts
+
+Set a spend or token limit on any project — monthly, weekly, or rolling 30-day, overall and per agent. Budgets are **observational**: TokenTelemetry tracks this period's spend against your limit but never blocks an agent.
+
+Set one on the project's **Config** tab — pick dollars or tokens, a period, and the alert thresholds (80% and 100% by default):
+
+![Setting a project budget](docs/images/budget-set.png)
+
+The project header and **Insights** tab show how close you are, colour-coded as spend climbs:
+
+![Budget usage on the Insights tab](docs/images/budget-usage.png)
+
+When spend crosses a threshold, an alert lands in the notification center — the bell at the bottom of the sidebar:
+
+![Budget alerts in the notification center](docs/images/budget-alerts.png)
 
 ### Session Trace
 

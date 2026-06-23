@@ -5,12 +5,14 @@ import { useParams, usePathname } from "next/navigation";
 import { useMemo } from "react";
 import {
   ChevronRight, Folder, Activity, Sparkles, ClipboardList, Settings2,
-  Clock, Users, Zap,
+  Clock, Users, Zap, Wallet,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { Card, AgentBadge } from "@/components/ui";
+import { formatCost, formatTokens } from "@/lib/format";
+import { type BudgetStatus, budgetTone } from "@/lib/budgets";
 import { ProjectProvider, type ProjectData, type SessionRow } from "./_lib/project-context";
 
 const TABS = [
@@ -30,6 +32,9 @@ export default function ProjectShellLayout({ children }: { children: React.React
     useResource<ProjectData[]>("/projects", { initial: [] });
   const { data: allSessions = [], loading: sessionsLoading } =
     useResource<SessionRow[]>("/sessions", { initial: [] });
+  const { data: budgetData } =
+    useResource<{ budgets: BudgetStatus[] }>("/budgets", { initial: undefined, pollMs: 60_000 });
+  const budgets = budgetData?.budgets ?? [];
 
   const project = useMemo(
     () => projectsList.find((p) => p.path === decodedPath),
@@ -47,6 +52,20 @@ export default function ProjectShellLayout({ children }: { children: React.React
   const totalTokens = sessions.reduce((sum, s) => sum + (s.tokens?.total ?? 0), 0);
   const subagents = (project?.configured_subagent_count ?? 0) + (project?.subagent_count ?? 0);
   const plansCount = project?.plans?.length ?? 0;
+
+  // Project-total budget (project scope, no agent/model) drives the header pill.
+  const projBudget = budgets.find(
+    (b) => b.filters.project === decodedPath && !b.filters.agent && !b.filters.model,
+  );
+  const BUDGET_TONE_COLOR = { ok: "var(--tt-brand)", warn: "var(--tt-warn)", over: "var(--tt-danger)" } as const;
+  const budgetPill = projBudget
+    ? {
+        value: projBudget.limit_type === "usd"
+          ? `${formatCost(projBudget.used)} / ${formatCost(projBudget.limit_value)}`
+          : `${formatTokens(projBudget.used)} / ${formatTokens(projBudget.limit_value)}`,
+        color: BUDGET_TONE_COLOR[budgetTone(projBudget.fraction)],
+      }
+    : null;
 
   /* Determine active tab from URL segment */
   const activeKey = useMemo(() => {
@@ -96,11 +115,17 @@ export default function ProjectShellLayout({ children }: { children: React.React
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-px rounded-[var(--tt-radius)] overflow-hidden bg-[var(--tt-border)] border border-[var(--tt-border)]">
+            <div className={cn(
+              "grid gap-px rounded-[var(--tt-radius)] overflow-hidden bg-[var(--tt-border)] border border-[var(--tt-border)]",
+              budgetPill ? "grid-cols-5" : "grid-cols-4",
+            )}>
               <HeaderStat icon={<Clock size={14} />}        label="Sessions"  value={sessions.length} />
               <HeaderStat icon={<Users size={14} />}        label="Subagents" value={subagents}       tone="purple" />
               <HeaderStat icon={<ClipboardList size={14} />} label="Plans"     value={plansCount}      tone="emerald" />
               <HeaderStat icon={<Zap size={14} />}          label="Tokens"    value={fmtNum(totalTokens)} tone="amber" />
+              {budgetPill && (
+                <HeaderStat icon={<Wallet size={14} />} label="Budget" value={budgetPill.value} color={budgetPill.color} />
+              )}
             </div>
           </div>
         </Card>
@@ -150,8 +175,8 @@ export default function ProjectShellLayout({ children }: { children: React.React
 }
 
 function HeaderStat({
-  icon, label, value, tone = "default",
-}: { icon: React.ReactNode; label: string; value: number | string; tone?: "default" | "purple" | "emerald" | "amber" }) {
+  icon, label, value, tone = "default", color,
+}: { icon: React.ReactNode; label: string; value: number | string; tone?: "default" | "purple" | "emerald" | "amber"; color?: string }) {
   const TONE: Record<string, string> = {
     default: "text-[var(--tt-fg)]",
     purple:  "text-purple-300",
@@ -161,7 +186,10 @@ function HeaderStat({
   return (
     <div className="bg-[var(--tt-panel)] px-4 py-3 min-w-[96px]">
       <div className="flex items-center gap-1.5 text-[var(--tt-fg-dim)] mb-1.5">{icon}<span className="text-[9px] font-semibold uppercase tracking-[0.18em]">{label}</span></div>
-      <div className={cn("tabular text-[18px] font-semibold leading-none", TONE[tone])}>{value}</div>
+      <div
+        className={cn("tabular text-[18px] font-semibold leading-none", color ? undefined : TONE[tone])}
+        style={color ? { color } : undefined}
+      >{value}</div>
     </div>
   );
 }

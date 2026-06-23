@@ -11,6 +11,7 @@ import {
   Card, CardHeader, CardTitle, CardEyebrow, Section, Badge, AgentBadge,
   EmptyState, Skeleton,
 } from "@/components/ui";
+import BudgetEditor from "@/components/budgets/BudgetEditor";
 import { useProject } from "../_lib/project-context";
 
 interface ConfigItem { name: string; agent: string; scope: "project" | "user"; description?: string; source?: string; pluginRef?: string; [k: string]: unknown }
@@ -38,7 +39,8 @@ interface UsageData {
 }
 
 export default function ConfigTab() {
-  const { decodedPath } = useProject();
+  const { decodedPath, project } = useProject();
+  const projectAgents = project?.agents ?? [];
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,6 +104,9 @@ export default function ConfigTab() {
 
   return (
     <div className="space-y-7">
+      {/* Budgets — set spend limits for this project (overall + per agent) */}
+      <BudgetEditor projectPath={decodedPath} agents={projectAgents} />
+
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <Sum icon={<Puzzle size={14} />}   label="Plugins"   value={pb.project.length}  user={pb.user.length}  hex="#a78bfa" />

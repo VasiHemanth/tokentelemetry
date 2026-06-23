@@ -11,14 +11,16 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 
 from harness_config import (
     load_aliases, apply_alias,
     load_hidden, hide_project, unhide_project,
     list_aliases, save_aliases,
+    load_budgets, save_budgets,
     load_preferences, save_preferences,
 )
+import notifications as notif
 from tt_paths import data_dir
 
 def _aware(dt):
@@ -1518,7 +1520,9 @@ def _read_cache() -> Optional[Dict[str, Any]]:
         if not _looks_like_sha(cached.get("latest")):
             return None
         age = _upd_time.time() - float(cached.get("fetched_at", 0))
-        if age > _UPDATE_CACHE_TTL:
+        # Reject both expired entries and future-dated ones (clock skew / DST):
+        # a negative age would otherwise never expire.
+        if age < 0 or age > _UPDATE_CACHE_TTL:
             return None
         return cached
     except Exception:
@@ -1529,8 +1533,13 @@ def _write_cache(payload: Dict[str, Any]) -> None:
     try:
         _TT_HOME.mkdir(parents=True, exist_ok=True)
         payload = {**payload, "fetched_at": _upd_time.time()}
-        with open(_UPDATE_CACHE, "w", encoding="utf-8") as f:
+        # Atomic write: serialize to a temp file then os.replace, so a concurrent
+        # reader (the dashboard can fire several /version calls at once) never
+        # observes a torn/half-written file.
+        tmp = _UPDATE_CACHE.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
+        os.replace(tmp, _UPDATE_CACHE)
     except Exception:
         pass
 
@@ -1545,7 +1554,10 @@ def _fetch_remote() -> Optional[Dict[str, Any]]:
         with _urlreq.urlopen(req, timeout=_UPDATE_FETCH_TIMEOUT) as r:
             sha_data = json.loads(r.read().decode("utf-8"))
         latest_sha = sha_data.get("sha")
-        if not latest_sha:
+        # Validate on the fetch path too (the cache read already does). A bogus
+        # non-40-hex value would otherwise be cached, then rejected on the next
+        # read by _looks_like_sha → a fetch-every-call loop + a false `behind`.
+        if not _looks_like_sha(latest_sha):
             return None
     except Exception:
         return None
@@ -1601,6 +1613,51 @@ def _fetch_remote() -> Optional[Dict[str, Any]]:
     return {"latest": latest_sha, "releases": releases, "release_url": release_url}
 
 
+def _is_behind(latest: Optional[str], current: Optional[str]) -> bool:
+    """True only when the local checkout genuinely lacks `latest`.
+
+    A plain `latest != current` can't tell "behind" from "ahead" — so anyone
+    running the dashboard from a feature branch (or just after merging) saw a
+    false "Update available". Instead: if `latest` is an ANCESTOR of local HEAD,
+    we already contain it → not behind. This also clears the stale-cache case:
+    right after `git pull`, the cached older `latest` is an ancestor of the new
+    HEAD, so the banner stops nagging immediately.
+
+    Falls back to inequality only when `latest` isn't in the local object store
+    (e.g. on `main`, behind, and not yet fetched) — the genuinely-behind case.
+    """
+    if not latest or not current:
+        return False
+    if latest == current:
+        return False
+    try:
+        proc = _subprocess.run(
+            ["git", "merge-base", "--is-ancestor", latest, "HEAD"],
+            cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=3,
+        )
+        if proc.returncode == 0:
+            return False  # latest is reachable from HEAD → already have it
+        if proc.returncode == 1:
+            return True   # known locally but not an ancestor → behind/diverged
+    except Exception:
+        pass
+    # rc 128 (unknown rev — not fetched) or git error → assume there's a commit
+    # on main we don't have.
+    return latest != current
+
+
+def _release_id(releases: List[Dict[str, Any]], fallback: Optional[str]) -> Optional[str]:
+    """Stable identity for the newest curated release, used to decide whether the
+    banner has new *feature* content to show (UPDATE.json only gains an entry on
+    feat: pushes — see CLAUDE.md). Keyed on tag|title so a fix:/chore: commit,
+    which doesn't touch UPDATE.json, never re-surfaces the banner. Untagged/legacy
+    feeds fall back to the commit SHA (prior behaviour)."""
+    if not releases:
+        return None
+    top = releases[0]
+    rid = "|".join(p for p in [top.get("tag"), top.get("title")] if p)
+    return rid or fallback
+
 def _update_check_enabled() -> bool:
     """Whether the dashboard may contact GitHub for version/release info.
 
@@ -1626,6 +1683,7 @@ async def get_version():
         "latest": None,
         "behind": False,
         "releases": [],
+        "latest_release": None,
         "release_url": f"https://github.com/{_REPO_OWNER}/{_REPO_NAME}",
         "source": "none",
         "repo": f"{_REPO_OWNER}/{_REPO_NAME}",
@@ -1653,7 +1711,8 @@ async def get_version():
     elif remote.get("highlights"):
         base["releases"] = [{"tag": None, "title": None, "highlights": remote["highlights"]}]
     base["release_url"] = remote.get("release_url") or base["release_url"]
-    base["behind"] = bool(latest) and latest != current
+    base["behind"] = _is_behind(latest, current)
+    base["latest_release"] = _release_id(base["releases"], latest)
     base["source"] = "cache" if cached else "github"
     return base
 
@@ -4989,6 +5048,232 @@ async def post_aliases(aliases: Dict[str, str]):
     save_aliases(cleaned)
     _invalidate_sessions_cache()
     return {"ok": True, "aliases": cleaned}
+
+
+# ---------------------------------------------------------------------------
+# Budgets (observational — see harness_config for the storage model)
+#
+# A budget is evaluated by windowing the parsed sessions to the budget's
+# period, filtering by the budget's filter object, and summing cost (usd) or
+# total tokens. We reuse get_sessions_cached() — no log re-read. All windowing
+# is in LOCAL time so "this month" matches the by_day analytics buckets.
+# ---------------------------------------------------------------------------
+
+def _budget_window(period: str, now_local: datetime):
+    """Return (start, reset_at) as local-tz datetimes. reset_at is None for
+    rolling windows (they have no fixed reset)."""
+    from datetime import timedelta
+    if period == "weekly":
+        start = (now_local - timedelta(days=now_local.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        return start, start + timedelta(days=7)
+    if period == "rolling_30d":
+        return now_local - timedelta(days=30), None
+    # monthly (default)
+    start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start.month == 12:
+        reset = start.replace(year=start.year + 1, month=1)
+    else:
+        reset = start.replace(month=start.month + 1)
+    return start, reset
+
+
+def _session_matches_filters(s: Dict[str, Any], filters: Dict[str, str]) -> bool:
+    """A session matches iff every present filter key equals the session's value.
+    Empty filters ({}) match everything (global budget)."""
+    if "project" in filters and s.get("project") != filters["project"]:
+        return False
+    if "agent" in filters and s.get("agent") != filters["agent"]:
+        return False
+    if "model" in filters and (s.get("model") or "") != filters["model"]:
+        return False
+    return True
+
+
+def _compute_budget_status(budget: Dict[str, Any], sessions: List[Dict[str, Any]],
+                           now_local: datetime) -> Dict[str, Any]:
+    start, reset = _budget_window(budget["period"], now_local)
+    filters = budget.get("filters") or {}
+    limit_type = budget["limit_type"]
+    limit_value = budget["limit_value"]
+
+    used = 0.0
+    sessions_in_window = 0
+    per_agent: Dict[str, Dict[str, float]] = {}
+    for s in sessions:
+        ts = s.get("timestamp")
+        if ts is None:
+            continue
+        try:
+            ts_local = ts.astimezone()
+        except Exception:
+            continue
+        if ts_local < start:
+            continue
+        if not _session_matches_filters(s, filters):
+            continue
+        cost = float(s.get("cost", 0.0) or 0.0)
+        toks = int((s.get("tokens") or {}).get("total", 0) or 0)
+        used += cost if limit_type == "usd" else toks
+        sessions_in_window += 1
+        a = s.get("agent", "unknown")
+        bucket = per_agent.setdefault(a, {"cost": 0.0, "tokens": 0.0})
+        bucket["cost"] += cost
+        bucket["tokens"] += toks
+
+    fraction = (used / limit_value) if limit_value > 0 else 0.0
+    # Highest crossed threshold (sorted ascending in storage).
+    alert_level = None
+    for t in budget.get("thresholds", []):
+        if fraction >= t:
+            alert_level = t
+
+    # Stable period bucket for notification de-duplication. Calendar periods key
+    # off their (fixed) boundary date; rolling_30d has no natural boundary, so we
+    # bucket by *today* — a rolling alert re-fires at most once per day.
+    if budget["period"] == "rolling_30d":
+        period_key = now_local.strftime("%Y-%m-%d")
+    else:
+        period_key = start.strftime("%Y-%m-%d")
+
+    return {
+        **budget,
+        "used": round(used, 6) if limit_type == "usd" else int(used),
+        "fraction": round(fraction, 4),
+        "alert_level": alert_level,
+        "sessions_in_window": sessions_in_window,
+        "window_start": start.isoformat(),
+        "period_key": period_key,
+        "reset_at": reset.isoformat() if reset else None,
+        "breakdown_by_agent": {
+            a: {"cost": round(v["cost"], 6), "tokens": int(v["tokens"])}
+            for a, v in sorted(per_agent.items(), key=lambda kv: kv[1]["cost"], reverse=True)
+        },
+    }
+
+
+async def _budget_statuses() -> List[Dict[str, Any]]:
+    budgets = load_budgets()
+    if not budgets:
+        return []
+    sessions = await get_sessions_cached()
+    now_local = datetime.now(timezone.utc).astimezone()
+    statuses = [_compute_budget_status(b, sessions, now_local) for b in budgets]
+    _emit_budget_notifications(statuses)
+    return statuses
+
+
+def _scope_label(filters: Dict[str, str]) -> str:
+    """Human label for a budget scope, e.g. 'Claude · my-app' or 'my-app'."""
+    proj = filters.get("project", "").rstrip("/").split("/")[-1] if filters.get("project") else None
+    agent = filters.get("agent")
+    if agent and proj:
+        return f"{agent} · {proj}"
+    return agent or proj or "Global"
+
+
+def _fmt_usd(v: float) -> str:
+    """Format a dollar amount: cents under $1, whole dollars at/above (with
+    thousands separators). Keeps small budgets like $0.50 from showing as $0."""
+    if abs(v) < 1:
+        return f"${v:.2f}"
+    return f"${v:,.0f}"
+
+
+def _emit_budget_notifications(statuses: List[Dict[str, Any]]) -> None:
+    """For every budget that has crossed a threshold, record a notification.
+
+    Idempotent: notif.emit() de-dupes on a stable key combining the budget id,
+    the current period window, and the crossed threshold — so each real
+    threshold-crossing produces exactly one notification per period.
+    """
+    for s in statuses:
+        level = s.get("alert_level")
+        if level is None:
+            continue
+        filters = s.get("filters") or {}
+        scope = _scope_label(filters)
+        pct = round(s.get("fraction", 0) * 100)
+        over = s.get("fraction", 0) >= 1
+        if s.get("limit_type") == "usd":
+            # Sub-dollar limits/spend need cents; otherwise whole dollars read cleaner.
+            used_s = _fmt_usd(s["used"])
+            limit_s = _fmt_usd(s["limit_value"])
+        else:
+            used_s = f"{int(s['used']):,} tok"
+            limit_s = f"{int(s['limit_value']):,} tok"
+        href = (
+            f"/projects/{quote(filters['project'], safe='')}/insights"
+            if filters.get("project") else "/analytics"
+        )
+        notif.emit(
+            kind="budget_alert",
+            dedup_key=f"budget:{s['id']}:{s.get('period_key')}:{level}",
+            title=f"Budget {'exceeded' if over else 'alert'}: {scope}",
+            severity="over" if over else "warn",
+            body=f"{used_s} / {limit_s} ({pct}%)",
+            href=href,
+        )
+
+
+@app.get("/budgets")
+async def get_budgets():
+    """Return every budget with its current usage, fraction, and alert level."""
+    return {"budgets": await _budget_statuses()}
+
+
+# ---------------------------------------------------------------------------
+# Notification center (see notifications.py for the storage model)
+# ---------------------------------------------------------------------------
+
+def _notif_ids(payload: Any) -> Optional[List[int]]:
+    """Extract an optional id list from a request body. Missing/empty -> None
+    (meaning 'apply to all'), so POST {} acts on everything."""
+    if isinstance(payload, dict):
+        ids = payload.get("ids")
+        if isinstance(ids, list) and ids:
+            try:
+                return [int(i) for i in ids]
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+@app.get("/notifications")
+async def get_notifications():
+    """Live (non-cleared) notifications, newest first, plus unread_count and
+    the to_toast subset the frontend surfaces once."""
+    # Refresh budget-derived notifications before reading the store.
+    await _budget_statuses()
+    return notif.list_live()
+
+
+@app.post("/notifications/toasted")
+async def post_notifications_toasted(payload: Any = Body(default=None)):
+    return {"ok": True, "updated": notif.mark_toasted(_notif_ids(payload))}
+
+
+@app.post("/notifications/read")
+async def post_notifications_read(payload: Any = Body(default=None)):
+    return {"ok": True, "updated": notif.mark_read(_notif_ids(payload))}
+
+
+@app.post("/notifications/clear")
+async def post_notifications_clear(payload: Any = Body(default=None)):
+    return {"ok": True, "updated": notif.clear(_notif_ids(payload))}
+
+
+@app.put("/budgets")
+async def put_budgets(payload: Any = Body(...)):
+    """Replace the full budget set. Accepts {"budgets": [...]} or a bare list.
+    Validation/sanitisation happens in harness_config.save_budgets."""
+    items = payload.get("budgets") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        items = []
+    save_budgets(items)
+    # No session-cache invalidation needed: budgets don't change parsed sessions.
+    return {"ok": True, "budgets": await _budget_statuses()}
+
 
 # def _quality_summary(edit_turns: int, retry_turns: int, measured_sessions: int) -> Dict[str, Any]:
 #     if edit_turns > 0:

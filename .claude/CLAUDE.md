@@ -141,3 +141,28 @@ Hints should tell the user what to *do* (switch model, check `ollama serve`,
 set an env var), not just restate the error. Prefer graceful degradation over a
 hard error where possible — e.g. the `openai_compat` adapter retries once with a
 clean OpenAI-only payload when a strict gateway 400s on a non-standard field.
+
+## Verify before reporting done (data & numeric features)
+
+For any change that produces a number, date, aggregate, or anything the user
+reads off the UI, **verify it yourself before saying "done." Do not make the
+user be the test harness** — the round-trip of "ship → user finds the bug →
+validate after the fact" is exactly what this rule exists to kill.
+
+1. **Independent recompute.** Re-derive the value a *different* way than the
+   feature does (e.g. hit `/sessions` and re-bucket in a throwaway script) and
+   show the comparison: UI/endpoint value vs your recompute. They must match; if
+   they don't, that's a bug — surface it, don't gloss it.
+2. **Timezone is local-day.** The user is IST (+05:30); day buckets are LOCAL
+   days. `toISOString()` on a local-midnight `Date` silently rolls back to the
+   previous UTC day — never key/label a day bucket that way (this is what put the
+   activity heatmap off by one). Build day keys from local Y/M/D components.
+3. **Confirm the app runs the NEW code** before validating in the browser: right
+   branch/HEAD, expected ports (frontend 3000 / backend 8000), and a *fresh*
+   `.next` (a stale build or the wrong port means you're testing old code — a 404
+   on a new endpoint or unchanged UI is the tell).
+4. **Static checks pass:** `tsc --noEmit` in `frontend/` for FE changes; parse/
+   import the touched backend modules. Don't call a build healthy on faith.
+
+Put the evidence (the diff, the numbers, the passing checks) in the done
+message, not just the word "done". `/ship` runs this loop as a command.

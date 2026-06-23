@@ -10,6 +10,7 @@ import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import { ThemeToggle } from "./ThemeToggle";
+import NotificationBell from "./notifications/NotificationBell";
 import HermesIcon from "./icons/HermesIcon";
 
 interface NavigationProps {
@@ -90,6 +91,8 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
             </div>
           </div>
         )}
+
+        <NotificationBell collapsed={isCollapsed} />
 
         <NavLink
           link={{ name: "Settings", href: "/settings", icon: Settings2 }}

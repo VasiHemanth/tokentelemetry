@@ -43,6 +43,8 @@ chintaku
 .claude/agents/
 .claude/commands/
 feature/
+.antigravitycli/
+cache/
 
 # --- Graphify (knowledge graph build artifacts) ---
 graphify-out/

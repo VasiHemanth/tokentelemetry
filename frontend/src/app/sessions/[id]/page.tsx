@@ -759,10 +759,10 @@ export default function SessionDetailPage() {
              <div className="p-4 text-[11px]">
                 {sidebarTab === "context" && (
                   <>
-                    <ContextPanel ctx={context} />
                     {delegation && agent && ((delegation.subagents?.length ?? 0) > 0 || (delegation.child_session_ids?.length ?? 0) > 0) && (
                       <SubagentsSidebar delegation={delegation} agent={agent} onOpen={setSubagentView} />
                     )}
+                    <ContextPanel ctx={context} />
                   </>
                 )}
                 {sidebarTab === "tools" && <ToolsPanel summary={toolSummary} onJump={(name) => {

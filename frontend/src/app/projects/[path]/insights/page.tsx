@@ -8,25 +8,30 @@ import { cn } from "@/lib/cn";
 import {
   Card, CardHeader, CardTitle, StatTile, EmptyState,
 } from "@/components/ui";
+import BudgetCard from "@/components/budgets/BudgetCard";
 import { useProject } from "../_lib/project-context";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function InsightsTab() {
-  const { sessions } = useProject();
+  const { sessions, decodedPath } = useProject();
+  const configHref = `/projects/${encodeURIComponent(decodedPath)}/config`;
   const [heatMetric, setHeatMetric] = useState<"sessions" | "tokens">("sessions");
 
   const insights = useMemo(() => {
     const DAYS = 365;
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const start = new Date(today); start.setDate(start.getDate() - (DAYS - 1));
-    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    // Local-day key (NOT toISOString — that converts to UTC and shifts the day
+    // back for positive-offset zones like IST, mislabeling every heatmap cell).
+    const dayKey = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-    type DayBucket = { date: string; count: number; tokens: number; byAgent: Record<string, number> };
+    type DayBucket = { date: string; count: number; tokens: number; cost: number; byAgent: Record<string, number> };
     const daily: Record<string, DayBucket> = {};
     for (let i = 0; i < DAYS; i++) {
       const d = new Date(start); d.setDate(d.getDate() + i);
-      daily[dayKey(d)] = { date: dayKey(d), count: 0, tokens: 0, byAgent: {} };
+      daily[dayKey(d)] = { date: dayKey(d), count: 0, tokens: 0, cost: 0, byAgent: {} };
     }
 
     const agentStats: Record<string, { count: number; tokens: number; firstSeen: number; lastSeen: number }> = {};
@@ -51,6 +56,7 @@ export default function InsightsTab() {
       const tok = s.tokens?.total || 0;
       if (daily[k]) {
         daily[k].count += 1; daily[k].tokens += tok;
+        daily[k].cost += s.cost || 0;
         daily[k].byAgent[s.agent] = (daily[k].byAgent[s.agent] || 0) + 1;
       }
       activeDays.add(k);
@@ -191,6 +197,9 @@ export default function InsightsTab() {
 
   return (
     <div className="space-y-5">
+      {/* Budget — observational spend vs limit (project total + per-agent) */}
+      <BudgetCard projectPath={decodedPath} configHref={configHref} />
+
       {/* Streaks + tallies */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatTile label="Current streak" value={`${insights.current}d`} icon={<Flame size={16} />} accent="var(--tt-success)" />
@@ -538,7 +547,7 @@ function MigrationRibbon({
   );
 }
 
-type DayBucket = { date: string; count: number; tokens: number; byAgent: Record<string, number> };
+type DayBucket = { date: string; count: number; tokens: number; cost: number; byAgent: Record<string, number> };
 
 function CombinedHeatmap({
   dailyArr, start, metric,
@@ -611,7 +620,7 @@ function CombinedHeatmap({
                   return (
                     <div
                       key={di}
-                      title={d ? `${d.date} · ${d.count} sessions · ${fmtNum(d.tokens)} tokens` : ""}
+                      title={d ? `${d.date} · ${d.count} sessions · ${fmtNum(d.tokens)} tokens · $${d.cost.toFixed(2)}` : ""}
                       className="w-[12px] h-[12px] rounded-[3px] transition-colors"
                       style={{
                         backgroundColor: intensity > 0 ? hexWithAlpha(hex, intensity) : "var(--tt-empty-cell)",

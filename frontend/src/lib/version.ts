@@ -24,6 +24,12 @@ export interface VersionInfo {
   behind: boolean;
   /** Newest first. Empty when UPDATE.json is missing / unreachable. */
   releases: UpdateRelease[];
+  /**
+   * Stable id of the newest curated release ("tag|title"), or null when there
+   * are no curated highlights. The banner keys dismissal on this so it only
+   * re-surfaces when a NEW feature release lands — not on every main commit.
+   */
+  latest_release: string | null;
   release_url: string;
   source: "github" | "cache" | "offline" | "disabled" | "none";
   repo: string;

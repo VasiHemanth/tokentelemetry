@@ -17,42 +17,54 @@ import { getVersion, type VersionInfo } from "@/lib/version";
  * (title + description + optional href to the feature), keeping users inside
  * the dashboard instead of redirecting to a commit-list page on GitHub.
  *
- * Dismissal is keyed on the *latest* commit SHA so the user only sees each
- * update once — any new commit on remote main re-surfaces it automatically.
- * No GitHub API calls from the browser; backend handles all fetching +
- * caching (6h TTL).
+ * Dismissal is keyed on the newest curated *release* id (`latest_release`,
+ * "tag|title" from UPDATE.json) — NOT the commit SHA. So the banner only
+ * re-surfaces when a new *feature* release lands; routine fix:/chore: commits
+ * to main (which don't touch UPDATE.json) never re-pop it. Dismissal is a
+ * one-time per-release acknowledgement — there is no time-based snooze.
+ *
+ * `behind` is computed server-side via git ancestry (not a SHA inequality), so
+ * feature-branch / ahead / just-pulled checkouts don't show a false positive.
+ * No GitHub API calls from the browser; backend handles all fetching + caching.
  */
 
-const STORAGE_KEY = "tt-update-dismissed-sha";
+const STORAGE_KEY = "tt-update-dismissed-release";
 const GIT_PULL = "git pull && ./start.sh";
 
 export default function WhatsNewBanner() {
   const [info, setInfo] = useState<VersionInfo | null>(null);
-  const [dismissedSha, setDismissedSha] = useState<string | null>(null);
+  const [dismissedRelease, setDismissedRelease] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
-    try { setDismissedSha(window.localStorage.getItem(STORAGE_KEY)); }
-    catch { setDismissedSha(null); }
+    try { setDismissedRelease(window.localStorage.getItem(STORAGE_KEY)); }
+    catch { setDismissedRelease(null); }
 
     let cancelled = false;
     getVersion()
       .then((d) => { if (!cancelled) setInfo(d); })
       .catch(() => { /* backend down or endpoint missing — silent */ });
-    return () => { cancelled = true; };
+
+    // Keep tabs in sync: if another tab dismisses, hide here too (and vice versa).
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY) setDismissedRelease(e.newValue);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => { cancelled = true; window.removeEventListener("storage", onStorage); };
   }, []);
 
-  // Render gates: need info, need to be behind, need the latest SHA to differ
-  // from whatever was dismissed.
+  // Render gates: need info, need to genuinely be behind, need a curated release
+  // (so fix:/chore: pushes with no UPDATE.json entry stay silent), and that
+  // release must not already be acknowledged.
   const isVisible =
-    !!info && info.behind && !!info.latest && dismissedSha !== info.latest;
+    !!info && info.behind && !!info.latest_release && dismissedRelease !== info.latest_release;
 
   function dismiss() {
-    if (!info?.latest) return;
-    try { window.localStorage.setItem(STORAGE_KEY, info.latest); }
+    if (!info?.latest_release) return;
+    try { window.localStorage.setItem(STORAGE_KEY, info.latest_release); }
     catch { /* private mode etc. — banner just re-appears next visit */ }
-    setDismissedSha(info.latest);
+    setDismissedRelease(info.latest_release);
     setDrawerOpen(false);
   }
 
