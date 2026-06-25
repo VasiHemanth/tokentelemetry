@@ -7,7 +7,7 @@ description: Frequently asked questions about TokenTelemetry.
 
 **Does TokenTelemetry send any data to the cloud?**
 
-No usage data, ever. It reads log files from your filesystem and serves a local web dashboard — your logs, sessions, tokens, and costs never leave your machine. The only outbound call is an optional update check that fetches the latest version and release notes from GitHub (no usage data sent). Disable it in Settings → *Updates & privacy* or with `TT_NO_UPDATE_CHECK=1`. See [Update Check & Privacy](/docs/configuration/privacy).
+Your logs, sessions, tokens, and costs never leave your machine — TokenTelemetry reads log files from your filesystem and serves a local web dashboard. Two narrow, content-free outbound features exist, both optional and both on by default: an update check that fetches the latest version and release notes from GitHub (no usage data), and anonymous product telemetry that reports which features are used (never your code, prompts, paths, or costs). Turn either off in Settings → *Updates & privacy* — or with `TT_NO_UPDATE_CHECK=1` / `TT_NO_TELEMETRY=1` (`DO_NOT_TRACK=1` also disables telemetry). See [Update Check & Privacy](/docs/configuration/privacy).
 
 **How does it track Claude Code token usage?**
 

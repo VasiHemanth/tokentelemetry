@@ -1,19 +1,19 @@
 ---
 title: Introduction
-description: TokenTelemetry is a free, local-first observability dashboard for AI coding agents — no signup, no cloud, no telemetry.
+description: TokenTelemetry is a free, local-first observability dashboard for AI coding agents — no signup, no cloud, your logs stay on your machine.
 ---
 
 ## What is TokenTelemetry?
 
 **TokenTelemetry** is a free, open-source, 100% local dashboard that reads the log files your AI coding agents already write and surfaces them in one unified place. It tracks token usage, LLM costs, tool calls, session traces, and reasoning steps across Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, and Hermes Agent.
 
-**No signup. No cloud. No data leaves your machine.** One command to start.
+**No signup. No cloud. Your logs, prompts, and costs never leave your machine.** One command to start.
 
 ![Dashboard](/screenshots/dashboard.png)
 
 ## The local-first promise
 
-All data stays in `~/.tokentelemetry/` on your machine. TokenTelemetry reads the log files agents already write — it never modifies them. The only outbound call is an optional hourly update-check to GitHub (no usage data, just a version request). You can disable that too.
+All your agent data stays in `~/.tokentelemetry/` on your machine — TokenTelemetry reads the log files agents already write and never modifies them. Two narrow outbound features exist, both content-free and both optional: an hourly update-check to GitHub (just a version request) and anonymous product telemetry (which features are used — never your code, prompts, paths, or costs). Both are on by default and can be turned off independently in Settings → *Updates & privacy*, or with `DO_NOT_TRACK=1`. See [Update Check & Privacy](/docs/configuration/privacy).
 
 ## Who it's for
 
