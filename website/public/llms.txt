@@ -143,9 +143,47 @@ A: TokenTelemetry is purpose-built for AI coding agents and autonomous agents, a
 **Q: What is the best open source LLM observability tool for coding agents?**
 A: TokenTelemetry is purpose-built for AI coding agents (Claude Code, Codex, Gemini CLI, Cursor) and autonomous agents (Hermes). For general LLM-app monitoring, alternatives include Langfuse and LangSmith (both require cloud setup and SDK instrumentation).
 
-## Docs
+## Documentation
 
-- Full documentation: https://tokentelemetry.com
+Full docs site: https://tokentelemetry.com/docs
+
+### Getting started
+
+- [Introduction](https://tokentelemetry.com/docs): What TokenTelemetry is and who it's for.
+- [Installation](https://tokentelemetry.com/docs/installation): One-line curl install, Windows PowerShell script, or clone from source.
+- [Quick Start](https://tokentelemetry.com/docs/quick-start): First launch, agent auto-detection, and opening the dashboard.
+- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 10 coding agents and Hermes, how each is detected, and what data each captures.
+
+### Features
+
+- [Dashboard](https://tokentelemetry.com/docs/features/dashboard): Bird's-eye view of your agent fleet — live KPIs, agent distribution, model leaderboard, recent activity.
+- [Analytics](https://tokentelemetry.com/docs/features/analytics): Token trends by agent, model, and day with date-range filters, cache efficiency, and delegation graphs.
+- [Projects](https://tokentelemetry.com/docs/features/projects): Per-working-directory cards with activity heatmaps, tool usage, config overlays, a plans library, and git-worktree rollups.
+- [Budgets & Alerts](https://tokentelemetry.com/docs/features/budgets): Spend or token limits per project (and per agent), with 80% / 100% alerts — observational, never blocks an agent.
+- [Traces](https://tokentelemetry.com/docs/features/traces): Replay every session step by step — events, messages, tool calls, artifacts, and plans.
+- [Summarization](https://tokentelemetry.com/docs/features/summarization): One-click LLM summaries of any session, cached by content hash, with classified error cards.
+- [Artifacts](https://tokentelemetry.com/docs/features/artifacts): Screenshots, browser recordings, and documents captured by your agents, viewable inline.
+- [Hermes Agent](https://tokentelemetry.com/docs/features/hermes): Dedicated autonomous-agent observability — gateway health, 38 source platforms, skills, and memory.
+
+### Configuration
+
+- [Billing & Cost Modes](https://tokentelemetry.com/docs/configuration/billing): How sessions are classified as subscription, API, local, or unknown — and how to override per agent.
+- [Configure the Summarizer](https://tokentelemetry.com/docs/configuration/configure-summarizer): Pick a summarization backend (Claude, Codex, Gemini, Qwen, Ollama, Antigravity, or OpenAI-compatible).
+- [Custom Data Directory](https://tokentelemetry.com/docs/configuration/data-directory): Relocate config and state via --data-dir, TOKENTELEMETRY_DATA_DIR, or TOKENTELEMETRY_HOME.
+- [Local Models & Power Cost](https://tokentelemetry.com/docs/configuration/local-models): Wattage, electricity rate, and carbon intensity to estimate energy cost and CO₂ for local sessions.
+- [Ports & Networking](https://tokentelemetry.com/docs/configuration/ports-networking): Change frontend/backend ports and understand NEXT_PUBLIC_API_PORT.
+- [Update Check & Privacy](https://tokentelemetry.com/docs/configuration/privacy): Control the optional update check and anonymous product telemetry — what's sent and how to disable each.
+- [Remote Access](https://tokentelemetry.com/docs/configuration/remote-access): Expose the dashboard to other devices (tailnet, LAN, SSH tunnel) with token auth.
+- [History & Retention](https://tokentelemetry.com/docs/configuration/retention): How long session data is kept, durable history, and transcript archival.
+
+### Reference
+
+- [CLI & Environment Reference](https://tokentelemetry.com/docs/reference/cli): Every CLI flag and environment variable TokenTelemetry recognizes.
+- [FAQ](https://tokentelemetry.com/docs/reference/faq): Frequently asked questions.
+- [Troubleshooting](https://tokentelemetry.com/docs/reference/troubleshooting): Agent not detected, ports in use, summarizer failures, remote access.
+
+### Other links
+
 - GitHub README: https://github.com/VasiHemanth/tokentelemetry#readme
 - Hermes Dashboard plugin: https://github.com/VasiHemanth/tokentelemetry/tree/main/plugin/hermes-dashboard
 - Hermes Agent (upstream): https://github.com/NousResearch/hermes-agent
