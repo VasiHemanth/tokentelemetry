@@ -8,7 +8,7 @@ import json
 import yaml
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Iterable
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
@@ -303,6 +303,37 @@ ANTIGRAVITY_BRAIN_DIRS = [d for d, _ in ANTIGRAVITY_BRAIN_SOURCES]
 # display name and the exact project cwd — see _antigravity_cli_meta().
 ANTIGRAVITY_CLI_DIR = GEMINI_DIR / "antigravity-cli"
 PROJECT_ALIASES_FILE = data_dir() / "aliases.json"
+
+# Cline — two stores. (a) CLI: SQLite sessions.db under ~/.cline/data/db/,
+# overridable via TT_CLINE_DIR for relocated data dirs (containers, shared
+# hosts). (b) VS Code extension: JSON state under globalStorage, overridable
+# via TT_CLINE_VSCODE_DIR.
+CLINE_DIR = Path(os.environ.get("TT_CLINE_DIR") or (HOME / ".cline")).expanduser()
+CLINE_VSCODE_DIR = Path(
+    os.environ.get("TT_CLINE_VSCODE_DIR")
+    or (VSCODE_BASE / "User" / "globalStorage" / "saoudrizwan.claude-dev")
+).expanduser()
+
+
+def _split_roots_env(value: Optional[str]) -> List[str]:
+    """Split a roots env var on BOTH os.pathsep and comma so it works whether
+    the user quotes a single path list or a comma-separated one."""
+    if not value:
+        return []
+    parts: List[str] = []
+    for chunk in value.split(os.pathsep):
+        for p in chunk.split(","):
+            p = p.strip()
+            if p:
+                parts.append(p)
+    return parts
+
+
+# SmallCode traces are PROJECT-LOCAL (<project>/.smallcode/traces/*.json), not
+# under a home dir, so there's no single directory to scan. We discover roots
+# from projects already seen from other agents, plus any extra roots the user
+# points us at via TT_SMALLCODE_ROOTS (pathsep- or comma-separated).
+SMALLCODE_EXTRA_ROOTS: List[str] = _split_roots_env(os.environ.get("TT_SMALLCODE_ROOTS"))
 
 
 def _sqlite_ro_uri(db_path) -> str:
@@ -1736,6 +1767,13 @@ def _list_available_agents() -> list:
     if OPENCODE_DB.exists(): agents.append("opencode")
     if _hermes_dbs(): agents.append("hermes")
     if GROK_SESSIONS_DIR.exists(): agents.append("grok")
+    if (CLINE_DIR / "data" / "db" / "sessions.db").exists() or (CLINE_VSCODE_DIR / "state" / "taskHistory.json").exists():
+        agents.append("cline")
+    # SmallCode traces are project-local; cheaply check only the explicitly
+    # configured extra roots here (the full project-derived root set is only
+    # known after _scan_sessions_sync runs the other scanners).
+    if any((Path(r).expanduser() / ".smallcode" / "traces").is_dir() for r in SMALLCODE_EXTRA_ROOTS):
+        agents.append("smallcode")
     # if OLLAMA_DIR.exists(): agents.append("ollama")
     return agents
 
@@ -2022,6 +2060,321 @@ def _grok_subagent_meta(sess_dir: Path) -> List[Dict[str, Any]]:
     return entries
 
 
+def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
+    """Scan SmallCode traces, which are PROJECT-LOCAL (not under a home dir).
+
+    Verified shape (see testdata/cline_smallcode/smallcode/8fadca50.json):
+    ``<project>/.smallcode/traces/<id>.json`` with
+    ``{id, model, prompt, startedAt, endedAt, durationMs, steps, tokens:{prompt,completion}}``.
+    """
+    out: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+
+    for root in roots:
+        if not root or root == "unknown":
+            continue
+        root_path = Path(root).expanduser()
+        traces_dir = root_path / ".smallcode" / "traces"
+        if not traces_dir.is_dir():
+            continue
+
+        for trace_path in sorted(traces_dir.glob("*.json")):
+            try:
+                with open(trace_path, "r", encoding="utf-8") as f:
+                    trace = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(trace, dict):
+                continue
+
+            sid = trace.get("id") or trace_path.stem
+            if not sid or sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+
+            model = trace.get("model") or "unknown"
+            started_at = trace.get("startedAt")
+            try:
+                ts = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+            except Exception:
+                ts = _file_mtime_utc(trace_path)
+
+            raw_tokens = trace.get("tokens") or {}
+            input_tokens = int(raw_tokens.get("prompt") or 0)
+            output_tokens = int(raw_tokens.get("completion") or 0)
+            tokens = {
+                "input": input_tokens, "output": output_tokens, "cached": 0,
+                "total": input_tokens + output_tokens, "cost": 0.0,
+            }
+            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+
+            prompt = trace.get("prompt") or ""
+            mcp_tools: List[str] = []
+            for step in trace.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if step.get("type") == "tool_call":
+                    name = step.get("name")
+                    if name and name not in mcp_tools:
+                        mcp_tools.append(name)
+
+            out.append({
+                "id": sid,
+                "agent": "smallcode",
+                "project": str(root_path),
+                "timestamp": ts,
+                "display": prompt[:120],
+                "tokens": tokens,
+                "model": model,
+                "mcp_tools": mcp_tools,
+                "has_plan": False,
+                "plans": [],
+                "artifacts": [{"name": trace_path.name, "path": str(trace_path), "type": "document"}],
+                "cost": tokens["cost"],
+            })
+
+    return out
+
+
+def _scan_cline_sessions() -> List[Dict[str, Any]]:
+    """Scan Cline sessions from BOTH stores it writes to, deduping by session id
+    (the CLI row wins when a session id appears in both).
+
+    (a) CLI: SQLite ``sessions.db`` under ``CLINE_DIR/data/db/`` — verified schema
+    has a ``sessions`` table with session_id/started_at/.../metadata_json/messages_path.
+    Token usage lives in ``metadata_json``, preferring ``aggregateUsage`` over
+    ``usage``; if both are all-zero we fall back to summing each message's
+    ``metrics`` in the ``messages_path`` JSON transcript.
+
+    (b) VS Code extension: ``CLINE_VSCODE_DIR/state/taskHistory.json`` — an array
+    of HistoryItems (id, ts epoch-ms, task, tokensIn/Out, cacheWrites/Reads,
+    totalCost, size). This store is undocumented beyond that shape (the
+    extension isn't installed on the machine this was written on), so the
+    parser sticks to exactly those fields.
+    """
+    aliases = _load_project_aliases()
+    def _apply_alias(p: str) -> str:
+        return aliases.get(p, p)
+
+    out: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+
+    # (a) CLI SQLite store
+    db_path = CLINE_DIR / "data" / "db" / "sessions.db"
+    if db_path.exists():
+        rows = []
+        try:
+            uri = _sqlite_ro_uri(db_path)
+            conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                # SELECT * (not a fixed column list) so older Cline DBs that
+                # predate is_subagent/parent_session_id still scan — missing
+                # columns are read defensively below rather than erroring the
+                # whole query to an empty result.
+                rows = conn.execute("SELECT * FROM sessions").fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            rows = []
+
+        # Cline spawns subagents/teams: each subagent is its OWN row with
+        # is_subagent=1 and parent_session_id set, while the parent's
+        # metadata.aggregateUsage already SUMS the children in. Counting both
+        # the parent's aggregate AND each child row would double-count, so
+        # parents are billed on their own `usage` and linked via
+        # parent_session_id for the delegation view; children stay as their own
+        # rows. Leaf/standalone sessions have usage == aggregateUsage.
+        def _row_get(r, k, default=None):
+            return r[k] if k in r.keys() else default
+        parents_with_children = {
+            _row_get(r, "parent_session_id")
+            for r in rows
+            if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
+        }
+
+        for row in rows:
+            sid = row["session_id"]
+            if not sid or sid in seen_ids:
+                continue
+
+            model = row["model"] or "unknown"
+            project_path = _apply_alias(row["workspace_root"] or row["cwd"] or "unknown")
+
+            try:
+                ts = datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+            except Exception:
+                ts = _file_mtime_utc(db_path)
+
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}") or {}
+            except Exception:
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            # Parents (sessions that spawned subagents) bill on their OWN usage
+            # so the separately-counted child rows aren't double-counted; leaf
+            # and standalone sessions use aggregateUsage (== usage with no
+            # children).
+            is_parent = sid in parents_with_children
+            if is_parent:
+                usage = metadata.get("usage") or metadata.get("aggregateUsage") or {}
+            else:
+                usage = metadata.get("aggregateUsage") or {}
+            if not isinstance(usage, dict) or not any(
+                usage.get(k) for k in ("inputTokens", "outputTokens", "cacheReadTokens")
+            ):
+                fallback_usage = metadata.get("usage")
+                if isinstance(fallback_usage, dict):
+                    usage = fallback_usage
+
+            tokens = {
+                "input": int((usage or {}).get("inputTokens") or 0),
+                "output": int((usage or {}).get("outputTokens") or 0),
+                "cached": int((usage or {}).get("cacheReadTokens") or 0),
+                "total": 0, "cost": 0.0,
+            }
+
+            # Metadata usage is all zero (older/degenerate rows) — fall back to
+            # summing per-message metrics in the messages_path transcript.
+            messages_path = row["messages_path"]
+            if tokens["input"] == 0 and tokens["output"] == 0 and tokens["cached"] == 0 and messages_path:
+                mp = Path(messages_path)
+                if mp.exists():
+                    try:
+                        with open(mp, "r", encoding="utf-8", errors="replace") as f:
+                            mdata = json.load(f)
+                        for m in (mdata.get("messages") or []):
+                            if not isinstance(m, dict):
+                                continue
+                            metrics = m.get("metrics") or {}
+                            if not isinstance(metrics, dict):
+                                continue
+                            tokens["input"] += int(metrics.get("inputTokens") or 0)
+                            tokens["output"] += int(metrics.get("outputTokens") or 0)
+                            tokens["cached"] += int(metrics.get("cacheReadTokens") or 0)
+                    except Exception:
+                        pass
+
+            tokens["total"] = tokens["input"] + tokens["output"]
+
+            # metadata.totalCost is the AGGREGATE (parent + children); for a
+            # parent we switched to own-usage above, so derive own cost to match
+            # rather than inheriting the children's cost.
+            meta_cost = metadata.get("totalCost")
+            if not is_parent and isinstance(meta_cost, (int, float)) and meta_cost > 0:
+                tokens["cost"] = float(meta_cost)
+            else:
+                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+
+            display = (row["prompt"] or metadata.get("title") or "")[:120]
+
+            artifacts: List[Dict[str, Any]] = [{"name": "sessions.db", "path": str(db_path), "type": "document"}]
+            if messages_path:
+                artifacts.append({"name": "messages", "path": str(messages_path), "type": "document"})
+
+            is_subagent = bool(_row_get(row, "is_subagent"))
+            parent_sid = _row_get(row, "parent_session_id")
+            rec = {
+                "id": sid,
+                "agent": "cline",
+                "project": project_path,
+                "timestamp": ts,
+                "display": display,
+                "tokens": tokens,
+                "model": model,
+                "mcp_tools": [],
+                "has_plan": False,
+                "plans": [],
+                "artifacts": artifacts,
+                "cost": tokens["cost"],
+                "cline": {
+                    "source": "cli",
+                    "provider": row["provider"],
+                    "status": row["status"],
+                    "messages_path": messages_path,
+                    "is_subagent": is_subagent,
+                    "agent_id": _row_get(row, "agent_id"),
+                    "team_name": _row_get(row, "team_name"),
+                    "spawned_children": sid in parents_with_children,
+                },
+            }
+            # Link child -> parent so the delegation view attributes a spawned
+            # subagent's (own-counted) tokens to the session that spawned it,
+            # mirroring the Grok/Codex sibling-session model.
+            if is_subagent and parent_sid:
+                rec["parent_session_id"] = parent_sid
+                rec["is_subagent"] = True
+            out.append(rec)
+            seen_ids.add(sid)
+
+    # (b) VS Code extension store
+    history_path = CLINE_VSCODE_DIR / "state" / "taskHistory.json"
+    if history_path.exists():
+        try:
+            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
+                history = json.load(f)
+        except Exception:
+            history = []
+
+        if isinstance(history, list):
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                sid = str(item.get("id") or "")
+                if not sid or sid in seen_ids:
+                    continue
+
+                ts_ms = item.get("ts")
+                try:
+                    ts = datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc)
+                except Exception:
+                    ts = _file_mtime_utc(history_path)
+
+                tokens_in = int(item.get("tokensIn") or 0)
+                tokens_out = int(item.get("tokensOut") or 0)
+                cache_reads = int(item.get("cacheReads") or 0)
+                model = item.get("model") or "unknown"
+                tokens = {
+                    "input": tokens_in, "output": tokens_out, "cached": cache_reads,
+                    "total": tokens_in + tokens_out, "cost": 0.0,
+                }
+                total_cost = item.get("totalCost")
+                if isinstance(total_cost, (int, float)) and total_cost > 0:
+                    tokens["cost"] = float(total_cost)
+                else:
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+
+                transcript_path = CLINE_VSCODE_DIR / "tasks" / sid / "api_conversation_history.json"
+                artifacts: List[Dict[str, Any]] = []
+                if transcript_path.exists():
+                    artifacts.append({"name": "api_conversation_history.json", "path": str(transcript_path), "type": "document"})
+
+                out.append({
+                    "id": sid,
+                    "agent": "cline",
+                    "project": _apply_alias(item.get("cwd") or item.get("workspace") or "unknown"),
+                    "timestamp": ts,
+                    "display": (item.get("task") or "")[:120],
+                    "tokens": tokens,
+                    "model": model,
+                    "mcp_tools": [],
+                    "has_plan": False,
+                    "plans": [],
+                    "artifacts": artifacts,
+                    "cost": tokens["cost"],
+                    "cline": {
+                        "source": "vscode",
+                        "cache_writes": item.get("cacheWrites"),
+                        "transcript_path": str(transcript_path) if transcript_path.exists() else None,
+                    },
+                })
+                seen_ids.add(sid)
+
+    return out
+
+
 def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
     """Reconstruct a Copilot chat session object from VS Code's newer .jsonl
     delta-log format (VS Code ~1.100+ writes <id>.jsonl instead of <id>.json).
@@ -2119,7 +2472,7 @@ def _opencode_resolve_model(val):
 # conversation ids. (All verified empirically by running the CLIs — see
 # DESIGN.md "probe findings".)
 _DELEGATION_CAPABLE_AGENTS = {"claude", "cursor", "opencode", "hermes",
-                              "grok", "codex", "antigravity"}
+                              "grok", "codex", "antigravity", "cline"}
 
 
 # content is JSON-escaped inside the INVOKE_SUBAGENT step record, so the quote
@@ -3539,6 +3892,20 @@ def _scan_sessions_sync():
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
 
+    # 8b. Cline — CLI SQLite store + VS Code extension JSON store
+    sessions.extend(_scan_cline_sessions())
+
+    # 8c. SmallCode — traces are PROJECT-LOCAL (<project>/.smallcode/traces/),
+    # so discover roots from projects already seen from other agents (they ran
+    # somewhere real) unioned with any user-configured extra roots, then scan.
+    smallcode_roots = {
+        s["project"] for s in sessions
+        if s.get("project") and s["project"] != "unknown"
+    }
+    smallcode_roots.update(SMALLCODE_EXTRA_ROOTS)
+    smallcode_roots = {r for r in smallcode_roots if r and Path(r).expanduser().is_dir()}
+    sessions.extend(_scan_smallcode_sessions(smallcode_roots))
+
     # 9. Hermes Agent (SQLite: sessions / messages, pre-aggregated tokens)
     hermes_cwd_map = _hermes_cwd_by_session() if _hermes_dbs() else {}
     hermes_by_id: Dict[str, Dict[str, Any]] = {}
@@ -4367,6 +4734,134 @@ async def get_session_detail(session_id: str, agent: str):
                     conn.close()
             except Exception:
                 continue
+        return {"error": "Not found"}
+    elif agent == "smallcode":
+        # Traces are project-local; use the cached session list (populated by
+        # GET /sessions, which any dashboard load already triggers) to find
+        # which project this trace lives under, falling back to the
+        # user-configured extra roots if the cache hasn't been built yet.
+        candidate_roots: List[str] = list(SMALLCODE_EXTRA_ROOTS)
+        cached_sessions = _sessions_cache.get("data")
+        if cached_sessions:
+            for s in cached_sessions:
+                if s.get("agent") == "smallcode" and s.get("project"):
+                    candidate_roots.append(s["project"])
+
+        trace_path = None
+        for root in dict.fromkeys(candidate_roots):  # dedupe, keep order
+            p = Path(root).expanduser() / ".smallcode" / "traces" / f"{session_id}.json"
+            if p.exists():
+                trace_path = p
+                break
+        if trace_path is None:
+            return {"error": "Not found"}
+
+        try:
+            with open(trace_path, "r", encoding="utf-8") as f:
+                trace = json.load(f)
+        except Exception:
+            return {"error": "Not found"}
+
+        base_ms = None
+        started_at = trace.get("startedAt")
+        if started_at:
+            try:
+                base_ms = _aware(datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))).timestamp() * 1000
+            except Exception:
+                base_ms = None
+        if base_ms is None:
+            base_ms = _file_mtime_utc(trace_path).timestamp() * 1000
+
+        events = []
+        prompt = trace.get("prompt")
+        if prompt:
+            events.append({"type": "user", "payload": {"content": prompt},
+                            "timestamp": base_ms, "normalized_timestamp": base_ms})
+        for i, step in enumerate(trace.get("steps") or [], start=1):
+            if not isinstance(step, dict):
+                continue
+            ts_ms = step.get("timestamp")
+            if not isinstance(ts_ms, (int, float)):
+                ts_ms = base_ms + i * 1000
+            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+            if step.get("type") == "tool_call":
+                events.append({"type": "tool_call", "payload": {
+                    "tool": step.get("name"), "args": step.get("args"),
+                }, **base})
+                events.append({"type": "tool_result", "payload": {
+                    "tool": step.get("name"), "content": step.get("result"),
+                }, **base})
+            else:
+                events.append({"type": step.get("type") or "assistant", "payload": step, **base})
+        return events
+    elif agent == "cline":
+        # (a) CLI store: session row -> messages_path transcript.
+        db_path = CLINE_DIR / "data" / "db" / "sessions.db"
+        if db_path.exists():
+            srow = None
+            try:
+                uri = _sqlite_ro_uri(db_path)
+                conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+                conn.row_factory = sqlite3.Row
+                try:
+                    srow = conn.execute(
+                        "SELECT messages_path FROM sessions WHERE session_id=?", (session_id,)
+                    ).fetchone()
+                finally:
+                    conn.close()
+            except Exception:
+                srow = None
+            if srow and srow["messages_path"]:
+                mp = Path(srow["messages_path"])
+                if mp.exists():
+                    try:
+                        with open(mp, "r", encoding="utf-8", errors="replace") as f:
+                            mdata = json.load(f)
+                        events = []
+                        for i, m in enumerate(mdata.get("messages") or []):
+                            if not isinstance(m, dict):
+                                continue
+                            ts_ms = m.get("ts")
+                            if not isinstance(ts_ms, (int, float)):
+                                ts_ms = i * 1000
+                            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+                            role = m.get("role")
+                            text_parts = []
+                            for block in (m.get("content") or []):
+                                if not isinstance(block, dict):
+                                    continue
+                                if block.get("type") == "text":
+                                    text_parts.append(block.get("text") or "")
+                                elif block.get("type") == "thinking":
+                                    events.append({"type": "assistant_thinking",
+                                                   "payload": {"text": block.get("thinking") or ""}, **base})
+                            text = "".join(text_parts)
+                            if role == "user" and text:
+                                events.append({"type": "user", "payload": {"content": text}, **base})
+                            elif role == "assistant" and text:
+                                events.append({"type": "assistant", "payload": {"content": text}, **base})
+                        return events
+                    except Exception:
+                        pass
+        # (b) VS Code store: transcript at tasks/<id>/api_conversation_history.json
+        transcript_path = CLINE_VSCODE_DIR / "tasks" / session_id / "api_conversation_history.json"
+        if transcript_path.exists():
+            try:
+                with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+                    data = json.load(f)
+            except Exception:
+                data = None
+            if isinstance(data, list):
+                events = []
+                for i, m in enumerate(data):
+                    if not isinstance(m, dict):
+                        continue
+                    role = m.get("role")
+                    content = m.get("content")
+                    text = content if isinstance(content, str) else (json.dumps(content) if content else "")
+                    base = {"timestamp": i * 1000, "normalized_timestamp": i * 1000}
+                    events.append({"type": role or "assistant", "payload": {"content": text}, **base})
+                return events
         return {"error": "Not found"}
     # elif agent == "ollama":
     #     if (OLLAMA_DIR / "history").exists():

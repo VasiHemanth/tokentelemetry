@@ -297,6 +297,8 @@ _AGENT_BUILDERS = {
     "grok": _api_only_buckets,
     "hermes": _api_only_buckets,
     "opencode": _api_only_buckets,
+    "cline": _api_only_buckets,    # BYOK across providers, same drain shape as grok/opencode
+    "smallcode": _local_buckets,   # local models only — electricity, not an API charge
 }
 
 # Fallback builders keyed by coarse billing-mode for agents without a bespoke
