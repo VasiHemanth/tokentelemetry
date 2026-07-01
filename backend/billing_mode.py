@@ -52,6 +52,8 @@ DEFAULT_MODES: Dict[str, str] = {
     "hermes": "api",               # autonomous; runs on provider keys
     "opencode": "api",             # bring-your-own-key
     "vibe": "unknown",
+    "cline": "api",                # BYOK across providers (Anthropic/OpenAI/Ollama/etc.)
+    "smallcode": "local",          # runs local models (e.g. ollama-served nemotron)
 }
 
 # Human-readable note on where a detected value came from (shown in Settings so

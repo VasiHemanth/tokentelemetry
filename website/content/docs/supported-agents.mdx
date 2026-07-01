@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 10 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 12 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -19,6 +19,8 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **GitHub Copilot** | GitHub | VS Code `chatSessions/` | tokens, traces, cost |
 | **OpenCode** | OpenCode | `~/.local/share/opencode/` | tokens, traces |
 | **Grok Build** | xAI | `~/.grok/sessions/` | tokens, traces, reasoning, cost |
+| **Cline** | Cline (open source) | `~/.cline/data/db/sessions.db` + VS Code `taskHistory.json` | tokens in/out, cache read/write, cost, model, provider, cwd |
+| **SmallCode** | SmallCode (open source) | `<project>/.smallcode/traces/<id>.json` | prompt/completion tokens, model, tool-call steps, timing |
 
 ## Autonomous agents
 
@@ -57,6 +59,14 @@ Reads Copilot's chat session files from VS Code's `chatSessions/` directory (ins
 ### OpenCode
 
 Reads session data from `~/.local/share/opencode/`. Token counts and traces are captured; OpenCode children sessions are included in the relayed-session count (they are already counted in the parent session's token totals).
+
+### Cline
+
+TokenTelemetry reads both the Cline CLI SQLite store and the VS Code extension's JSON task history, de-duplicating sessions that appear in both.
+
+### SmallCode
+
+SmallCode writes traces into each project directory rather than a global home dir, so TokenTelemetry discovers them under the project paths it already tracks from other agents (and honors the `TT_SMALLCODE_ROOTS` env var for extra locations).
 
 ### Hermes Agent
 
