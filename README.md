@@ -98,6 +98,15 @@ hermes dashboard
 
 The launcher tab works for every TT page, not just `/hermes` — Analytics, Projects, and All Agents views all open from inside Hermes Dashboard. Pure-frontend, no extra backend, no network access beyond your local TT. See [`plugin/hermes-dashboard/README.md`](plugin/hermes-dashboard/README.md) for details.
 
+### Companion X/Twitter telemetry
+
+For social monitoring runs, pair TokenTelemetry with
+[Hermes Tweet](https://github.com/Xquik-dev/hermes-tweet). Hermes Tweet can
+collect X/Twitter account, post, or trend context inside Hermes, while
+TokenTelemetry keeps the related sessions, tool calls, token usage, model usage,
+and local Hermes dashboard links visible. Hermes Tweet is a third-party project
+maintained by Xquik-dev, not by this repository.
+
 ---
 
 ## Features
