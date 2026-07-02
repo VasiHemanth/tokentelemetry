@@ -67,3 +67,6 @@ tokentelemetry-cro-analysis.md
 pr.diff
 simulate.py
 .grok/
+
+# Obsidian vault config (docs/wiki opened as a vault for graph view)
+.obsidian/
