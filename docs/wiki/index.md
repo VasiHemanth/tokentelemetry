@@ -62,6 +62,10 @@ Humans edit sources; the wiki is recompiled from them. History in
 * [Run TokenTelemetry locally](playbooks/run-locally.md) - Start backend and frontend for development; default ports 8000/3000, data dir override, common env vars.
 * [Record a decision (ADR)](playbooks/record-a-decision.md) - When and how to write an ADR; copy the template, number it, link issue/discussion/design doc, ship it in the feature PR.
 
+## Analyses
+
+* [graphify vs the tokentelemetry plugin](analyses/graphify-vs-tt-plugin.md) - Comparison of the graphify knowledge-graph skill and the tokentelemetry second-brain plugin: cousins, not twins; a map vs a field guide, and how they compose.
+
 ## Conventions
 
 * [Local-first, no user-machine network calls](conventions/local-first.md) - No new outbound calls from user machines; data that needs refreshing is refreshed at build/CI time and shipped in releases.

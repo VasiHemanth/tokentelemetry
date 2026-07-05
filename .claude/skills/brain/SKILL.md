@@ -45,8 +45,14 @@ wiki compiles them, this file is the schema that keeps you disciplined.
 | Decision | `decisions/` | ADR (summary + consequence highlights, `resource:` the ADR) |
 | Playbook | `playbooks/` | recurring maintainer task (steps, files touched, traps) |
 | Convention | `conventions/` | project rule or invariant (the rule, why, enforcement) |
+| Analysis | `analyses/` | analysis produced in an agent chat worth keeping, implemented or not (extra frontmatter: `status: proposed \| adopted \| rejected \| superseded`) |
 
 New types are allowed when nothing fits; add them to this table in the same PR.
+
+Analysis pages differ from the rest: they are point-in-time snapshots of
+thinking, not compiled from repo sources. Their body is never rewritten after
+saving; later edits may only change `status` (with a one-line note and a link
+to what superseded or implemented them) and fix broken links.
 
 ## Workflows
 
@@ -68,6 +74,24 @@ After a PR merges to main, the ingest source is `git diff <before>..main`.
 1. Read `index.md`, follow links to the relevant pages, answer from the wiki.
 2. If the wiki couldn't answer and you had to read raw sources, file what you
    learned back into the wiki (same rules as ingest) so the next query hits.
+
+### save `<analysis from this chat>`
+
+For when a conversation produces an analysis worth keeping (a comparison, a
+design assessment, a recommendation) that may or may not ever be implemented.
+
+1. Distill the analysis from the conversation into one page under `analyses/`:
+   the question it answers, the reasoning, the conclusion, and any proposed
+   follow-ups. Keep the substance; drop the chat back-and-forth.
+2. Frontmatter: `type: Analysis`, `status: proposed` (or `adopted`/`rejected`
+   if the user already decided), plus the usual `title`, `description`,
+   `tags`, `timestamp`. Set `resource:` to the main artifact discussed, when
+   one exists.
+3. Cross-link related wiki pages; add the entry to `index.md` under
+   `## Analyses`; append a `log.md` **Creation** entry naming the chat context.
+4. Commit as `docs:`. When an analysis later gets implemented or overruled,
+   update only its `status` line and add the link; the body stays as written
+   (see the Analysis page-type rule above).
 
 ### lint
 

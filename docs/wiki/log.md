@@ -1,5 +1,14 @@
 # Log
 
+## 2026-07-05
+
+**Creation** New page type `Analysis` (`analyses/`, snapshot pages saved from
+agent chats via the new `/brain save` workflow; body immutable after save,
+only `status` may change). First page:
+`analyses/graphify-vs-tt-plugin.md`, comparing the graphify knowledge-graph
+skill with the tokentelemetry second-brain plugin, saved from the 2026-07-05
+chat session, status proposed.
+
 ## 2026-07-02
 
 **Creation** Initial compile of the bundle: overview, 13 harness pages, 9
