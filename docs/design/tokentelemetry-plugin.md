@@ -316,3 +316,30 @@ self-reported savings.
 - Runtime LLM calls or any new outbound network from the dashboard
   ([[local-first-no-user-network]]).
 - Causal "the wiki saved you X tokens" claims (§9).
+
+## 12. Addendum (2026-07-05, shipped in plugin v0.2.0): discovery, reuse, intake
+
+Three gaps found after the pcr-divergence dogfood, closed in the plugin repo:
+
+1. **Agent discovery.** A compiled wiki nobody's agents know about saves no
+   tokens. `scripts/agent_context.py` writes a stable pointer block (markers
+   `tokentelemetry-brain:start/end`) into `AGENTS.md` (created if missing) and
+   any existing `CLAUDE.md`; brain-compile's completion step offers it once the
+   manifest reaches `complete`. The block carries no counts or SHAs, so it
+   never churns between compiles (cache hygiene), and rewrites idempotently
+   between its markers only.
+2. **Prior-knowledge reuse.** `profile_census.py` now reports a
+   `prior_knowledge` list: graphify graphs (`graphify-out/graph.json`),
+   Obsidian vaults, ADR dirs, design docs, wiki-shaped trees. `/brain-init`
+   asks seed-or-ignore per source and records the choice in
+   `project-profile.md`; `/brain-compile` reads recorded seeds first (graph
+   clusters become queue topics and per-topic reader assignments). Seeds are a
+   map, not testimony: pages are still grounded by reading files. Honest
+   framing: seeding cuts discovery cost, it does not make compilation free.
+3. **Intake tray.** `docs/wiki/raw/` is the committed inbox for knowledge with
+   no repo home (external notes, pasted docs), completing the llm-wiki raw
+   layer for non-repo sources. `/brain ingest` sweeps it: distill into pages,
+   then move the file to `raw/processed/` (content immutable, moved not
+   edited). `okf_lint.py` exempts `raw/**` from page checks but warns on
+   unprocessed items; queries never read raw/ (pages stay the only query
+   surface, or the token savings leak).
