@@ -14,7 +14,7 @@ import {
   type Simulation, type SimulationNodeDatum,
 } from "d3-force";
 import {
-  Boxes, ChevronDown, Focus, Search, SlidersHorizontal, X,
+  Boxes, ChevronDown, Focus, Maximize2, Minus, Plus, Search, SlidersHorizontal, X,
 } from "lucide-react";
 import {
   useCallback, useEffect, useMemo, useRef, useState,
@@ -36,6 +36,7 @@ interface SimNode extends SimulationNodeDatum {
 interface SimEdge {
   source: SimNode;
   target: SimNode;
+  kind: "link" | "index";
 }
 
 interface Props {
@@ -124,7 +125,10 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
   const visibleIds = useMemo(() => {
     let ids = new Set(nodes.map((n) => n.id));
     if (!ctl.showOrphans) {
-      ids = new Set([...ids].filter((id) => (adjacency.get(id)?.size ?? 0) > 0));
+      // degree comes from the backend and excludes index-hub links, so a page
+      // only the index lists still counts as an orphan.
+      const degreeById = new Map(nodes.map((n) => [n.id, n.degree]));
+      ids = new Set([...ids].filter((id) => id === "index" || (degreeById.get(id) ?? 0) > 0));
     }
     if (hiddenTypes.size > 0) {
       const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -166,14 +170,14 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
         return {
           ref: n,
           id: n.id,
-          r: (5 + Math.sqrt(n.degree) * 2.4) * ctl.nodeScale,
+          r: (n.id === "index" ? 12 : 5 + Math.sqrt(n.degree) * 2.4) * ctl.nodeScale,
           x: cached?.x, y: cached?.y,
         } as SimNode;
       });
     const byId = new Map(visNodes.map((n) => [n.id, n]));
     const visEdges: SimEdge[] = edges
       .filter((e) => byId.has(e.source) && byId.has(e.target))
-      .map((e) => ({ source: byId.get(e.source)!, target: byId.get(e.target)! }));
+      .map((e) => ({ source: byId.get(e.source)!, target: byId.get(e.target)!, kind: e.kind ?? "link" }));
     return { visNodes, visEdges };
   }, [nodes, edges, visibleIds, ctl.nodeScale]);
 
@@ -182,22 +186,29 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
     if (visNodes.length === 0) return;
 
     // Cluster anchors on a ring: gives each community its own region so the
-    // hulls separate instead of interleaving.
-    const clusterIdxs = [...new Set(visNodes.map((n) => n.ref.cluster))].sort((a, b) => a - b);
+    // hulls separate instead of interleaving. The index hub (cluster -1)
+    // anchors to the center: the glue that holds the map together.
+    const clusterIdxs = [...new Set(visNodes.map((n) => n.ref.cluster))]
+      .filter((c) => c >= 0).sort((a, b) => a - b);
     const ring = Math.min(size.w, size.h) * 0.42 * (clusterIdxs.length > 1 ? 1 : 0);
     const anchor = new Map<number, { x: number; y: number }>();
+    anchor.set(-1, { x: 0, y: 0 });
     clusterIdxs.forEach((c, i) => {
       const a = (2 * Math.PI * i) / clusterIdxs.length - Math.PI / 2;
       anchor.set(c, { x: Math.cos(a) * ring, y: Math.sin(a) * ring });
     });
 
     const sim = forceSimulation<SimNode>(visNodes)
-      .force("link", forceLink<SimNode, SimEdge>(visEdges).distance(ctl.linkDist).strength(0.35))
+      .force("link", forceLink<SimNode, SimEdge>(visEdges)
+        .distance((l) => (l.kind === "index" ? ctl.linkDist * 1.9 : ctl.linkDist))
+        .strength((l) => (l.kind === "index" ? 0.02 : 0.35)))
       .force("charge", forceManyBody().strength(-ctl.repel))
       .force("center", forceCenter(0, 0).strength(0.04))
       .force("collide", forceCollide<SimNode>().radius((d) => d.r + 6))
-      .force("cx", forceX<SimNode>((d) => anchor.get(d.ref.cluster)?.x ?? 0).strength(0.11))
-      .force("cy", forceY<SimNode>((d) => anchor.get(d.ref.cluster)?.y ?? 0).strength(0.11));
+      .force("cx", forceX<SimNode>((d) => anchor.get(d.ref.cluster)?.x ?? 0)
+        .strength((d) => (d.ref.cluster === -1 ? 0.4 : 0.11)))
+      .force("cy", forceY<SimNode>((d) => anchor.get(d.ref.cluster)?.y ?? 0)
+        .strength((d) => (d.ref.cluster === -1 ? 0.4 : 0.11)));
     simRef.current = sim;
     sim.stop();
 
@@ -235,16 +246,31 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
     };
   }, [transform]);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = svgRef.current!.getBoundingClientRect();
-    const px = e.clientX - rect.left - rect.width / 2;
-    const py = e.clientY - rect.top - rect.height / 2;
+  const zoomAt = useCallback((px: number, py: number, factor: number) => {
     setTransform((t) => {
-      const k = Math.min(4, Math.max(0.2, t.k * Math.exp(-e.deltaY * 0.0016)));
+      const k = Math.min(4, Math.max(0.2, t.k * factor));
       return { k, x: px - ((px - t.x) / t.k) * k, y: py - ((py - t.y) / t.k) * k };
     });
   }, []);
+
+  // Wheel/pinch must be a NATIVE non-passive listener: React attaches wheel
+  // handlers passively, so preventDefault() is ignored there and a trackpad
+  // pinch zooms the whole browser tab instead of the graph.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const px = e.clientX - rect.left - rect.width / 2;
+      const py = e.clientY - rect.top - rect.height / 2;
+      // ctrlKey marks a pinch gesture; its deltas are small, so scale harder.
+      const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016));
+      zoomAt(px, py, factor);
+    };
+    svg.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheelNative);
+  }, [zoomAt]);
 
   const onPointerDown = useCallback((e: React.PointerEvent, nodeId?: string) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -400,7 +426,6 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
       <svg
         ref={svgRef}
         className="w-full h-full cursor-grab active:cursor-grabbing select-none touch-none"
-        onWheel={onWheel}
         onPointerDown={(e) => onPointerDown(e)}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -433,13 +458,15 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
             const lit = neighborSet && activeId != null
               && (e.source.id === activeId || e.target.id === activeId);
             const dim = neighborSet && !lit;
+            const isHubTie = e.kind === "index";
             return (
               <line
                 key={i}
                 x1={sp.x} y1={sp.y} x2={tp.x} y2={tp.y}
                 stroke={lit ? "var(--tt-brand)" : "var(--tt-fg)"}
-                strokeOpacity={lit ? 0.65 : dim ? 0.04 : 0.13}
-                strokeWidth={(lit ? 1.8 : 1.1) / transform.k}
+                strokeOpacity={lit ? 0.6 : dim ? 0.03 : isHubTie ? 0.05 : 0.13}
+                strokeWidth={(lit ? 1.8 : isHubTie ? 0.9 : 1.1) / transform.k}
+                strokeDasharray={isHubTie ? `${3 / transform.k} ${4 / transform.k}` : undefined}
                 className="transition-[stroke-opacity] duration-150"
               />
             );
@@ -453,8 +480,9 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
             const isNeighbor = neighborSet?.has(n.id) ?? false;
             const dim = neighborSet ? !isNeighbor : false;
             const isSelected = n.id === selectedId;
-            const showLabel = isActive || isSelected || isNeighbor || labelOpacity > 0.05;
-            const thisLabelOpacity = isActive || isSelected || isNeighbor ? 1 : labelOpacity;
+            const isHub = n.id === "index";
+            const showLabel = isActive || isSelected || isNeighbor || isHub || labelOpacity > 0.05;
+            const thisLabelOpacity = isActive || isSelected || isNeighbor || isHub ? 1 : labelOpacity;
             return (
               <g
                 key={n.id}
@@ -467,6 +495,9 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
               >
                 {isSelected && (
                   <circle r={n.r + 5 / transform.k} fill="none" stroke="var(--tt-brand)" strokeWidth={1.5 / transform.k} strokeOpacity={0.8} strokeDasharray={`${4 / transform.k} ${3 / transform.k}`} />
+                )}
+                {isHub && !isSelected && (
+                  <circle r={n.r + 4 / transform.k} fill="none" stroke={fillOf(n.ref)} strokeWidth={1.2 / transform.k} strokeOpacity={0.45} />
                 )}
                 <circle
                   r={n.r}
@@ -600,16 +631,34 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
         })}
       </div>
 
-      {/* graph stats, bottom-right */}
+      {/* zoom controls + graph stats, bottom-right */}
+      <div className="absolute bottom-12 right-3 flex flex-col rounded-[var(--tt-radius)] overflow-hidden border border-[var(--tt-border)] bg-[var(--tt-overlay)]/90 backdrop-blur">
+        <ZoomButton title="Zoom in" onClick={() => zoomAt(0, 0, 1.4)}><Plus size={13} /></ZoomButton>
+        <ZoomButton title="Zoom out" onClick={() => zoomAt(0, 0, 1 / 1.4)}><Minus size={13} /></ZoomButton>
+        <ZoomButton title="Reset view" onClick={() => setTransform({ x: 0, y: 0, k: 1 })}><Maximize2 size={12} /></ZoomButton>
+      </div>
       <div className="absolute bottom-3 right-3 flex items-center gap-1.5 text-[10.5px] text-[var(--tt-fg-dim)] px-2.5 h-6 rounded-full bg-[var(--tt-overlay)]/90 backdrop-blur border border-[var(--tt-border)]">
         <Boxes size={11} />
-        {simData.visNodes.length} pages · {simData.visEdges.length} links · {hulls.length || clusters.length} clusters
+        {simData.visNodes.filter((n) => n.id !== "index").length} pages · {simData.visEdges.length} links · {hulls.length || clusters.length} clusters
       </div>
     </div>
   );
 }
 
 /* ------------------------------------------------------------ controls UI */
+
+function ZoomButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="h-7 w-7 grid place-items-center text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] hover:tt-tint-2 transition-colors border-b border-[var(--tt-border)] last:border-b-0"
+    >
+      {children}
+    </button>
+  );
+}
 
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (

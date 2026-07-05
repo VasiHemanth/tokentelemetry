@@ -31,6 +31,7 @@ const KNOWN_ORDER = [
 export function buildTypePalette(types: string[]): Map<string, TypeSlot> {
   const map = new Map<string, TypeSlot>();
   for (let i = 0; i < KNOWN_ORDER.length; i++) map.set(KNOWN_ORDER[i], SLOTS[i]);
+  map.set("index", SLOTS[0]); // hub node: same hue as Overview, never a new slot
   const unknown = types
     .map((t) => t.toLowerCase())
     .filter((t) => t && t !== "untyped" && !map.has(t))

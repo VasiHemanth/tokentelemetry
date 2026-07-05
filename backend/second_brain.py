@@ -315,6 +315,40 @@ def build_graph(wiki_dir: Path, kind: str) -> dict:
             for target in _WIKILINK_RE.findall(text):
                 raw_links.append((node_id, "wikilink:" + target.strip().lower()))
 
+    # index.md is the hub: it links every page by design, so it joins the
+    # graph as a special center node whose edges are typed "index" (the
+    # frontend renders them faint and the physics treats them as loose ties).
+    # It stays OUT of degree counts and clustering, or it would star-connect
+    # everything into one community.
+    index_path = wiki_dir / "index.md"
+    has_index_node = False
+    if index_path.is_file():
+        try:
+            itext = index_path.read_text(errors="ignore")
+        except OSError:
+            itext = None
+        if itext is not None:
+            has_index_node = True
+            pages["index"] = {
+                "id": "index",
+                "title": "Index",
+                "type": "Index",
+                "description": "The wiki's grouped directory: every page, one line each.",
+                "tags": [],
+                "timestamp": None,
+                "resource": None,
+                "dir": "",
+            }
+            for target in _MD_LINK_RE.findall(itext):
+                if target.startswith(("http://", "https://")):
+                    continue
+                try:
+                    resolved = (wiki_dir / target.lstrip("/")).resolve()
+                    rel_t = resolved.relative_to(wiki_dir.resolve()).as_posix()
+                except (OSError, ValueError):
+                    continue
+                raw_links.append(("index", rel_t[:-3] if rel_t.endswith(".md") else rel_t))
+
     # Resolve wikilinks by basename, dedupe, drop self-loops and dangling ends.
     edge_set = set()
     for src, dst in raw_links:
@@ -324,30 +358,34 @@ def build_graph(wiki_dir: Path, kind: str) -> dict:
             continue
         edge_set.add((src, dst))
 
-    neighbors: Dict[str, List[str]] = {nid: [] for nid in pages}
-    for src, dst in edge_set:
+    real_edges = {(s, d) for s, d in edge_set if s != "index" and d != "index"}
+    concept_ids = [nid for nid in pages if nid != "index"]
+    neighbors: Dict[str, List[str]] = {nid: [] for nid in concept_ids}
+    for src, dst in real_edges:
         neighbors[src].append(dst)
         neighbors[dst].append(src)
-    for nid in pages:
+    for nid in concept_ids:
         pages[nid]["degree"] = len(neighbors[nid])
+    if has_index_node:
+        pages["index"]["degree"] = sum(1 for s, d in edge_set if s == "index" or d == "index")
 
     # Clustering: directories ARE the semantic grouping in an OKF bundle
     # (subsystems/, features/, ...), so use them when they exist; label
     # propagation would just re-discover a coarser version of them on a dense
     # wiki. Flat vaults (Obsidian, loose markdown) have no directory signal,
     # so communities come from the link structure instead.
-    dirs = {p["dir"] for p in pages.values() if p["dir"]}
-    dir_coverage = sum(1 for p in pages.values() if p["dir"]) / max(len(pages), 1)
+    dirs = {pages[n]["dir"] for n in concept_ids if pages[n]["dir"]}
+    dir_coverage = sum(1 for n in concept_ids if pages[n]["dir"]) / max(len(concept_ids), 1)
     if len(dirs) >= 2 and dir_coverage >= 0.6:
-        group_of = {nid: (pages[nid]["dir"] or "core") for nid in pages}
+        group_of = {nid: (pages[nid]["dir"] or "core") for nid in concept_ids}
         label_for_group = {g: (g if g != "core" else "core") for g in set(group_of.values())}
     else:
-        labels = _label_propagation(list(pages), neighbors)
-        group_of = {nid: f"c{labels[nid]}" for nid in pages}
+        labels = _label_propagation(concept_ids, neighbors)
+        group_of = {nid: f"c{labels[nid]}" for nid in concept_ids}
         # Name each community after its best-connected member.
         label_for_group = {}
         for g in set(group_of.values()):
-            members = [n for n in pages if group_of[n] == g]
+            members = [n for n in concept_ids if group_of[n] == g]
             top = max(members, key=lambda n: (pages[n]["degree"], n))
             label_for_group[g] = pages[top]["title"]
 
@@ -360,13 +398,19 @@ def build_graph(wiki_dir: Path, kind: str) -> dict:
             "label": label_for_group[g],
             "size": sum(1 for n in group_of if group_of[n] == g),
         })
-    for nid in pages:
+    for nid in concept_ids:
         pages[nid]["cluster"] = cluster_idx[group_of[nid]]
+    if has_index_node:
+        pages["index"]["cluster"] = -1  # hub: no hull, anchored to the center
 
-    type_counts = Counter(p["type"] or "untyped" for p in pages.values())
+    type_counts = Counter(pages[n]["type"] or "untyped" for n in concept_ids)
     return {
         "nodes": list(pages.values()),
-        "edges": [{"source": s, "target": t} for s, t in sorted(edge_set)],
+        "edges": [
+            {"source": s, "target": t,
+             "kind": "index" if "index" in (s, t) else "link"}
+            for s, t in sorted(edge_set)
+        ],
         "clusters": clusters,
         "types": dict(type_counts),
     }

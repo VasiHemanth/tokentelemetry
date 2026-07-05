@@ -29,6 +29,7 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
+  kind?: "link" | "index";
 }
 
 export interface GraphCluster {
