@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-05",
+      "title": "Second Brain: your project wiki as a graph",
+      "highlights": [
+        {
+          "title": "Obsidian-style knowledge graph per project",
+          "description": "Projects with a compiled wiki (built by the tokentelemetry Claude Code plugin) get a Second Brain tab: an interactive force-directed graph of every page. Pages cluster by wiki section, hover lights up a page's neighborhood, and clicking opens the full page in a drawer with its links, tags, and a freshness check against the commit it was compiled from.",
+          "href": "/projects"
+        },
+        {
+          "title": "Import a brain you already built",
+          "description": "Already have a wiki or an Obsidian vault in the repo? The tab detects it and offers one-click import (a pointer in TokenTelemetry's own config; your repo is never written). Plain markdown vaults render as a graph too, including [[wikilinks]]."
+        }
+      ]
+    },
+    {
       "tag": "2026-06-24",
       "title": "Git worktrees, grouped under their project",
       "highlights": [

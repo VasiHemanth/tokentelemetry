@@ -6868,6 +6868,119 @@ async def get_config(project: Optional[str] = None):
     }
 
 # --------------------------------------------------------------------------- #
+# Second Brain (project wiki) — read-only; see backend/second_brain.py
+# --------------------------------------------------------------------------- #
+import second_brain as _second_brain
+
+
+def _brain_project(project: Optional[str]) -> Optional[Path]:
+    """Validate a ?project= param the same way /config does."""
+    if not project or not _project_within_safe_roots(project):
+        return None
+    p = Path(project)
+    return p if p.exists() and p.is_dir() else None
+
+
+def _brain_resolved(project: Optional[str]):
+    """(project_path, wiki_dir, kind, summary) or (None, None, None, error_dict)."""
+    proj = _brain_project(project)
+    if proj is None:
+        return None, None, None, {"exists": False, "kind": None, "source": "none",
+                                  "project_valid": False}
+    registered = _second_brain.load_brains().get(str(proj))
+    summary = _second_brain.wiki_summary(proj, registered)
+    summary["project_valid"] = True
+    if not summary["exists"]:
+        return proj, None, None, summary
+    return proj, Path(summary["wiki_path"]), summary["kind"], summary
+
+
+@app.get("/brain")
+async def get_brain(project: Optional[str] = None):
+    """Wiki detection summary for a project (drives the Second Brain tab states)."""
+    _, _, _, summary = _brain_resolved(project)
+    summary["project"] = project
+    return summary
+
+
+@app.get("/brain/graph")
+async def get_brain_graph(project: Optional[str] = None):
+    """Nodes/edges/clusters for the wiki graph view."""
+    proj, wiki_dir, kind, summary = _brain_resolved(project)
+    if wiki_dir is None:
+        return {"summary": summary, "nodes": [], "edges": [], "clusters": [], "types": {}}
+    graph = _second_brain.graph_cached(wiki_dir, kind)
+    return {"summary": summary, **graph}
+
+
+@app.get("/brain/page")
+async def get_brain_page(project: Optional[str] = None, id: Optional[str] = None):
+    """One wiki page: frontmatter, markdown body, in/out links, staleness."""
+    proj, wiki_dir, kind, summary = _brain_resolved(project)
+    if wiki_dir is None or not id:
+        raise HTTPException(status_code=404, detail="no wiki or page id")
+    graph = _second_brain.graph_cached(wiki_dir, kind)
+    detail = _second_brain.page_detail(
+        proj, wiki_dir, id, summary.get("compiled_from_sha"), graph)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"page not found: {id}")
+    return detail
+
+
+@app.get("/brain/candidates")
+async def get_brain_candidates(project: Optional[str] = None):
+    """Importable wiki-shaped trees found inside the project directory."""
+    proj = _brain_project(project)
+    if proj is None:
+        return {"candidates": []}
+    return {"candidates": _second_brain.scan_candidates(proj)}
+
+
+class BrainRegisterPayload(BaseModel):
+    project: str
+    wiki_path: str
+
+
+@app.post("/brain/register")
+async def register_brain(payload: BrainRegisterPayload):
+    """Import an existing wiki: records a pointer in ~/.tokentelemetry only.
+
+    The project repo is never written; unregistering just deletes the pointer.
+    """
+    proj = _brain_project(payload.project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    if not _project_within_safe_roots(payload.wiki_path):
+        raise HTTPException(status_code=400, detail="wiki path outside allowed roots")
+    kind = _second_brain.classify_wiki_dir(Path(payload.wiki_path))
+    if kind is None:
+        raise HTTPException(
+            status_code=422,
+            detail="not a recognizable wiki (no manifest, index+typed pages, "
+                   ".obsidian, or enough markdown files)")
+    brains = _second_brain.load_brains()
+    brains[str(proj)] = str(Path(payload.wiki_path).resolve())
+    _second_brain.save_brains(brains)
+    return {"ok": True, "kind": kind, "wiki_path": brains[str(proj)]}
+
+
+class BrainUnregisterPayload(BaseModel):
+    project: str
+
+
+@app.post("/brain/unregister")
+async def unregister_brain(payload: BrainUnregisterPayload):
+    proj = _brain_project(payload.project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    brains = _second_brain.load_brains()
+    removed = brains.pop(str(proj), None)
+    if removed is not None:
+        _second_brain.save_brains(brains)
+    return {"ok": True, "removed": removed}
+
+
+# --------------------------------------------------------------------------- #
 # Trace summaries
 # --------------------------------------------------------------------------- #
 from fastapi import Body, HTTPException

@@ -9,7 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@types/d3-force": "^3.0.10",
     "clsx": "^2.1.1",
+    "d3-force": "^3.0.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.8.0",
     "next": "16.2.9",
