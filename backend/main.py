@@ -6285,6 +6285,79 @@ async def get_analytics(
         "pricing_updated": PRICING_UPDATED,
     }
 
+
+_USAGE_WINDOWS = ("today", "7d", "30d", "all")
+
+
+@app.get("/usage")
+async def get_usage():
+    """Unified equivalent of each agent's own in-session `/usage` command:
+    per-agent tokens/cost/cache-hit/session-count for today (local calendar
+    day), rolling 7d, rolling 30d, and all-time, plus the same plan/quota
+    context Settings' drain-order view already computes. One place to see
+    what every agent's native /usage, /stats, or /status would show, instead
+    of switching tools."""
+    import history_store
+    from billing_mode import get_all as get_billing_modes
+    from billing_route import get_route_overview, load_plans, DEFAULT_PLAN
+
+    now_local = datetime.now().astimezone()
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_bounds = {
+        "today": today_start.astimezone(timezone.utc).isoformat(),
+        "7d": (now_local - timedelta(days=7)).astimezone(timezone.utc).isoformat(),
+        "30d": (now_local - timedelta(days=30)).astimezone(timezone.utc).isoformat(),
+        "all": None,
+    }
+
+    stored = history_store.query(None, None, [], [], [])
+    merged: Dict[tuple, Dict[str, Any]] = {(s["agent"], s["id"]): s for s in stored}
+    for s in await get_sessions_cached():
+        merged[(s.get("agent"), s.get("id"))] = s
+    sessions = list(merged.values())
+
+    def _empty_window() -> Dict[str, Any]:
+        return {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0, "session_count": 0}
+
+    by_agent: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for s in sessions:
+        agent = s.get("agent")
+        if not agent:
+            continue
+        ts = s.get("timestamp")
+        ts_iso = ts.astimezone(timezone.utc).isoformat() if isinstance(ts, datetime) else None
+        rows = by_agent.setdefault(agent, {w: _empty_window() for w in _USAGE_WINDOWS})
+        st = s.get("tokens", {})
+        scost = s.get("cost", 0.0) or 0.0
+        for w, bound in window_bounds.items():
+            if bound is not None and (ts_iso is None or ts_iso < bound):
+                continue
+            row = rows[w]
+            for k in ("input", "output", "cached", "total"):
+                row[k] += st.get(k, 0)
+            row["cost"] += scost
+            row["session_count"] += 1
+
+    for rows in by_agent.values():
+        for row in rows.values():
+            row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cached"])
+            row["cost"] = round(row["cost"], 6)
+
+    agents = sorted(set(_list_available_agents()) | set(by_agent.keys()))
+    modes = get_billing_modes(agents)
+    plans = load_plans()
+    billing = {
+        a: get_route_overview(a, plan=plans.get(a, DEFAULT_PLAN), mode=modes.get(a, {}).get("mode"))
+        for a in agents
+    }
+
+    return {
+        "agents": {a: by_agent.get(a, {w: _empty_window() for w in _USAGE_WINDOWS}) for a in agents},
+        "billing": billing,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _parse_skill_md(p: Path):
     """Read SKILL.md frontmatter; return {name, description}."""
     try:

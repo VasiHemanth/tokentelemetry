@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-05",
+      "title": "One Usage page for every agent",
+      "highlights": [
+        {
+          "title": "New Usage page",
+          "description": "Claude Code, Codex, Gemini CLI and the rest each have their own /usage or /stats command with a different set of fields — some don't have one at all. This page shows what all of them would tell you, in one place: tokens, cost, cache hit rate, and plan/quota status for today, 7 days, 30 days, or all time, for every agent TokenTelemetry tracks.",
+          "href": "/usage"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-24",
       "title": "Git worktrees, grouped under their project",
       "highlights": [
