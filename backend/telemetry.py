@@ -130,7 +130,8 @@ _EVENT_PROPS: Dict[str, set] = {
 _ENUMS: Dict[str, set] = {
     "route": {
         "dashboard", "analytics", "traces", "projects", "project-detail",
-        "hermes", "artifacts", "local-models", "settings", "sessions", "other",
+        "hermes", "artifacts", "local-models", "settings", "sessions", "brain",
+        "other",
     },
     "dimension": {"agent", "model", "local-only", "day", "other"},
     "outcome": {"ok", "error", "empty", "unavailable", "other"},
@@ -144,6 +145,10 @@ _ENUMS: Dict[str, set] = {
         # "budget-set" = saved a budget (the configuring action). No limit
         # value/cost ever rides along — only these two enum labels.
         "budgets", "budget-set",
+        # Second Brain: "brain-import" = registered an existing wiki (adoption
+        # of import), "brain-page-open" = opened a page drawer from the graph
+        # (engagement depth). Never the wiki path, page id, or project name.
+        "brain-import", "brain-page-open",
         "other",
     },
     "tier": {"full", "rollup", "other"},

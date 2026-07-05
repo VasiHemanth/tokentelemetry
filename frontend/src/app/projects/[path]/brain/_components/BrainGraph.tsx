@@ -546,7 +546,7 @@ export default function BrainGraph({ nodes, edges, clusters, selectedId, onSelec
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Filter pages…"
-            className="bg-transparent outline-none text-[12px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-faint)] w-[150px]"
+            className="bg-transparent outline-none focus-visible:outline-none text-[12px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-faint)] w-[150px]"
           />
           {search && (
             <button onClick={() => setSearch("")} className="text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]">

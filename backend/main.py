@@ -6936,6 +6936,73 @@ async def get_brain_candidates(project: Optional[str] = None):
     return {"candidates": _second_brain.scan_candidates(proj)}
 
 
+@app.get("/brain/browse")
+async def browse_brain_dirs(project: Optional[str] = None, path: Optional[str] = None):
+    """One directory level for the import folder picker.
+
+    Confined to the same safe roots as every other project-scoped endpoint;
+    `parent` is null at a root boundary so the UI can't walk above it.
+    """
+    proj = _brain_project(project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    target = Path(path) if path else proj
+    try:
+        target = target.resolve()
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=400, detail="unreadable path")
+    if not _project_within_safe_roots(str(target)):
+        raise HTTPException(status_code=400, detail="path outside allowed roots")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="not a directory")
+    listing = _second_brain.browse_dir(target)
+    parent = target.parent
+    listing["parent"] = (
+        str(parent)
+        if parent != target and _project_within_safe_roots(str(parent))
+        else None
+    )
+    return listing
+
+
+@app.get("/brain/build-cost")
+async def get_brain_build_cost(project: Optional[str] = None):
+    """Tokens spent building this project's brain.
+
+    Derived from TT's own session scan: sessions in this project whose
+    skills_used include brain-init / brain-compile (bare or plugin-namespaced,
+    e.g. "tokentelemetry:brain-compile"). Includes delegated (subagent) tokens,
+    since brain-compile fans out most of its work to subagents.
+    """
+    proj = _brain_project(project)
+    if proj is None:
+        return {"available": False, "sessions": 0}
+    build_skills = {"brain-init", "brain-compile"}
+
+    def is_build_session(s: Dict[str, Any]) -> bool:
+        if s.get("project") != str(proj):
+            return False
+        return any(
+            (sk.get("name") or "").rsplit(":", 1)[-1] in build_skills
+            for sk in s.get("skills_used") or []
+        )
+
+    sessions = [s for s in await get_sessions_cached() if is_build_session(s)]
+    own = sum((s.get("tokens") or {}).get("total", 0) or 0 for s in sessions)
+    delegated = sum(
+        (s.get("delegation") or {}).get("delegated_total", 0) or 0 for s in sessions
+    )
+    cost = sum((s.get("cost") or 0) + (s.get("delegated_cost") or 0) for s in sessions)
+    return {
+        "available": True,
+        "sessions": len(sessions),
+        "tokens": own + delegated,
+        "own_tokens": own,
+        "delegated_tokens": delegated,
+        "cost": round(cost, 4),
+    }
+
+
 class BrainRegisterPayload(BaseModel):
     project: str
     wiki_path: str

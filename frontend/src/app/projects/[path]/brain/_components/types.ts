@@ -71,3 +71,17 @@ export interface WikiCandidate {
   kind: string;
   page_count: number;
 }
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  hint: string | null;
+}
+
+export interface BrowseListing {
+  path: string;
+  parent: string | null;
+  hint: string | null;
+  dirs: BrowseEntry[];
+  truncated: boolean;
+}

@@ -11,7 +11,11 @@
         },
         {
           "title": "Import a brain you already built",
-          "description": "Already have a wiki or an Obsidian vault in the repo? The tab detects it and offers one-click import (a pointer in TokenTelemetry's own config; your repo is never written). Plain markdown vaults render as a graph too, including [[wikilinks]]."
+          "description": "Already have a wiki or an Obsidian vault? The tab detects in-repo candidates, and a folder browser lets you walk to a wiki anywhere on disk — no typing absolute paths. Import records a pointer in TokenTelemetry's own config; your repo is never written. Plain markdown vaults render as a graph too, including [[wikilinks]]."
+        },
+        {
+          "title": "See what the brain cost to build",
+          "description": "The tab shows the tokens spent by the /brain-init and /brain-compile sessions that built this project's wiki, including work delegated to subagents, so you can weigh the one-time build against the sessions it makes cheaper."
         }
       ]
     },

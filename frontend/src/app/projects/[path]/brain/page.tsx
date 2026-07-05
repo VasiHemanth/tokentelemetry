@@ -1,9 +1,10 @@
 "use client";
 
-import { Brain, Loader2, RefreshCw, TriangleAlert, Unplug } from "lucide-react";
+import { Brain, Coins, Loader2, RefreshCw, TriangleAlert, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch, useResource } from "@/lib/api";
+import { formatCost, formatTokens } from "@/lib/format";
 import { Badge, Card, EmptyState, Skeleton } from "@/components/ui";
 
 import { useProject } from "../_lib/project-context";
@@ -18,6 +19,15 @@ const KIND_LABEL: Record<string, string> = {
   obsidian_vault: "Obsidian vault",
   markdown_wiki: "markdown wiki",
 };
+
+interface BuildCost {
+  available: boolean;
+  sessions: number;
+  tokens: number;
+  own_tokens: number;
+  delegated_tokens: number;
+  cost: number;
+}
 
 function useDarkTheme() {
   const [dark, setDark] = useState(true);
@@ -41,6 +51,12 @@ export default function BrainTab() {
   const q = `project=${encodeURIComponent(decodedPath)}`;
   const { data, loading, refetch } = useResource<BrainGraphData>(
     decodedPath ? `/brain/graph?${q}` : null,
+    { initial: undefined },
+  );
+  // Tokens spent on /brain-init + /brain-compile sessions in this project,
+  // from TT's own session scan (includes delegated subagent work).
+  const { data: buildCost } = useResource<BuildCost>(
+    decodedPath ? `/brain/build-cost?${q}` : null,
     { initial: undefined },
   );
 
@@ -110,6 +126,15 @@ export default function BrainTab() {
         {summary.compiled_from_sha && (
           <span className="font-mono text-[10px] text-[var(--tt-fg-faint)]" title="Commit the wiki was compiled from">
             @{summary.compiled_from_sha.slice(0, 7)}
+          </span>
+        )}
+        {buildCost?.available && buildCost.sessions > 0 && (
+          <span
+            className="inline-flex items-center gap-1 h-5 px-2 rounded-full border border-[var(--tt-border)] bg-[var(--tt-sunken)] text-[10.5px] text-[var(--tt-fg-dim)]"
+            title={`Tokens spent by /brain-init + /brain-compile sessions here: ${buildCost.own_tokens.toLocaleString()} in-session + ${buildCost.delegated_tokens.toLocaleString()} delegated to subagents across ${buildCost.sessions} session${buildCost.sessions === 1 ? "" : "s"} (${formatCost(buildCost.cost)})`}
+          >
+            <Coins size={10} className="text-[var(--tt-brand)]" />
+            built with {formatTokens(buildCost.tokens)} tok
           </span>
         )}
         <span className="flex-1" />

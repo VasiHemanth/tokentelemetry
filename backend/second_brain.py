@@ -232,6 +232,58 @@ def scan_candidates(project: Path) -> List[dict]:
     return candidates
 
 
+def _wiki_hint(d: Path) -> Optional[str]:
+    """Cheap wiki-shape hint for the folder browser. Marker checks only — no
+    page iteration — so listing a directory of many children stays fast. The
+    authoritative check is still classify_wiki_dir() at register time."""
+    try:
+        if (d / "manifest.json").is_file() and (d / "BRAIN.md").is_file():
+            return "plugin_wiki"
+        if (d / ".obsidian").is_dir():
+            return "obsidian_vault"
+        md = 0
+        with os.scandir(d) as it:
+            for entry in it:
+                if entry.is_file() and entry.name.endswith(".md"):
+                    md += 1
+                    if md >= 3:
+                        return "markdown_wiki"
+    except OSError:
+        pass
+    return None
+
+
+def browse_dir(path: Path, limit: int = 200) -> dict:
+    """One level of the folder browser behind the import picker: immediate
+    subdirectories of `path` with a cheap wiki-shape hint each. Hidden
+    directories are skipped (vault config lives inside its parent, which is
+    what gets picked). Caller enforces the safe-roots boundary."""
+    dirs: List[dict] = []
+    truncated = False
+    try:
+        with os.scandir(path) as it:
+            children = sorted(
+                (e for e in it if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")),
+                key=lambda e: e.name.lower())
+    except OSError:
+        children = []
+    for entry in children:
+        if len(dirs) >= limit:
+            truncated = True
+            break
+        dirs.append({
+            "name": entry.name,
+            "path": str(Path(path) / entry.name),
+            "hint": _wiki_hint(Path(entry.path)),
+        })
+    return {
+        "path": str(path),
+        "hint": _wiki_hint(path),
+        "dirs": dirs,
+        "truncated": truncated,
+    }
+
+
 # ---------------------------------------------------------------- graph
 
 def _mtime_fingerprint(wiki_dir: Path) -> float:
