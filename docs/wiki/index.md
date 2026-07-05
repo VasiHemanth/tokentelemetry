@@ -66,6 +66,10 @@ Humans edit sources; the wiki is recompiled from them. History in
 
 * [graphify vs the tokentelemetry plugin](analyses/graphify-vs-tt-plugin.md) - Comparison of the graphify knowledge-graph skill and the tokentelemetry second-brain plugin: cousins, not twins; a map vs a field guide, and how they compose.
 
+## Ideas
+
+* [Prove the brain saves tokens](ideas/prove-brain-token-savings.md) - Benchmark the brain-init/compile/skillsmith pipeline and surface a payback metric; loosen domain profiles from boxes to starting kits.
+
 ## Conventions
 
 * [Local-first, no user-machine network calls](conventions/local-first.md) - No new outbound calls from user machines; data that needs refreshing is refreshed at build/CI time and shipped in releases.

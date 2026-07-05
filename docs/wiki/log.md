@@ -1,5 +1,13 @@
 # Log
 
+## 2026-07-06
+
+**Creation** First `Idea` page via the new `/brain idea` workflow:
+`ideas/prove-brain-token-savings.md`. Captured from a maintainer prompt:
+domain profiles may be too restrictive (starting kits, not boxes), and the
+token-savings claim behind the plugin pipeline needs benchmarks plus an
+in-product payback metric next to the build-cost badge. Status: captured.
+
 ## 2026-07-05
 
 **Creation** New page type `Analysis` (`analyses/`, snapshot pages saved from
