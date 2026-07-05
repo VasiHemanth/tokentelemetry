@@ -7003,6 +7003,115 @@ async def get_brain_build_cost(project: Optional[str] = None):
     }
 
 
+import platform as _platform
+import shutil as _shutil
+import threading as _threading
+
+# One native dialog at a time: a second click while a dialog is up should not
+# stack another one behind it.
+_FOLDER_PICKER_LOCK = _threading.Lock()
+
+# How long the native dialog may sit open before we close it and give up.
+_FOLDER_PICKER_TIMEOUT_S = 300
+
+
+def _native_pick_folder_sync(start: Optional[str]) -> Dict[str, Any]:
+    """Open the OS folder dialog (Finder / Explorer / zenity) and return
+    {"path": ...} | {"canceled": True} | {"unsupported": True, "reason": ...}.
+
+    Runs in a worker thread; each branch shells out to the platform's dialog
+    tool so nothing here needs a GUI toolkit in-process. `start` is passed via
+    argv (never interpolated into a script) so a hostile path can't inject.
+    """
+    system = _platform.system()
+    try:
+        if system == "Darwin":
+            script = (
+                'on run argv\n'
+                '  if (count of argv) > 0 then\n'
+                '    return POSIX path of (choose folder with prompt '
+                '"Choose a wiki folder for TokenTelemetry" '
+                'default location (POSIX file (item 1 of argv)))\n'
+                '  else\n'
+                '    return POSIX path of (choose folder with prompt '
+                '"Choose a wiki folder for TokenTelemetry")\n'
+                '  end if\n'
+                'end run'
+            )
+            argv = [start] if start and Path(start).is_dir() else []
+            out = _subprocess.run(["osascript", "-e", script, *argv],
+                                  capture_output=True, text=True,
+                                  timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0:
+                p = out.stdout.strip().rstrip("/")
+                return {"path": p} if p else {"canceled": True}
+            # -128 is AppleScript's "User canceled."; anything else means the
+            # dialog could not be shown (headless, no WindowServer session).
+            if "-128" in out.stderr or "canceled" in out.stderr.lower():
+                return {"canceled": True}
+            return {"unsupported": True, "reason": "could not open the macOS folder dialog"}
+        if system == "Windows":
+            ps = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$f.Description = 'Choose a wiki folder for TokenTelemetry'; "
+                "$f.ShowNewFolderButton = $false; "
+                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ Write-Output $f.SelectedPath }"
+            )
+            out = _subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command", ps],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode != 0:
+                return {"unsupported": True, "reason": "could not open the Explorer folder dialog"}
+            p = out.stdout.strip()
+            return {"path": p} if p else {"canceled": True}
+        # Linux: whichever of the two common dialog tools exists.
+        if _shutil.which("zenity"):
+            out = _subprocess.run(
+                ["zenity", "--file-selection", "--directory",
+                 "--title=Choose a wiki folder for TokenTelemetry"],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0 and out.stdout.strip():
+                return {"path": out.stdout.strip()}
+            return {"canceled": True}
+        if _shutil.which("kdialog"):
+            out = _subprocess.run(
+                ["kdialog", "--getexistingdirectory", start or str(Path.home())],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0 and out.stdout.strip():
+                return {"path": out.stdout.strip()}
+            return {"canceled": True}
+        return {"unsupported": True,
+                "reason": "no folder-dialog tool found (install zenity or kdialog)"}
+    except _subprocess.TimeoutExpired:
+        return {"canceled": True, "reason": "dialog timed out"}
+    except (OSError, ValueError) as e:
+        return {"unsupported": True, "reason": f"folder dialog failed: {e}"}
+
+
+@app.get("/brain/pick-folder")
+async def pick_brain_folder(request: Request, project: Optional[str] = None):
+    """Open the NATIVE OS folder picker on the machine running TokenTelemetry.
+
+    Loopback-only: for a remote (tailnet) viewer the dialog would open on the
+    host's screen, not theirs, so remote callers get `unsupported` and the UI
+    falls back to the in-app folder browser (/brain/browse).
+    """
+    client = request.client.host if request.client else ""
+    if client not in ("127.0.0.1", "::1", "localhost"):
+        return {"unsupported": True,
+                "reason": "native picker is only available on the machine running TokenTelemetry"}
+    proj = _brain_project(project)
+    start = str(proj) if proj else None
+    if not _FOLDER_PICKER_LOCK.acquire(blocking=False):
+        return {"busy": True}
+    try:
+        return await _asyncio.to_thread(_native_pick_folder_sync, start)
+    finally:
+        _FOLDER_PICKER_LOCK.release()
+
+
 class BrainRegisterPayload(BaseModel):
     project: str
     wiki_path: str

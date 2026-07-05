@@ -35,6 +35,7 @@ export default function Onboarding({ project, onImported }: { project: string; o
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
 
   const doImport = async (wikiPath: string): Promise<boolean> => {
     setBusyPath(wikiPath);
@@ -57,6 +58,30 @@ export default function Onboarding({ project, onImported }: { project: string; o
       return false;
     } finally {
       setBusyPath(null);
+    }
+  };
+
+  /** Native OS folder dialog (Finder / Explorer), served by the local backend.
+   * Remote viewers and headless hosts get `unsupported` and fall back to the
+   * in-app folder browser. */
+  const browseNative = async () => {
+    setImportError(null);
+    setPicking(true);
+    try {
+      const r = await api<{ path?: string; canceled?: boolean; busy?: boolean; unsupported?: boolean }>(
+        `/brain/pick-folder?project=${encodeURIComponent(project)}`,
+      );
+      if (r.path) {
+        setManualPath(r.path);
+        await doImport(r.path);
+        return;
+      }
+      if (r.canceled || r.busy) return;
+      setPickerOpen(true);
+    } catch {
+      setPickerOpen(true);
+    } finally {
+      setPicking(false);
     }
   };
 
@@ -152,12 +177,12 @@ export default function Onboarding({ project, onImported }: { project: string; o
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setPickerOpen(true)}
-              disabled={busyPath !== null}
+              onClick={browseNative}
+              disabled={busyPath !== null || picking}
               className="flex items-center gap-1.5 h-8 px-3 rounded-[var(--tt-radius)] bg-[var(--tt-brand)] text-white text-[12px] font-medium hover:bg-[var(--tt-brand-strong)] disabled:opacity-50 transition-colors shrink-0"
             >
-              <FolderOpen size={13} />
-              Browse folders…
+              {picking ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />}
+              Choose folder…
             </button>
             <div className="flex items-center gap-1.5 flex-1 h-8 px-2.5 rounded-[var(--tt-radius)] bg-[var(--tt-sunken)] border border-[var(--tt-border)] focus-within:border-[var(--tt-border-focus)]">
               <input
