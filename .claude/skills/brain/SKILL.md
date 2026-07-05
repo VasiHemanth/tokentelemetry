@@ -1,6 +1,6 @@
 ---
 name: brain
-description: Maintain the project second brain at docs/wiki/ (an OKF v0.1 bundle). Use for /brain ingest <source>, /brain query <question>, /brain lint. Trigger whenever knowledge should be filed into or answered from the wiki.
+description: Maintain the project second brain at docs/wiki/ (an OKF v0.1 bundle). Use for /brain ingest <source>, /brain query <question>, /brain save <analysis>, /brain idea <rough idea>, /brain lint. Trigger whenever knowledge should be filed into or answered from the wiki.
 ---
 
 # brain — TokenTelemetry second brain maintainer
@@ -46,6 +46,7 @@ wiki compiles them, this file is the schema that keeps you disciplined.
 | Playbook | `playbooks/` | recurring maintainer task (steps, files touched, traps) |
 | Convention | `conventions/` | project rule or invariant (the rule, why, enforcement) |
 | Analysis | `analyses/` | analysis produced in an agent chat worth keeping, implemented or not (extra frontmatter: `status: proposed \| adopted \| rejected \| superseded`) |
+| Idea | `ideas/` | captured idea, clarified from a rough prompt, not yet assessed or implemented (extra frontmatter: `status: captured \| adopted \| dropped`) |
 
 New types are allowed when nothing fits; add them to this table in the same PR.
 
@@ -92,6 +93,34 @@ design assessment, a recommendation) that may or may not ever be implemented.
 4. Commit as `docs:`. When an analysis later gets implemented or overruled,
    update only its `status` line and add the link; the body stays as written
    (see the Analysis page-type rule above).
+
+### idea `<rough idea>`
+
+For when the user has a spark (a feature, an approach, a "what if") and wants
+it kept before it evaporates. The input is rough by nature; your job is to
+make it clear, then save it. Ideas are direction, not knowledge: a query must
+never present one as how TokenTelemetry works.
+
+1. **Clarify first.** Rewrite the prompt into plain prose: what the idea is,
+   the problem it addresses, how it might take shape. Keep the user's intent,
+   drop the rambling. If one load-bearing point is genuinely ambiguous, ask
+   one question; otherwise do not interrogate.
+2. **Confirm.** Show the cleaned-up version and get a quick yes before saving.
+   It is the user's idea; make sure clarifying did not distort it.
+3. **Dedupe.** Search `ideas/` before writing: a prompt that extends an
+   existing idea updates that page (append a dated refinement) instead of
+   creating a near-duplicate.
+4. One page under `ideas/`: the idea stated clearly, the motivation, a sketch
+   of the shape, open questions. Frontmatter: `type: Idea`,
+   `status: captured` (move to `adopted` / `dropped`, with a link to whatever
+   implemented or killed it, once its fate is known), plus the usual `title`,
+   `description`, `tags`, `timestamp`. Set `resource:` only when the idea
+   targets a specific existing artifact.
+5. Cross-link related pages, add the entry to `index.md` under `## Ideas`,
+   append a `log.md` **Creation** entry, commit as `docs:`.
+
+Unlike `save` snapshots, idea pages stay alive: refinements append with a
+date, and `status` changes as the idea is adopted or dropped.
 
 ### lint
 
