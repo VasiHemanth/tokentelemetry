@@ -65,6 +65,7 @@ Humans edit sources; the wiki is recompiled from them. History in
 ## Analyses
 
 * [graphify vs the tokentelemetry plugin](analyses/graphify-vs-tt-plugin.md) - Comparison of the graphify knowledge-graph skill and the tokentelemetry second-brain plugin: cousins, not twins; a map vs a field guide, and how they compose.
+* [How to prove the brain saves tokens, ranked approaches](analyses/brain-savings-approaches.md) - Depth-and-breadth assessment of eight measurement approaches, grounded in a real 2-arm pilot on education_video and a 51-session trace audit; adherence, not wiki quality, is the current bottleneck.
 
 ## Ideas
 

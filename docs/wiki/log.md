@@ -2,6 +2,14 @@
 
 ## 2026-07-06
 
+**Creation** Analysis page `analyses/brain-savings-approaches.md`, saved from
+the research session that assessed `ideas/prove-brain-token-savings.md`.
+Evidence: a 2-arm pilot on education_video (16 headless sessions) and a
+51-session trace audit, plus two adversarial reviews. Ranked five approaches;
+headline finding is that agent adherence to the wiki, not wiki quality, is
+the current bottleneck. The idea page gained a dated refinement pointing at
+the analysis. Status: proposed.
+
 **Creation** First `Idea` page via the new `/brain idea` workflow:
 `ideas/prove-brain-token-savings.md`. Captured from a maintainer prompt:
 domain profiles may be too restrictive (starting kits, not boxes), and the

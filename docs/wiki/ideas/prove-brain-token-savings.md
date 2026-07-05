@@ -56,8 +56,21 @@ Sketch of the fix, in three parts:
 - Staleness risk: a wrong wiki can cost more than no wiki. The benchmark
   should include a stale-wiki arm.
 
+## Refinement 2026-07-06
+
+A research pass ran a real pilot (education_video, 2 arms, 16 sessions) and
+a 51-session trace audit, then ranked the measurement approaches:
+[How to prove the brain saves tokens, ranked approaches](../analyses/brain-savings-approaches.md).
+Headline: adherence, not wiki quality, is the current bottleneck (agents
+ignored the wiki on 4 of 6 covered questions; when they read it, one answer
+halved in cost). Sequencing changes: routing experiment first, savings
+benchmark after; the payback number as sketched here is §11-banned in
+product and survives only as a published benchmark result.
+
 ## Related
 
+- [How to prove the brain saves tokens, ranked approaches](../analyses/brain-savings-approaches.md):
+  the 2026-07-06 assessment of this idea's measurement sketch.
 - [Graphify vs the TokenTelemetry plugin](../analyses/graphify-vs-tt-plugin.md):
   earlier analysis of prior-knowledge overlap.
 - The plugin design doc (`resource:` above) sketches a before/after metrics
