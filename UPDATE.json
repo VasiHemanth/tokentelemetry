@@ -6,7 +6,12 @@
       "highlights": [
         {
           "title": "New Usage page",
-          "description": "Claude Code, Codex, Gemini CLI and the rest each have their own /usage or /stats command with a different set of fields — some don't have one at all. This page shows what all of them would tell you, in one place: tokens, cost, cache hit rate, and plan/quota status for today, 7 days, 30 days, or all time, for every agent TokenTelemetry tracks.",
+          "description": "Claude Code, Codex, Gemini CLI and the rest each have their own /usage or /stats command with a different set of fields — some don't have one at all. This page shows what all of them would tell you, in one place: tokens, cost, cache hit rate, and plan status for today, 7 days, 30 days, or all time, for every agent TokenTelemetry tracks.",
+          "href": "/usage"
+        },
+        {
+          "title": "Session limits & reset cadence per agent",
+          "description": "Each card spells out that agent's limit model and when it resets — Claude's 5-hour rolling session plus weekly cap, Gemini's daily request quota, Copilot's monthly credits, and so on — checked against provider docs. Live remaining quota still lives behind each agent's own command; TokenTelemetry counts your local tokens and tells you where the live figure comes from.",
           "href": "/usage"
         }
       ]
