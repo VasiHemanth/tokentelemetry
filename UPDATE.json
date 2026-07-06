@@ -2,22 +2,12 @@
   "releases": [
     {
       "tag": "2026-07-05",
-      "title": "One Usage page for every agent",
+      "title": "Native commands & limits, on Analytics",
       "highlights": [
         {
-          "title": "New Usage page",
-          "description": "Claude Code, Codex, Gemini CLI and the rest each have their own /usage or /stats command with a different set of fields — some don't have one at all. This page shows what all of them would tell you, in one place: tokens, cost, cache hit rate, and plan status for today, 7 days, 30 days, or all time, for every agent TokenTelemetry tracks.",
-          "href": "/usage"
-        },
-        {
-          "title": "Session limits & reset cadence per agent",
-          "description": "Each card spells out that agent's limit model and when it resets — Claude's 5-hour rolling session plus weekly cap, Gemini's daily request quota, Copilot's monthly credits, and so on — checked against provider docs. Live remaining quota still lives behind each agent's own command; TokenTelemetry counts your local tokens and tells you where the live figure comes from.",
-          "href": "/usage"
-        },
-        {
-          "title": "Per-model breakdown & what's driving your usage",
-          "description": "Every agent card now breaks its tokens and cost down by model, the split Claude's /cost and Codex's /usage print. Above the cards, a cross-agent 'What's driving your usage?' panel — modeled on Claude /usage's 'what's contributing to your limits' — shows how much of your spend comes from subagent-heavy and 8h+ sessions, plus the top skills, subagents, and MCP servers, computed across every agent at once.",
-          "href": "/usage"
+          "title": "Where each agent's live usage figure lives",
+          "description": "Analytics now ends with a per-agent reference: the in-session command each agent uses to show usage (Claude's /usage, Codex's /status, Gemini and Qwen's /stats, Copilot's /usage — or none at all), plus its limit model and reset cadence. TokenTelemetry re-counts your local tokens; your live remaining quota and exact reset countdown live on each provider's servers, so this maps which command reads them. Verified against provider docs and CLI source (July 2026).",
+          "href": "/analytics"
         }
       ]
     },

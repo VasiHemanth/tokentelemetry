@@ -251,11 +251,6 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
         "endpoint": r["endpoint"],
         "billing_mode": r["billing_mode"],
         "timestamp": ts,
-        # Raw window bounds kept alongside the derived `timestamp` (= last_ts) so
-        # consumers can compute session duration / concurrency. Additive: older
-        # readers that only look at `timestamp` are unaffected.
-        "first_ts": r["first_ts"],
-        "last_ts": r["last_ts"],
         "tokens": {
             "input": r["input"], "output": r["output"],
             "cached": r["cached"], "total": r["total"],

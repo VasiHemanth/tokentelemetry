@@ -14,6 +14,7 @@ import {
 import { useResource } from "@/lib/api";
 import { trackEvent } from "@/lib/telemetry";
 import { getAgent } from "@/lib/agents";
+import { NativeCommandsReference } from "@/components/NativeCommandsReference";
 import { useTheme } from "@/components/ThemeProvider";
 import { formatTokens as compact } from "@/lib/format";
 import {
@@ -572,6 +573,8 @@ export default function AnalyticsPage() {
       )}
 
       <EcosystemSection data={data} />
+
+      <NativeCommandsReference />
     </div>
   );
 }
