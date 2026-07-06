@@ -2,6 +2,15 @@
 
 ## 2026-07-06
 
+**Creation** Analysis page `analyses/multi-harness-session-mining.md`, saved
+from a maintainer chat. The plugin's `session_scan.py` mines only Claude
+Code sessions while TokenTelemetry parses ~13 agent sources; the page maps
+each harness's store, project attribution, and signal richness, and ranks
+three options (adapter registry in the plugin, backend signals endpoint,
+shared parser library). Recommendation: adapter registry now with
+per-adapter fixtures, shared library later; gemini skipped as legacy.
+Status: proposed, awaiting the maintainer's option pick.
+
 **Update** `ideas/prove-brain-token-savings.md` gained a fourth dated
 refinement: the A/B benchmark from Doubt 2 ran against the regenerated
 census-schema education_video wiki (2 arms x 7 questions x 2 replicates,
