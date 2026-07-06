@@ -67,6 +67,20 @@ halved in cost). Sequencing changes: routing experiment first, savings
 benchmark after; the payback number as sketched here is §11-banned in
 product and survives only as a published benchmark result.
 
+## Refinement 2026-07-06 (later): adherence experiment ran
+
+The routing experiment the analysis ranked first was executed the same day
+(3 arms x 4 covered questions x 2 replicates, 24 sessions, education_video
+copies): current pointer block 5/8 runs consulted the wiki (median 11 turns,
+mean $0.30); pointer with the wiki index embedded 8/8 (median 4 turns, mean
+$0.14, answers still correct and still verifying against source); pointer
+plus a skillsmith-generated skill 2/8, with the skill invoked in 0 of 8 runs
+despite being loaded (verified available). Turn distributions for the index
+arm vs baseline do not overlap (3-8 vs 9-12). Direction for the plugin:
+embed the index (or a distilled page map) in the pointer block, and rethink
+skillsmith's role; a skill described as optimization advice never fires on
+ordinary questions, so routing cannot live there.
+
 ## Related
 
 - [How to prove the brain saves tokens, ranked approaches](../analyses/brain-savings-approaches.md):

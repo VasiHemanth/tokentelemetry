@@ -2,6 +2,16 @@
 
 ## 2026-07-06
 
+**Finding** The adherence experiment proposed by
+`analyses/brain-savings-approaches.md` ran the same day (24 sessions, 3
+routing arms on education_video copies). Index-in-pointer routing reached
+8/8 wiki consultation at a third of the turns and half the cost of the
+current pointer block (5/8); a skillsmith-generated skill never fired (0/8
+invocations while loaded). Recorded as a dated refinement on
+`ideas/prove-brain-token-savings.md`; plugin-side changes (pointer block
+gains an embedded page map, skillsmith routing role rethought) are direction,
+not yet implemented.
+
 **Creation** Analysis page `analyses/brain-savings-approaches.md`, saved from
 the research session that assessed `ideas/prove-brain-token-savings.md`.
 Evidence: a 2-arm pilot on education_video (16 headless sessions) and a
