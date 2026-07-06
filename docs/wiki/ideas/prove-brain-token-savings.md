@@ -115,6 +115,27 @@ Testable with the existing harness: compile education_video under a forced
 `generic` profile vs a census-driven schema, run the same question set,
 compare adherence, turns, correctness.
 
+## Refinement 2026-07-06 (round 2): A/B on the census-schema wiki ran
+
+The A/B benchmark sketched in Doubt 2 was executed against the regenerated
+education_video wiki (28 pages, census-derived schema, page-map pointer
+block): 2 arms (wiki + pointer vs no wiki, pointer stripped) x 7 questions
+(round-1 set plus one targeting the new Domain pages) x 2 replicates, 28
+sessions, all valid, all correct on source-verified key facts in both arms.
+
+Results by coverage class: where the wiki actually answers the question
+(3 of 7), brain halved both turns (4.0 vs 8.2 mean) and cost ($0.14 vs
+$0.28); where the details live in CLAUDE.md that both arms read anyway, no
+advantage; on the one uncovered code-path question the wiki cost ~2 extra
+turns (the wiki tax is real but small); overall cost -18% ($3.03 vs $3.70).
+Adherence of the shipped pointer block: 12/14, and 12/12 on questions that
+do not name a source file (both misses were the question naming
+`scripts/research.js`, where going straight to the file is rational). The
+new schema's pages earned their place: the tracker-database data-store page
+flipped last round's partially-covered DB question to a 3-turn half-cost
+answer. Correctness never degraded; brain answers still verified against
+source and were deeper on one question (found the posting CLI mismatch).
+
 ## Related
 
 - [How to prove the brain saves tokens, ranked approaches](../analyses/brain-savings-approaches.md):

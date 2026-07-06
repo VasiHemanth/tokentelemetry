@@ -2,6 +2,15 @@
 
 ## 2026-07-06
 
+**Update** `ideas/prove-brain-token-savings.md` gained a fourth dated
+refinement: the A/B benchmark from Doubt 2 ran against the regenerated
+census-schema education_video wiki (2 arms x 7 questions x 2 replicates,
+28 sessions). Where the wiki answers the question, turns and cost halve;
+overall cost -18%; adherence of the shipped page-map pointer block 12/14
+(12/12 on questions not naming a source file); correctness equal in both
+arms. The new data-store page flipped the previously partially-covered
+tracker-DB question to a 3-turn half-cost answer.
+
 **Update** `ideas/prove-brain-token-savings.md` gained a third dated
 refinement: Doubt 1 sharpened from "starting kits, not boxes" to dropping
 the three-profile menu entirely. Wiki generation should derive the
