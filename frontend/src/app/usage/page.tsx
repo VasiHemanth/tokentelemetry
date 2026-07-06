@@ -281,7 +281,7 @@ export default function UsagePage() {
   }, [data]);
 
   return (
-    <div className="space-y-6">
+    <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-6 pb-20">
       <PageHeader
         icon={<Gauge size={18} />}
         eyebrow="Cross-agent"
@@ -289,16 +289,16 @@ export default function UsagePage() {
         description="What every agent's own /usage, /stats, or /status command would show — Claude Code, Codex, Gemini CLI, and the rest — read from the same local session data TokenTelemetry already scans, in one place instead of switching tools."
       />
 
-      <div className="flex items-center gap-1">
+      <div className="inline-flex gap-0.5 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-0.5">
         {WINDOWS.map((w) => (
           <button
             key={w.key}
             type="button"
             onClick={() => setActiveWindow(w.key)}
-            className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors cursor-pointer ${
+            className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] rounded-[calc(var(--tt-radius)-2px)] transition-colors cursor-pointer ${
               activeWindow === w.key
-                ? "bg-[var(--tt-brand)] text-white"
-                : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] border border-[var(--tt-border)]"
+                ? "bg-[var(--tt-panel)] text-[var(--tt-fg)] shadow-sm"
+                : "text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
             }`}
           >
             {w.label}
@@ -307,7 +307,7 @@ export default function UsagePage() {
       </div>
 
       {loading && !data ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56 w-full" />)}
         </div>
       ) : agentIds.length === 0 ? (
@@ -317,7 +317,7 @@ export default function UsagePage() {
           description="Run a coding agent TokenTelemetry supports and its usage will show up here."
         />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-fr">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 auto-rows-fr">
           {agentIds.map((agent) => (
             <AgentUsageCard
               key={agent}
