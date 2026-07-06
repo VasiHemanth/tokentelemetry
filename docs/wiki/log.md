@@ -2,6 +2,12 @@
 
 ## 2026-07-06
 
+**Update** `analyses/multi-harness-session-mining.md` moved to
+status: adopted. The maintainer picked option A the same day, approving
+codex shell-string path extraction (in-memory tokenization, only path
+tokens emitted); shipped as the plugin's harness_adapters registry
+(11 adapters, 16 fixture tests), plugin commit 09762fe / v0.4.0.
+
 **Creation** Analysis page `analyses/multi-harness-session-mining.md`, saved
 from a maintainer chat. The plugin's `session_scan.py` mines only Claude
 Code sessions while TokenTelemetry parses ~13 agent sources; the page maps

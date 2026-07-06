@@ -1,6 +1,6 @@
 ---
 type: Analysis
-status: proposed
+status: adopted
 title: Multi-harness session mining for the plugin
 description: How to extend the plugin's session_scan beyond Claude Code to every harness TokenTelemetry parses, with a per-harness feasibility matrix and three build options.
 tags: [plugin, session-scan, harnesses, brain-compile, session-miner]
@@ -9,6 +9,11 @@ resource: backend/main.py
 ---
 
 # Multi-harness session mining for the plugin
+
+Status 2026-07-06: adopted. The maintainer picked option A (with codex
+shell-string path extraction approved); implemented as the plugin's
+`scripts/harness_adapters.py` registry, commit `09762fe` (plugin v0.4.0,
+11 adapters, per-adapter fixtures in `tests/`).
 
 Saved from a maintainer chat, 2026-07-06. The plugin's `session_scan.py` only
 mines Claude Code sessions, while TokenTelemetry itself parses ~13 agent
