@@ -11,16 +11,39 @@ import {
   PageHeader, Card, CardHeader, CardTitle, EmptyState, Skeleton,
 } from "@/components/ui";
 
-interface WindowStats {
+interface ModelStats {
+  model: string;
   input: number; output: number; cached: number; total: number;
   cost: number; session_count: number; cache_hit_pct: number | null;
 }
 
+interface WindowStats {
+  input: number; output: number; cached: number; total: number;
+  cost: number; session_count: number; cache_hit_pct: number | null;
+  by_model?: ModelStats[];
+}
+
 type WindowKey = "today" | "7d" | "30d" | "all";
+
+interface NamedValue { name: string; value: number }
+
+interface Contributions {
+  session_count: number;
+  total_cost: number;
+  subagent_share: number | null;
+  long_session_share: number | null;
+  parallel_share: number | null;
+  context_share: number | null;
+  by_agent: NamedValue[];
+  skills: NamedValue[];
+  subagents: NamedValue[];
+  mcp: NamedValue[];
+}
 
 interface UsageData {
   agents: Record<string, Record<WindowKey, WindowStats>>;
   billing: Record<string, AgentRouteOverview>;
+  contributions: Record<WindowKey, Contributions>;
   generated_at: string;
 }
 
@@ -172,6 +195,118 @@ function Stat({ label, value, sub, title }: { label: string; value: string; sub?
   );
 }
 
+/** Per-model rows — the input/output/cache/cost split every agent's own
+ *  /cost, /usage or /stats prints, but keyed off TT's local session data. */
+function ModelBreakdown({ models }: { models: ModelStats[] }) {
+  const shown = models.slice(0, 4);
+  const rest = models.length - shown.length;
+  return (
+    <div className="space-y-1 border-t border-[var(--tt-border)] pt-2">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--tt-fg-dim)]">By model</div>
+      {shown.map((m) => (
+        <div key={m.model} className="flex items-baseline justify-between gap-2 text-[11px]">
+          <span className="truncate text-[var(--tt-fg-muted)]" title={m.model}>{m.model}</span>
+          <span className="tabular shrink-0 text-[var(--tt-fg-dim)]">
+            {formatTokens(m.total)} · <span className="text-[var(--tt-fg-muted)]">{formatCost(m.cost)}</span>
+          </span>
+        </div>
+      ))}
+      {rest > 0 && (
+        <div className="text-[10.5px] text-[var(--tt-fg-dim)]">+{rest} more model{rest === 1 ? "" : "s"}</div>
+      )}
+    </div>
+  );
+}
+
+/** A driver line ("N% of usage came from …") mirroring Claude /usage's
+ *  "What's contributing to your limits usage?" section. */
+function Driver({ pct, label, hint }: { pct: number | null; label: string; hint: string }) {
+  if (pct == null) return null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-[12px] text-[var(--tt-fg)]">{label}</span>
+        <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)] shrink-0">{pct}%</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--tt-sunken)]">
+        <div className="h-full rounded-full bg-[var(--tt-brand)]" style={{ width: `${Math.min(100, pct)}%` }} />
+      </div>
+      <p className="text-[10.5px] leading-snug text-[var(--tt-fg-dim)]">{hint}</p>
+    </div>
+  );
+}
+
+/** A small "% of usage" table (agents / skills / subagents / MCP servers),
+ *  mirroring the breakdown tables Claude /usage prints. */
+function BreakdownTable({ title, rows, total, unit }: {
+  title: string; rows: NamedValue[]; total?: number; unit?: string;
+}) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--tt-fg-dim)]">{title}</div>
+      {rows.map((r) => {
+        const pct = total && total > 0 ? Math.round((100 * r.value) / total) : null;
+        return (
+          <div key={r.name} className="flex items-baseline justify-between gap-2 text-[11px]">
+            <span className="truncate text-[var(--tt-fg-muted)]" title={r.name}>{r.name}</span>
+            <span className="tabular shrink-0 text-[var(--tt-fg-dim)]">
+              {pct != null ? `${pct}%` : `${r.value}${unit ? ` ${unit}` : ""}`}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The cross-agent "What's driving your usage?" panel — the piece each agent's
+ *  native /usage/stats shows but scattered per tool; here computed once from
+ *  TT's local session data across every agent. */
+function ContributionsPanel({ c }: { c: Contributions }) {
+  const agentTotal = c.by_agent.reduce((sum, a) => sum + a.value, 0);
+  const agentRows = c.by_agent
+    .slice(0, 5)
+    .map((a) => ({ name: getAgent(a.name).label, value: a.value }));
+  const hasDrivers = c.subagent_share != null || c.long_session_share != null;
+  const hasTables = agentRows.length > 0 || c.skills.length > 0 || c.subagents.length > 0 || c.mcp.length > 0;
+  if (!hasDrivers && !hasTables) return null;
+
+  return (
+    <Card>
+      <CardHeader className="mb-4">
+        <CardTitle><Gauge size={14} className="text-[var(--tt-brand)]" /> What&apos;s driving your usage?</CardTitle>
+        <span className="text-[10px] text-[var(--tt-fg-dim)]">{c.session_count} sessions · {formatCost(c.total_cost)}</span>
+      </CardHeader>
+
+      {hasDrivers && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Driver pct={c.subagent_share} label="From subagent-heavy sessions"
+            hint="Each subagent runs its own requests. Consider a cheaper model for simple ones." />
+          <Driver pct={c.long_session_share} label="From sessions active 8h+"
+            hint="Often background/loop runs. Continuous usage adds up — make sure it's intentional." />
+        </div>
+      )}
+
+      {hasTables && (
+        <div className="mt-5 grid gap-x-6 gap-y-4 border-t border-[var(--tt-border)] pt-4 sm:grid-cols-2 lg:grid-cols-4">
+          <BreakdownTable title="By agent" rows={agentRows} total={agentTotal} />
+          <BreakdownTable title="Skills" rows={c.skills} unit="uses" />
+          <BreakdownTable title="Subagents" rows={c.subagents} unit="spawns" />
+          <BreakdownTable title="MCP servers" rows={c.mcp} unit="calls" />
+        </div>
+      )}
+
+      <p className="mt-4 text-[10.5px] leading-snug text-[var(--tt-fg-dim)]">
+        Approximate, from local sessions on this machine (all agents) — excludes other devices.
+        Shares are cost-weighted. Two drivers Claude&apos;s <code>/usage</code> also shows —{" "}
+        <code>&gt;150k context</code> and <code>4+ parallel sessions</code> — need per-request signals
+        TokenTelemetry doesn&apos;t record yet, so they&apos;re omitted here.
+      </p>
+    </Card>
+  );
+}
+
 function AgentUsageCard({
   agent, stats, overview,
 }: { agent: string; stats: WindowStats; overview?: AgentRouteOverview }) {
@@ -220,6 +355,9 @@ function AgentUsageCard({
               <Stat label="Cache" value={stats.cache_hit_pct == null ? "—" : `${stats.cache_hit_pct}%`}
                     sub="hit rate" />
             </div>
+            {stats.by_model && stats.by_model.length > 0 && (
+              <ModelBreakdown models={stats.by_model} />
+            )}
             {overview && (
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--tt-fg-dim)]">Plan</span>
@@ -305,6 +443,10 @@ export default function UsagePage() {
           </button>
         ))}
       </div>
+
+      {data?.contributions?.[activeWindow] && (
+        <ContributionsPanel c={data.contributions[activeWindow]} />
+      )}
 
       {loading && !data ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
