@@ -2,6 +2,16 @@
 
 ## 2026-07-06
 
+**Creation** Analysis page
+`analyses/next-token-optimization-techniques.md`: four candidate
+techniques (turn batching, tool-result diet, scout delegation,
+checkpoint-restart) attacking conversation-shape waste pools the existing
+seeds do not cover. Grounded in a 105-transcript waste-pool measurement
+(1.5% batching rate, 26M replayed tokens in collapsible turns, 1.7% of tool
+results carrying 24.8% of bytes) plus an independent Codex session that
+converged on the same shapes. Status: proposed; each becomes a skillsmith
+seed only after its experiment shows an effect.
+
 **Finding** The adherence experiment proposed by
 `analyses/brain-savings-approaches.md` ran the same day (24 sessions, 3
 routing arms on education_video copies). Index-in-pointer routing reached
