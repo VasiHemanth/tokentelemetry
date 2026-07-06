@@ -2,7 +2,7 @@
 type: Idea
 status: captured
 title: Prove the brain saves tokens
-description: Benchmark the brain-init/compile/skillsmith pipeline and surface a payback metric; loosen domain profiles from boxes to starting kits.
+description: Benchmark the brain-init/compile/skillsmith pipeline and surface a payback metric; replace the domain-profile menu with a census-driven dynamic schema.
 tags: [plugin, benchmarks, token-savings, domain-profiles, skillsmith]
 timestamp: 2026-07-06
 resource: docs/design/tokentelemetry-plugin.md
@@ -80,6 +80,40 @@ arm vs baseline do not overlap (3-8 vs 9-12). Direction for the plugin:
 embed the index (or a distilled page map) in the pointer block, and rethink
 skillsmith's role; a skill described as optimization advice never fires on
 ordinary questions, so routing cannot live there.
+
+## Refinement 2026-07-06 (later still): drop the profile menu entirely
+
+Doubt 1 sharpened from "starting kits, not boxes" to removing the
+three-profile menu altogether. The maintainer's call: the supplied context
+(raw sources, census) stays as is, but wiki generation should derive the
+page-type table and folder structure dynamically instead of picking from
+fullstack-app / research-data / generic.
+
+Evidence since the original capture supports it: TT itself, the reference
+project for `fullstack-app`, needed a `harness` type the profile did not
+ship (BRAIN.md was the escape hatch, so the schema is already per-project
+in practice); and the proven routing win (index-in-pointer, 8/8 adherence)
+is schema-agnostic, so a dynamic taxonomy does not threaten it.
+
+Agreed shape (option B of three discussed):
+
+- A universal skeleton every project gets with no LLM discretion:
+  `Overview`, `Decision`, `Playbook`, `Convention`, index/log/manifest,
+  OKF rules, and a non-negotiable redaction core copied verbatim into
+  every generated BRAIN.md. Redaction is never LLM-derived.
+- `profile_census.py` changes job: its facts (extension histogram,
+  framework markers, tree, doc inventory) feed an LLM proposal of 3-8
+  domain-specific page types, each with a directory, `one_page_per`
+  granularity, and evidence of at least 2-3 expected pages.
+- The AskUserQuestion gate stays, showing the proposed table instead of a
+  three-item menu. BRAIN.md remains the durable contract: only
+  `/brain-init` derives; compiles and ingests never re-derive.
+- The three profile YAMLs demote to few-shot exemplars in the brain-init
+  prompt; explicit custom profiles stay supported as overrides.
+
+Testable with the existing harness: compile education_video under a forced
+`generic` profile vs a census-driven schema, run the same question set,
+compare adherence, turns, correctness.
 
 ## Related
 

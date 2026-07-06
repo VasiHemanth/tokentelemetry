@@ -2,6 +2,14 @@
 
 ## 2026-07-06
 
+**Update** `ideas/prove-brain-token-savings.md` gained a third dated
+refinement: Doubt 1 sharpened from "starting kits, not boxes" to dropping
+the three-profile menu entirely. Wiki generation should derive the
+page-type table dynamically from the census, on top of a fixed universal
+skeleton (Overview/Decision/Playbook/Convention plus a never-LLM-derived
+redaction core); the three profile YAMLs demote to few-shot exemplars.
+Plugin-side brain-init changes drafted separately in the plugin repo.
+
 **Creation** Analysis page
 `analyses/next-token-optimization-techniques.md`: four candidate
 techniques (turn batching, tool-result diet, scout delegation,

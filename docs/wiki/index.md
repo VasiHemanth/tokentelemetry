@@ -70,7 +70,7 @@ Humans edit sources; the wiki is recompiled from them. History in
 
 ## Ideas
 
-* [Prove the brain saves tokens](ideas/prove-brain-token-savings.md) - Benchmark the brain-init/compile/skillsmith pipeline and surface a payback metric; loosen domain profiles from boxes to starting kits.
+* [Prove the brain saves tokens](ideas/prove-brain-token-savings.md) - Benchmark the brain-init/compile/skillsmith pipeline and surface a payback metric; replace the domain-profile menu with a census-driven dynamic schema.
 
 ## Conventions
 
