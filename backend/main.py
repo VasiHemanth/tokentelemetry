@@ -6881,6 +6881,295 @@ async def get_config(project: Optional[str] = None):
     }
 
 # --------------------------------------------------------------------------- #
+# Second Brain (project wiki) — read-only; see backend/second_brain.py
+# --------------------------------------------------------------------------- #
+import second_brain as _second_brain
+
+
+def _brain_project(project: Optional[str]) -> Optional[Path]:
+    """Validate a ?project= param the same way /config does."""
+    if not project or not _project_within_safe_roots(project):
+        return None
+    p = Path(project)
+    return p if p.exists() and p.is_dir() else None
+
+
+def _brain_resolved(project: Optional[str]):
+    """(project_path, wiki_dir, kind, summary) or (None, None, None, error_dict)."""
+    proj = _brain_project(project)
+    if proj is None:
+        return None, None, None, {"exists": False, "kind": None, "source": "none",
+                                  "project_valid": False}
+    registered = _second_brain.load_brains().get(str(proj))
+    summary = _second_brain.wiki_summary(proj, registered)
+    summary["project_valid"] = True
+    if not summary["exists"]:
+        return proj, None, None, summary
+    return proj, Path(summary["wiki_path"]), summary["kind"], summary
+
+
+@app.get("/brain")
+async def get_brain(project: Optional[str] = None):
+    """Wiki detection summary for a project (drives the Second Brain tab states)."""
+    _, _, _, summary = _brain_resolved(project)
+    summary["project"] = project
+    return summary
+
+
+@app.get("/brain/graph")
+async def get_brain_graph(project: Optional[str] = None):
+    """Nodes/edges/clusters for the wiki graph view."""
+    proj, wiki_dir, kind, summary = _brain_resolved(project)
+    if wiki_dir is None:
+        return {"summary": summary, "nodes": [], "edges": [], "clusters": [], "types": {}}
+    graph = _second_brain.graph_cached(wiki_dir, kind)
+    return {"summary": summary, **graph}
+
+
+@app.get("/brain/page")
+async def get_brain_page(project: Optional[str] = None, id: Optional[str] = None):
+    """One wiki page: frontmatter, markdown body, in/out links, staleness."""
+    proj, wiki_dir, kind, summary = _brain_resolved(project)
+    if wiki_dir is None or not id:
+        raise HTTPException(status_code=404, detail="no wiki or page id")
+    graph = _second_brain.graph_cached(wiki_dir, kind)
+    detail = _second_brain.page_detail(
+        proj, wiki_dir, id, summary.get("compiled_from_sha"), graph)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"page not found: {id}")
+    return detail
+
+
+@app.get("/brain/candidates")
+async def get_brain_candidates(project: Optional[str] = None):
+    """Importable wiki-shaped trees found inside the project directory."""
+    proj = _brain_project(project)
+    if proj is None:
+        return {"candidates": []}
+    return {"candidates": _second_brain.scan_candidates(proj)}
+
+
+@app.get("/brain/browse")
+async def browse_brain_dirs(project: Optional[str] = None, path: Optional[str] = None):
+    """One directory level for the import folder picker.
+
+    Confined to the same safe roots as every other project-scoped endpoint;
+    `parent` is null at a root boundary so the UI can't walk above it.
+    """
+    proj = _brain_project(project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    target = Path(path) if path else proj
+    try:
+        target = target.resolve()
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=400, detail="unreadable path")
+    if not _project_within_safe_roots(str(target)):
+        raise HTTPException(status_code=400, detail="path outside allowed roots")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="not a directory")
+    listing = _second_brain.browse_dir(target)
+    parent = target.parent
+    listing["parent"] = (
+        str(parent)
+        if parent != target and _project_within_safe_roots(str(parent))
+        else None
+    )
+    return listing
+
+
+@app.get("/brain/build-cost")
+async def get_brain_build_cost(project: Optional[str] = None):
+    """Tokens spent building this project's brain.
+
+    Derived from TT's own session scan: sessions in this project whose
+    skills_used include brain-init / brain-compile (bare or plugin-namespaced,
+    e.g. "tokentelemetry:brain-compile"). Includes delegated (subagent) tokens,
+    since brain-compile fans out most of its work to subagents.
+    """
+    proj = _brain_project(project)
+    if proj is None:
+        return {"available": False, "sessions": 0}
+    build_skills = {"brain-init", "brain-compile"}
+
+    def is_build_session(s: Dict[str, Any]) -> bool:
+        if s.get("project") != str(proj):
+            return False
+        return any(
+            (sk.get("name") or "").rsplit(":", 1)[-1] in build_skills
+            for sk in s.get("skills_used") or []
+        )
+
+    sessions = [s for s in await get_sessions_cached() if is_build_session(s)]
+    own = sum((s.get("tokens") or {}).get("total", 0) or 0 for s in sessions)
+    delegated = sum(
+        (s.get("delegation") or {}).get("delegated_total", 0) or 0 for s in sessions
+    )
+    cost = sum((s.get("cost") or 0) + (s.get("delegated_cost") or 0) for s in sessions)
+    return {
+        "available": True,
+        "sessions": len(sessions),
+        "tokens": own + delegated,
+        "own_tokens": own,
+        "delegated_tokens": delegated,
+        "cost": round(cost, 4),
+    }
+
+
+import platform as _platform
+import shutil as _shutil
+import threading as _threading
+
+# One native dialog at a time: a second click while a dialog is up should not
+# stack another one behind it.
+_FOLDER_PICKER_LOCK = _threading.Lock()
+
+# How long the native dialog may sit open before we close it and give up.
+_FOLDER_PICKER_TIMEOUT_S = 300
+
+
+def _native_pick_folder_sync(start: Optional[str]) -> Dict[str, Any]:
+    """Open the OS folder dialog (Finder / Explorer / zenity) and return
+    {"path": ...} | {"canceled": True} | {"unsupported": True, "reason": ...}.
+
+    Runs in a worker thread; each branch shells out to the platform's dialog
+    tool so nothing here needs a GUI toolkit in-process. `start` is passed via
+    argv (never interpolated into a script) so a hostile path can't inject.
+    """
+    system = _platform.system()
+    try:
+        if system == "Darwin":
+            script = (
+                'on run argv\n'
+                '  if (count of argv) > 0 then\n'
+                '    return POSIX path of (choose folder with prompt '
+                '"Choose a wiki folder for TokenTelemetry" '
+                'default location (POSIX file (item 1 of argv)))\n'
+                '  else\n'
+                '    return POSIX path of (choose folder with prompt '
+                '"Choose a wiki folder for TokenTelemetry")\n'
+                '  end if\n'
+                'end run'
+            )
+            argv = [start] if start and Path(start).is_dir() else []
+            out = _subprocess.run(["osascript", "-e", script, *argv],
+                                  capture_output=True, text=True,
+                                  timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0:
+                p = out.stdout.strip().rstrip("/")
+                return {"path": p} if p else {"canceled": True}
+            # -128 is AppleScript's "User canceled."; anything else means the
+            # dialog could not be shown (headless, no WindowServer session).
+            if "-128" in out.stderr or "canceled" in out.stderr.lower():
+                return {"canceled": True}
+            return {"unsupported": True, "reason": "could not open the macOS folder dialog"}
+        if system == "Windows":
+            ps = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$f.Description = 'Choose a wiki folder for TokenTelemetry'; "
+                "$f.ShowNewFolderButton = $false; "
+                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ Write-Output $f.SelectedPath }"
+            )
+            out = _subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command", ps],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode != 0:
+                return {"unsupported": True, "reason": "could not open the Explorer folder dialog"}
+            p = out.stdout.strip()
+            return {"path": p} if p else {"canceled": True}
+        # Linux: whichever of the two common dialog tools exists.
+        if _shutil.which("zenity"):
+            out = _subprocess.run(
+                ["zenity", "--file-selection", "--directory",
+                 "--title=Choose a wiki folder for TokenTelemetry"],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0 and out.stdout.strip():
+                return {"path": out.stdout.strip()}
+            return {"canceled": True}
+        if _shutil.which("kdialog"):
+            out = _subprocess.run(
+                ["kdialog", "--getexistingdirectory", start or str(Path.home())],
+                capture_output=True, text=True, timeout=_FOLDER_PICKER_TIMEOUT_S)
+            if out.returncode == 0 and out.stdout.strip():
+                return {"path": out.stdout.strip()}
+            return {"canceled": True}
+        return {"unsupported": True,
+                "reason": "no folder-dialog tool found (install zenity or kdialog)"}
+    except _subprocess.TimeoutExpired:
+        return {"canceled": True, "reason": "dialog timed out"}
+    except (OSError, ValueError) as e:
+        return {"unsupported": True, "reason": f"folder dialog failed: {e}"}
+
+
+@app.get("/brain/pick-folder")
+async def pick_brain_folder(request: Request, project: Optional[str] = None):
+    """Open the NATIVE OS folder picker on the machine running TokenTelemetry.
+
+    Loopback-only: for a remote (tailnet) viewer the dialog would open on the
+    host's screen, not theirs, so remote callers get `unsupported` and the UI
+    falls back to the in-app folder browser (/brain/browse).
+    """
+    client = request.client.host if request.client else ""
+    if client not in ("127.0.0.1", "::1", "localhost"):
+        return {"unsupported": True,
+                "reason": "native picker is only available on the machine running TokenTelemetry"}
+    proj = _brain_project(project)
+    start = str(proj) if proj else None
+    if not _FOLDER_PICKER_LOCK.acquire(blocking=False):
+        return {"busy": True}
+    try:
+        return await _asyncio.to_thread(_native_pick_folder_sync, start)
+    finally:
+        _FOLDER_PICKER_LOCK.release()
+
+
+class BrainRegisterPayload(BaseModel):
+    project: str
+    wiki_path: str
+
+
+@app.post("/brain/register")
+async def register_brain(payload: BrainRegisterPayload):
+    """Import an existing wiki: records a pointer in ~/.tokentelemetry only.
+
+    The project repo is never written; unregistering just deletes the pointer.
+    """
+    proj = _brain_project(payload.project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    if not _project_within_safe_roots(payload.wiki_path):
+        raise HTTPException(status_code=400, detail="wiki path outside allowed roots")
+    kind = _second_brain.classify_wiki_dir(Path(payload.wiki_path))
+    if kind is None:
+        raise HTTPException(
+            status_code=422,
+            detail="not a recognizable wiki (no manifest, index+typed pages, "
+                   ".obsidian, or enough markdown files)")
+    brains = _second_brain.load_brains()
+    brains[str(proj)] = str(Path(payload.wiki_path).resolve())
+    _second_brain.save_brains(brains)
+    return {"ok": True, "kind": kind, "wiki_path": brains[str(proj)]}
+
+
+class BrainUnregisterPayload(BaseModel):
+    project: str
+
+
+@app.post("/brain/unregister")
+async def unregister_brain(payload: BrainUnregisterPayload):
+    proj = _brain_project(payload.project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail="invalid project path")
+    brains = _second_brain.load_brains()
+    removed = brains.pop(str(proj), None)
+    if removed is not None:
+        _second_brain.save_brains(brains)
+    return {"ok": True, "removed": removed}
+
+
+# --------------------------------------------------------------------------- #
 # Trace summaries
 # --------------------------------------------------------------------------- #
 from fastapi import Body, HTTPException

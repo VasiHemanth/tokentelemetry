@@ -71,6 +71,7 @@ export function routeOf(pathname: string): string {
   if (p.startsWith("/analytics")) return "analytics";
   if (p.startsWith("/local-models")) return "local-models";
   if (p.startsWith("/sessions")) return "traces";
+  if (/^\/projects\/[^/]+\/brain$/.test(p)) return "brain";
   if (p.startsWith("/projects")) return p === "/projects" ? "projects" : "project-detail";
   if (p.startsWith("/hermes")) return "hermes";
   if (p.startsWith("/settings")) return "settings";

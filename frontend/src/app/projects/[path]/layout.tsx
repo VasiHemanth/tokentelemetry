@@ -5,7 +5,7 @@ import { useParams, usePathname } from "next/navigation";
 import { useMemo } from "react";
 import {
   ChevronRight, Folder, Activity, Sparkles, ClipboardList, Settings2,
-  Clock, Users, Zap, GitBranch, Wallet,
+  Clock, Users, Zap, GitBranch, Wallet, Brain,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -16,10 +16,11 @@ import { type BudgetStatus, budgetTone } from "@/lib/budgets";
 import { ProjectProvider, type ProjectData, type SessionRow } from "./_lib/project-context";
 
 const TABS = [
-  { key: "activity", label: "Activity",  icon: Activity,      href: "activity"  },
-  { key: "insights", label: "Insights",  icon: Sparkles,      href: "insights"  },
-  { key: "plans",    label: "Plans",     icon: ClipboardList, href: "plans"     },
-  { key: "config",   label: "Config",    icon: Settings2,     href: "config"    },
+  { key: "activity", label: "Activity",     icon: Activity,      href: "activity" },
+  { key: "insights", label: "Insights",     icon: Sparkles,      href: "insights" },
+  { key: "plans",    label: "Plans",        icon: ClipboardList, href: "plans"    },
+  { key: "brain",    label: "Second Brain", icon: Brain,         href: "brain"    },
+  { key: "config",   label: "Config",       icon: Settings2,     href: "config"   },
 ];
 
 export default function ProjectShellLayout({ children }: { children: React.ReactNode }) {

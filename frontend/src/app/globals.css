@@ -222,3 +222,45 @@ body {
 .prose code { background: var(--tt-sunken); padding: 0.15em 0.4em; border-radius: 4px; font-family: var(--font-mono); font-size: 0.88em; border: 1px solid var(--tt-border); }
 .prose pre { background: var(--tt-sunken); padding: 1em; border-radius: var(--tt-radius); overflow-x: auto; border: 1px solid var(--tt-border); margin-bottom: 1.5em; }
 .prose blockquote { border-left: 3px solid var(--tt-success); padding-left: 1em; color: var(--tt-fg-dim); font-style: italic; }
+
+/* =========================================================================
+   Compact markdown scale (.tt-brain-md)
+   One notch down from .prose, which is sized for the full-width session
+   viewer. Used where markdown renders inside panels: the Second Brain page
+   drawer and the project Plans tab.
+   ========================================================================= */
+.tt-brain-md { font-size: 12.5px; line-height: 1.62; color: var(--tt-fg-muted); }
+.tt-brain-md h1, .tt-brain-md h2, .tt-brain-md h3, .tt-brain-md h4 {
+  color: var(--tt-fg); font-weight: 600; letter-spacing: -0.01em;
+  margin: 1.4em 0 0.45em;
+}
+.tt-brain-md > :first-child { margin-top: 0.2em; }
+.tt-brain-md h1 { font-size: 15px; padding-bottom: 0.3em; border-bottom: 1px solid var(--tt-border); }
+.tt-brain-md h2 { font-size: 13.5px; }
+.tt-brain-md h3, .tt-brain-md h4 { font-size: 12.5px; }
+.tt-brain-md p { margin: 0 0 0.8em; }
+.tt-brain-md ul, .tt-brain-md ol { margin: 0 0 0.8em; padding-left: 1.3em; }
+.tt-brain-md ul { list-style-type: disc; }
+.tt-brain-md ol { list-style-type: decimal; }
+.tt-brain-md li { margin-bottom: 0.3em; }
+.tt-brain-md code {
+  background: var(--tt-sunken); border: 1px solid var(--tt-border);
+  border-radius: 4px; padding: 0.1em 0.35em;
+  font-family: var(--font-mono); font-size: 0.92em;
+}
+.tt-brain-md pre {
+  background: var(--tt-sunken); border: 1px solid var(--tt-border);
+  border-radius: var(--tt-radius); padding: 0.75em 0.9em;
+  overflow-x: auto; margin: 0 0 1em; font-size: 11px; line-height: 1.55;
+}
+.tt-brain-md pre code { background: none; border: none; padding: 0; font-size: inherit; }
+.tt-brain-md blockquote {
+  border-left: 3px solid var(--tt-border-strong); padding-left: 0.9em;
+  margin: 0 0 0.8em; color: var(--tt-fg-dim); font-style: italic;
+}
+.tt-brain-md table { border-collapse: collapse; font-size: 11.5px; margin: 0 0 1em; display: block; overflow-x: auto; }
+.tt-brain-md th, .tt-brain-md td { border: 1px solid var(--tt-border); padding: 0.35em 0.6em; text-align: left; }
+.tt-brain-md th { background: var(--tt-sunken); color: var(--tt-fg); font-weight: 600; }
+.tt-brain-md a { color: var(--tt-brand); text-decoration: none; }
+.tt-brain-md a:hover { text-decoration: underline; }
+.tt-brain-md hr { border: none; border-top: 1px solid var(--tt-border); margin: 1.2em 0; }

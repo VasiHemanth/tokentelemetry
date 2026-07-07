@@ -43,7 +43,9 @@ export default function PlansTab() {
             </span>
           </div>
 
-          <div className="p-6 prose prose-sm max-w-none">
+          {/* .tt-brain-md: shared compact markdown scale (globals.css), same
+            * treatment as the Second Brain page drawer. */}
+          <div className="p-6 tt-brain-md max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{plan.content}</ReactMarkdown>
           </div>
 

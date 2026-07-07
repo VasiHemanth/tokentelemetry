@@ -106,7 +106,7 @@ sent at most once per meaningful action.
 | `page.viewed` | a route is opened | `route` (enum: dashboard, analytics, traces, projects, hermes, artifacts, local-models, settings…) | **Which surfaces matter.** Is anyone using Hermes? Artifacts? |
 | `trace.summarized` | a trace summary is generated | `backend` (ollama/claude/…), `outcome` (ok/error-category) | Is the headline feature used? Which backend? Failure rate |
 | `analytics.filtered` | a filter is applied on Analytics | `dimension` (agent/model/local-only/day), no values | **Is local-model filtering used?** (your explicit question) |
-| `feature.used` | generic, for discrete features | `name` (plan-library, project-insights, delegation-view, power-cost, billing-mode, search…) | Long-tail feature adoption |
+| `feature.used` | generic, for discrete features | `name` (plan-library, project-insights, delegation-view, power-cost, billing-mode, search, brain-import, brain-page-open…) | Long-tail feature adoption |
 | `retention.opted_in` | user enables durable history | `tier` | Which power features convert |
 
 **Duration/outcome buckets, never raw values.** e.g. summary latency as
