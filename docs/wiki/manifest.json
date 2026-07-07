@@ -1,0 +1,387 @@
+{
+  "okf": "0.1",
+  "profile": "generic",
+  "created": "2026-07-07",
+  "updated": "2026-07-07",
+  "status": "complete",
+  "batches_done": 0,
+  "batches_total": 0,
+  "page_count": 50,
+  "page_types": {
+    "Analysis": 5,
+    "Convention": 5,
+    "Decision": 3,
+    "Feature": 7,
+    "Harness": 13,
+    "Idea": 1,
+    "Overview": 1,
+    "Playbook": 6,
+    "Subsystem": 9
+  },
+  "compiled_from_sha": "422d0a95a075b21296f6ea536bd1e946be0015d2",
+  "plugin_version": "0.5.0",
+  "provenance": {
+    "analyses/brain-savings-approaches": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "13fa09cde345"
+    },
+    "analyses/graphify-vs-tt-plugin": {
+      "resources": {
+        "docs/design/tokentelemetry-plugin.md": "413e28691c69",
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "963bd54a41af"
+    },
+    "analyses/multi-harness-session-mining": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "docs/design/tokentelemetry-plugin.md": "413e28691c69"
+      },
+      "page_sha": "ace25d740218"
+    },
+    "analyses/next-token-optimization-techniques": {
+      "resources": {},
+      "page_sha": "15bf5487011c"
+    },
+    "analyses/wiki-staleness-failure-modes": {
+      "resources": {
+        "docs/design/tokentelemetry-plugin.md": "413e28691c69"
+      },
+      "page_sha": "d81e0413d5e8"
+    },
+    "conventions/count-once-invariant": {
+      "resources": {
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "188585db4a34"
+    },
+    "conventions/error-handling": {
+      "resources": {},
+      "page_sha": "35af3d274202"
+    },
+    "conventions/local-first": {
+      "resources": {
+        "backend/telemetry.py": "5cae82d67eb4",
+        "docs/design/product-telemetry.md": "330dc75a8ce6"
+      },
+      "page_sha": "6f5f2e3f6443"
+    },
+    "conventions/pre-push-gates": {
+      "resources": {
+        ".claude/hooks": "cd12867e57c3",
+        ".github/workflows/security-audit.yml": "0380f6de0e45",
+        "package.json": "1ef388d4ea7d"
+      },
+      "page_sha": "27c3b327e04f"
+    },
+    "conventions/update-json-feed": {
+      "resources": {
+        "UPDATE.json": "5e22e7247d56",
+        ".claude/hooks/enforce-update-json.py": "90d9e15c8a67"
+      },
+      "page_sha": "13f181c5e2b7"
+    },
+    "decisions/adr-0001-record-decisions": {
+      "resources": {
+        "docs/adr/0001-record-architecture-decisions.md": "9b3e2b3d8915",
+        "docs/adr/0000-template.md": "9b9be070a9f4"
+      },
+      "page_sha": "313f8f82e5a3"
+    },
+    "decisions/adr-0002-durable-history": {
+      "resources": {
+        "docs/adr/0002-durable-history-rollup.md": "91537b269515"
+      },
+      "page_sha": "1fc31c77d92e"
+    },
+    "decisions/adr-0003-docs-site-fumadocs": {
+      "resources": {
+        "docs/adr/0003-docs-site-fumadocs.md": "74fd2b176ee1",
+        "docs/design/documentation-site.md": "ab49fb16e733"
+      },
+      "page_sha": "290f6003a2fb"
+    },
+    "features/analytics": {
+      "resources": {
+        "website/content/docs/features/analytics.mdx": "220d91676db6"
+      },
+      "page_sha": "a93fef816637"
+    },
+    "features/hermes-dashboard": {
+      "resources": {
+        "website/content/docs/features/hermes.mdx": "ab33fb0c9073"
+      },
+      "page_sha": "c570524912c0"
+    },
+    "features/local-models": {
+      "resources": {
+        "website/content/docs/configuration/local-models.mdx": "93ff4308e341",
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "4ec78c5d3e17"
+    },
+    "features/projects": {
+      "resources": {
+        "website/content/docs/features/projects.mdx": "4853d319d015"
+      },
+      "page_sha": "0ddc7ce1c0fb"
+    },
+    "features/schedules": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "1ec53bc3573b"
+    },
+    "features/summarization": {
+      "resources": {
+        "website/content/docs/features/summarization.mdx": "8e2ab2a51b05",
+        "website/content/docs/configuration/configure-summarizer.mdx": "c0154f720b5b"
+      },
+      "page_sha": "436a4dca94a4"
+    },
+    "features/traces": {
+      "resources": {
+        "website/content/docs/features/traces.mdx": "98eb7c88a1c3"
+      },
+      "page_sha": "9eebb56ff3ef"
+    },
+    "harnesses/antigravity": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "backend/test_antigravity_cli.py": "e445e1bb6b11",
+        "backend/summarizers/antigravity.py": "4d9aa5586c1c",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "930eabeedf0b"
+    },
+    "harnesses/claude-code": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "2c216069cd5a"
+    },
+    "harnesses/cline": {
+      "resources": {
+        "backend/test_cline_smallcode.py": "e08c33615b50"
+      },
+      "page_sha": "a04f0df4e716"
+    },
+    "harnesses/codex": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "backend/summarizers/codex.py": "e22e52d9186d",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "b143125a5545"
+    },
+    "harnesses/copilot": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "fd3eb65b1ddf"
+    },
+    "harnesses/cursor": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "41abb014f52b"
+    },
+    "harnesses/gemini-cli": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "backend/summarizers/gemini.py": "00dcad893c0c"
+      },
+      "page_sha": "dc9fb5857463"
+    },
+    "harnesses/grok-build": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "7c8e23148b11"
+    },
+    "harnesses/hermes": {
+      "resources": {
+        "llms.txt": "000be374c343",
+        "DESIGN.md": "a4d991aa3a82",
+        "scripts/install-hermes-plugin.sh": "b99357121ef3"
+      },
+      "page_sha": "1305b3a21b2d"
+    },
+    "harnesses/opencode": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "DESIGN.md": "a4d991aa3a82"
+      },
+      "page_sha": "32660f6a7dbb"
+    },
+    "harnesses/qwen": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "backend/summarizers/qwen.py": "804b5cd76e2d"
+      },
+      "page_sha": "c749cb2f3db5"
+    },
+    "harnesses/smallcode": {
+      "resources": {
+        "backend/test_cline_smallcode.py": "e08c33615b50"
+      },
+      "page_sha": "3379249d17c6"
+    },
+    "harnesses/vibe": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "6fb98fae671d"
+    },
+    "ideas/prove-brain-token-savings": {
+      "resources": {
+        "docs/design/tokentelemetry-plugin.md": "413e28691c69"
+      },
+      "page_sha": "e44062ecb80c"
+    },
+    "overview": {
+      "resources": {
+        "README.md": "bababfc991eb",
+        "bin/cli.js": "8d71c5e79981"
+      },
+      "page_sha": "1f143a898018"
+    },
+    "playbooks/add-a-harness": {
+      "resources": {
+        "DESIGN.md": "a4d991aa3a82",
+        "backend/main.py": "8e0dd470a9de",
+        "backend/pricing_data.json": "3c7b4d2d4342",
+        "frontend/src/lib/agents.ts": "b193ba6fc1c8",
+        "llms.txt": "000be374c343",
+        "website/content/docs/supported-agents.mdx": "8a0e8da319c8"
+      },
+      "page_sha": "35a4d7cb489f"
+    },
+    "playbooks/add-summarizer-error-category": {
+      "resources": {
+        "backend/summarizers/errors.py": "592d89974e72",
+        "frontend/src/lib/summarizer.ts": "2f17b2887f24"
+      },
+      "page_sha": "f45907b9f28d"
+    },
+    "playbooks/record-a-decision": {
+      "resources": {
+        "docs/adr/README.md": "58f3b66b8ecd",
+        "docs/adr/0000-template.md": "9b9be070a9f4",
+        "docs/design/README.md": "0be8156b26ba"
+      },
+      "page_sha": "c7f40d5cf539"
+    },
+    "playbooks/run-locally": {
+      "resources": {
+        "start.sh": "4d5e10bfcb0a",
+        "start.bat": "40f026c31bcd",
+        "bin/cli.js": "8d71c5e79981",
+        "backend/requirements.txt": "8802a907c88a"
+      },
+      "page_sha": "395d9e4598b6"
+    },
+    "playbooks/ship-a-feature": {
+      "resources": {
+        "package.json": "1ef388d4ea7d"
+      },
+      "page_sha": "a7b8a40fc1ca"
+    },
+    "playbooks/write-scanner-tests": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "backend/test_delegation.py": "257569ece81e",
+        "backend/test_cline_smallcode.py": "e08c33615b50",
+        "backend/test_tt_paths.py": "288419373978",
+        "backend/requirements.txt": "8802a907c88a"
+      },
+      "page_sha": "7635ed701509"
+    },
+    "subsystems/cli": {
+      "resources": {
+        "bin/cli.js": "8d71c5e79981",
+        "install.sh": "feca80435159",
+        "install.ps1": "537f1f458b8a",
+        "start.sh": "4d5e10bfcb0a",
+        "start.bat": "40f026c31bcd",
+        "backend/tt_paths.py": "db6aa0a1f1af"
+      },
+      "page_sha": "44156256820f"
+    },
+    "subsystems/delegation-telemetry": {
+      "resources": {
+        "DESIGN.md": "a4d991aa3a82",
+        "backend/main.py": "8e0dd470a9de",
+        "backend/test_delegation.py": "257569ece81e"
+      },
+      "page_sha": "ea90f59cfbd8"
+    },
+    "subsystems/frontend": {
+      "resources": {
+        "frontend/src/app": "7e8d442f1177"
+      },
+      "page_sha": "891110dd0350"
+    },
+    "subsystems/history-store": {
+      "resources": {
+        "backend/history_store.py": "699133c3edba",
+        "docs/design/durable-history.md": "d6a5fd7b520a",
+        "backend/agent_retention.py": "9bf7333d5eff"
+      },
+      "page_sha": "a9b2e328bf16"
+    },
+    "subsystems/power-cost": {
+      "resources": {
+        "backend/power_meter.py": "56abb1079848",
+        "backend/power_config.py": "16b29824d0bb",
+        "backend/billing_mode.py": "e035e26b4bcb",
+        "backend/billing_route.py": "38c90538d879",
+        "backend/insights.py": "1b715e553e7e"
+      },
+      "page_sha": "e29b1829952d"
+    },
+    "subsystems/pricing": {
+      "resources": {
+        "backend/pricing.py": "c756bb833671",
+        "backend/pricing_data.json": "3c7b4d2d4342",
+        "backend/pricing_sync.py": "8c014b8ad5b1",
+        ".github/workflows/pricing-sync.yml": "e286a7c238b2",
+        "backend/test_pricing.py": "0c90af890adb",
+        "backend/test_pricing_data.py": "464dbf675f33"
+      },
+      "page_sha": "e7f0aa14adbc"
+    },
+    "subsystems/remote-auth": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de",
+        "frontend/src/lib/api.ts": "67893809aa1b",
+        "backend/test_remote_auth.py": "6cde91f67191"
+      },
+      "page_sha": "e3ebbdb4e8d9"
+    },
+    "subsystems/scanner": {
+      "resources": {
+        "backend/main.py": "8e0dd470a9de"
+      },
+      "page_sha": "5e8c7477d86c"
+    },
+    "subsystems/summarizers": {
+      "resources": {
+        "backend/summarizers": "e2991c4d1b44",
+        "backend/summaries.py": "b58d4370d345",
+        "frontend/src/lib/summarizer.ts": "2f17b2887f24"
+      },
+      "page_sha": "5c9ed61baca0"
+    }
+  },
+  "provenance_stamped": "2026-07-07",
+  "source_tree": {
+    "count": 352,
+    "sha": "548f42cb4551"
+  }
+}

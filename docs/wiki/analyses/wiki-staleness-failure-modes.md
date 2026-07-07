@@ -1,6 +1,6 @@
 ---
 type: Analysis
-status: proposed
+status: adopted
 title: Wiki staleness failure modes and the update-nudge design
 description: Eleven-agent simulation of how a compiled wiki fails after code drift, what can go catastrophically wrong, and a harness-agnostic design for suggesting (never auto-running) ingest.
 tags: [plugin, staleness, ingest, nudge, multi-harness, security, simulation]
@@ -9,6 +9,13 @@ resource: docs/design/tokentelemetry-plugin.md
 ---
 
 # Wiki staleness failure modes and the update-nudge design
+
+Status 2026-07-06: adopted, with the maintainer's refinement that stale
+pages FALL BACK to source (wiki-as-cache) instead of demanding updates.
+Shipped as plugin v0.5.0 commit `060b674`: `wiki_manifest.py stamp`
+(content-hash provenance) + self-contained `docs/wiki/status.py`
+(FRESH/STALE/TAMPERED/UNVERIFIABLE, --note refresh queue), hardened by a
+4-role agent review; rolled out to this wiki and education_video.
 
 Saved from a maintainer chat, 2026-07-06. Trigger: a real incident — the
 maintainer merged code changes, forgot `/brain ingest`, and later got a

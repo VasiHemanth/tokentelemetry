@@ -2,6 +2,17 @@
 
 ## 2026-07-06
 
+**Update** `analyses/wiki-staleness-failure-modes.md` moved to
+status: adopted, refined per the maintainer: stale pages fall back to
+reading source (wiki-as-cache, code authoritative) rather than nudging
+for updates. Implemented in the plugin (v0.5.0, commit 060b674): stamp
+writes content-hash provenance and installs a self-contained status.py
+per wiki; verdicts FRESH/STALE/TAMPERED/UNVERIFIABLE; refresh notes
+queue in raw/stale-notes.md for the next ingest. A 100-case validation
+set (10 agents) and a 4-role hardening review (red-team, tests,
+integration, docs) preceded the ship; this wiki and education_video are
+stamped and carry status.py.
+
 **Creation** Analysis page `analyses/wiki-staleness-failure-modes.md`,
 saved from a maintainer chat after a real forgotten-ingest incident
 produced a stale answer. An 11-agent simulation (6 personas, 5
