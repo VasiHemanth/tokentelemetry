@@ -68,6 +68,7 @@ Humans edit sources; the wiki is recompiled from them. History in
 * [How to prove the brain saves tokens, ranked approaches](analyses/brain-savings-approaches.md) - Depth-and-breadth assessment of eight measurement approaches, grounded in a real 2-arm pilot on education_video and a 51-session trace audit; adherence, not wiki quality, is the current bottleneck.
 * [Four token-optimization techniques beyond the current seeds](analyses/next-token-optimization-techniques.md) - Data-mined candidates attacking conversation shape (turn batching, tool-result diet, scout delegation, checkpoint-restart), the waste pools ponytail, caveman, headroom and the wiki do not touch.
 * [Multi-harness session mining for the plugin](analyses/multi-harness-session-mining.md) - How to extend the plugin's session_scan beyond Claude Code to every harness TokenTelemetry parses, with a per-harness feasibility matrix and three build options.
+* [Wiki staleness failure modes and the update-nudge design](analyses/wiki-staleness-failure-modes.md) - Eleven-agent simulation of how a compiled wiki fails after code drift, what can go catastrophically wrong, and a harness-agnostic design for suggesting (never auto-running) ingest.
 
 ## Ideas
 

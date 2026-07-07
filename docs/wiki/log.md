@@ -2,6 +2,18 @@
 
 ## 2026-07-06
 
+**Creation** Analysis page `analyses/wiki-staleness-failure-modes.md`,
+saved from a maintainer chat after a real forgotten-ingest incident
+produced a stale answer. An 11-agent simulation (6 personas, 5
+adversarial critics, ~66 findings) mapped staleness failure modes; the
+critics also verified live gaps in this repo's own bundle (no
+manifest.json, no compiled_from_sha anywhere, 6/6 playbooks without
+resource:). Recommendation: content-hash provenance, a committed
+stateless status.py check script referenced by one stable pointer-block
+line, point-of-use trust demotion, a raw/ inbox escape hatch for
+non-Claude harnesses, and a CI staleness marker; auto-ingest stays
+rejected. Status: proposed.
+
 **Update** `analyses/multi-harness-session-mining.md` moved to
 status: adopted. The maintainer picked option A the same day, approving
 codex shell-string path extraction (in-memory tokenization, only path
