@@ -36,7 +36,7 @@ from tt_paths import data_dir
 
 _log = logging.getLogger("tokentelemetry.history")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Sub-dicts folded into ``ecosystem_json`` and expanded back out on read. These
 # are the keys the analytics aggregation + delegation views consume beyond the
@@ -82,6 +82,7 @@ def _migrate(con: sqlite3.Connection) -> None:
                 input           INTEGER DEFAULT 0,
                 output          INTEGER DEFAULT 0,
                 cached          INTEGER DEFAULT 0,
+                cache_reads     INTEGER DEFAULT 0,
                 total           INTEGER DEFAULT 0,
                 cost            REAL    DEFAULT 0.0,
                 tok_per_sec     REAL,
@@ -115,6 +116,20 @@ def _migrate(con: sqlite3.Connection) -> None:
             );
             """
         )
+        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.commit()
+    if ver < 2:
+        # v2 adds `cache_reads`: the CUMULATIVE cache-read sum per session
+        # (Claude-style scanners' `_cached_sum`). Distinct from `cached`, which
+        # is the per-session high-water mark. The analytics cache-hit metric
+        # needs cumulative reads; without persisting it, sessions served from
+        # this store fall back to the HWM and understate the rate (issue #126).
+        # ALTER always appends the column; ``ver < 1`` fresh DBs already have it
+        # from CREATE TABLE, so tolerate the duplicate-column error.
+        try:
+            con.execute("ALTER TABLE sessions ADD COLUMN cache_reads INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.commit()
 
@@ -165,14 +180,20 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
             for r in valid:
                 tok = r.get("tokens") or {}
                 ts = _to_utc_iso(r.get("timestamp"))
+                # Cumulative cache reads for the hit-rate metric. Prefer the
+                # scanner's `_cached_sum` (Claude-style); fall back to the HWM
+                # `cached` for scanners that don't track a sum, so their stored
+                # value equals today's. Explicit membership, not `or`, so a
+                # legitimately-zero `_cached_sum` is never masked by `cached`.
+                cache_reads = tok["_cached_sum"] if "_cached_sum" in tok else tok.get("cached", 0)
                 con.execute(
                     """
                     INSERT INTO sessions (
                         agent, id, project, model, provider, endpoint, billing_mode,
-                        first_ts, last_ts, input, output, cached, total, cost,
+                        first_ts, last_ts, input, output, cached, cache_reads, total, cost,
                         tok_per_sec, ecosystem_json, first_seen_at, last_seen_at,
                         source_present
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                     ON CONFLICT(agent, id) DO UPDATE SET
                         project=excluded.project,
                         model=excluded.model,
@@ -184,6 +205,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         input=excluded.input,
                         output=excluded.output,
                         cached=excluded.cached,
+                        cache_reads=excluded.cache_reads,
                         total=excluded.total,
                         cost=excluded.cost,
                         tok_per_sec=excluded.tok_per_sec,
@@ -196,7 +218,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         r.get("provider"), r.get("endpoint"), r.get("billing_mode"),
                         ts, ts,
                         int(tok.get("input", 0) or 0), int(tok.get("output", 0) or 0),
-                        int(tok.get("cached", 0) or 0), int(tok.get("total", 0) or 0),
+                        int(tok.get("cached", 0) or 0), int(cache_reads or 0),
+                        int(tok.get("total", 0) or 0),
                         float(r.get("cost", 0.0) or 0.0),
                         r.get("tok_per_sec"),
                         _ecosystem_blob(r), now, now,
@@ -242,6 +265,11 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
         ts = datetime.fromisoformat(r["last_ts"]) if r["last_ts"] else datetime.now(timezone.utc)
     except (ValueError, TypeError):
         ts = datetime.now(timezone.utc)
+    # Cumulative cache reads (v2+). Rows persisted before v2 (or pruned before
+    # this ran) have 0 here; fall back to the HWM `cached` so the analytics
+    # cache-hit metric degrades to the old behavior for them rather than reading
+    # a spurious 0. Freshly-scanned sessions carry the real sum.
+    cache_reads = (r["cache_reads"] if "cache_reads" in r.keys() else 0) or r["cached"]
     out: Dict[str, Any] = {
         "id": r["id"],
         "agent": r["agent"],
@@ -254,6 +282,7 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
         "tokens": {
             "input": r["input"], "output": r["output"],
             "cached": r["cached"], "total": r["total"],
+            "_cached_sum": cache_reads,
         },
         "cost": r["cost"],
         "tok_per_sec": r["tok_per_sec"],

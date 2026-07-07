@@ -6002,7 +6002,13 @@ async def put_budgets(payload: Any = Body(...)):
 
 
 def _cache_hit_pct(input_tokens: int, cached_tokens: int) -> Optional[float]:
-    """Return cache hit ratio as 0-100, matching the Hermes overlay's scale."""
+    """Return cache hit ratio as 0-100, matching the Hermes overlay's scale.
+
+    `cached_tokens` must be the CUMULATIVE cache-read sum across turns
+    (`_cached_sum` for Claude-style scanners), never the per-session
+    high-water-mark `cached` field — HWM/(cumulative input) understates the
+    rate more the longer the session runs.
+    """
     denom = input_tokens + cached_tokens
     if denom <= 0:
         return None
@@ -6102,7 +6108,7 @@ async def get_analytics(
     for s in sessions:
         agent = s["agent"]
         if agent not in by_agent:
-            by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+            by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "cache_reads": 0, "total": 0, "cost": 0.0,
                                "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0, "session_count": 0}
         st = s.get("tokens", {})
         scost = s.get("cost", 0.0)
@@ -6118,6 +6124,12 @@ async def get_analytics(
             savings = savings_vs_cloud(scost, cloud_cost)
             co2 = co2_for_session(st.get("output", 0), config=pc, tok_per_sec=tps)
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
+        # Cumulative cache reads for the hit-rate metric. Claude-style scanners
+        # keep `cached` as a per-session high-water mark (unique prefix size) and
+        # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
+        # `input` badly understates the hit rate on long sessions. Agents without
+        # `_cached_sum` fall back to `cached` (prior behavior).
+        by_agent[agent]["cache_reads"] += st.get("_cached_sum") or st.get("cached", 0) or 0
         by_agent[agent]["cost"] += scost
         by_agent[agent]["energy_wh"] += energy
         by_agent[agent]["savings_usd"] += savings
@@ -6145,7 +6157,7 @@ async def get_analytics(
         by_day[day]["savings_usd"] += savings
         by_day[day]["co2_g"] += co2
     for agent, row in by_agent.items():
-        row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cached"])
+        row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cache_reads"])
         # agg = quality_by_agent.get(agent)
         # if agg:
         #     row["quality"] = _quality_summary(agg["edit_turns"], agg["retry_turns"], agg["measured_sessions"])
@@ -6155,6 +6167,7 @@ async def get_analytics(
     total_input = sum(a["input"] for a in by_agent.values())
     total_output = sum(a["output"] for a in by_agent.values())
     total_cached = sum(a["cached"] for a in by_agent.values())
+    total_cache_reads = sum(a["cache_reads"] for a in by_agent.values())
 
     # Ecosystem usage: skills, MCP servers, subagent types. New keys only — the
     # existing by_agent/by_day/by_model/total stay byte-identical (no silent
@@ -6278,7 +6291,7 @@ async def get_analytics(
             "energy_wh": sum(a["energy_wh"] for a in by_agent.values()),
             "savings_usd": sum(a["savings_usd"] for a in by_agent.values()),
             "co2_g": sum(a["co2_g"] for a in by_agent.values()),
-            "cache_hit_pct": _cache_hit_pct(total_input, total_cached),
+            "cache_hit_pct": _cache_hit_pct(total_input, total_cache_reads),
         },
         "coverage": history_store.coverage(),
         "granularity": granularity,
