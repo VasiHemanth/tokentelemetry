@@ -2607,6 +2607,50 @@ _BUILTIN_CLI_COMMANDS = {
 _CODEX_SKILL_RE = re.compile(r'skills[/\\]+([\w.-]+)[/\\]+SKILL\.md')
 
 
+# IDE-originated Claude Code sessions (VS Code plugin, JetBrains/Rider) prefix
+# the first user prompt with editor-context tags — <ide_selection>…,
+# <ide_opened_file>…, <ide_diagnostics>… — so the raw first line makes a
+# useless session preview (discussion #129). Strip every well-formed
+# <ide_*>…</ide_*> block plus harness-injected <system-reminder> blocks
+# before taking the preview.
+_IDE_CONTEXT_TAG_RE = re.compile(r"<(ide_\w+)>.*?</\1>", re.DOTALL)
+_SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+def _claude_user_prompt_preview(data: Dict[str, Any], limit: int = 200) -> Optional[str]:
+    """Human-typed prompt preview from one Claude Code user JSONL line.
+
+    Returns None when the line carries no usable prompt (meta lines, command
+    echoes, tool results, or IDE-context-only messages) so callers keep
+    scanning later user lines.
+    """
+    if data.get("isMeta"):
+        return None
+    msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+    uc = msg.get("content")
+    if isinstance(uc, list):
+        # IDE / attachment messages arrive as content-block lists.
+        text = "\n".join(
+            b.get("text", "") for b in uc
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    elif isinstance(uc, str):
+        text = uc
+    else:
+        return None
+    if not text.strip():
+        return None
+    text = _IDE_CONTEXT_TAG_RE.sub("", text)
+    text = _SYSTEM_REMINDER_RE.sub("", text)
+    text = text.strip()
+    if (not text
+            or text.startswith("<local-command-")
+            or text.startswith("<command-name>")
+            or text.startswith("Caveat:")):
+        return None
+    return text[:limit]
+
+
 def _count_tool(tool_counts: Dict[str, int], name) -> None:
     if name:
         tool_counts[name] = tool_counts.get(name, 0) + 1
@@ -2855,9 +2899,9 @@ def _scan_sessions_sync():
                         if data.get("type") == "summary" and data.get("summary"):
                             sess["display"] = str(data["summary"])[:120]
                         elif data.get("type") == "user":
-                            uc = data.get("message", {}).get("content")
-                            if isinstance(uc, str) and uc.strip():
-                                sess["display"] = uc.strip()[:120]
+                            preview = _claude_user_prompt_preview(data)
+                            if preview:
+                                sess["display"] = preview
                     if sess["project"] != "unknown" and sess.get("display"):
                         break
         except Exception: pass
@@ -4663,7 +4707,14 @@ async def get_session_detail(session_id: str, agent: str):
                         "callID": p.get("callID"),
                         "state": p.get("state"),
                     }, **base})
-                # step-start / step-finish are lifecycle markers; skip in trace
+                elif ptype == "step-finish":
+                    # Lifecycle marker, not its own trace event — but it carries
+                    # the step's token usage, so attach it to the step's last
+                    # emitted event for the per-step usage UI (#128).
+                    tk = p.get("tokens")
+                    if isinstance(tk, dict) and events:
+                        events[-1]["tokens"] = tk
+                # step-start is a lifecycle marker; skip in trace
             return events
         finally:
             conn.close()
