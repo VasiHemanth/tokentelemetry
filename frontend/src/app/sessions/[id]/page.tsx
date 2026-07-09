@@ -72,6 +72,44 @@ interface Step {
   kind: StepKind;
   label: string;
   ts?: number;
+  tokens?: StepTokens | null;
+}
+
+/** Per-step (per-API-call) token usage — discussion #128. */
+interface StepTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/* Extract per-step token usage where the trace records it:
+   - Claude / Cursor: each assistant JSONL line carries `message.usage`
+     (one API call's usage, repeated on every line of that call);
+   - Codex: `token_count` event_msgs report per-turn usage — attached to the
+     preceding event as `_tt_tokens` in normalizeTraceEvents;
+   - OpenCode: `step-finish` parts carry usage — attached backend-side as
+     `tokens` on the step's last event. */
+function eventTokens(evt: any): StepTokens | null {
+  const u = evt.message?.usage || evt._tt_tokens;
+  if (u && (u.input_tokens != null || u.output_tokens != null)) {
+    return {
+      input: u.input_tokens || 0,
+      output: u.output_tokens || 0,
+      cacheRead: u.cache_read_input_tokens ?? u.cached_input_tokens ?? 0,
+      cacheWrite: u.cache_creation_input_tokens || 0,
+    };
+  }
+  const t = evt.tokens;
+  if (t && typeof t === "object" && (t.input != null || t.output != null)) {
+    return {
+      input: t.input || 0,
+      output: t.output || 0,
+      cacheRead: t.cache?.read || 0,
+      cacheWrite: t.cache?.write || 0,
+    };
+  }
+  return null;
 }
 
 function eventKind(evt: Event): StepKind {
@@ -117,9 +155,17 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
     evts = [];
   }
   if (agent === "codex") {
+    // token_count events are filtered as noise, but they carry the turn's
+    // usage — hand it to the preceding kept event for the per-step chip (#128).
+    let lastKept: any = null;
     evts = evts.filter((e: any) => {
       if (e.type === "turn_context") return false;
-      if (e.type === "event_msg" && e.payload?.type === "token_count") return false;
+      if (e.type === "event_msg" && e.payload?.type === "token_count") {
+        const u = e.payload?.info?.last_token_usage;
+        if (u && lastKept) lastKept._tt_tokens = u;
+        return false;
+      }
+      lastKept = e;
       return true;
     });
   }
@@ -313,14 +359,31 @@ export default function SessionDetailPage() {
     return false;
   };
 
+  // Per-step token usage, deduped: Claude splits one API call across several
+  // JSONL lines that all repeat the same `message.usage`, so only the first
+  // line of each message id gets the usage attributed (#128).
+  const stepTokens = useMemo(() => {
+    const out: (StepTokens | null)[] = new Array(events.length).fill(null);
+    let lastMsgId: string | null = null;
+    events.forEach((e: any, i) => {
+      const t = eventTokens(e);
+      if (!t) return;
+      const msgId = e.message?.id;
+      if (msgId && msgId === lastMsgId) return;
+      if (msgId) lastMsgId = msgId;
+      out[i] = t;
+    });
+    return out;
+  }, [events]);
+
   // Steps for left index
   const steps: Step[] = useMemo(
     () =>
       events.map((evt, idx) => {
         const kind = eventKind(evt);
-        return { idx, kind, label: stepLabel(evt, kind), ts: normalizeTs(evt) };
+        return { idx, kind, label: stepLabel(evt, kind), ts: normalizeTs(evt), tokens: stepTokens[idx] };
       }),
-    [events]
+    [events, stepTokens]
   );
 
   // Stats
@@ -703,7 +766,7 @@ export default function SessionDetailPage() {
 
                       return (
                          <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
-                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} />
+                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} tokens={stepTokens[idx]} />
                          </div>
                       );
                    })}
@@ -1056,6 +1119,14 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
       <span className="text-[var(--tt-fg-faint)] w-7 tabular-nums">{step.idx.toString().padStart(3, "0")}</span>
       <span className={color[step.kind]}>{icon[step.kind]}</span>
       <span className="text-[var(--tt-fg)] truncate flex-1">{step.label}</span>
+      {step.tokens && (
+        <span
+          className="tabular-nums text-[9px] text-[var(--tt-fg-dim)] shrink-0"
+          title={`Tokens this step — in: ${step.tokens.input.toLocaleString()}, out: ${step.tokens.output.toLocaleString()}, cache read: ${step.tokens.cacheRead.toLocaleString()}, cache write: ${step.tokens.cacheWrite.toLocaleString()}`}
+        >
+          {formatTokens(step.tokens.output)}
+        </span>
+      )}
     </button>
   );
 }
@@ -1385,7 +1456,7 @@ function ArtifactViewer({ path }: { path: string }) {
   );
 }
 
-function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null }) {
+function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null, tokens?: StepTokens | null }) {
   const { type, timestamp, message, attachment, toolUseResult, payload, content, thoughts, toolCalls } = event;
 
   // Render a tiny timestamp badge if available
@@ -2072,7 +2143,34 @@ function EventCard({ event, mode = "all", agent }: { event: any, mode?: "dialogu
     );
   }
 
-  return <div className="space-y-6 w-full">{parts.map((p, i) => <React.Fragment key={i}>{p}</React.Fragment>)}</div>;
+  return (
+    <div className="space-y-6 w-full">
+      {parts.map((p, i) => <React.Fragment key={i}>{p}</React.Fragment>)}
+      {tokens && parts.length > 0 && <StepTokensChip t={tokens} />}
+    </div>
+  );
+}
+
+/* Per-step token usage footer (#128) — one API call's usage, right under the
+   step's cards so expensive steps are visible without opening the raw pane. */
+function StepTokensChip({ t }: { t: StepTokens }) {
+  const bits: string[] = [];
+  if (t.output) bits.push(`${formatTokens(t.output)} out`);
+  if (t.input) bits.push(`${formatTokens(t.input)} in`);
+  if (t.cacheRead) bits.push(`${formatTokens(t.cacheRead)} cache read`);
+  if (t.cacheWrite) bits.push(`${formatTokens(t.cacheWrite)} cache write`);
+  if (bits.length === 0) return null;
+  return (
+    <div className="flex justify-end !mt-2">
+      <span
+        className="inline-flex items-center gap-1.5 text-[9px] font-mono tabular-nums text-[var(--tt-fg-dim)] bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-0.5"
+        title="Token usage for this step (one API call)"
+      >
+        <Zap size={9} className="text-[var(--tt-brand)]" />
+        {bits.join(" · ")}
+      </span>
+    </div>
+  );
 }
 function ResponseBody({ text, tone = "default" }: { text: string; tone?: "default" | "muted" }) {
   const [mode, setMode] = useState<"md" | "raw">("md");

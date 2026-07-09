@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-09",
+      "title": "Readable session intents & per-step tokens",
+      "highlights": [
+        {
+          "title": "IDE sessions now show your actual prompt",
+          "description": "Sessions started from the VS Code or JetBrains Claude plugins used to show \"No prompt content\" or raw editor tags in the sessions list. The list now skips the editor context and shows the first words you actually typed, so you can find the right session at a glance."
+        },
+        {
+          "title": "Token usage on every step of a trace",
+          "description": "Open a session trace and each step now shows the tokens that API call used — a small chip under the step and a per-step count in the step index. Makes it easy to scan an expensive session and spot which step was the main offender.",
+          "href": "/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-06-24",
       "title": "Git worktrees, grouped under their project",
       "highlights": [
