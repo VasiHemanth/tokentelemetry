@@ -800,5 +800,91 @@ def test_scan_cache_write_creates_parent_dirs(tmp_path, monkeypatch):
     assert expected_path.exists()
 
 
+def test_claude_scan_has_no_100_cap(scan_env, monkeypatch):
+    """Every discovered Claude session must be parsed (or cache-hit) — never
+    left as a permanent zero-value stub because of the old [:100] slice."""
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    total = 120
+    for i in range(total):
+        sid = f"sid-{i:04d}"
+        make_claude_tree(scan_env / ".claude", sid, with_subagents=False)
+
+    sessions = main._scan_sessions_sync()
+    claude_sessions = [s for s in sessions if s["agent"] == "claude"]
+
+    assert len(claude_sessions) > 100, f"expected >100 claude sessions, got {len(claude_sessions)}"
+    for s in claude_sessions:
+        assert not (s.get("model") is None and s["tokens"]["total"] == 0), (
+            f"session {s['id']} is a permanent stub: model={s.get('model')!r}, "
+            f"tokens={s['tokens']}"
+        )
+        assert s.get("stub") is False
+
+
+def test_claude_scan_cache_hit_serves_stale_content(scan_env, monkeypatch):
+    """If the underlying .jsonl mutates but mtime is pinned back to the value
+    seen on the first scan, the second scan must serve the cached result
+    rather than re-reading the (now different) file content."""
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    sid = "sid-cache-hit"
+    session_file = make_claude_tree(scan_env / ".claude", sid, with_subagents=False)
+
+    first = main._scan_sessions_sync()
+    first_sess = next(s for s in first if s["agent"] == "claude" and s["id"] == sid)
+    first_tokens = dict(first_sess["tokens"])
+    first_model = first_sess.get("model")
+
+    st = session_file.stat()
+    original_mtime = st.st_mtime
+    with open(session_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "type": "assistant",
+            "timestamp": "2099-01-01T00:00:00Z",
+            "message": {
+                "model": "claude-mutated-model",
+                "usage": {"input_tokens": 999999, "output_tokens": 999999},
+                "content": [],
+            },
+        }) + "\n")
+    os.utime(session_file, (original_mtime, original_mtime))
+
+    second = main._scan_sessions_sync()
+    second_sess = next(s for s in second if s["agent"] == "claude" and s["id"] == sid)
+
+    assert second_sess["tokens"] == first_tokens
+    assert second_sess.get("model") == first_model
+    assert second_sess.get("stub") is False
+
+
+def test_claude_scan_cache_miss_after_real_mtime_change(scan_env, monkeypatch):
+    """A genuine content change (which naturally bumps mtime) must be
+    reflected on the next scan — the cache must not mask real updates."""
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    sid = "sid-cache-miss"
+    session_file = make_claude_tree(scan_env / ".claude", sid, with_subagents=False)
+
+    first = main._scan_sessions_sync()
+    first_sess = next(s for s in first if s["agent"] == "claude" and s["id"] == sid)
+    first_input_tokens = first_sess["tokens"]["input"]
+
+    with open(session_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "type": "assistant",
+            "timestamp": "2099-01-01T00:00:00Z",
+            "message": {
+                "model": "claude-new-turn",
+                "usage": {"input_tokens": 12345, "output_tokens": 1},
+                "content": [],
+            },
+        }) + "\n")
+    # mtime NOT pinned back — real change, real mtime bump
+
+    second = main._scan_sessions_sync()
+    second_sess = next(s for s in second if s["agent"] == "claude" and s["id"] == sid)
+
+    assert second_sess["tokens"]["input"] == first_input_tokens + 12345
+    assert second_sess.get("stub") is False
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

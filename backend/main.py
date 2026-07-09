@@ -22,6 +22,7 @@ from harness_config import (
 )
 import notifications as notif
 from tt_paths import data_dir
+import scan_cache
 
 def _aware(dt):
     """Ensure datetime is timezone-aware UTC. Naive inputs are assumed to be UTC."""
@@ -2766,6 +2767,44 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     }
 
 
+_CLAUDE_CACHE_FIELDS = (
+    "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
+    "artifacts", "delegation", "delegated_cost",
+)
+
+
+def _claude_cache_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
+    """Snapshot the expensive-to-reparse fields of a fully-parsed Claude
+    session for the sidecar cache. Deliberately excludes `project` (always
+    recomputed fresh so project-alias edits apply retroactively) and `id`/
+    `agent` (known from the cache key already)."""
+    payload = {k: sess.get(k) for k in _CLAUDE_CACHE_FIELDS}
+    ts = sess.get("timestamp")
+    payload["timestamp"] = ts.isoformat() if isinstance(ts, datetime) else ts
+    payload["plans"] = [
+        {**p, "timestamp": p["timestamp"].isoformat() if isinstance(p.get("timestamp"), datetime) else p.get("timestamp")}
+        for p in (payload.get("plans") or [])
+    ]
+    return payload
+
+
+def _apply_claude_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> None:
+    """Inverse of `_claude_cache_payload`: merge a cache hit back into `sess`."""
+    for k in _CLAUDE_CACHE_FIELDS:
+        if k in cached:
+            sess[k] = cached[k]
+    ts = cached.get("timestamp")
+    if isinstance(ts, str):
+        try:
+            sess["timestamp"] = datetime.fromisoformat(ts)
+        except ValueError:
+            pass
+    sess["plans"] = [
+        {**p, "timestamp": datetime.fromisoformat(p["timestamp"]) if isinstance(p.get("timestamp"), str) else p.get("timestamp")}
+        for p in (sess.get("plans") or [])
+    ]
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -2866,7 +2905,7 @@ def _scan_sessions_sync():
     # slicing previously dropped genuinely recent sessions when totals
     # exceeded 100.
     if claude_sessions:
-        for sid, sess in sorted(claude_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True)[:100]:
+        for sid, sess in sorted(claude_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True):
             session_file = claude_file_map.get(sid)
             if session_file:
                 # Discover Claude Project Memory artifacts
@@ -2877,115 +2916,99 @@ def _scan_sessions_sync():
                             sess["artifacts"].append({"name": mf.name, "path": str(mf), "type": "document"})
                 except Exception: pass
 
-                # pending_edit_tool_ids: Set[str] = set()  # quality signals (commented out)
-                # prior_edit_failed = False
-                tool_counts: Dict[str, int] = {}
-                skill_counts: Dict[str, int] = {}
-                last_real_ts = None
+                cached = None
+                source_mtime = None
                 try:
-                    with open(session_file, "r", encoding="utf-8", errors="replace") as f:
-                        for line in f:
-                            try:
-                                data = json.loads(line)
-                            except Exception: continue
-                            # Only user/assistant turns carry their own "timestamp".
-                            # Housekeeping entries appended on reopen (ai-title, mode,
-                            # last-prompt, file-history-snapshot) have none but still
-                            # bump the file's mtime -- falling back to that alone
-                            # would report the session as happening on reopen day.
-                            if data.get("type") in ("user", "assistant") and data.get("timestamp"):
-                                last_real_ts = data["timestamp"]
-                            if data.get("type") == "assistant":
-                                msg = data.get("message", {})
-                                m = msg.get("model")
-                                if m and m != "<synthetic>" and not sess.get("model"):
-                                    sess["model"] = m
-                                usage = msg.get("usage", {})
-                                if usage:
-                                    cr = usage.get("cache_read_input_tokens", 0) or 0
-                                    cc = usage.get("cache_creation_input_tokens", 0) or 0
-                                    cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
-                                    sess["tokens"]["input"]  += usage.get("input_tokens", 0) or 0
-                                    sess["tokens"]["output"] += usage.get("output_tokens", 0) or 0
-                                    # cached = unique cached-prefix size (high-water-mark), NOT per-turn sum
-                                    sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cr)
-                                    sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
-                                    # cache_creation (write) IS billed per event → cumulative, like input.
-                                    sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
-                                    sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
-                                sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
-                                sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
-                                for item in msg.get("content", []):
-                                    if item.get("type") == "tool_use":
-                                        tool = item.get("name")
-                                        if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
-                                        _count_tool(tool_counts, tool)
-                                        if tool == "Skill":
-                                            skill = (item.get("input") or {}).get("skill")
-                                            if skill:
-                                                skill_counts[skill] = skill_counts.get(skill, 0) + 1
-                                        if tool == "ExitPlanMode":
-                                            plan_text = (item.get("input") or {}).get("plan") or ""
-                                            if plan_text:
-                                                sess["has_plan"] = True
-                                                sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": plan_text})
-                                    if item.get("type") == "thinking":
-                                        t_text = item.get("thinking", "")
-                                        if "plan" in t_text.lower() and len(t_text) > 100:
-                                            sess["has_plan"] = True
-                                            sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": t_text})
-                                # Quality signals (edit/retry tracking) commented out:
-                                # if this_turn_edit_ids:
-                                #     sess["quality"]["edit_turns"] += 1
-                                #     if prior_edit_failed:
-                                #         sess["quality"]["retry_turns"] += 1
-                                #     pending_edit_tool_ids = this_turn_edit_ids
-                                #     prior_edit_failed = False
-                            if data.get("type") == "user":
-                                u_msg = data.get("message", {})
-                                u_content = u_msg.get("content", "")
-                                if "/plan" in str(u_content):
-                                    sess["has_plan"] = True
-                                # Slash-command echoes: count skill invocations,
-                                # skip built-in CLI commands (/model, /usage, ...).
-                                for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
-                                    if cmd not in _BUILTIN_CLI_COMMANDS:
-                                        skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
-                                # Quality signals (retry chain tracking) commented out:
-                                # if isinstance(u_content, list):
-                                #     for it in u_content:
-                                #         if isinstance(it, dict) and it.get("type") == "tool_result":
-                                #             if it.get("tool_use_id") in pending_edit_tool_ids and it.get("is_error"):
-                                #                 prior_edit_failed = True
-                                # else:
-                                #     prior_edit_failed = False
-                                #     pending_edit_tool_ids = set()
-                except Exception: continue
-                if last_real_ts:
+                    source_mtime = session_file.stat().st_mtime
+                    cached = scan_cache.read_cache("claude", sid, source_mtime)
+                except OSError:
+                    cached = None
+
+                if cached is not None:
+                    _apply_claude_cache_hit(sess, cached)
+                    sess["stub"] = False
+                else:
+                    tool_counts: Dict[str, int] = {}
+                    skill_counts: Dict[str, int] = {}
+                    last_real_ts = None
                     try:
-                        sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
-                    except ValueError:
-                        pass
-                _attach_tool_usage(sess, tool_counts, skill_counts)
-                # Subagent (Task/Agent) rollup — separate "delegated" bucket so the
-                # parent's own token fields stay exactly as before. Full per-subagent
-                # breakdown is served by /sessions/{id}/delegation, the list carries
-                # only the summary.
-                deleg = _claude_subagent_usage(session_file, sid)
-                sess["delegation"] = {
-                    "supported": True,
-                    "tokens_recorded": True,
-                    "spawn_count": deleg["spawn_count"] if deleg else 0,
-                    "delegated_total": deleg["totals"]["total"] if deleg else 0,
-                }
-                if deleg:
-                    sess["delegation"]["by_type"] = deleg["by_type"]
-                    sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
-                    sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
-                    sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
-                    sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
-                    sess["delegated_cost"] = deleg["cost"]
-                sess["stub"] = False
+                        with open(session_file, "r", encoding="utf-8", errors="replace") as f:
+                            for line in f:
+                                try:
+                                    data = json.loads(line)
+                                except Exception: continue
+                                if data.get("type") in ("user", "assistant") and data.get("timestamp"):
+                                    last_real_ts = data["timestamp"]
+                                if data.get("type") == "assistant":
+                                    msg = data.get("message", {})
+                                    m = msg.get("model")
+                                    if m and m != "<synthetic>" and not sess.get("model"):
+                                        sess["model"] = m
+                                    usage = msg.get("usage", {})
+                                    if usage:
+                                        cr = usage.get("cache_read_input_tokens", 0) or 0
+                                        cc = usage.get("cache_creation_input_tokens", 0) or 0
+                                        cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
+                                        sess["tokens"]["input"]  += usage.get("input_tokens", 0) or 0
+                                        sess["tokens"]["output"] += usage.get("output_tokens", 0) or 0
+                                        sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cr)
+                                        sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
+                                        sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
+                                        sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
+                                    sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
+                                    for item in msg.get("content", []):
+                                        if item.get("type") == "tool_use":
+                                            tool = item.get("name")
+                                            if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
+                                            _count_tool(tool_counts, tool)
+                                            if tool == "Skill":
+                                                skill = (item.get("input") or {}).get("skill")
+                                                if skill:
+                                                    skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                                            if tool == "ExitPlanMode":
+                                                plan_text = (item.get("input") or {}).get("plan") or ""
+                                                if plan_text:
+                                                    sess["has_plan"] = True
+                                                    sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": plan_text})
+                                        if item.get("type") == "thinking":
+                                            t_text = item.get("thinking", "")
+                                            if "plan" in t_text.lower() and len(t_text) > 100:
+                                                sess["has_plan"] = True
+                                                sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": t_text})
+                                if data.get("type") == "user":
+                                    u_msg = data.get("message", {})
+                                    u_content = u_msg.get("content", "")
+                                    if "/plan" in str(u_content):
+                                        sess["has_plan"] = True
+                                    for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
+                                        if cmd not in _BUILTIN_CLI_COMMANDS:
+                                            skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
+                    except Exception: continue
+                    if last_real_ts:
+                        try:
+                            sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+                    _attach_tool_usage(sess, tool_counts, skill_counts)
+                    deleg = _claude_subagent_usage(session_file, sid)
+                    sess["delegation"] = {
+                        "supported": True,
+                        "tokens_recorded": True,
+                        "spawn_count": deleg["spawn_count"] if deleg else 0,
+                        "delegated_total": deleg["totals"]["total"] if deleg else 0,
+                    }
+                    if deleg:
+                        sess["delegation"]["by_type"] = deleg["by_type"]
+                        sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
+                        sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
+                        sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
+                        sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
+                        sess["delegated_cost"] = deleg["cost"]
+
+                    if source_mtime is not None:
+                        scan_cache.write_cache("claude", sid, source_mtime, _claude_cache_payload(sess))
+                    sess["stub"] = False
         sessions.extend(claude_sessions.values())
     # 2. Codex
     codex_index = CODEX_DIR / "session_index.jsonl"
