@@ -2801,7 +2801,7 @@ def _scan_sessions_sync():
             "timestamp": ts, "display": None,
             "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
             "mcp_tools": [], "has_plan": False, "plans": [],
-            "model": None, "artifacts": [],
+            "model": None, "artifacts": [], "stub": True,
         }
 
     # Optional enrichment: overlay project/display from legacy history.jsonl.
@@ -2822,7 +2822,7 @@ def _scan_sessions_sync():
                                 "timestamp": ts, "display": data.get("display"),
                                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
                                 "mcp_tools": [], "has_plan": False, "plans": [],
-                                "model": None, "artifacts": [],
+                                "model": None, "artifacts": [], "stub": True,
                             }
                         else:
                             # Overlay metadata only; keep file-derived timestamp if newer
@@ -2985,6 +2985,7 @@ def _scan_sessions_sync():
                     sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
                     sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
                     sess["delegated_cost"] = deleg["cost"]
+                sess["stub"] = False
         sessions.extend(claude_sessions.values())
     # 2. Codex
     codex_index = CODEX_DIR / "session_index.jsonl"
@@ -3010,7 +3011,7 @@ def _scan_sessions_sync():
                         if not sid: continue
                         ts = _aware(datetime.fromisoformat(data.get("updated_at").replace('Z', '+00:00'))) if data.get("updated_at") else _file_mtime_utc(codex_index)
                         if sid not in codex_sessions or ts > codex_sessions[sid]["timestamp"]:
-                            codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": data.get("thread_name"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": []}
+                            codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": data.get("thread_name"), "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": [], "stub": True}
                     except Exception: continue
         except Exception: pass
 
@@ -3026,7 +3027,7 @@ def _scan_sessions_sync():
                 ts = max(_file_mtime_utc(f) for f in files)
             except Exception:
                 ts = _now()
-            codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": None, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": []}
+            codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": None, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": [], "stub": True}
         
         # Process the 100 most recent sessions
         for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True)[:100]:
@@ -3149,6 +3150,7 @@ def _scan_sessions_sync():
                         "cost": calculate_cost(model_for_cost, net_in, do, dc)
                     }
                 sess["tokens_by_day"] = tbd
+            sess["stub"] = False
         for s in codex_sessions.values():
             if not s.get("model") and s.get("_provider"):
                 s["model"] = s["_provider"]

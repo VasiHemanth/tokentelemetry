@@ -658,5 +658,20 @@ def test_subagent_trace_endpoint(scan_env):
     assert _run(main.session_subagent_trace(SID, "one", "gemini")) == {"error": "Invalid agent"}
 
 
+def test_claude_parsed_session_is_not_stub(scan_env):
+    make_claude_tree(scan_env / ".claude")
+    s = [s for s in main._scan_sessions_sync() if s["agent"] == "claude"][0]
+    assert s["stub"] is False
+
+
+def test_codex_parsed_session_is_not_stub(scan_env, monkeypatch):
+    codex_dir = scan_env / ".codex"
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+    _make_codex_tree(codex_dir)
+    for s in main._scan_sessions_sync():
+        if s["agent"] == "codex":
+            assert s["stub"] is False
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
