@@ -22,6 +22,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import main  # noqa: E402
+import scan_cache  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
 PROJ = "-tmp-proj"
@@ -741,6 +742,62 @@ def test_upsert_nonstub_default_still_overwrites(tmp_path, monkeypatch):
         con.close()
     assert row["model"] == "m2" and row["input"] == 20 and row["total"] == 25
     assert row["cost"] == 2.0
+
+
+def test_scan_cache_miss_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
+
+    result = scan_cache.read_cache("claude", "no-such-session", source_mtime=1000.0)
+
+    assert result is None
+
+
+def test_scan_cache_write_then_read_hit(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
+
+    payload = {"model": "x", "tokens": {"total": 5}}
+    scan_cache.write_cache("claude", "sid1", source_mtime=1000.0, payload=payload)
+
+    result = scan_cache.read_cache("claude", "sid1", source_mtime=1000.0)
+
+    assert result is not None
+    assert result["model"] == "x"
+    assert result["tokens"] == {"total": 5}
+
+
+def test_scan_cache_miss_when_stale(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
+
+    scan_cache.write_cache("claude", "sid1", source_mtime=1000.0, payload={"model": "x"})
+
+    result = scan_cache.read_cache("claude", "sid1", source_mtime=2000.0)
+
+    assert result is None
+
+
+def test_scan_cache_miss_on_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
+
+    path = scan_cache.cache_path("claude", "sid1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not valid json {{{", encoding="utf-8")
+
+    result = scan_cache.read_cache("claude", "sid1", source_mtime=1000.0)
+
+    assert result is None
+
+
+def test_scan_cache_write_creates_parent_dirs(tmp_path, monkeypatch):
+    data_dir_path = tmp_path / "tt_data"
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(data_dir_path))
+
+    assert not (data_dir_path / "cache").exists()
+    assert not (data_dir_path / "cache" / "claude").exists()
+
+    scan_cache.write_cache("claude", "sid1", source_mtime=1000.0, payload={"model": "x"})
+
+    expected_path = scan_cache.cache_path("claude", "sid1")
+    assert expected_path.exists()
 
 
 if __name__ == "__main__":
