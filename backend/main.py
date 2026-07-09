@@ -2809,6 +2809,47 @@ def _apply_claude_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> Non
     ]
 
 
+_CODEX_CACHE_FIELDS = (
+    "tokens", "model", "_provider", "cost", "mcp_tools", "has_plan", "plans",
+    "text", "tokens_by_day", "tool_counts", "_skill_counts",
+    "parent_session_id", "subagent_info",
+)
+
+
+def _codex_cache_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
+    """Snapshot the expensive-to-reparse fields of a fully-parsed Codex
+    session for the sidecar cache. Excludes `project` (always recomputed
+    fresh) and `id`/`agent` (known from the cache key already). Includes
+    the RAW `tool_counts`/`_skill_counts` dicts (not the derived
+    `mcp_usage`/`skills_used`) because the unconditional post-processing
+    loop in `_scan_sessions_sync` derives those from the raw counts for
+    every session regardless of cache hit/miss."""
+    payload = {k: sess[k] for k in _CODEX_CACHE_FIELDS if k in sess}
+    payload["timestamp"] = sess["timestamp"].isoformat() if isinstance(sess.get("timestamp"), datetime) else sess.get("timestamp")
+    payload["plans"] = [
+        {**p, "timestamp": p["timestamp"].isoformat() if isinstance(p.get("timestamp"), datetime) else p.get("timestamp")}
+        for p in (payload.get("plans") or [])
+    ]
+    return payload
+
+
+def _apply_codex_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> None:
+    """Inverse of `_codex_cache_payload`: merge a cache hit back into `sess`."""
+    for k in _CODEX_CACHE_FIELDS:
+        if k in cached:
+            sess[k] = cached[k]
+    ts = cached.get("timestamp")
+    if isinstance(ts, str):
+        try:
+            sess["timestamp"] = datetime.fromisoformat(ts)
+        except ValueError:
+            pass
+    sess["plans"] = [
+        {**p, "timestamp": datetime.fromisoformat(p["timestamp"]) if isinstance(p.get("timestamp"), str) else p.get("timestamp")}
+        for p in (sess.get("plans") or [])
+    ]
+
+
 def _scan_sessions_sync():
     sessions = []
     aliases = _load_project_aliases()
@@ -3056,10 +3097,20 @@ def _scan_sessions_sync():
                 ts = _now()
             codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": None, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": [], "stub": True}
         
-        # Process the 100 most recent sessions
-        for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True)[:100]:
+        for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True):
             rollout_files = codex_file_map.get(sid, [])
             rollout_files.sort(key=lambda f: f.name)
+            try:
+                source_mtime = max(f.stat().st_mtime for f in rollout_files) if rollout_files else None
+            except OSError:
+                source_mtime = None
+
+            cached = scan_cache.read_cache("codex", sid, source_mtime) if source_mtime is not None else None
+            if cached is not None:
+                _apply_codex_cache_hit(sess, cached)
+                sess["stub"] = False
+                continue
+
             day_snap = {}
             for rollout_file in rollout_files:
                 try:
@@ -3119,20 +3170,20 @@ def _scan_sessions_sync():
                                     #   Chat-Completions-style APIs; we add reasoning explicitly only if the record's
                                     #   total_tokens doesn't already account for it.
                                     gross_input = usage.get("input_tokens", 0) or 0
-                                    cached      = usage.get("cached_input_tokens", 0) or 0
+                                    cached_tok  = usage.get("cached_input_tokens", 0) or 0
                                     output      = usage.get("output_tokens", 0) or 0
                                     reasoning   = usage.get("reasoning_output_tokens", 0) or 0
                                     total_record = usage.get("total_tokens", 0) or 0
-                                    net_input   = max(0, gross_input - cached)
+                                    net_input   = max(0, gross_input - cached_tok)
                                     # If total_tokens > gross_input + output, the API is reporting reasoning as
                                     # extra (not folded into output_tokens). Otherwise reasoning is implicit.
                                     output_billable = output + (reasoning if total_record > gross_input + output else 0)
 
                                     if event_day:
-                                        day_snap[event_day] = (gross_input, cached, output_billable)
+                                        day_snap[event_day] = (gross_input, cached_tok, output_billable)
 
                                     sess["tokens"]["input"]  = max(sess["tokens"]["input"],  net_input)
-                                    sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cached)
+                                    sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cached_tok)
                                     sess["tokens"]["output"] = max(sess["tokens"]["output"], output_billable)
                                     sess["tokens"]["total"]  = sess["tokens"]["input"] + sess["tokens"]["cached"] + sess["tokens"]["output"]
                                     # Codex/OpenAI usage has no cache-write field (only cached read); nothing to pass.
@@ -3177,6 +3228,9 @@ def _scan_sessions_sync():
                         "cost": calculate_cost(model_for_cost, net_in, do, dc)
                     }
                 sess["tokens_by_day"] = tbd
+
+            if source_mtime is not None:
+                scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
             sess["stub"] = False
         for s in codex_sessions.values():
             if not s.get("model") and s.get("_provider"):

@@ -16,6 +16,7 @@ import os
 import sqlite3
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -914,6 +915,105 @@ def test_claude_scan_cache_miss_after_real_mtime_change(scan_env, monkeypatch):
 
     assert second_sess["tokens"]["input"] == first_input_tokens + 12345
     assert second_sess.get("stub") is False
+
+
+# --- Codex scan cache / cap removal -----------------------------------------
+
+def _write_codex_rollout(codex_dir, sid: str, seq: int, lines: list[dict]):
+    day = datetime(2026, 7, 1)
+    rollout_dir = codex_dir / "sessions" / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    path = rollout_dir / f"rollout-2026-07-01T00-00-{seq:02d}-{sid}.jsonl"
+    with open(path, "w", encoding="utf-8") as f:
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
+    return path
+
+
+def _codex_session_meta(cwd="/tmp/proj", model="gpt-5-codex", provider="openai"):
+    return {"type": "session_meta", "payload": {"cwd": cwd, "model": model, "model_provider": provider}}
+
+
+def _codex_token_event(ts, input_tokens, cached, output, reasoning=0, total=None):
+    total = total if total is not None else (input_tokens + output + reasoning)
+    return {
+        "type": "event_msg",
+        "timestamp": ts,
+        "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": input_tokens, "cached_input_tokens": cached,
+            "output_tokens": output, "reasoning_output_tokens": reasoning,
+            "total_tokens": total,
+        }}},
+    }
+
+
+def test_codex_scan_has_no_100_cap(scan_env, monkeypatch):
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    for i in range(115):
+        sid = f"019eb056-4eae-7280-8617-{i:012d}"
+        _write_codex_rollout(codex_dir, sid, i, [
+            _codex_session_meta(),
+            _codex_token_event("2026-07-01T00:00:00Z", 100, 0, 50),
+        ])
+
+    result = main._scan_sessions_sync()
+    codex_sessions = [s for s in result if s.get("agent") == "codex"]
+    assert len(codex_sessions) >= 115
+    stubs = [s for s in codex_sessions
+             if s.get("model") is None and s["tokens"]["total"] == 0 and s.get("stub") is True]
+    assert not stubs
+
+
+def test_codex_scan_cache_hit_serves_stale_content(scan_env, monkeypatch):
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-000000000001"
+    path = _write_codex_rollout(codex_dir, sid, 0, [
+        _codex_session_meta(),
+        _codex_token_event("2026-07-01T00:00:00Z", 100, 10, 50),
+        {"type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": ""}},
+    ])
+
+    result1 = main._scan_sessions_sync()
+    sess1 = next(s for s in result1 if s["id"] == sid)
+    mtime = path.stat().st_mtime
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(_codex_token_event("2026-07-01T00:05:00Z", 999, 0, 999)) + "\n")
+    os.utime(path, (mtime, mtime))  # pin mtime back after mutating content
+
+    result2 = main._scan_sessions_sync()
+    sess2 = next(s for s in result2 if s["id"] == sid)
+
+    assert sess2["tokens"] == sess1["tokens"]
+    assert sess2["mcp_tools"] == sess1["mcp_tools"]
+    assert sess2.get("mcp_usage") == sess1.get("mcp_usage")
+    assert sess2.get("skills_used") == sess1.get("skills_used")
+
+
+def test_codex_scan_cache_miss_after_real_mtime_change(scan_env, monkeypatch):
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-000000000002"
+    path = _write_codex_rollout(codex_dir, sid, 0, [
+        _codex_session_meta(),
+        _codex_token_event("2026-07-01T00:00:00Z", 100, 0, 50),
+    ])
+
+    result1 = main._scan_sessions_sync()
+    sess1 = next(s for s in result1 if s["id"] == sid)
+    assert sess1["tokens"]["total"] == 150
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(_codex_token_event("2026-07-01T00:05:00Z", 300, 0, 150)) + "\n")
+
+    result2 = main._scan_sessions_sync()
+    sess2 = next(s for s in result2 if s["id"] == sid)
+    assert sess2["tokens"]["total"] == 450
 
 
 if __name__ == "__main__":
