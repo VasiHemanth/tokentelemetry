@@ -77,10 +77,18 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
     `session.shutdown.modelMetrics`. The exact shape varies by Copilot
     version, so we defensively sum any recognizable input/output/cache token
     counts found anywhere in the structure. Returns None when nothing usable
-    is present (caller then falls back to the per-message estimate)."""
+    is present (caller then falls back to the per-message estimate).
+
+    Copilot's `usage.inputTokens` is GROSS: it already includes
+    cacheReadTokens + cacheWriteTokens (verified against tokenDetails, whose
+    net input.tokenCount + cache_read + cache_write sums exactly to
+    inputTokens). So after collection, cache traffic is subtracted back out
+    of input — otherwise it's billed twice across the input and cached
+    buckets. The subtraction is guarded (only when input covers it) so an
+    unknown future shape that reports net input can't go negative."""
     if not isinstance(metrics, (dict, list)):
         return None
-    tot = {"input": 0, "output": 0, "cached": 0}
+    tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
     found = False
 
     def grab(obj):
@@ -89,8 +97,15 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
             for k, v in obj.items():
                 kl = str(k).lower()
                 if isinstance(v, (int, float)) and not isinstance(v, bool) and "token" in kl:
+                    if "reasoning" in kl:
+                        # Folded into outputTokens already; counting it (the
+                        # old "in" match caught reasonINg) double-bills it.
+                        continue
                     if "cache" in kl:
-                        tot["cached"] += int(v); found = True
+                        if "write" in kl or "creation" in kl:
+                            tot["cache_creation"] += int(v); found = True
+                        else:
+                            tot["cached"] += int(v); found = True
                     elif "out" in kl or "completion" in kl or "output" in kl:
                         tot["output"] += int(v); found = True
                     elif "in" in kl or "prompt" in kl:
@@ -102,7 +117,12 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
                 grab(x)
 
     grab(metrics)
-    return tot if found else None
+    if not found:
+        return None
+    cache_total = tot["cached"] + tot["cache_creation"]
+    if cache_total and tot["input"] >= cache_total:
+        tot["input"] -= cache_total
+    return tot
 
 def _antigravity_surface_map() -> Dict[str, str]:
     """Map Antigravity session id → surface (cli / ide / app) from the brain dirs,
@@ -3895,8 +3915,8 @@ def _scan_sessions_sync():
                     tokens["input"] = in_estimate
                     tokens["output"] = out_tokens
                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                # Copilot CLI modelMetrics has no distinct cache-write field; nothing to pass.
-                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
+                                                cache_creation_tokens=tokens.get("cache_creation", 0))
                 if model and model not in models_used: models_used.insert(0, model)
                 ts = last_ts or start_ts or _file_mtime_utc(ev_file)
                 sessions.append({
