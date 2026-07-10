@@ -40,7 +40,10 @@ npm-debug.log*
 # --- Local-only notes / runtime artifacts ---
 chintaku
 .claude/settings.local.json
-.claude/agents/
+# Agents are local-only, except the curated audit fleet used by the
+# committed /bug-audit skill ("/*" not "/" so the negation can apply).
+.claude/agents/*
+!.claude/agents/audit-*.md
 .claude/commands/
 feature/
 .antigravitycli/
