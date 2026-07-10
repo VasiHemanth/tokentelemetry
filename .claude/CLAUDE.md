@@ -66,6 +66,10 @@ easy to forget the file, and a stale banner is worse than no banner
 - Go to the **top** of `releases[]` (newest first — drawer renders top-down)
 - Have a description that helps a non-technical user understand *why* this matters, not just *what* changed
 - Use an `href` when a single page is the natural landing spot for the change (e.g. a new feature page, a redesigned section)
+- Credit external contributors for major community-raised bugs/fixes: end the
+  relevant highlight's description with "Thanks to <github-username> for
+  reporting and fixing this (PR #N)." Reserve credit for significant external
+  contributions so it stays meaningful; maintainer changes carry no credit line.
 
 ## When the hook gets in your way
 
