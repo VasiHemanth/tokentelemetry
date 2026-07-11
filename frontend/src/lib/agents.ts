@@ -33,7 +33,7 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   openai_compat: { key: "openai_compat", label: "OpenAI-compatible server", hex: "#14b8a6", icon: Server },
   cline:       { key: "cline",       label: "Cline",       hex: "#7c3aed", icon: Bot },
   smallcode:   { key: "smallcode",   label: "SmallCode",   hex: "#0d9488", icon: Boxes },
-  pi:          { key: "pi",          label: "Pi",          hex: "#e11d48", icon: Pi },
+  pi:          { key: "pi",          label: "Pi",          hex: "#d946ef", icon: Pi },
 };
 
 const FALLBACK: AgentMeta = {
