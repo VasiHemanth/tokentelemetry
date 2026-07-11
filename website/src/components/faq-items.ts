@@ -14,7 +14,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "How do I monitor Google Antigravity, Codex, and Gemini CLI costs?",
-    a: "TokenTelemetry auto-reads logs from Google Antigravity (Google's agentic coding CLI), OpenAI Codex CLI, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, and Grok Build (xAI). Token counts and dollar costs appear in the local dashboard automatically.",
+    a: "TokenTelemetry auto-reads logs from Google Antigravity (Google's agentic coding CLI), OpenAI Codex CLI, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Grok Build (xAI), and Pi (Earendil Works). Token counts and dollar costs appear in the local dashboard automatically.",
   },
   {
     q: "Is there a free tool to monitor AI coding agent token usage?",
@@ -30,7 +30,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Which agents does it support?",
-    a: "Ten coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
+    a: "Eleven coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Pi) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
   },
   {
     q: "Why does Hermes Agent get its own page?",

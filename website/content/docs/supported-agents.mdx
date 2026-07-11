@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 12 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 13 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -21,6 +21,7 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Grok Build** | xAI | `~/.grok/sessions/` | tokens, traces, reasoning, cost |
 | **Cline** | Cline (open source) | `~/.cline/data/db/sessions.db` + VS Code `taskHistory.json` | tokens in/out, cache read/write, cost, model, provider, cwd |
 | **SmallCode** | SmallCode (open source) | `<project>/.smallcode/traces/<id>.json` | prompt/completion tokens, model, tool-call steps, timing |
+| **Pi** | Earendil Works | `~/.pi/agent/sessions/` | tokens, traces, reasoning, cost, model |
 
 ## Autonomous agents
 
@@ -67,6 +68,10 @@ TokenTelemetry reads both the Cline CLI SQLite store and the VS Code extension's
 ### SmallCode
 
 SmallCode writes traces into each project directory rather than a global home dir, so TokenTelemetry discovers them under the project paths it already tracks from other agents (and honors the `TT_SMALLCODE_ROOTS` env var for extra locations).
+
+### Pi
+
+Reads one JSONL per session from `~/.pi/agent/sessions/<encoded-cwd>/`. Each assistant turn carries per-request token usage (input/output, cache read + write, reasoning) plus the provider, model, and cost, so token, cost, reasoning, and model data are captured per message. Cost is recomputed per turn with TokenTelemetry's own pricing — mixed-model sessions bill correctly, and turns where Pi runs against Ollama (or another local endpoint) are priced by local electricity instead of API rates.
 
 ### Hermes Agent
 
