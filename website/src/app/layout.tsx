@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 const SITE_URL = "https://tokentelemetry.com";
 const TITLE = "Token Telemetry — Observability for coding & autonomous agents (Hermes, Claude Code, Codex …)";
 const DESCRIPTION =
-  "Token Telemetry is local, read-only observability for 11 coding agents (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Pi) plus Hermes Agent (Nous Research) — with a dedicated dashboard for gateway health, cron jobs, skills, memory, and 38 source platforms. One command, 100% on your machine.";
+  "Token Telemetry is local, read-only observability for 13 coding agents (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi) plus Hermes Agent (Nous Research) — with a dedicated dashboard for gateway health, cron jobs, skills, memory, and 38 source platforms. One command, 100% on your machine.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
