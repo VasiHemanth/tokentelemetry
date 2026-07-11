@@ -18,7 +18,7 @@ export default function AgentsGrid() {
         <div className="text-center max-w-[680px] mx-auto mb-10">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">Coverage</p>
           <h2 className="text-[clamp(26px,3.6vw,42px)] leading-[1.08] tracking-[-0.025em] font-semibold text-[var(--tt-fg)]">
-            Eleven agents, <span className="text-[var(--tt-brand)]">one place.</span>
+            13 coding agents, <span className="text-[var(--tt-brand)]">one place.</span>
           </h2>
           <p className="mt-3.5 text-[15.5px] text-[var(--tt-fg-muted)] leading-relaxed">
             Tap any agent to see what TokenTelemetry captures and where it reads from.

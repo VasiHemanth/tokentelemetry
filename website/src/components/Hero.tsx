@@ -45,7 +45,7 @@ export default function Hero() {
                 </span>
                 100% local
               </span>
-              {["MIT open source", "11 agents", "No signup"].map((c) => (
+              {["MIT open source", "13 agents", "No signup"].map((c) => (
                 <span key={c} className="inline-flex items-center h-7 px-2.5 rounded-full text-[11.5px] font-medium text-[var(--tt-fg-muted)] bg-[var(--tt-panel)] border border-[var(--tt-border)]">
                   {c}
                 </span>
@@ -63,7 +63,7 @@ export default function Hero() {
 
             {/* Subhead */}
             <p className="text-[clamp(15px,1.7vw,17px)] text-[var(--tt-fg-muted)] leading-relaxed max-w-[540px] mx-auto lg:mx-0 mb-6">
-              Read-only observability for Claude Code, Codex, Cursor, Gemini CLI &amp; 7 more. It reads the logs
+              Read-only observability for Claude Code, Codex, Cursor, Gemini CLI &amp; 9 more. It reads the logs
               your agents already write — no SDK, no signup, and your data never leaves your computer.
             </p>
 

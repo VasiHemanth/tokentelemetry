@@ -4,7 +4,7 @@
 
 ## What is TokenTelemetry?
 
-TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, and Nous Research's Hermes Agent.
+TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, and Nous Research's Hermes Agent.
 
 It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:3000.
 
@@ -22,7 +22,7 @@ It reads session logs and SQLite state directly from the filesystem (no SDK, no 
 
 ## Supported Agents
 
-### Coding agents (10)
+### Coding agents (13)
 
 - Claude Code (Anthropic)
 - OpenAI Codex CLI
@@ -34,6 +34,9 @@ It reads session logs and SQLite state directly from the filesystem (no SDK, no 
 - Vibe
 - Antigravity (Google)
 - Grok Build (xAI)
+- Cline (open source)
+- SmallCode (open source)
+- Pi (Earendil Works)
 
 ### Autonomous agents (1)
 
@@ -56,7 +59,7 @@ Hermes Agent is structurally different from coding agents — it runs across CLI
 
 ## Hermes Dashboard Plugin
 
-TokenTelemetry ships a plugin for Hermes Agent's own web dashboard (port 9119). After a one-command install, a "TokenTelemetry" tab appears inside Hermes Dashboard with deep-link cards that open TT pages (Hermes Overview, Skills, Memory, Analytics, Projects, All Agents) in a new browser tab. Important: the plugin is a launcher, not the engine — TokenTelemetry itself must be installed and running for the launcher to do anything. When TT isn't running, the plugin shows an onboarding card explaining what TokenTelemetry is (a local observability dashboard for Hermes Agent AND 10 coding agents) with a copy-paste install command.
+TokenTelemetry ships a plugin for Hermes Agent's own web dashboard (port 9119). After a one-command install, a "TokenTelemetry" tab appears inside Hermes Dashboard with deep-link cards that open TT pages (Hermes Overview, Skills, Memory, Analytics, Projects, All Agents) in a new browser tab. Important: the plugin is a launcher, not the engine — TokenTelemetry itself must be installed and running for the launcher to do anything. When TT isn't running, the plugin shows an onboarding card explaining what TokenTelemetry is (a local observability dashboard for Hermes Agent AND 13 coding agents) with a copy-paste install command.
 
 Install (recommended, via Hermes's own plugin manager):
 
@@ -114,7 +117,7 @@ cd tokentelemetry
 A: Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from `~/.claude/` logs — no instrumentation, no SDK, no config.
 
 **Q: How do I monitor Gemini CLI and Codex costs?**
-A: TokenTelemetry auto-reads logs from Gemini CLI, OpenAI Codex CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, and Antigravity. Token counts and dollar costs appear in the local dashboard automatically.
+A: TokenTelemetry auto-reads logs from Gemini CLI, OpenAI Codex CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, and Pi. Token counts and dollar costs appear in the local dashboard automatically.
 
 **Q: Does TokenTelemetry support Hermes Agent from Nous Research?**
 A: Yes — TokenTelemetry is the only third-party observability tool that supports Hermes Agent. It reads `~/.hermes/state.db` (or wherever `HERMES_HOME` points), parses `agent.log` for per-API-call latency and cache hits, exposes a dedicated `/hermes` dashboard with 38 source platforms, gateway health, cron health, skills + memory pages, and renders `delegate_task` subagents inline.
@@ -152,7 +155,7 @@ Full docs site: https://tokentelemetry.com/docs
 - [Introduction](https://tokentelemetry.com/docs): What TokenTelemetry is and who it's for.
 - [Installation](https://tokentelemetry.com/docs/installation): One-line curl install, Windows PowerShell script, or clone from source.
 - [Quick Start](https://tokentelemetry.com/docs/quick-start): First launch, agent auto-detection, and opening the dashboard.
-- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 10 coding agents and Hermes, how each is detected, and what data each captures.
+- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 13 coding agents and Hermes, how each is detected, and what data each captures.
 
 ### Features
 

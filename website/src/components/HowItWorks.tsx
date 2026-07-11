@@ -9,7 +9,7 @@ const STEPS = [
     n: "2",
     title: "It finds your agents",
     body: "Scans the log files Claude Code, Codex, Cursor & co. already write to your disk. Read-only. Nothing is sent anywhere.",
-    code: <><span className="text-[var(--tt-success-fg,#10b981)]">✓</span> detected 11 agents · 510 sessions</>,
+    code: <><span className="text-[var(--tt-success-fg,#10b981)]">✓</span> detected 13 agents · 510 sessions</>,
   },
   {
     n: "3",

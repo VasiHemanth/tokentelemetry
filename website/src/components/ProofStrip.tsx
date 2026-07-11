@@ -4,8 +4,12 @@ import { useGithubStats } from "@/lib/useGithubStats";
 
 export default function ProofStrip() {
   const { stars, forks } = useGithubStats();
+  // Derive the count from the source of truth so it never goes stale when an
+  // agent is added. Hermes is the autonomous agent, counted separately from the
+  // coding-agent headline used across the site.
+  const codingAgentCount = AGENTS.filter((a) => a.name !== "Hermes Agent").length;
   const STATS = [
-    { value: "11", unit: "agents", label: "auto-detected, zero config", green: false },
+    { value: String(codingAgentCount), unit: "agents", label: "auto-detected, zero config", green: false },
     { value: "0", unit: "bytes uploaded", label: "fully local · read-only", green: true },
     { value: String(stars), unit: `★ · ${forks} forks`, label: "open source · MIT", green: false },
     { value: "1", unit: "command", label: "no SDK · no signup", green: false },
