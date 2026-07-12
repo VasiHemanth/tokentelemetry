@@ -1,0 +1,91 @@
+---
+title: Commands
+description: Every skill, workflow, and script the Second Brain plugin ships, and when to reach for each.
+---
+
+## Lifecycle at a glance
+
+```
+/brain-init  ->  /brain-compile  ->  pointer block  ->  daily use
+   census          batches           AGENTS.md          /brain query
+   schema          checkpoints       CLAUDE.md          /brain ingest
+   scaffold        stamp                                /brain save | idea | lint
+                                     wiki complete ->   /skillsmith
+```
+
+## Skills
+
+### `/brain-init`
+
+Phase 0 for a project with no wiki. Runs the census, derives a
+project-specific schema (page types, directories, extraction and redaction
+rules) from what the census actually found, shows it for confirmation, then
+scaffolds `docs/wiki/` with the schema (`BRAIN.md`), empty index and log, the
+compile queue, and a manifest at `status: compiling`. Surfaces prior
+knowledge (graphify graphs, ADR folders, design docs, Obsidian vaults) and
+asks whether to seed the compile from it. If a hand-built wiki already
+exists, it points at `/brain adopt` instead. Nothing is written until you
+confirm.
+
+### `/brain-compile`
+
+Resumable compile loop. Builds a work queue from the file tree, git history,
+and structural session signals, then writes 3 to 6 pages per batch with a
+commit per batch. Safe to interrupt: rerunning resumes from the first
+unfinished item. Ends with the stamp step so freshness is checkable from day
+one, and offers to install the `AGENTS.md` / `CLAUDE.md` pointer block once
+the manifest reaches `status: complete`.
+
+### `/brain <workflow>`
+
+The maintainer skill. It reads the project's own `docs/wiki/BRAIN.md` at
+runtime and hardcodes no page types.
+
+| Workflow | Use when |
+|----------|----------|
+| `/brain ingest <diff\|file\|ref>` | a PR merged, a file changed, or something landed in `docs/wiki/raw/` |
+| `/brain query <question>` | you want an answer from the wiki instead of a codebase walk |
+| `/brain save <analysis>` | this chat produced an analysis worth keeping |
+| `/brain idea <rough idea>` | you have a spark to capture before it evaporates |
+| `/brain lint` | periodic health check |
+| `/brain adopt` | wrap an existing hand-built wiki or Obsidian vault |
+
+Ingest is the only workflow that changes pages: it updates existing pages,
+bumps timestamps, regenerates the index, logs the change, and re-stamps.
+With no argument it sweeps the `docs/wiki/raw/` inbox. Queries answer from
+pages only and confirm user-visible claims against each page's cited source.
+Saves are immutable snapshots under `analyses/`; ideas stay alive under
+`ideas/` and collect dated refinements. Adopt shows every change as a diff
+before writing and never rewrites your prose.
+
+### `/skillsmith`
+
+Generates a per-project token-optimization skill from the finished wiki and
+mined waste evidence. Refuses a half wiki. Output is a diff; installs only on
+explicit approval.
+
+## Subagents (spawned by the skills)
+
+| Agent | Role |
+|-------|------|
+| `source-reader` | reads a small assigned file set, returns word-capped facts with line refs |
+| `git-historian` | mines git log for decision-shaped commits and per-file churn |
+| `session-miner` | turns one `session_scan.py` slice into topic candidates, structural signals only |
+| `wiki-auditor` | semantic lint: contradictions, stale pages, thin types, duplicates; reports, never fixes |
+
+## Scripts
+
+All stdlib Python, no network. Runnable directly from any harness.
+
+| Script | What it does |
+|--------|--------------|
+| `okf_lint.py <wiki_dir> [--json]` | deterministic lint: frontmatter, types, link resolution, index agreement, pending inbox items |
+| `wiki_manifest.py <wiki_dir> init\|update\|stamp` | owns `manifest.json`; `stamp` writes per-page content-hash provenance and installs `status.py` |
+| `docs/wiki/status.py [page] [--note] [--json]` | freshness verdicts (FRESH, STALE, TAMPERED, UNVERIFIABLE); `--note` queues a refresh note |
+| `profile_census.py <project_dir>` | the census behind `/brain-init` |
+| `session_scan.py <project_dir> [--harness LIST]` | locates session logs across 11 harnesses, emits structural signals only |
+| `agent_context.py <project_dir> --check\|--write` | owns the pointer block in `AGENTS.md` / `CLAUDE.md`; idempotent |
+
+`status.py` travels inside the wiki, so a teammate (or a different coding
+agent) can check freshness with plain `python3 docs/wiki/status.py`, no
+plugin installed.

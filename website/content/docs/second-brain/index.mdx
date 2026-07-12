@@ -1,0 +1,80 @@
+---
+title: Second Brain plugin
+description: A Claude Code plugin that compiles your project into a small, typed wiki agents read instead of re-exploring the codebase.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every time a coding agent opens your project, it spends tokens re-reading the
+same files to figure out what the project is. The Second Brain plugin pays
+that cost once: it compiles the project into a wiki at `docs/wiki/` (short,
+typed pages: overview, subsystems, features, decisions, conventions,
+playbooks), then a pointer block in `AGENTS.md` routes later agent sessions
+through those pages instead of a codebase walk.
+
+The wiki is also a map humans can read. This is the second brain the plugin
+compiled for the TokenTelemetry repo itself, one node per page, clustered by
+page type:
+
+![Second brain graph of the TokenTelemetry repo](/screenshots/second-brain-graph.png)
+
+<Callout title="It pairs with the dashboard, but needs neither signup nor server">
+TokenTelemetry detects `docs/wiki/manifest.json` in scanned projects and shows
+an observed before/after split of token metrics at the wiki's creation date.
+No causal savings claim: a flat or negative delta is reported as-is. See
+[the evidence page](/docs/second-brain/evidence) for measured results.
+</Callout>
+
+## How it works
+
+1. `/brain-init` censuses the project (languages, doc surfaces, prior
+   knowledge like ADRs, graphify output, or Obsidian vaults), derives a
+   project-specific page schema, and scaffolds `docs/wiki/` after you confirm.
+2. `/brain-compile` builds pages in resumable batches from source files, git
+   history, and structural session signals. Interrupt it anytime; rerunning
+   resumes from the first unfinished item.
+3. Every compile and ingest ends with a stamp step that records per-page
+   content-hash provenance and installs `docs/wiki/status.py`, a stdlib-only
+   freshness checker that works from any harness, no plugin required.
+4. Day to day, `/brain query` answers from the wiki, `/brain ingest` keeps it
+   in step with merged changes, `/brain save` and `/brain idea` capture
+   thinking from chats, `/brain lint` checks health.
+
+Nothing runs automatically: no hook, cron, or daemon ever mutates the wiki.
+
+## Freshness without nagging
+
+The wiki is a cache; code stays authoritative. `status.py` reports each page
+as FRESH, STALE, TAMPERED, or UNVERIFIABLE against the stamped hashes. A
+stale page never blocks work: the agent reads the page's source files,
+answers from code, and queues a refresh note the next `/brain ingest` sweeps.
+
+## Privacy
+
+Session mining extracts structural signals only (file-read frequencies, tool
+mix, error-loop signatures) across 11 supported harnesses. It never reads
+transcript prose, user messages, or tool output content. Everything runs
+locally; no network calls.
+
+## Install
+
+<Callout title="Being prepared for public release">
+The plugin ships separately from the dashboard and its repository is not yet
+public. Once it is, installation is two commands:
+</Callout>
+
+```bash
+claude plugin marketplace add <plugin-repo-url>
+claude plugin install tokentelemetry
+```
+
+Then, inside any project:
+
+```
+/brain-init
+/brain-compile
+```
+
+Full command surface: [Commands](/docs/second-brain/commands). Measured
+results behind the token-efficiency claim:
+[Evidence](/docs/second-brain/evidence).
