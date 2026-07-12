@@ -3,6 +3,7 @@ import ProofStrip from "@/components/ProofStrip";
 import HowItWorks from "@/components/HowItWorks";
 import FeatureShowcase from "@/components/FeatureShowcase";
 import HermesSpotlight from "@/components/HermesSpotlight";
+import SecondBrainSpotlight from "@/components/SecondBrainSpotlight";
 import Privacy from "@/components/Privacy";
 import AgentsGrid from "@/components/AgentsGrid";
 import FAQ from "@/components/FAQ";
@@ -17,6 +18,7 @@ export default function Page() {
       <HowItWorks />
       <FeatureShowcase />
       <HermesSpotlight />
+      <SecondBrainSpotlight />
       <Privacy />
       <AgentsGrid />
       <FAQ />

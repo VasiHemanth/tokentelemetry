@@ -1,6 +1,6 @@
 ---
 title: Second Brain plugin
-description: A Claude Code plugin that compiles your project into a small, typed wiki agents read instead of re-exploring the codebase.
+description: Compile your project into a small, typed wiki that every supported coding agent reads instead of re-exploring the codebase. Compiled with Claude Code; consumed by all agents.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -12,11 +12,27 @@ typed pages: overview, subsystems, features, decisions, conventions,
 playbooks), then a pointer block in `AGENTS.md` routes later agent sessions
 through those pages instead of a codebase walk.
 
+The compile step runs as a Claude Code plugin today, but the output is for
+every agent you use: the pointer block lands in `AGENTS.md` (and `CLAUDE.md`),
+which Codex, Gemini CLI, Cursor, Copilot, and the other supported agents
+already read, and the freshness checker is plain Python that runs from any
+harness. Compile once with Claude Code; every agent on the project benefits.
+
 The wiki is also a map humans can read. This is the second brain the plugin
 compiled for the TokenTelemetry repo itself, one node per page, clustered by
 page type:
 
-![Second brain graph of the TokenTelemetry repo](/screenshots/second-brain-graph.png)
+<img
+  src="/screenshots/second-brain-graph.png"
+  alt="Second brain graph of the TokenTelemetry repo, one node per page, clustered by page type (light theme)"
+  className="dark:hidden"
+/>
+
+<img
+  src="/screenshots/second-brain-graph-dark.png"
+  alt="Second brain graph of the TokenTelemetry repo, one node per page, clustered by page type (dark theme)"
+  className="hidden dark:block"
+/>
 
 <Callout title="It pairs with the dashboard, but needs neither signup nor server">
 TokenTelemetry detects `docs/wiki/manifest.json` in scanned projects and shows
@@ -68,12 +84,23 @@ claude plugin marketplace add <plugin-repo-url>
 claude plugin install tokentelemetry
 ```
 
-Then, inside any project:
+Manual install (no marketplace): copy the plugin's `skills/`, `agents/`,
+`profiles/`, and `scripts/` directories into your project's `.claude/`
+directory. The skills locate scripts via `${CLAUDE_PLUGIN_ROOT}`, which only
+a plugin install sets; after a manual copy, point it at `.claude/` or replace
+the variable in the copied files.
+
+Then, inside any project (in Claude Code):
 
 ```
 /brain-init
 /brain-compile
 ```
+
+That is the only Claude Code-specific part. Once compiled, the wiki works
+with every supported agent with no further setup: they pick it up through
+the `AGENTS.md` pointer block, and anyone can check freshness with
+`python3 docs/wiki/status.py`, plugin installed or not.
 
 Full command surface: [Commands](/docs/second-brain/commands). Measured
 results behind the token-efficiency claim:
