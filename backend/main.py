@@ -8,7 +8,7 @@ import json
 import yaml
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set, Iterable
+from typing import List, Optional, Dict, Any, Set, Iterable, Tuple
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
@@ -740,15 +740,31 @@ class Session(BaseModel):
 
 # EDIT_TOOLS: Set[str] = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
 
-def _hermes_dbs() -> List[Path]:
-    dbs: List[Path] = []
+def _hermes_dbs_with_profiles() -> List[Tuple[Path, Optional[str]]]:
+    """Every Hermes state.db paired with its owning profile (None = default).
+
+    A Hermes profile (~/.hermes/profiles/<name>/) is a full parallel agent
+    home — own config, SOUL.md, sessions, state.db, skills, cron, gateway.
+    Hermes itself has no cross-profile usage view, so the profile tag is
+    what lets TT attribute sessions to the profile that produced them.
+    """
+    dbs: List[Tuple[Path, Optional[str]]] = []
     if HERMES_DB.exists():
-        dbs.append(HERMES_DB)
+        dbs.append((HERMES_DB, None))
     if HERMES_PROFILES_DIR.is_dir():
-        for p in HERMES_PROFILES_DIR.glob("*/state.db"):
+        for p in sorted(HERMES_PROFILES_DIR.glob("*/state.db")):
             if p.exists():
-                dbs.append(p)
+                dbs.append((p, p.parent.name))
     return dbs
+
+
+def _hermes_dbs() -> List[Path]:
+    return [p for p, _ in _hermes_dbs_with_profiles()]
+
+
+def _hermes_home(profile: Optional[str]) -> Path:
+    """Root dir whose logs/gateway/cron belong to the given profile."""
+    return (HERMES_PROFILES_DIR / profile) if profile else HERMES_DIR
 
 
 _HERMES_CWD_RE = re.compile(r"\[(\d{8}_\d{6}_[a-f0-9]+)\][^\n]*cwd=([^\s,)]+)")
@@ -778,8 +794,12 @@ def _parse_hermes_log_ts(s: str) -> Optional[datetime]:
         return None
 
 
-def _hermes_log_summary(session_id: str) -> Dict[str, Any]:
-    """Parse ~/.hermes/logs/agent.log for one session.
+def _hermes_log_summary(session_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    """Parse the owning home's logs/agent.log for one session.
+
+    Each profile writes its own agent.log, so sessions recorded in a
+    profile's state.db never appear in the root log — pass the profile
+    or the overlay comes back empty.
 
     Returns:
       api_calls: list of {ts, n, model, provider, in, out, total, latency_s, cache_hit_pct?, cache_read?}
@@ -787,7 +807,7 @@ def _hermes_log_summary(session_id: str) -> Dict[str, Any]:
       model_journey: distinct models in temporal order
       summary: {api_call_count, total_latency_s, avg_latency_s, cache_hit_pct, models_used}
     """
-    log_path = HERMES_DIR / "logs" / "agent.log"
+    log_path = _hermes_home(profile) / "logs" / "agent.log"
     if not log_path.exists():
         return {"api_calls": [], "tool_calls": [], "model_journey": [], "summary": None}
     api_calls: List[Dict[str, Any]] = []
@@ -985,16 +1005,99 @@ async def hermes_soul():
     return {"content": content, "exists": True}
 
 
+def _hermes_profile_meta(home: Path) -> Dict[str, Any]:
+    """Cheap local reads only — never .env, auth.json, or full config.yaml."""
+    description = None
+    try:
+        py = home / "profile.yaml"
+        if py.exists():
+            m = re.search(r"^description\s*:\s*(.+)$",
+                          py.read_text(encoding="utf-8", errors="ignore"), re.M)
+            if m:
+                description = m.group(1).strip().strip("'\"") or None
+    except Exception:
+        pass
+    skills_count = 0
+    try:
+        skills_dir = home / "skills"
+        if skills_dir.is_dir():
+            skills_count = sum(1 for d in skills_dir.iterdir()
+                               if d.is_dir() and not d.name.startswith("."))
+    except Exception:
+        pass
+    return {
+        "description": description,
+        "soul_exists": (home / "SOUL.md").exists(),
+        "skills_count": skills_count,
+        "cron_jobs": len(_hermes_cron_jobs(home)),
+        "gateway": _hermes_gateway_state(home),
+    }
+
+
 @app.get("/hermes/profiles")
 async def hermes_profiles():
-    """List available profiles."""
-    if not HERMES_PROFILES_DIR.exists():
-        return {"profiles": []}
-    profiles = []
-    for p in HERMES_PROFILES_DIR.iterdir():
-        if p.is_dir():
-            profiles.append({"name": p.name})
-    return {"profiles": profiles}
+    """Profiles with metadata and a per-profile usage rollup.
+
+    A profile is a full parallel Hermes home; Hermes itself offers no
+    combined usage/cost view across profiles, so TT aggregates one here.
+    Usage comes from the shared session scan (grouped by the scan's
+    hermes_profile tag) so the numbers match the rest of the dashboard.
+    """
+    if not HERMES_DIR.is_dir():
+        return {"profiles": [], "active_profile": None}
+
+    # `hermes profile use <name>` writes the sticky marker; absent = default.
+    active = None
+    try:
+        marker = HERMES_DIR / "active_profile"
+        if marker.exists():
+            active = marker.read_text(encoding="utf-8").strip() or None
+    except Exception:
+        pass
+
+    def _empty_usage() -> Dict[str, Any]:
+        return {"sessions": 0, "input_tokens": 0, "output_tokens": 0,
+                "total_tokens": 0, "cost": 0.0, "last_activity": None}
+
+    usage: Dict[str, Dict[str, Any]] = {}
+    try:
+        for s in await get_sessions_cached():
+            if s.get("agent") != "hermes":
+                continue
+            key = s.get("hermes_profile") or "default"
+            u = usage.setdefault(key, _empty_usage())
+            u["sessions"] += 1
+            tk = s.get("tokens") or {}
+            u["input_tokens"] += tk.get("input", 0) or 0
+            u["output_tokens"] += tk.get("output", 0) or 0
+            u["total_tokens"] += tk.get("total", 0) or 0
+            u["cost"] += float(s.get("cost") or 0)
+            ts = s.get("timestamp")
+            iso = ts.isoformat() if isinstance(ts, datetime) else ts
+            if iso and (u["last_activity"] is None or iso > u["last_activity"]):
+                u["last_activity"] = iso
+    except Exception:
+        pass
+
+    profiles: List[Dict[str, Any]] = [{
+        "name": "default",
+        "is_default": True,
+        "active": active is None,
+        "usage": usage.get("default") or _empty_usage(),
+        **_hermes_profile_meta(HERMES_DIR),
+    }]
+    if HERMES_PROFILES_DIR.is_dir():
+        for p in sorted(HERMES_PROFILES_DIR.iterdir()):
+            if not p.is_dir():
+                continue
+            profiles.append({
+                "name": p.name,
+                "is_default": False,
+                "active": active == p.name,
+                "usage": usage.get(p.name) or _empty_usage(),
+                **_hermes_profile_meta(p),
+            })
+    return {"profiles": profiles, "active_profile": active}
 
 
 @app.get("/hermes/tools")
@@ -1139,13 +1242,33 @@ async def grok_session_forensics(session_id: str):
     }
 
 
+def _hermes_session_profile(session_id: str) -> Optional[str]:
+    """Which profile's state.db holds this session (None = default root)."""
+    for db_path, profile in _hermes_dbs_with_profiles():
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True, timeout=1.0)
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM sessions WHERE id=? LIMIT 1", (session_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+            if row:
+                return profile
+        except Exception:
+            continue
+    return None
+
+
 @app.get("/sessions/{session_id}/hermes-overlay")
 async def hermes_session_overlay(session_id: str):
     """Per-session overlay derived from agent.log + memory tool calls."""
-    log = _hermes_log_summary(session_id)
+    profile = _hermes_session_profile(session_id)
+    log = _hermes_log_summary(session_id, profile)
     mem = _hermes_memory_io(session_id)
     return {
         "session_id": session_id,
+        "profile": profile,
         "performance": log["summary"],
         "api_calls": log["api_calls"],
         "tool_calls": log["tool_calls"],
@@ -1155,7 +1278,7 @@ async def hermes_session_overlay(session_id: str):
 
 
 def _hermes_cwd_by_session() -> Dict[str, str]:
-    """Recover per-session cwd from ~/.hermes/logs/agent.log.
+    """Recover per-session cwd from agent.log (root home + every profile).
 
     Hermes doesn't persist cwd in its schema (it's a portable agent — no project
     concept). The cwd surfaces only as a side effect when the `terminal` tool
@@ -1163,33 +1286,40 @@ def _hermes_cwd_by_session() -> Dict[str, str]:
     seen per session id. Sessions that never invoked the terminal stay 'unknown'.
     Fidelity: inferred.
     """
-    log_path = HERMES_DIR / "logs" / "agent.log"
-    if not log_path.exists():
-        return {}
+    log_paths = [HERMES_DIR / "logs" / "agent.log"]
+    if HERMES_PROFILES_DIR.is_dir():
+        log_paths.extend(sorted(HERMES_PROFILES_DIR.glob("*/logs/agent.log")))
     out: Dict[str, str] = {}
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                m = _HERMES_CWD_RE.search(line)
-                if not m:
-                    continue
-                sid, cwd = m.group(1), m.group(2)
-                if sid not in out:  # first wins
-                    out[sid] = cwd
-    except Exception:
-        return out
+    for log_path in log_paths:
+        if not log_path.exists():
+            continue
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    m = _HERMES_CWD_RE.search(line)
+                    if not m:
+                        continue
+                    sid, cwd = m.group(1), m.group(2)
+                    if sid not in out:  # first wins
+                        out[sid] = cwd
+        except Exception:
+            continue
     return out
 
 
-def _hermes_gateway_state() -> Dict[str, Any]:
-    """Read ~/.hermes/gateway_state.json + gateway.pid. Both are optional.
+def _hermes_gateway_state(home: Optional[Path] = None) -> Dict[str, Any]:
+    """Read gateway_state.json + gateway.pid from a Hermes home (default root).
+
+    Each profile runs its own gateway with its own pid/state files, so pass
+    the profile's home to get that gateway's health.
 
     Returns dict with keys: state (str), pid (int|None), pid_alive (bool),
     active_agents (int), platforms (list[{name, state, error_code}]),
     updated_at (iso str|None). All-NULL if no gateway file present.
     """
-    state_path = HERMES_DIR / "gateway_state.json"
-    pid_path = HERMES_DIR / "gateway.pid"
+    base = home or HERMES_DIR
+    state_path = base / "gateway_state.json"
+    pid_path = base / "gateway.pid"
     out: Dict[str, Any] = {
         "state": None, "pid": None, "pid_alive": False,
         "active_agents": 0, "platforms": [], "updated_at": None,
@@ -1229,14 +1359,15 @@ def _hermes_gateway_state() -> Dict[str, Any]:
     return out
 
 
-def _hermes_cron_jobs() -> List[Dict[str, Any]]:
-    """Read ~/.hermes/cron/jobs.json — Hermes's scheduled-job registry.
+def _hermes_cron_jobs(home: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Read cron/jobs.json from a Hermes home (default root) — the
+    scheduled-job registry.
 
     Annotates each job with `at_risk` when next_run_at is past now (grace window
     applied per Hermes's own rule: daily=2h, hourly=30m, 10min=5m). Hermes itself
     fast-forwards past these but doesn't expose them — so we flag them.
     """
-    jobs_path = HERMES_DIR / "cron" / "jobs.json"
+    jobs_path = (home or HERMES_DIR) / "cron" / "jobs.json"
     if not jobs_path.exists():
         return []
     try:
@@ -4283,9 +4414,10 @@ def _scan_sessions_sync():
     sessions.extend(_scan_smallcode_sessions(smallcode_roots))
 
     # 9. Hermes Agent (SQLite: sessions / messages, pre-aggregated tokens)
-    hermes_cwd_map = _hermes_cwd_by_session() if _hermes_dbs() else {}
+    hermes_dbs = _hermes_dbs_with_profiles()
+    hermes_cwd_map = _hermes_cwd_by_session() if hermes_dbs else {}
     hermes_by_id: Dict[str, Dict[str, Any]] = {}
-    for db_path in _hermes_dbs():
+    for db_path, h_profile in hermes_dbs:
         try:
             uri = _sqlite_ro_uri(db_path)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -4338,7 +4470,7 @@ def _scan_sessions_sync():
                         try:
                             from power_config import is_local_session
                             if is_local_session(model, srow["billing_base_url"], srow["billing_provider"]):
-                                _summ = _hermes_log_summary(sid).get("summary")
+                                _summ = _hermes_log_summary(sid, h_profile).get("summary")
                                 if _summ and _summ.get("total_latency_s", 0) > 0 and out_t > 0:
                                     _measured_tps = out_t / _summ["total_latency_s"]
                         except Exception:
@@ -4383,6 +4515,8 @@ def _scan_sessions_sync():
                         "endpoint": srow["billing_base_url"],
                         "tok_per_sec": _measured_tps,
                     }
+                    if h_profile:
+                        hermes_by_id[sid]["hermes_profile"] = h_profile
                     _attach_tool_usage(hermes_by_id[sid], h_tool_counts)
                     sessions.append(hermes_by_id[sid])
             finally:
