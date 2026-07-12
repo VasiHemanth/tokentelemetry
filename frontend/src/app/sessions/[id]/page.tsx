@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -45,6 +45,8 @@ interface Session {
   antigravity_source?: string;
   /** Hermes-only */
   source_subtype?: string;
+  /** Hermes-only: owning profile (~/.hermes/profiles/<name>); absent = default home */
+  hermes_profile?: string;
   parent_session_id?: string | null;
   end_reason?: string | null;
 }
@@ -567,6 +569,11 @@ export default function SessionDetailPage() {
                   {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
                   {agent === "antigravity" && <AntigravitySourceBadge source={sessionInfo?.antigravity_source} size="sm" />}
                   {agent === "hermes" && <SourceBadge source={sessionInfo?.source_subtype} size="sm" />}
+                  {agent === "hermes" && sessionInfo?.hermes_profile && (
+                    <Badge variant="outline" size="xs" className="font-mono normal-case" title={`Hermes profile: ~/.hermes/profiles/${sessionInfo.hermes_profile}`}>
+                      <Users size={10} /> {sessionInfo.hermes_profile}
+                    </Badge>
+                  )}
                   <button
                     onClick={() => navigator.clipboard?.writeText(id)}
                     title="Copy session id"

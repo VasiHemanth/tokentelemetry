@@ -2,6 +2,21 @@
   "releases": [
     {
       "tag": "2026-07-12",
+      "title": "Hermes profiles: per-profile usage",
+      "highlights": [
+        {
+          "title": "See which Hermes profile spent what",
+          "description": "If you run multiple Hermes profiles (work, personal, per-client), Hermes itself has no combined view of their usage. The Profiles page now shows every profile with its sessions, tokens, cost, last activity, gateway status, skills and cron jobs — and each session is tagged with the profile that ran it.",
+          "href": "/hermes/profiles"
+        },
+        {
+          "title": "Profile sessions get their full trace details",
+          "description": "Session timings, per-call latency and working-directory info for sessions run under a named profile were silently missing (only the default home's logs were read). Profile logs are now picked up, so those sessions show the same detail as everything else."
+        }
+      ]
+    },
+    {
+      "tag": "2026-07-12",
       "title": "Pi Coding Agent support",
       "highlights": [
         {
