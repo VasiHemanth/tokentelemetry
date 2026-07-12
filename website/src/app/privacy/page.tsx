@@ -52,6 +52,10 @@ export default function PrivacyPage() {
           </li>
           <li>Which AI agents are detected on your machine (e.g. Claude, Codex), as a generic list</li>
           <li>
+            Which model families each agent uses (e.g. claude-opus, gpt) — a fixed set of family
+            names only, never the exact model id or a custom model name
+          </li>
+          <li>
             A random session id that is regenerated every launch and is never linked to you across
             sessions
           </li>

@@ -4434,6 +4434,7 @@ SESSIONS_TTL_SEC = 30.0
 
 _sessions_cache: Dict[str, Any] = {"data": None, "at": 0.0, "building": False}
 _sessions_lock: Optional[_asyncio.Lock] = None  # lazy-init inside event loop
+_model_usage_sent = False   # once-per-process guard for agent.model_used
 
 
 def _get_sessions_lock() -> _asyncio.Lock:
@@ -4503,6 +4504,55 @@ def _persist_history_async(data: List[Dict[str, Any]]) -> None:
         _work()
 
 
+def _emit_model_usage(data: List[Dict[str, Any]]) -> None:
+    """Once per process: emit one agent.model_used per distinct (agent, family)
+    pair seen in sessions from the last 30 days. Model ids are collapsed to a
+    hardcoded family enum by telemetry.normalize_model_family — the raw id
+    never leaves the machine. Best-effort; never raises."""
+    global _model_usage_sent
+    if _model_usage_sent or not _telemetry.enabled():
+        return
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        pairs = set()
+        for s in data:
+            agent = s.get("agent")
+            if not agent:
+                continue
+            ts = s.get("timestamp")
+            if isinstance(ts, str):
+                # Cache paths may carry ISO strings; parse best-effort and
+                # skip the window filter (not the session) on failure.
+                try:
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    ts = None
+            if isinstance(ts, datetime):
+                t = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+                if t < cutoff:
+                    continue
+            models = list(s.get("models_used") or [])
+            if s.get("model"):
+                models.append(s["model"])
+            for m in models:
+                # Placeholder ids ("", "unknown", "<synthetic>", …) carry no
+                # signal — skip entirely rather than emit family "other".
+                if not m or (isinstance(m, str)
+                             and m.strip().lower() in _telemetry._SKIP_MODELS):
+                    continue
+                fam = _telemetry.normalize_model_family(m)
+                pairs.add((agent, fam))
+                if len(pairs) >= 30:
+                    break
+            if len(pairs) >= 30:
+                break
+        for agent, fam in pairs:
+            _telemetry.emit("agent.model_used", {"agent": agent, "family": fam})
+        _model_usage_sent = True
+    except Exception:
+        pass
+
+
 async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
     """Cached, non-blocking access to the session list.
 
@@ -4538,6 +4588,7 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             # worker thread — a store failure must never break a request, and the
             # write must not add latency to this scan.
             _persist_history_async(data)
+            _emit_model_usage(data)
         except Exception as e:
             _log.exception("sessions scan failed: %s", e)
             # If we have a previous value, keep serving it rather than 500-ing.

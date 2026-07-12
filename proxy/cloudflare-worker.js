@@ -39,6 +39,8 @@
  *   blob14  = summarizer_backend     (context)
  *   blob15  = country                (CF edge 2-letter, no IP stored)
  *   blob16  = sdkVersion
+ *   blob17  = agent                 (agent.model_used)
+ *   blob18  = model family          (agent.model_used "family")
  *   double1 = agent_count
  *   double2 = isDebug                (0/1)
  */
@@ -53,6 +55,7 @@ const MAX_BODY = 8 * 1024; // events are tiny; reject anything bigger as abuse.
 const ALLOWED_EVENTS = new Set([
   "app.launched", "page.viewed", "trace.summarized",
   "analytics.filtered", "feature.used", "retention.opted_in",
+  "agent.model_used",
 ]);
 
 // Cheap, stateless validation. This is NOT anti-spoof (an open-source client
@@ -129,6 +132,8 @@ export default {
           blob(p.summarizer_backend), // blob14
           blob(country, 8),           // blob15
           blob(s.sdkVersion),         // blob16
+          blob(p.agent),              // blob17
+          blob(p.family),             // blob18
         ],
         doubles: [
           num(p.agent_count),         // double1

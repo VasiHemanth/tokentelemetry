@@ -134,6 +134,61 @@ def test_emit_is_noop_when_disabled(monkeypatch):
     assert len(telemetry._SENT) == before  # nothing recorded, nothing sent
 
 
+def test_model_family_normalizes_known_ids():
+    cases = {
+        "claude-opus-4-8": "claude-opus",
+        "claude-3-5-sonnet": "claude-sonnet",
+        "gpt-5.4-codex": "gpt",
+        "gpt-oss-120b": "gpt",
+        "o3-mini": "o-series",
+        "gemini-2.5-pro": "gemini",
+        "alibaba/qwen3-coder": "qwen",
+        "@cf/meta/llama-3.3-70b-instruct": "llama",
+        "accounts/fireworks/models/kimi-k2p6": "kimi",
+        "deepseek-v4-pro": "deepseek",
+        "us.anthropic.claude-opus-4-8-v1": "claude-opus",
+        "copilot/gpt-5-mini": "gpt",
+        "grok-build": "grok",
+        "nemotron-3-nano:4b": "other",
+    }
+    for raw, want in cases.items():
+        assert telemetry.normalize_model_family(raw) == want, raw
+
+
+def test_model_family_custom_names_never_leak():
+    # Whatever comes in, only a hardcoded enum literal comes out.
+    for raw in ["acme-internal-secret-llama-ft:latest", "/Users/me/models/private",
+                "my-company-tuned-thing", "unknown", "<synthetic>"]:
+        fam = telemetry.normalize_model_family(raw)
+        assert fam in telemetry._ENUMS["model_family"], raw
+        assert fam != raw, raw
+    # A recognisable substring maps to its family token — never the raw id.
+    assert telemetry.normalize_model_family("acme-internal-secret-llama-ft") == "llama"
+    assert telemetry.normalize_model_family("totally-custom-thing") == "other"
+
+
+def test_agent_model_used_enum_guardrail():
+    out = telemetry._sanitize_props("agent.model_used",
+                                    {"agent": "claude", "family": "claude-opus"})
+    assert out == {"agent": "claude", "family": "claude-opus"}
+    out = telemetry._sanitize_props("agent.model_used",
+                                    {"agent": "my-secret-agent", "family": "sk-leak"})
+    assert out == {"agent": "other", "family": "other"}
+
+
+def test_agent_model_used_payload_is_content_free():
+    payload = telemetry.build_event("agent.model_used", {
+        "agent": "claude",
+        "family": "/Users/me/models/private",   # path-shaped → enum → "other"
+        "raw": "acme-internal-secret-llama-ft", # not allowlisted → dropped
+    })
+    assert payload["props"]["family"] == "other"
+    assert "raw" not in payload["props"]
+    blob = _blob(payload)
+    assert "/users/me/models/private" not in blob
+    assert "acme-internal-secret-llama-ft" not in blob
+
+
 def test_sample_payloads_cover_every_event():
     samples = telemetry.sample_payloads()
     names = {s["eventName"] for s in samples}

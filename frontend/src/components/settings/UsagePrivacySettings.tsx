@@ -140,6 +140,7 @@ export default function UsagePrivacySettings() {
                     <li className="list-disc">Your OS, CPU type, and app version</li>
                     <li className="list-disc">Your country (from the network edge — never your IP)</li>
                     <li className="list-disc">Which AI agents are detected (Claude, Codex, …)</li>
+                    <li className="list-disc">Which model families each agent uses (e.g. claude-opus, gpt) — never the exact model id or a custom model name</li>
                     <li className="list-disc">A random per-launch session id (reset each launch, not linked to you)</li>
                   </ul>
                 </div>

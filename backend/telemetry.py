@@ -123,6 +123,7 @@ _EVENT_PROPS: Dict[str, set] = {
     "analytics.filtered": {"dimension"},
     "feature.used":       {"name"},
     "retention.opted_in": {"tier"},
+    "agent.model_used":   {"agent", "family"},
 }
 
 # Enum-controlled values. A value outside its set becomes "other" — never the
@@ -147,7 +148,26 @@ _ENUMS: Dict[str, set] = {
         "other",
     },
     "tier": {"full", "rollup", "other"},
+    # Detected-agent names for agent.model_used — the full set
+    # _list_available_agents() in main.py can return, plus "other". Any name
+    # outside this set (a fork, a custom harness) collapses to "other".
+    "agent": {
+        "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
+        "copilot", "opencode", "hermes", "grok", "pi", "cline", "smallcode",
+        "other",
+    },
+    # Model FAMILIES only — the family token is hardcoded by
+    # normalize_model_family(), so a custom/identifying model id can never
+    # ride through; anything unrecognised is "other".
+    "model_family": {
+        "claude-opus", "claude-sonnet", "claude-haiku", "claude-fable", "claude",
+        "gpt", "o-series", "gemini", "gemma", "qwen", "deepseek", "llama",
+        "mistral", "grok", "glm", "kimi", "minimax", "command", "other",
+    },
 }
+# _sanitize_props keys enums by PROP name; the agent.model_used prop is
+# "family", so alias it to the canonical model_family set (same object).
+_ENUMS["family"] = _ENUMS["model_family"]
 
 # Detected-agent names we recognise — must match _list_available_agents() in
 # main.py. Anything else is bucketed as "other-agent" so a custom/identifying
@@ -156,6 +176,66 @@ _KNOWN_AGENTS = {
     "claude", "codex", "gemini", "antigravity", "qwen", "vibe",
     "cursor", "copilot", "opencode", "hermes", "grok",
 }
+
+# Model ids that carry no signal at all — placeholders the scanners emit when a
+# session has no real model. Callers should skip these BEFORE normalizing so a
+# placeholder-only session emits nothing (vs a real-but-unknown model, which
+# still counts as family "other").
+_SKIP_MODELS = {"", "unknown", "<synthetic>", "_default", "none", "default"}
+
+
+def normalize_model_family(raw: Any) -> str:
+    """Map a raw model id to a controlled family literal, else 'other'.
+
+    Never returns the raw string — the family token is hardcoded, so an
+    identifying/custom model name can never ride through.
+    """
+    if not isinstance(raw, str):
+        return "other"
+    s = raw.strip().lower()
+    if not s or s in _SKIP_MODELS:
+        return "other"
+    s = s.rsplit("/", 1)[-1]          # drop provider prefix: alibaba/, @cf/meta/, accounts/fireworks/models/
+    s = s.split(":", 1)[0]            # drop ollama ":latest"/":q4" tags
+    # order matters — specific before generic (first match wins)
+    if "claude" in s or "anthropic" in s:
+        if "opus" in s:
+            return "claude-opus"
+        if "sonnet" in s:
+            return "claude-sonnet"
+        if "haiku" in s:
+            return "claude-haiku"
+        if "fable" in s:
+            return "claude-fable"
+        return "claude"
+    if "gpt" in s or "chatgpt" in s or "codex" in s:
+        return "gpt"
+    if s.startswith(("o1", "o3", "o4")):
+        return "o-series"
+    if "gemini" in s:
+        return "gemini"
+    if "gemma" in s:
+        return "gemma"
+    if "qwen" in s or "qwq" in s or "tongyi" in s:
+        return "qwen"
+    if "deepseek" in s:
+        return "deepseek"
+    if "llama" in s:
+        return "llama"
+    if ("mistral" in s or "mixtral" in s or "codestral" in s
+            or "ministral" in s or "magistral" in s):
+        return "mistral"
+    if "grok" in s:
+        return "grok"
+    if "glm" in s:
+        return "glm"
+    if "kimi" in s:
+        return "kimi"
+    if "minimax" in s:
+        return "minimax"
+    if "command" in s or "cohere" in s:
+        return "command"
+    return "other"
 
 
 def _safe_scalar(v: Any) -> Optional[Any]:
@@ -351,6 +431,7 @@ def sample_payloads() -> List[Dict[str, Any]]:
         "analytics.filtered": {"dimension": "local-only"},
         "feature.used": {"name": "plan-library"},
         "retention.opted_in": {"tier": "full"},
+        "agent.model_used": {"agent": "claude", "family": "claude-opus"},
     }
     return [build_event(ev, p) for ev, p in samples.items()]
 

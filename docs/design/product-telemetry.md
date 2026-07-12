@@ -108,6 +108,7 @@ sent at most once per meaningful action.
 | `analytics.filtered` | a filter is applied on Analytics | `dimension` (agent/model/local-only/day), no values | **Is local-model filtering used?** (your explicit question) |
 | `feature.used` | generic, for discrete features | `name` (plan-library, project-insights, delegation-view, power-cost, billing-mode, search…) | Long-tail feature adoption |
 | `retention.opted_in` | user enables durable history | `tier` | Which power features convert |
+| `agent.model_used` | once per launch, after the first full sessions scan | `agent` (enum: claude, codex, …), `family` (enum: claude-opus, gpt, gemini, …) | **Which model families each agent runs** (last 30 days) → seeds per-agent token-efficiency suggestions. Family is a hardcoded enum via `normalize_model_family()` — custom model ids collapse to `other`, never sent raw |
 
 **Duration/outcome buckets, never raw values.** e.g. summary latency as
 `fast/medium/slow`, not milliseconds tied to a specific trace.

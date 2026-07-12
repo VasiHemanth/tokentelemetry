@@ -2,6 +2,17 @@
   "releases": [
     {
       "tag": "2026-07-12",
+      "title": "Anonymous model-family stats",
+      "highlights": [
+        {
+          "title": "Telemetry now counts model families per agent",
+          "description": "The anonymous usage stats now include which model family (e.g. \"claude-opus\", \"gpt\", \"gemini\") each detected agent is used with — never the exact model name, so custom or local model names stay on your machine. This helps us build smarter token-efficiency suggestions per agent. As always, you can inspect the exact payload or turn telemetry off in Settings.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-07-12",
       "title": "Pi Coding Agent support",
       "highlights": [
         {
