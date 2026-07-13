@@ -22,6 +22,8 @@ export interface BudgetFilters {
   project?: string;
   agent?: string;
   model?: string;
+  /** Hermes profile scope; "default" matches sessions from the root home. */
+  hermes_profile?: string;
 }
 
 /** A stored budget definition (what the editor reads/writes). */

@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity, DollarSign, Cpu, Power, AlertTriangle, Clock, CheckCircle2,
-  BookOpen, Brain, ArrowRight, Sparkles, Users, Wrench, Signal, Timer
+  BookOpen, Brain, ArrowRight, Sparkles, Users, Wrench, Signal, Timer,
+  Kanban,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import {
@@ -16,6 +17,7 @@ import {
 import SourceBadge from "@/components/SourceBadge";
 import HermesIcon from "@/components/icons/HermesIcon";
 import { formatTokens, formatCost } from "@/lib/format";
+import { profileColor, profileTint } from "@/lib/profileColor";
 import { trackEvent } from "@/lib/telemetry";
 
 interface GatewayState {
@@ -55,6 +57,7 @@ interface Session {
   cost?: number;
   model?: string;
   source_subtype?: string;
+  hermes_profile?: string;
   project_inferred?: boolean;
   cost_anomaly?: boolean;
 }
@@ -74,11 +77,28 @@ export default function HermesPage() {
   const pathname = usePathname();
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 15_000, initial: [] });
   const overviewRes = useResource<Overview>("/hermes/overview", { pollMs: 30_000 });
+  const profilesRes = useResource<{ profiles: { name: string }[] }>("/hermes/profiles", { pollMs: 60_000 });
   const gateway = overviewRes.data?.gateway;
   const cronJobs = overviewRes.data?.cron_jobs ?? [];
-  const hermesSessions = useMemo(
+  // "all" | "default" | profile name — scopes every number and list below.
+  const [profileScope, setProfileScope] = useState<string>("all");
+  const allHermesSessions = useMemo(
     () => (sessionsRes.data ?? []).filter((s) => s.agent === "hermes"),
     [sessionsRes.data]
+  );
+  // Pills come from the profiles endpoint (so a zero-session profile still
+  // shows) unioned with whatever the sessions carry.
+  const profileNames = useMemo(() => {
+    const names = new Set<string>((profilesRes.data?.profiles ?? []).map((p) => p.name));
+    for (const s of allHermesSessions) names.add(s.hermes_profile || "default");
+    names.delete("default");
+    return ["default", ...[...names].sort()];
+  }, [profilesRes.data, allHermesSessions]);
+  const hermesSessions = useMemo(
+    () => profileScope === "all"
+      ? allHermesSessions
+      : allHermesSessions.filter((s) => (s.hermes_profile || "default") === profileScope),
+    [allHermesSessions, profileScope]
   );
 
   // Explicit signal that the Hermes dashboard (the differentiator surface) was
@@ -153,6 +173,37 @@ export default function HermesPage() {
         description="Autonomous agent observability — sessions, sources, costs across every platform"
         actions={gateway && <GatewayPill g={gateway} />}
       />
+
+      {/* Profile scope — desktop-style switcher; hidden when only the default home exists */}
+      {profileNames.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {["all", ...profileNames].map((name) => {
+            const selected = profileScope === name;
+            const color = profileColor(name);
+            const count = name === "all"
+              ? allHermesSessions.length
+              : allHermesSessions.filter((s) => (s.hermes_profile || "default") === name).length;
+            return (
+              <button
+                key={name}
+                onClick={() => setProfileScope(name)}
+                className={`inline-flex items-center gap-1.5 font-mono text-[11px] px-2.5 h-7 rounded-full border transition-colors ${
+                  selected
+                    ? "border-[var(--tt-border-strong)] bg-[var(--tt-sunken)] text-[var(--tt-fg)]"
+                    : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
+                }`}
+                style={selected && color ? { borderColor: color } : undefined}
+              >
+                {color && (
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color }} />
+                )}
+                {name === "all" ? "All profiles" : name}
+                <span className="text-[9px] tabular text-[var(--tt-fg-dim)]">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -255,6 +306,19 @@ export default function HermesPage() {
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold text-[var(--tt-fg)]">Gateway</div>
             <div className="text-[11px] text-[var(--tt-fg-muted)]">Live platform connections</div>
+          </div>
+          <ArrowRight size={14} className="text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-fg)] transition-colors" />
+        </Link>
+        <Link
+          href="/hermes/kanban"
+          className="group flex items-center gap-3 bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded-[var(--tt-radius-lg)] p-4 hover:border-[var(--tt-border-strong)] hover:bg-[var(--tt-sunken)] transition-colors"
+        >
+          <div className="h-9 w-9 grid place-items-center rounded-md bg-rose-500/10 text-rose-500">
+            <Kanban size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold text-[var(--tt-fg)]">Kanban</div>
+            <div className="text-[11px] text-[var(--tt-fg-muted)]">Swarm board with per-task cost</div>
           </div>
           <ArrowRight size={14} className="text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-fg)] transition-colors" />
         </Link>
@@ -429,7 +493,22 @@ export default function HermesPage() {
                   <TR key={s.id} interactive>
                     <TD className="pl-5">
                       <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
-                        <SourceBadge source={s.source_subtype} size="xs" />
+                        <span className="inline-flex items-center gap-1.5">
+                          <SourceBadge source={s.source_subtype} size="xs" />
+                          {s.hermes_profile && profileScope === "all" && (
+                            <span
+                              className="inline-flex items-center gap-1 font-mono text-[9px] px-1.5 h-4 rounded-full border"
+                              style={{
+                                color: profileColor(s.hermes_profile) ?? undefined,
+                                borderColor: profileColor(s.hermes_profile) ?? undefined,
+                                background: profileTint(s.hermes_profile) ?? undefined,
+                              }}
+                              title={`Profile: ${s.hermes_profile}`}
+                            >
+                              {s.hermes_profile}
+                            </span>
+                          )}
+                        </span>
                       </Link>
                     </TD>
                     <TD className="font-mono text-[11px] text-[var(--tt-fg-muted)] max-w-[180px] truncate" title={s.model}>
