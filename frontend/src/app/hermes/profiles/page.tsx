@@ -9,7 +9,7 @@ import { profileColor, profileTint } from "@/lib/profileColor";
 import { Budget, BudgetStatus, getBudgets, putBudgets } from "@/lib/budgets";
 import {
   Users, Power, BookOpen, Clock, Sparkles, TrendingUp, TrendingDown,
-  Bot, Wallet,
+  Bot, Wallet, GitCompareArrows,
 } from "lucide-react";
 
 interface ProfileGateway {
@@ -48,8 +48,18 @@ interface ProfilesResp {
   active_profile: string | null;
 }
 
+interface Session {
+  id: string;
+  agent: string;
+  model?: string;
+  cost?: number;
+  hermes_profile?: string;
+  tokens?: { total: number };
+}
+
 export default function ProfilesPage() {
   const { data, loading } = useResource<ProfilesResp>("/hermes/profiles", { pollMs: 60_000 });
+  const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 60_000, initial: [] });
   const profiles = data?.profiles || [];
   const named = profiles.filter((p) => !p.is_default);
   const totals = profiles.reduce(
@@ -118,6 +128,10 @@ export default function ProfilesPage() {
         <StatTile label="Cost / 7d" value={loading ? "—" : formatCost(totals.cost7d)} hint={loading ? undefined : `${formatCost(totals.cost)} all-time`} />
       </div>
 
+      {!loading && profiles.length >= 2 && (
+        <ComparePanel profiles={profiles} sessions={sessionsRes.data ?? []} />
+      )}
+
       {loading ? (
         <div className="animate-pulse h-32 bg-[var(--tt-panel)] rounded-xl" />
       ) : profiles.length === 0 ? (
@@ -141,6 +155,173 @@ export default function ProfilesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Identity in the compare view is carried by POSITION (A is always left)
+ *  and by the name labels; the profile color only reinforces it. The default
+ *  home has no identity hue, so it wears the app brand color here. */
+function compareColor(name: string): string {
+  return profileColor(name) ?? "var(--tt-brand)";
+}
+
+function ComparePanel({ profiles, sessions }: { profiles: Profile[]; sessions: Session[] }) {
+  // Default to the two biggest spenders — the comparison people actually want.
+  const byCost = [...profiles].sort((x, y) => y.usage.cost - x.usage.cost);
+  const [open, setOpen] = useState(false);
+  const [nameA, setNameA] = useState(byCost[0].name);
+  const [nameB, setNameB] = useState(byCost[1].name);
+  const a = profiles.find((p) => p.name === nameA);
+  const b = profiles.find((p) => p.name === nameB);
+  if (!a || !b) return null;
+  const colA = compareColor(a.name);
+  const colB = compareColor(b.name);
+
+  const rows: { label: string; va: number; vb: number; fmt: (n: number) => string }[] = [
+    { label: "Sessions", va: a.usage.sessions, vb: b.usage.sessions, fmt: (n) => String(n) },
+    { label: "Total tokens", va: a.usage.total_tokens, vb: b.usage.total_tokens, fmt: formatTokens },
+    { label: "Input tokens", va: a.usage.input_tokens, vb: b.usage.input_tokens, fmt: formatTokens },
+    { label: "Output tokens", va: a.usage.output_tokens, vb: b.usage.output_tokens, fmt: formatTokens },
+    { label: "All-time cost", va: a.usage.cost, vb: b.usage.cost, fmt: formatCost },
+    { label: "7-day burn", va: a.usage.cost_7d, vb: b.usage.cost_7d, fmt: formatCost },
+    { label: "Unattended 7d", va: a.usage.unattended_cost_7d, vb: b.usage.unattended_cost_7d, fmt: formatCost },
+  ];
+
+  const topModels = (name: string) => {
+    const m = new Map<string, { count: number; cost: number }>();
+    for (const s of sessions) {
+      if (s.agent !== "hermes" || (s.hermes_profile || "default") !== name) continue;
+      const key = s.model || "—";
+      const cur = m.get(key) ?? { count: 0, cost: 0 };
+      cur.count += 1;
+      cur.cost += s.cost || 0;
+      m.set(key, cur);
+    }
+    return [...m.entries()].sort((x, y) => y[1].cost - x[1].cost || y[1].count - x[1].count).slice(0, 5);
+  };
+
+  // One shared scale across both series — never two axes.
+  const dailyMax = Math.max(
+    ...a.usage.daily.map((d) => d.cost),
+    ...b.usage.daily.map((d) => d.cost),
+    0.000001,
+  );
+  const days = a.usage.daily.map((d, i) => ({
+    date: d.date,
+    ca: d.cost,
+    cb: b.usage.daily[i]?.cost ?? 0,
+  }));
+
+  const Select = ({ value, onChange, exclude }: { value: string; onChange: (v: string) => void; exclude: string }) => (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1 text-[11px] font-mono text-[var(--tt-fg)] focus:outline-none focus:border-[var(--tt-border-strong)]"
+    >
+      {profiles.filter((p) => p.name !== exclude).map((p) => (
+        <option key={p.name} value={p.name}>{p.name}</option>
+      ))}
+    </select>
+  );
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <GitCompareArrows size={14} className="text-[var(--tt-fg-muted)]" />
+        <span className="text-[13px] font-semibold text-[var(--tt-fg)]">Compare profiles</span>
+        {open ? (
+          <>
+            <Select value={nameA} onChange={setNameA} exclude={nameB} />
+            <span className="text-[11px] text-[var(--tt-fg-dim)]">vs</span>
+            <Select value={nameB} onChange={setNameB} exclude={nameA} />
+            <button onClick={() => setOpen(false)} className="ml-auto text-[10px] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]">
+              close
+            </button>
+          </>
+        ) : (
+          <button onClick={() => setOpen(true)} className="ml-auto text-[10px] text-[var(--tt-brand)] hover:underline">
+            open
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <>
+          {/* Legend: colored dot + name on each side, position fixed A-left B-right */}
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <div className="flex items-center gap-1.5 justify-end font-mono text-[12px] text-[var(--tt-fg)]">
+              {a.name}
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: colA }} />
+            </div>
+            <span className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-dim)] px-2">metric</span>
+            <div className="flex items-center gap-1.5 font-mono text-[12px] text-[var(--tt-fg)]">
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: colB }} />
+              {b.name}
+            </div>
+          </div>
+
+          {/* Mirrored metric bars, each row scaled to its own max */}
+          <div className="space-y-1.5">
+            {rows.map((r) => {
+              const max = Math.max(r.va, r.vb, 0.000001);
+              return (
+                <div key={r.label} className="grid grid-cols-[1fr_110px_1fr] items-center gap-2" title={`${r.label}: ${a.name} ${r.fmt(r.va)} vs ${b.name} ${r.fmt(r.vb)}`}>
+                  <div className="flex items-center gap-2 justify-end">
+                    <span className="text-[11px] tabular text-[var(--tt-fg-muted)]">{r.fmt(r.va)}</span>
+                    <div className="h-3 rounded-l-[4px] min-w-[2px]" style={{ width: `${(r.va / max) * 100}%`, maxWidth: "70%", background: colA }} />
+                  </div>
+                  <div className="text-center text-[10px] text-[var(--tt-fg-dim)]">{r.label}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-3 rounded-r-[4px] min-w-[2px]" style={{ width: `${(r.vb / max) * 100}%`, maxWidth: "70%", background: colB }} />
+                    <span className="text-[11px] tabular text-[var(--tt-fg-muted)]">{r.fmt(r.vb)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Paired daily-cost bars, one shared scale */}
+          <div>
+            <div className="text-[9px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1.5">Daily cost, last 14 days</div>
+            <div className="flex items-end gap-[3px] h-16">
+              {days.map((d) => (
+                <div key={d.date} className="flex-1 flex items-end justify-center gap-[2px] h-full" title={`${d.date} · ${a.name} ${formatCost(d.ca)} · ${b.name} ${formatCost(d.cb)}`}>
+                  <div className="w-1/2 max-w-[10px] rounded-t-[3px] min-h-[2px]" style={{ height: `${Math.max(2, (d.ca / dailyMax) * 100)}%`, background: d.ca > 0 ? colA : "var(--tt-border)" }} />
+                  <div className="w-1/2 max-w-[10px] rounded-t-[3px] min-h-[2px]" style={{ height: `${Math.max(2, (d.cb / dailyMax) * 100)}%`, background: d.cb > 0 ? colB : "var(--tt-border)" }} />
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between text-[9px] text-[var(--tt-fg-dim)] mt-1">
+              <span>{days[0]?.date}</span>
+              <span>{days[days.length - 1]?.date}</span>
+            </div>
+          </div>
+
+          {/* Top models per side */}
+          <div className="grid grid-cols-2 gap-4">
+            {[{ p: a, col: colA }, { p: b, col: colB }].map(({ p, col }) => (
+              <div key={p.name}>
+                <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1.5">
+                  <span className="h-2 w-2 rounded-full" style={{ background: col }} /> Top models · {p.name}
+                </div>
+                {topModels(p.name).length === 0 ? (
+                  <div className="text-[11px] italic text-[var(--tt-fg-faint)]">no sessions</div>
+                ) : (
+                  <div className="space-y-1">
+                    {topModels(p.name).map(([m, info]) => (
+                      <div key={m} className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono text-[var(--tt-fg)] truncate max-w-[65%]" title={m}>{m}</span>
+                        <span className="tabular text-[var(--tt-fg-muted)]">{info.count} · {formatCost(info.cost)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 
