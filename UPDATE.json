@@ -1,6 +1,27 @@
 {
   "releases": [
     {
+      "tag": "2026-07-13",
+      "title": "Hermes profiles: burn, budgets & swarm costs",
+      "highlights": [
+        {
+          "title": "Filter the Hermes dashboard by profile",
+          "description": "A profile switcher scopes every stat, model and session list to one profile (or all, grouped with each profile's color — the same color Hermes desktop gives it). Spot at a glance which persona a session belongs to.",
+          "href": "/hermes"
+        },
+        {
+          "title": "Know which profile is burning budget",
+          "description": "Each profile card now shows a 14-day cost sparkline, 7-day burn with trend, and how much of it was spent unattended (cron, subagents, kanban workers). Set an alerts-only monthly budget per profile right on the card — the overnight-swarm surprise bill gets caught early.",
+          "href": "/hermes/profiles"
+        },
+        {
+          "title": "Kanban swarm board with per-task cost",
+          "description": "Hermes tracks swarm tasks but never prices them. The new Kanban page shows every board's tasks by status with the cost of each task's linked session, per-worker cost lanes, and failure/retry burn.",
+          "href": "/hermes/kanban"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-12",
       "title": "Hermes profiles: per-profile usage",
       "highlights": [

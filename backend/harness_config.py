@@ -198,7 +198,7 @@ def save_aliases(aliases: Dict[str, str]) -> None:
 
 BUDGET_PERIODS = ("monthly", "weekly", "rolling_30d")
 BUDGET_LIMIT_TYPES = ("usd", "tokens")
-BUDGET_FILTER_KEYS = ("project", "agent", "model")
+BUDGET_FILTER_KEYS = ("project", "agent", "model", "hermes_profile")
 _DEFAULT_THRESHOLDS = [0.8, 1.0]
 
 

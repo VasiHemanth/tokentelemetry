@@ -15,6 +15,7 @@ import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
 import { formatTokens, formatCost } from "@/lib/format";
+import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
@@ -36,6 +37,7 @@ interface Session {
   antigravity_source?: string;
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
+  hermes_profile?: string;
 }
 
 interface AnalyticsResponse {
@@ -265,7 +267,21 @@ export default function Home() {
                       <TD className="font-mono text-[12px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.agent === "hermes" ? `Hermes source: ${s.source_subtype || "unknown"}` : s.project}>
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="block truncate">
                           {s.agent === "hermes" ? (
-                            <SourceBadge source={s.source_subtype} size="xs" />
+                            <span className="inline-flex items-center gap-1.5">
+                              <SourceBadge source={s.source_subtype} size="xs" />
+                              {s.hermes_profile && (
+                                <span
+                                  className="font-mono text-[9px] px-1.5 rounded-full border"
+                                  style={{
+                                    color: profileColor(s.hermes_profile) ?? undefined,
+                                    borderColor: profileColor(s.hermes_profile) ?? undefined,
+                                  }}
+                                  title={`Profile: ${s.hermes_profile}`}
+                                >
+                                  {s.hermes_profile}
+                                </span>
+                              )}
+                            </span>
                           ) : (
                             s.project.split("/").pop()
                           )}

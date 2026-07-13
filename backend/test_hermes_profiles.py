@@ -53,7 +53,8 @@ def hermes_env(tmp_path, monkeypatch):
     missing = tmp_path / "missing"
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
                  "GROK_SESSIONS_DIR", "VSCODE_STORAGE", "CURSOR_STORAGE",
-                 "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR"):
+                 "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
+                 "PI_SESSIONS_DIR"):
         monkeypatch.setattr(main, attr, missing / attr.lower())
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [])
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_DIRS", [])
@@ -171,9 +172,18 @@ def test_profiles_endpoint(hermes_env, monkeypatch):
     assert c["description"] == "Coding assistant persona"
     assert c["skills_count"] == 2
     assert c["cron_jobs"] == 1
-    assert c["usage"] == {"sessions": 1, "input_tokens": 50, "output_tokens": 20,
-                          "total_tokens": 70, "cost": 0.005,
-                          "last_activity": "2026-01-02T00:00:00+00:00"}
+    cu = c["usage"]
+    assert cu["sessions"] == 1
+    assert cu["input_tokens"] == 50 and cu["output_tokens"] == 20
+    assert cu["total_tokens"] == 70
+    assert cu["cost"] == 0.005
+    assert cu["last_activity"] == "2026-01-02T00:00:00+00:00"
+    # The canned session is older than 14 days → burn windows and the 14-day
+    # sparkline are all zero, but the shape is always present.
+    assert cu["cost_7d"] == 0.0 and cu["cost_prev_7d"] == 0.0
+    assert cu["unattended_cost_7d"] == 0.0
+    assert len(cu["daily"]) == 14
+    assert all(d["cost"] == 0.0 for d in cu["daily"])
 
 
 def test_profiles_endpoint_no_hermes(tmp_path, monkeypatch):
@@ -181,3 +191,126 @@ def test_profiles_endpoint_no_hermes(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "HERMES_PROFILES_DIR", tmp_path / "nope" / "profiles")
     res = _run(main.hermes_profiles())
     assert res == {"profiles": [], "active_profile": None}
+
+
+def test_profiles_burn_windows(hermes_env, monkeypatch):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+
+    async def fake_sessions(fresh=False):
+        return [
+            # yesterday, unattended (cron) → cost_7d + unattended_cost_7d
+            {"agent": "hermes", "cost": 1.0, "timestamp": now - timedelta(days=1),
+             "source_subtype": "cron", "tokens": {"total": 10}},
+            # yesterday, interactive → cost_7d only
+            {"agent": "hermes", "cost": 0.5, "timestamp": now - timedelta(days=1),
+             "source_subtype": "cli", "tokens": {"total": 10}},
+            # 10 days ago → prev window
+            {"agent": "hermes", "cost": 2.0, "timestamp": now - timedelta(days=10),
+             "source_subtype": "cli", "tokens": {"total": 10}},
+        ]
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+
+    u = _run(main.hermes_profiles())
+    d = {p["name"]: p for p in u["profiles"]}["default"]["usage"]
+    assert d["cost_7d"] == pytest.approx(1.5)
+    assert d["unattended_cost_7d"] == pytest.approx(1.0)
+    assert d["cost_prev_7d"] == pytest.approx(2.0)
+    # The 14-day sparkline spans BOTH windows, so all three sessions land in it.
+    assert sum(x["cost"] for x in d["daily"]) == pytest.approx(3.5)
+    # A profile with zero sessions still gets a zero-filled 14-day series so
+    # frontend sparklines align.
+    c = {p["name"]: p for p in u["profiles"]}["coder"]["usage"]
+    assert len(c["daily"]) == 14 and all(x["cost"] == 0.0 for x in c["daily"])
+
+
+def test_budget_filter_hermes_profile():
+    coder = {"agent": "hermes", "hermes_profile": "coder"}
+    root = {"agent": "hermes"}
+    assert main._session_matches_filters(coder, {"hermes_profile": "coder"})
+    assert not main._session_matches_filters(root, {"hermes_profile": "coder"})
+    assert main._session_matches_filters(root, {"hermes_profile": "default"})
+    assert not main._session_matches_filters(coder, {"hermes_profile": "default"})
+
+
+# --- kanban cost board --------------------------------------------------------
+
+def _make_kanban_db(path: Path, with_session_col: bool = True):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    sid_col = ", session_id TEXT" if with_session_col else ""
+    con.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, body TEXT, "
+                "assignee TEXT, status TEXT, priority INTEGER DEFAULT 0, "
+                "created_at INTEGER, started_at INTEGER, completed_at INTEGER, "
+                "consecutive_failures INTEGER DEFAULT 0, last_failure_error TEXT"
+                f"{sid_col})")
+    con.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, "
+                "profile TEXT, status TEXT, outcome TEXT, started_at INTEGER)")
+    if with_session_col:
+        con.execute("INSERT INTO tasks (id, title, assignee, status, created_at, "
+                    "completed_at, session_id) VALUES "
+                    "('t1', 'build UI', 'frontend-eng', 'done', 1750000000, "
+                    "1750000500, '20260102_000000_bbbb2222')")
+        con.execute("INSERT INTO tasks (id, title, assignee, status, created_at, "
+                    "consecutive_failures, last_failure_error, session_id) VALUES "
+                    "('t2', 'flaky deploy', 'devops', 'blocked', 1750000000, 2, "
+                    "'spawn timeout', NULL)")
+        con.execute("INSERT INTO task_runs (task_id, profile, status, outcome, "
+                    "started_at) VALUES ('t1', 'coder', 'done', 'completed', 1750000000)")
+        con.execute("INSERT INTO task_runs (task_id, profile, status, outcome, "
+                    "started_at) VALUES ('t2', 'coder', 'crashed', 'timed_out', 1750000000)")
+    else:
+        con.execute("INSERT INTO tasks (id, title, assignee, status, created_at) "
+                    "VALUES ('old1', 'legacy task', 'worker', 'todo', 1750000000)")
+    con.commit()
+    con.close()
+
+
+def test_kanban_endpoint_joins_session_cost(hermes_env, monkeypatch):
+    _make_kanban_db(hermes_env / "kanban.db")
+
+    async def fake_sessions(fresh=False):
+        return [{"id": "20260102_000000_bbbb2222", "agent": "hermes",
+                 "cost": 0.25, "tokens": {"total": 70},
+                 "timestamp": datetime(2026, 1, 2, tzinfo=timezone.utc)}]
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+
+    res = _run(main.hermes_kanban())
+    assert res["installed"] is True
+    assert len(res["boards"]) == 1
+    b = res["boards"][0]
+    assert b["profile"] is None and b["board"] == "default"
+    by_id = {t["id"]: t for t in b["tasks"]}
+    assert by_id["t1"]["cost"] == 0.25 and by_id["t1"]["tokens"] == 70
+    assert by_id["t1"]["runs"] == {"count": 1, "failed": 0, "profiles": ["coder"]}
+    assert by_id["t2"]["cost"] == 0.0
+    assert by_id["t2"]["runs"]["failed"] == 1
+    assert by_id["t2"]["last_failure_error"] == "spawn timeout"
+    assert b["totals"]["cost"] == pytest.approx(0.25)
+    assert b["totals"]["by_status"] == {"done": 1, "blocked": 1}
+    assert b["totals"]["by_assignee"][0] == {"assignee": "frontend-eng",
+                                             "tasks": 1, "cost": 0.25}
+
+
+def test_kanban_endpoint_tolerates_old_schema_and_boards(hermes_env, monkeypatch):
+    # Pre-migration DB without session_id, plus a named board in a profile home.
+    _make_kanban_db(hermes_env / "kanban.db", with_session_col=False)
+    _make_kanban_db(hermes_env / "profiles" / "coder" / "kanban" / "boards" /
+                    "swarm" / "kanban.db")
+
+    async def fake_sessions(fresh=False):
+        return []
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+
+    res = _run(main.hermes_kanban())
+    keys = [(b["profile"], b["board"]) for b in res["boards"]]
+    assert keys == [(None, "default"), ("coder", "swarm")]
+    legacy = res["boards"][0]["tasks"][0]
+    assert legacy["session_id"] is None and legacy["cost"] == 0.0
+
+
+def test_kanban_endpoint_no_dbs(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "HERMES_DIR", tmp_path / "nope")
+    monkeypatch.setattr(main, "HERMES_PROFILES_DIR", tmp_path / "nope" / "profiles")
+    res = _run(main.hermes_kanban())
+    assert res == {"installed": False, "boards": []}

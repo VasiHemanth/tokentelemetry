@@ -1057,8 +1057,17 @@ async def hermes_profiles():
 
     def _empty_usage() -> Dict[str, Any]:
         return {"sessions": 0, "input_tokens": 0, "output_tokens": 0,
-                "total_tokens": 0, "cost": 0.0, "last_activity": None}
+                "total_tokens": 0, "cost": 0.0, "last_activity": None,
+                "cost_7d": 0.0, "cost_prev_7d": 0.0, "unattended_cost_7d": 0.0,
+                "daily": []}
 
+    # Sessions nobody was watching when they spent — the runaway-swarm /
+    # overnight-cron burn users get surprised by. Matches Hermes's own
+    # autonomous source values.
+    _UNATTENDED_SOURCES = {"cron", "subagent", "kanban", "tool"}
+
+    now_local = datetime.now().astimezone()
+    day_cost: Dict[str, Dict[str, float]] = {}
     usage: Dict[str, Dict[str, Any]] = {}
     try:
         for s in await get_sessions_cached():
@@ -1071,19 +1080,47 @@ async def hermes_profiles():
             u["input_tokens"] += tk.get("input", 0) or 0
             u["output_tokens"] += tk.get("output", 0) or 0
             u["total_tokens"] += tk.get("total", 0) or 0
-            u["cost"] += float(s.get("cost") or 0)
+            cost = float(s.get("cost") or 0)
+            u["cost"] += cost
             ts = s.get("timestamp")
             iso = ts.isoformat() if isinstance(ts, datetime) else ts
             if iso and (u["last_activity"] is None or iso > u["last_activity"]):
                 u["last_activity"] = iso
+            if isinstance(ts, datetime):
+                ts_local = ts.astimezone()
+                age_days = (now_local - ts_local).total_seconds() / 86400
+                if age_days <= 7:
+                    u["cost_7d"] += cost
+                    if (s.get("source_subtype") or "") in _UNATTENDED_SOURCES:
+                        u["unattended_cost_7d"] += cost
+                elif age_days <= 14:
+                    u["cost_prev_7d"] += cost
+                # Day buckets are LOCAL days — build keys from local Y/M/D,
+                # never toISOString/utc (see project rule on day bucketing).
+                dkey = f"{ts_local.year:04d}-{ts_local.month:02d}-{ts_local.day:02d}"
+                day_cost.setdefault(key, {})
+                day_cost[key][dkey] = day_cost[key].get(dkey, 0.0) + cost
     except Exception:
         pass
+
+    # Last 14 local days, oldest first, zero-filled so sparklines align.
+    day_keys: List[str] = []
+    for i in range(13, -1, -1):
+        d = now_local - timedelta(days=i)
+        day_keys.append(f"{d.year:04d}-{d.month:02d}-{d.day:02d}")
+
+    def _usage_for(key: str) -> Dict[str, Any]:
+        u = usage.get(key) or _empty_usage()
+        per = day_cost.get(key, {})
+        u["daily"] = [{"date": dk, "cost": round(per.get(dk, 0.0), 6)}
+                      for dk in day_keys]
+        return u
 
     profiles: List[Dict[str, Any]] = [{
         "name": "default",
         "is_default": True,
         "active": active is None,
-        "usage": usage.get("default") or _empty_usage(),
+        "usage": _usage_for("default"),
         **_hermes_profile_meta(HERMES_DIR),
     }]
     if HERMES_PROFILES_DIR.is_dir():
@@ -1094,10 +1131,153 @@ async def hermes_profiles():
                 "name": p.name,
                 "is_default": False,
                 "active": active == p.name,
-                "usage": usage.get(p.name) or _empty_usage(),
+                "usage": _usage_for(p.name),
                 **_hermes_profile_meta(p),
             })
     return {"profiles": profiles, "active_profile": active}
+
+
+def _hermes_kanban_dbs() -> List[Tuple[Path, Optional[str], str]]:
+    """(db_path, profile, board) for every Hermes kanban DB.
+
+    Layout per home: the default board is <home>/kanban.db (back-compat with
+    pre-boards installs); named boards live at <home>/kanban/boards/<slug>/kanban.db.
+    """
+    out: List[Tuple[Path, Optional[str], str]] = []
+    homes: List[Tuple[Path, Optional[str]]] = [(HERMES_DIR, None)]
+    if HERMES_PROFILES_DIR.is_dir():
+        homes.extend((p, p.name) for p in sorted(HERMES_PROFILES_DIR.iterdir())
+                     if p.is_dir())
+    for home, profile in homes:
+        default_db = home / "kanban.db"
+        if default_db.exists():
+            out.append((default_db, profile, "default"))
+        boards_dir = home / "kanban" / "boards"
+        if boards_dir.is_dir():
+            for db in sorted(boards_dir.glob("*/kanban.db")):
+                out.append((db, profile, db.parent.name))
+    return out
+
+
+def _connect_kanban_ro(db_path: Path) -> sqlite3.Connection:
+    """mode=ro, falling back to immutable=1 — a kanban DB in WAL mode inside a
+    0700 home can refuse a plain read-only open (no -shm access)."""
+    uri = _sqlite_ro_uri(db_path)
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+        return conn
+    except sqlite3.OperationalError:
+        return sqlite3.connect(uri + "&immutable=1", uri=True, timeout=1.0)
+
+
+@app.get("/hermes/kanban")
+async def hermes_kanban():
+    """Kanban boards with per-task cost attribution.
+
+    Hermes's swarm/board tracks tasks and runs but never costs them
+    (per-goal cost attribution is a standing user ask). Newer Hermes links
+    tasks to state.db sessions via tasks.session_id — where present we join
+    the session's cost/tokens from the shared scan; task_runs.profile tells
+    us which profile-worker did the work.
+    """
+    dbs = _hermes_kanban_dbs()
+    if not dbs:
+        return {"installed": False, "boards": []}
+
+    # session id -> (cost, tokens) from the shared scan, so task costs match
+    # every other number on the dashboard.
+    sess_cost: Dict[str, Tuple[float, int]] = {}
+    try:
+        for s in await get_sessions_cached():
+            if s.get("agent") == "hermes":
+                sess_cost[s["id"]] = (float(s.get("cost") or 0),
+                                      int((s.get("tokens") or {}).get("total", 0) or 0))
+    except Exception:
+        pass
+
+    def _iso(unix) -> Optional[str]:
+        try:
+            if not unix:
+                return None
+            return datetime.fromtimestamp(float(unix), tz=timezone.utc).isoformat()
+        except Exception:
+            return None
+
+    boards: List[Dict[str, Any]] = []
+    for db_path, profile, board in dbs:
+        try:
+            conn = _connect_kanban_ro(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+                if "id" not in cols:
+                    continue
+                # session_id arrived via migration — older boards lack it.
+                sid_col = "session_id" if "session_id" in cols else "NULL AS session_id"
+                rows = conn.execute(
+                    "SELECT id, title, status, assignee, priority, created_at, "
+                    "started_at, completed_at, consecutive_failures, "
+                    f"last_failure_error, {sid_col} FROM tasks"
+                ).fetchall()
+                runs_by_task: Dict[str, Dict[str, Any]] = {}
+                try:
+                    for r in conn.execute(
+                        "SELECT task_id, profile, status, outcome FROM task_runs"
+                    ):
+                        agg = runs_by_task.setdefault(r["task_id"], {
+                            "count": 0, "failed": 0, "profiles": []})
+                        agg["count"] += 1
+                        if (r["outcome"] or "") not in ("", "completed"):
+                            agg["failed"] += 1
+                        if r["profile"] and r["profile"] not in agg["profiles"]:
+                            agg["profiles"].append(r["profile"])
+                except Exception:
+                    pass
+
+                tasks: List[Dict[str, Any]] = []
+                totals_cost = 0.0
+                by_status: Dict[str, int] = {}
+                by_assignee: Dict[str, Dict[str, Any]] = {}
+                for row in rows:
+                    sid = row["session_id"]
+                    cost, toks = sess_cost.get(sid, (0.0, 0)) if sid else (0.0, 0)
+                    status = row["status"] or "unknown"
+                    assignee = row["assignee"] or "(unassigned)"
+                    totals_cost += cost
+                    by_status[status] = by_status.get(status, 0) + 1
+                    a = by_assignee.setdefault(assignee, {"assignee": assignee,
+                                                          "tasks": 0, "cost": 0.0})
+                    a["tasks"] += 1
+                    a["cost"] += cost
+                    tasks.append({
+                        "id": row["id"], "title": row["title"],
+                        "status": status, "assignee": row["assignee"],
+                        "priority": row["priority"] or 0,
+                        "created_at": _iso(row["created_at"]),
+                        "started_at": _iso(row["started_at"]),
+                        "completed_at": _iso(row["completed_at"]),
+                        "consecutive_failures": row["consecutive_failures"] or 0,
+                        "last_failure_error": row["last_failure_error"],
+                        "session_id": sid,
+                        "cost": cost, "tokens": toks,
+                        "runs": runs_by_task.get(row["id"]),
+                    })
+            finally:
+                conn.close()
+        except Exception:
+            continue
+        boards.append({
+            "profile": profile, "board": board,
+            "tasks": tasks,
+            "totals": {
+                "tasks": len(tasks), "cost": round(totals_cost, 6),
+                "by_status": by_status,
+                "by_assignee": sorted(by_assignee.values(),
+                                      key=lambda x: -x["cost"]),
+            },
+        })
+    return {"installed": True, "boards": boards}
 
 
 @app.get("/hermes/tools")
@@ -6409,6 +6589,11 @@ def _session_matches_filters(s: Dict[str, Any], filters: Dict[str, str]) -> bool
     if "agent" in filters and s.get("agent") != filters["agent"]:
         return False
     if "model" in filters and (s.get("model") or "") != filters["model"]:
+        return False
+    # Hermes profile scope. Sessions from the default home carry no
+    # hermes_profile key, so "default" matches them explicitly.
+    if "hermes_profile" in filters and \
+            (s.get("hermes_profile") or "default") != filters["hermes_profile"]:
         return False
     return True
 
