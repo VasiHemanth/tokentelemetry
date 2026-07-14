@@ -7845,6 +7845,33 @@ async def summarize_recent(limit: int = 20):
 
 if __name__ == "__main__":
     import uvicorn
+    import logging
+
+    # Redact the remote-access token from uvicorn's access log. `?token=` is
+    # how artifact <img>/<a> loads authenticate (see _presented_token above —
+    # they can't set an Authorization header), so without this the token
+    # lands in plain sight in every access-log line, which persists under
+    # systemd/journald/docker.
+    #
+    # uvicorn.access records carry a positional args tuple
+    # (client_addr, method, full_path, http_version, status_code); the query
+    # string lives in full_path (index 2) — see uvicorn.logging.AccessFormatter.
+    # addFilter here (before uvicorn.run() below) works because uvicorn's
+    # default logging config sets disable_existing_loggers=False and doesn't
+    # touch existing filters, so this filter survives uvicorn's own
+    # logging.config.dictConfig() call.
+    _TOKEN_QS_RE = re.compile(r"([?&]token=)[^&\s\"']+")
+
+    class _TokenRedactingFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            args = record.args
+            if isinstance(args, tuple) and len(args) > 2 and isinstance(args[2], str):
+                redacted = _TOKEN_QS_RE.sub(r"\1<redacted>", args[2])
+                if redacted != args[2]:
+                    record.args = args[:2] + (redacted,) + args[3:]
+            return True
+
+    logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
     # Port resolution order: --port CLI arg → TT_API_PORT env var → 8000.
     # bin/cli.js passes --port; running the file directly (uvicorn / python)
