@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@types/mdx": "^2.0.14",
-    "framer-motion": "^11.11.0",
+    "framer-motion": "^12.42.2",
     "fumadocs-core": "^16.10.3",
     "fumadocs-mdx": "^15.0.12",
     "fumadocs-ui": "^16.10.3",
