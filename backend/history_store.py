@@ -36,7 +36,7 @@ from tt_paths import data_dir
 
 _log = logging.getLogger("tokentelemetry.history")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Sub-dicts folded into ``ecosystem_json`` and expanded back out on read. These
 # are the keys the analytics aggregation + delegation views consume beyond the
@@ -86,6 +86,8 @@ def _migrate(con: sqlite3.Connection) -> None:
                 total           INTEGER DEFAULT 0,
                 cost            REAL    DEFAULT 0.0,
                 tok_per_sec     REAL,
+                task_type       TEXT,
+                completed       TEXT,
                 ecosystem_json  TEXT,
                 first_seen_at   TEXT,
                 last_seen_at    TEXT,
@@ -130,6 +132,21 @@ def _migrate(con: sqlite3.Connection) -> None:
             con.execute("ALTER TABLE sessions ADD COLUMN cache_reads INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.commit()
+    if ver < 3:
+        # v3 adds the cost-attribution raw signals: `task_type`
+        # (interactive|programmatic|unknown) and `completed`
+        # (clean|errored|unknown), both log-derived at scan time and STORED
+        # verbatim. The config-dependent billing_bucket / marginal_cost_zero are
+        # deliberately NOT persisted — they're re-derived at read time from the
+        # live billing route (store-raw-derive-at-read). Fresh DBs already carry
+        # both columns from CREATE TABLE, so tolerate the duplicate-column error.
+        for _col in ("task_type", "completed"):
+            try:
+                con.execute(f"ALTER TABLE sessions ADD COLUMN {_col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.commit()
 
@@ -216,6 +233,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             total=excluded.total,
                             cost=excluded.cost,
                             tok_per_sec=excluded.tok_per_sec,
+                            task_type=excluded.task_type,
+                            completed=excluded.completed,
                             ecosystem_json=excluded.ecosystem_json,
                             last_seen_at=excluded.last_seen_at,
                             source_present=1
@@ -225,9 +244,9 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                     INSERT INTO sessions (
                         agent, id, project, model, provider, endpoint, billing_mode,
                         first_ts, last_ts, input, output, cached, cache_reads, total, cost,
-                        tok_per_sec, ecosystem_json, first_seen_at, last_seen_at,
-                        source_present
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                        tok_per_sec, task_type, completed, ecosystem_json,
+                        first_seen_at, last_seen_at, source_present
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                     {conflict_clause}
                     """,
                     (
@@ -239,6 +258,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         int(tok.get("total", 0) or 0),
                         float(r.get("cost", 0.0) or 0.0),
                         r.get("tok_per_sec"),
+                        r.get("task_type"), r.get("completed"),
                         _ecosystem_blob(r), now, now,
                     ),
                 )
@@ -303,6 +323,10 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
         },
         "cost": r["cost"],
         "tok_per_sec": r["tok_per_sec"],
+        # Cost-attribution raw signals (v3+). Rows persisted before v3 have no
+        # column / NULL here → "unknown", matching a scanner with no signal.
+        "task_type": (r["task_type"] if "task_type" in r.keys() else None) or "unknown",
+        "completed": (r["completed"] if "completed" in r.keys() else None) or "unknown",
         "source_present": bool(r["source_present"]),
         "transcript_archived": bool(r["transcript_archived"]),
         "summary_present": bool(r["summary_present"]),

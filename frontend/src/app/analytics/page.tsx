@@ -33,6 +33,7 @@ interface AnalyticsData {
     linked_children?: number; linked_child_tokens?: number; linked_child_cost?: number;
     by_agent?: Record<string, { parents: number; spawns: number; children: number; child_tokens: number; child_cost: number; delegated_tokens: number; delegated_cost: number }>;
   };
+  cost_attribution?: CostAttribution;
   total: { input: number; output: number; cached: number; total: number; cost: number };
   coverage?: {
     earliest: string | null;
@@ -45,6 +46,21 @@ interface AnalyticsData {
 
 interface AgentStats {
   input: number; output: number; cached: number; total: number; cost: number; session_count: number;
+}
+
+/* Cost attribution (additive /analytics key, discussion #49 v1). Every field is
+   optional-safe — an older backend omits the whole `cost_attribution` object and
+   the section simply doesn't render. */
+interface BucketStat { cost: number; tokens: number; sessions: number }
+type BillingBucket = "included" | "api_rate" | "electricity" | "unknown";
+interface CostAttribution {
+  by_bucket: Record<BillingBucket, BucketStat>;
+  local_vs_cloud: { local: BucketStat; cloud: BucketStat };
+  per_session: {
+    avg_cost_all: number;
+    avg_cost_completed: number | null;
+    completed_counts: { clean: number; errored: number; unknown: number };
+  };
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -571,7 +587,155 @@ export default function AnalyticsPage() {
         </Section>
       )}
 
+      {data.cost_attribution && <CostAttributionSection ca={data.cost_attribution} />}
+
       <EcosystemSection data={data} />
+    </div>
+  );
+}
+
+/* Cost attribution — which layer actually pays: subscription-covered vs API
+   metered vs local electricity, local-vs-cloud, and cost per (completed) session.
+   Labels reuse the billing vocabulary from DrainOrder/BillingSettings. The
+   "subscription-covered" figure is an API-list-price equivalent, never a bill
+   (same framing as costFraming() in lib/billing.ts). */
+const BUCKET_META: Record<
+  BillingBucket,
+  { label: string; sub: string; dot: string; text: string }
+> = {
+  included:    { label: "Subscription-covered", sub: "$0 marginal — flat-fee plan",        dot: "var(--tt-success-fg)", text: "text-[var(--tt-success-fg)]" },
+  api_rate:    { label: "API metered",          sub: "Pay-per-token — approximates a bill", dot: "#f59e0b",              text: "text-amber-300" },
+  electricity: { label: "Electricity (local)",  sub: "Local model — power estimate",        dot: "var(--tt-info-fg)",    text: "text-[var(--tt-info-fg)]" },
+  unknown:     { label: "Unknown",              sub: "Billing mode not resolved",           dot: "var(--tt-fg-dim)",     text: "text-[var(--tt-fg-dim)]" },
+};
+const BUCKET_ORDER: BillingBucket[] = ["included", "api_rate", "electricity", "unknown"];
+
+function CostAttributionSection({ ca }: { ca: CostAttribution }) {
+  const buckets = BUCKET_ORDER
+    .map((k) => ({ key: k, ...(ca.by_bucket?.[k] ?? { cost: 0, tokens: 0, sessions: 0 }) }))
+    .filter((b) => b.sessions > 0 || b.cost > 0 || b.tokens > 0);
+  const totalCost = buckets.reduce((s, b) => s + b.cost, 0);
+  const hasIncluded = (ca.by_bucket?.included?.sessions ?? 0) > 0 || (ca.by_bucket?.included?.cost ?? 0) > 0;
+
+  const lc = ca.local_vs_cloud;
+  const cloud = lc?.cloud ?? { cost: 0, tokens: 0, sessions: 0 };
+  const local = lc?.local ?? { cost: 0, tokens: 0, sessions: 0 };
+  const cc = ca.per_session?.completed_counts ?? { clean: 0, errored: 0, unknown: 0 };
+  const avgCompleted = ca.per_session?.avg_cost_completed;
+
+  return (
+    <Section
+      title="Cost attribution"
+      description="Which layer actually pays — subscription plans, pay-per-token API, or local electricity — and what a session costs. All dollar figures are API list-price equivalents."
+      actions={<Badge variant="neutral" size="sm">{buckets.length} bucket{buckets.length === 1 ? "" : "s"}</Badge>}
+    >
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Bucket split */}
+        <Card className="lg:col-span-2" padding="none">
+          <div className="px-5 py-4 border-b border-[var(--tt-border)] flex items-center justify-between">
+            <CardTitle><DollarSign size={14} className="text-amber-300" /> By billing bucket</CardTitle>
+            <CardEyebrow>subscription vs metered vs local</CardEyebrow>
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead>
+                <TR>
+                  <TH className="pl-5">Bucket</TH>
+                  <TH className="text-right">Sessions</TH>
+                  <TH className="text-right">Tokens</TH>
+                  <TH className="text-right">Share</TH>
+                  <TH className="text-right pr-5 text-amber-300">API equiv.</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {buckets.map((b) => {
+                  const meta = BUCKET_META[b.key];
+                  return (
+                    <TR key={b.key}>
+                      <TD className="pl-5">
+                        <span className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: meta.dot }} />
+                          <span className="flex flex-col min-w-0">
+                            <span className={cn("text-[12px] font-medium", meta.text)}>{meta.label}</span>
+                            <span className="text-[10px] text-[var(--tt-fg-dim)]">{meta.sub}</span>
+                          </span>
+                        </span>
+                      </TD>
+                      <TD className="text-right tabular text-[var(--tt-fg-muted)]">{b.sessions.toLocaleString()}</TD>
+                      <TD className="text-right tabular text-[var(--tt-fg-muted)]">{compact(b.tokens)}</TD>
+                      <TD className="text-right tabular text-[var(--tt-fg-dim)]">{pct(b.cost, totalCost)}%</TD>
+                      <TD className="text-right pr-5 tabular font-semibold text-amber-300">${b.cost.toFixed(2)}</TD>
+                    </TR>
+                  );
+                })}
+              </TBody>
+            </Table>
+          </div>
+          {hasIncluded && (
+            <p className="px-5 py-3 text-[11px] leading-snug text-[var(--tt-fg-dim)] border-t border-[var(--tt-border)]">
+              <span className="text-[var(--tt-fg-muted)] font-medium">Subscription-covered is an API-list-price equivalent, not a bill.</span>{" "}
+              Flat-fee plans (Claude Pro/Max, Copilot and similar) charge a fixed
+              monthly price, so your actual spend on that usage is much lower — the
+              figure only re-prices it at API list rates so sessions are comparable.
+            </p>
+          )}
+        </Card>
+
+        {/* Local vs cloud + cost per session */}
+        <div className="space-y-6">
+          <Card padding="lg">
+            <CardHeader>
+              <CardTitle><Cpu size={14} className="text-[var(--tt-info-fg)]" /> Local vs cloud</CardTitle>
+            </CardHeader>
+            <div className="space-y-2.5 mt-1">
+              <SplitRow label="Cloud (hosted APIs)" stat={cloud} accentText="text-amber-300" dot="#f59e0b" />
+              <SplitRow label="Local (self-hosted)" stat={local} accentText="text-[var(--tt-info-fg)]" dot="var(--tt-info-fg)" />
+            </div>
+          </Card>
+
+          <div className="grid grid-cols-1 gap-4">
+            <StatTile
+              label="Cost per session"
+              value={`$${(ca.per_session?.avg_cost_all ?? 0).toFixed(3)}`}
+              hint="API equiv., averaged over every recorded session"
+              icon={<DollarSign size={16} />}
+              accent="var(--tt-brand)"
+            />
+            <StatTile
+              label="Cost per completed session"
+              value={avgCompleted == null ? "—" : `$${avgCompleted.toFixed(3)}`}
+              hint={
+                <>
+                  {cc.clean.toLocaleString()} ended cleanly · {cc.errored.toLocaleString()} errored · {cc.unknown.toLocaleString()} unknown
+                </>
+              }
+              icon={<DollarSign size={16} />}
+              accent="var(--tt-success)"
+            />
+          </div>
+        </div>
+      </div>
+
+      <p className="text-[11px] leading-snug text-[var(--tt-fg-dim)] px-0.5">
+        <span className="text-[var(--tt-fg-muted)]">Completed = &ldquo;ended cleanly&rdquo;</span> (no API/limit error at the
+        end), not &ldquo;the user was satisfied.&rdquo; Sessions we can&rsquo;t
+        classify are counted as <span className="text-[var(--tt-fg-muted)]">unknown</span> — never folded into clean.
+      </p>
+    </Section>
+  );
+}
+
+function SplitRow({ label, stat, accentText, dot }: { label: string; stat: BucketStat; accentText: string; dot: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-[11px]">
+      <span className="flex items-center gap-2 text-[var(--tt-fg-muted)] min-w-0">
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: dot }} />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="text-right whitespace-nowrap tabular">
+        <span className={cn("font-semibold", accentText)}>${stat.cost.toFixed(2)}</span>
+        <span className="text-[var(--tt-fg-dim)]"> · {stat.sessions.toLocaleString()} sess · {compact(stat.tokens)} tok</span>
+      </span>
     </div>
   );
 }

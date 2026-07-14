@@ -1,6 +1,22 @@
 {
   "releases": [
     {
+      "tag": "2026-07-14",
+      "title": "Cost attribution: buckets & per-session cost",
+      "highlights": [
+        {
+          "title": "See which bucket actually pays for each session",
+          "description": "Analytics now splits cost three ways: subscription-covered (included in a flat plan you already pay), API-metered (billed per token), and local electricity. It tells you how much of your spend is a real marginal bill versus usage a subscription already covers, plus a local-vs-cloud split.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Cost per completed session",
+          "description": "Alongside average cost per session, Analytics shows cost per session that ended cleanly. Codex, Claude Code and Cline report a completion signal; other agents show as unknown rather than guessing. Lets you weigh spend against runs that finished, not ones that errored out partway.",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-13",
       "title": "Compare two Hermes profiles head-to-head",
       "highlights": [
