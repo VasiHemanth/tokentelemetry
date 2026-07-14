@@ -11,8 +11,6 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
-frontend/package-lock.json
-package-lock.json
 
 # --- Python / backend ---
 backend/venv/
