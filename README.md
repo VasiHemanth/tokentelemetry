@@ -145,6 +145,20 @@ cd tokentelemetry
 
 Then open: **http://localhost:3000**
 
+`./start.sh` is also how you relaunch it later — there's no global `tokentelemetry` command, by design, so it stays a self-contained local checkout. Re-run it from the repo folder whenever you want to start it again.
+
+---
+
+## Updating
+
+```bash
+cd tokentelemetry   # your clone
+git pull
+./start.sh          # start.bat on Windows
+```
+
+Dependencies re-install automatically on the next launch when they've changed — nothing else to do. The dashboard's update check (**Settings → Updates & privacy**) tells you *when* a new version is out; `git pull` is how you apply it. Re-running the one-line installer over an existing clone now updates it too, but a manual `git pull` is the reliable path.
+
 ---
 
 ## What You'll See
@@ -410,6 +424,7 @@ Know of another? [Open an issue](https://github.com/VasiHemanth/tokentelemetry/i
 **Port conflicts:** Check/kill processes on ports 3000 and 8000.  
 **Python not found:** Install Python 3.9+ and ensure it's in your PATH.  
 **No sessions showing:** Run an agent (Claude Code, Gemini CLI, etc.) first — TokenTelemetry needs existing log files.  
+**How do I start it again?** `cd` into the clone folder and run `./start.sh` (`start.bat` on Windows) — there's no global command.  
 **Windows issues:** Run PowerShell as Administrator for the installer.
 
 ---
