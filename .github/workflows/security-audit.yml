@@ -4,8 +4,10 @@ name: Dependency security audit
 # next 16.2.4) were merged because nobody ran `npm audit` before shipping the
 # remote-access feature. This gate runs that check automatically on every PR and
 # push, so audit regressions in any of the three npm packages fail CI instead of
-# reaching main. Lockfiles are gitignored here, so we `npm install` (not `npm ci`)
-# to resolve a fresh tree exactly like a new contributor would.
+# reaching main. package-lock.json is now committed for all three packages, so
+# we `npm ci` (exact, reproducible install from the committed lock — same tree
+# every user's `npm ci` resolves in bin/cli.js) instead of resolving a fresh
+# tree from package.json ranges.
 
 on:
   pull_request:
@@ -43,9 +45,9 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Resolve dependency tree (no lockfile committed)
+      - name: Install exact dependency tree from committed lockfile
         working-directory: ${{ matrix.package }}
-        run: npm install --package-lock-only
+        run: npm ci
 
       # Runtime deps are the real exposed surface — fail the build on any
       # high/critical there. Dev-only advisories are reported but non-blocking.

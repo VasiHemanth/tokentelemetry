@@ -84,7 +84,17 @@ Your agent logs are never modified — TokenTelemetry only reads them.
 
 ## Updating
 
-Re-run the one-liner to update to the latest version, or `git pull` inside the repo directory if you cloned.
+TokenTelemetry doesn't update itself — you pull the latest when you want it. The dashboard's update check (**Settings → Updates & privacy**) tells you *when* a new version is out; this is how you apply it:
+
+```bash
+cd tokentelemetry   # the folder you installed into
+git pull
+./start.sh          # start.bat on Windows
+```
+
+Dependencies re-install automatically on the next launch when they've changed (a new lockfile or `package.json`), so there's no separate build step — `git pull` then start.
+
+Re-running the one-line installer over an existing clone updates it too: it does a fast-forward `git pull` before launching. A manual `git pull` is the more predictable path, and the one to use if you've made local changes (the installer skips the update rather than clobber them).
 
 ## Uninstalling
 

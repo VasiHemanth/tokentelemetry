@@ -1,0 +1,72 @@
+# Dependabot keeps the now-committed lockfiles (package-lock.json ×3,
+# backend/requirements.lock) from freezing users on stale, potentially
+# vulnerable pins. Weekly PRs bump them; minor/patch bumps are grouped per
+# ecosystem to cut down PR noise, majors stay separate since they can carry
+# breaking changes that need a human look. See .github/workflows/security-audit.yml
+# for the CI gate that gets exercised on every dependency PR this opens.
+version: 2
+updates:
+  # --- root CLI package -----------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # --- dashboard frontend -----------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # --- public marketing site --------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # --- FastAPI backend --------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # --- CI workflow actions -----------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"

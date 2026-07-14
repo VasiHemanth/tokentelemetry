@@ -242,17 +242,30 @@ function ensureBackend() {
     console.log('→ creating Python venv…');
     run(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
   }
-  // Skip pip install when requirements.txt hasn't changed since last install.
+  // Skip pip install when requirements haven't changed since last install.
   // Previously this ran every launch (hitting PyPI ~6× per hour for someone
   // restarting often), which is both slow and ironic for a "100% local" tool.
   const reqPath = path.join(backendDir, 'requirements.txt');
+  const lockPath = path.join(backendDir, 'requirements.lock');
   const stampPath = path.join(venvDir, '.requirements.sha');
+  // Prefer the hash-pinned lock: `--require-hashes` makes pip verify every
+  // download (including transitive deps) against a hash recorded here, so a
+  // registry compromise between installs can't silently swap in a malicious
+  // package. Fall back to the human-edited requirements.txt when no lock is
+  // present (older checkout predating this change) so those users aren't
+  // broken.
+  const useLock = fs.existsSync(lockPath) && /--hash=/.test(fs.readFileSync(lockPath, 'utf8'));
+  const installFrom = useLock ? lockPath : reqPath;
   let cachedSha = null;
   try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
-  const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(reqPath)).digest('hex');
+  const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(installFrom)).digest('hex');
   if (cachedSha === currentSha) return;
   console.log('→ installing backend dependencies…');
-  run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+  if (useLock) {
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r', 'requirements.lock'], { cwd: backendDir });
+  } else {
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+  }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
@@ -267,6 +280,7 @@ function ensureFrontend() {
   // self-heal on their next launch.
   const nmDir = path.join(frontendDir, 'node_modules');
   const pkgPath = path.join(frontendDir, 'package.json');
+  const lockPath = path.join(frontendDir, 'package-lock.json');
   const stampPath = path.join(nmDir, '.package-json.sha');
   const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(pkgPath)).digest('hex');
   let cachedSha = null;
@@ -275,7 +289,16 @@ function ensureFrontend() {
   console.log(fs.existsSync(nmDir)
     ? '→ frontend dependencies changed; updating…'
     : '→ installing frontend dependencies (first run can take a minute)…');
-  run('npm', ['install'], { cwd: frontendDir });
+  // Prefer `npm ci` — it installs exactly what package-lock.json pins (supply-chain
+  // hardening: a compromised registry can't slip a newer, malicious version past a
+  // committed lockfile) and is faster since it skips dependency resolution. Older
+  // checkouts predating the committed lockfile (or a repo where it was deleted)
+  // fall back to `npm install` so those users aren't broken.
+  if (fs.existsSync(lockPath)) {
+    run('npm', ['ci'], { cwd: frontendDir });
+  } else {
+    run('npm', ['install'], { cwd: frontendDir });
+  }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
