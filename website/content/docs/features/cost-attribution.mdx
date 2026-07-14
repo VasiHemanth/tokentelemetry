@@ -1,0 +1,73 @@
+---
+title: Cost Attribution
+description: Split cost by billing bucket (subscription-covered, API-metered, local electricity), see a local-vs-cloud split, and cost per completed session.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The **Cost attribution** section on the [Analytics](/docs/features/analytics) page breaks your spend down by *what actually pays for it*, not by token count. It answers a different question than the totals: of everything you ran, how much was a real marginal bill, how much was already covered by a subscription, and how much was electricity.
+
+All of it is derived on your machine from agent logs plus your billing configuration. Nothing leaves your machine.
+
+## The three billing buckets
+
+Every session's cost is placed in one of three buckets, derived at read time from your per-agent [billing configuration](/docs/configuration/billing):
+
+| Bucket | Meaning |
+| --- | --- |
+| **Included** | Covered by a flat subscription you already pay for (Claude Pro/Max, ChatGPT Plus, Copilot). No extra charge for this session. |
+| **API rate** | Metered per token against an API key. This is a real marginal cost; every token adds to a bill. |
+| **Electricity** | A local model (Ollama, llama.cpp, LM Studio, vLLM). Cost is power draw, not an API charge. |
+
+The split tells you which part of your usage you'd stop paying for if you stopped running it, versus usage a subscription already covers whether you use it or not.
+
+<Callout title="Included is an API-equivalent, not your bill">
+The dollar figure in the **Included** bucket is what the same tokens *would* cost at API list rates. It is a comparison number, not an invoice. On a flat plan your actual spend for those sessions is your monthly fee, regardless of how many tokens you ran (within plan limits). Use it to judge how much value you're getting from the subscription, not as money owed.
+</Callout>
+
+## Local means electricity
+
+Sessions in the **Electricity** bucket are priced by power draw and your kWh rate, not by a per-token charge, because a model you host yourself has no API bill. If you haven't set your wattage and electricity rate, configure them on the [Local Models & Power Cost](/docs/configuration/local-models) page so the estimate reflects your hardware.
+
+## Local vs cloud split
+
+Separately from the three buckets, Cost attribution shows a **local vs cloud** split: total cost and share for models you run yourself versus models called over a provider's API. This is the same local/cloud classification the pricing engine already uses, so it lines up with the energy and savings figures elsewhere in the app.
+
+## Cost per session and per completed session
+
+Two averages sit alongside the buckets:
+
+- **Cost per session**: total cost divided by every session in the range.
+- **Cost per completed session**: total cost divided by only the sessions that ended cleanly.
+
+Splitting them out lets you compare spend against work that actually ran to the end, instead of letting runs that errored or hit a limit partway drag the average in either direction.
+
+### What "completed" means, and what it doesn't
+
+A session is marked **completed** when its log shows it ended cleanly. That is a mechanical signal from the transcript, not a judgment about the result:
+
+- **Completed means** the run reached a normal end (the agent finished its turn or reported a done state).
+- **Completed does not mean** the output was correct, the task was accepted, or you were satisfied. A session can end cleanly and still be wrong.
+
+### Per-agent signal coverage
+
+Not every agent records whether a session finished. TokenTelemetry only marks completion where the harness leaves an honest signal in its logs, and shows the rest as `unknown` rather than guessing:
+
+| Agent | Completion signal |
+| --- | --- |
+| Codex | `task_complete` event in the session log |
+| Claude Code | Final turn ends with a clean stop (not an API error or limit) |
+| Cline | Its own `status` field |
+| All other agents | `unknown`; no completion signal in the logs |
+
+Sessions with `unknown` completion are kept as their own group. They are never folded into the completed count, so "cost per completed session" is computed only from sessions we can actually confirm ended cleanly. For agents in the `unknown` row, treat that average as covering the agents that do report a signal.
+
+<Callout type="info">
+Cost attribution depends on durable history being on, like the rest of Analytics. Sessions captured before you enabled durable history won't carry the completion signal or appear in these splits. See [History & Retention](/docs/configuration/retention).
+</Callout>
+
+## Related
+
+- [Billing & Cost Modes](/docs/configuration/billing): how each agent's bucket is detected and how to override it.
+- [Local Models & Power Cost](/docs/configuration/local-models): set the wattage and rate behind the electricity bucket.
+- [Analytics](/docs/features/analytics): the page this section lives on.

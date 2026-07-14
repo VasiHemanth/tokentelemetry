@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Wallet, Check } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -49,6 +49,13 @@ interface Session {
   hermes_profile?: string;
   parent_session_id?: string | null;
   end_reason?: string | null;
+  /* Cost attribution v1 — all optional (older backend omits them). task_type &
+     completed are stored raw at scan time; billing_bucket & marginal_cost_zero
+     are derived at read time from the user's current billing config. */
+  task_type?: "interactive" | "programmatic" | "unknown";
+  completed?: "clean" | "errored" | "unknown";
+  billing_bucket?: "included" | "api_rate" | "electricity" | "unknown";
+  marginal_cost_zero?: boolean;
 }
 
 interface Event {
@@ -589,6 +596,11 @@ export default function SessionDetailPage() {
                   {modelsUsed.length > 3 && (
                     <span className="text-[10px] font-mono text-[var(--tt-fg-dim)]">+{modelsUsed.length - 3}</span>
                   )}
+                  <BillingBucketChip
+                    bucket={sessionInfo?.billing_bucket}
+                    marginalZero={sessionInfo?.marginal_cost_zero}
+                  />
+                  <CompletedChip completed={sessionInfo?.completed} />
                 </div>
               </div>
             </div>
@@ -924,6 +936,52 @@ export default function SessionDetailPage() {
       )}
     </div>
   );
+}
+
+/* Cost-attribution metadata chips (discussion #49 v1). Both degrade to nothing
+   when the field is absent or carries only "unknown" noise — an "unknown"
+   completed chip on every legacy session would be clutter, so we show it only
+   for a decisive clean/errored end. Labels reuse the billing vocabulary from
+   Settings → Billing (DrainOrder/BillingSettings). */
+function BillingBucketChip({
+  bucket,
+  marginalZero,
+}: {
+  bucket?: "included" | "api_rate" | "electricity" | "unknown";
+  marginalZero?: boolean;
+}) {
+  if (!bucket || bucket === "unknown") return null;
+  const meta = {
+    included:    { variant: "success" as const, label: "Subscription-covered" },
+    api_rate:    { variant: "warn" as const,    label: "API metered" },
+    electricity: { variant: "info" as const,    label: "Electricity" },
+  }[bucket];
+  return (
+    <Badge variant={meta.variant} size="xs" title="How this session's usage is billed">
+      <Wallet size={10} /> {meta.label}
+      {marginalZero && <span className="opacity-70">· $0 marginal</span>}
+    </Badge>
+  );
+}
+
+function CompletedChip({ completed }: { completed?: "clean" | "errored" | "unknown" }) {
+  // Only show a decisive end — "unknown" is the default for most harnesses and
+  // adds no signal, so it's omitted rather than shown as a chip on every session.
+  if (completed === "clean") {
+    return (
+      <Badge variant="success" size="xs" title='Ended cleanly (no API/limit error at the end) — not a measure of whether you were satisfied'>
+        <Check size={10} /> Completed
+      </Badge>
+    );
+  }
+  if (completed === "errored") {
+    return (
+      <Badge variant="danger" size="xs" title="Ended on an API or rate-limit error">
+        <AlertTriangle size={10} /> Errored
+      </Badge>
+    );
+  }
+  return null;
 }
 
 /* Sidebar list of this session's subagents — the at-a-glance "what was

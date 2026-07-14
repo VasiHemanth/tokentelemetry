@@ -2616,6 +2616,10 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
 
             is_subagent = bool(_row_get(row, "is_subagent"))
             parent_sid = _row_get(row, "parent_session_id")
+            # Cost-attribution raw signals: the CLI store's `interactive` flag
+            # (1/0) and `status` are first-class columns, not a guess.
+            _iv = _row_get(row, "interactive")
+            _task_type = "unknown" if _iv is None else ("interactive" if _iv else "programmatic")
             rec = {
                 "id": sid,
                 "agent": "cline",
@@ -2629,6 +2633,8 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 "plans": [],
                 "artifacts": artifacts,
                 "cost": tokens["cost"],
+                "task_type": _task_type,
+                "completed": _cline_completed(_row_get(row, "status")),
                 "cline": {
                     "source": "cli",
                     "provider": row["provider"],
@@ -3334,6 +3340,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
+    "task_type", "completed",
 )
 
 
@@ -3377,6 +3384,7 @@ _CODEX_CACHE_FIELDS = (
     "tokens", "model", "_provider", "cost", "mcp_tools", "has_plan", "plans",
     "text", "tokens_by_day", "tool_counts", "_skill_counts",
     "parent_session_id", "subagent_info", "_raw_cwd",
+    "task_type", "completed",
 )
 
 
@@ -3412,6 +3420,50 @@ def _apply_codex_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> None
         {**p, "timestamp": datetime.fromisoformat(p["timestamp"]) if isinstance(p.get("timestamp"), str) else p.get("timestamp")}
         for p in (sess.get("plans") or [])
     ]
+
+
+# --- Cost-attribution raw signals (stored; billing bucket is derived at read) ---
+def _claude_task_type(entrypoint: Optional[str]) -> str:
+    """Map a Claude ``entrypoint`` (top-level on every transcript line) to a task
+    type: ``cli`` / ``claude-desktop`` are a human at a terminal/app
+    (interactive); ``sdk-cli`` is the Agent SDK / headless path (programmatic).
+    Anything unrecognized stays ``unknown`` — never guess."""
+    ep = (entrypoint or "").strip().lower()
+    if ep in ("cli", "claude-desktop"):
+        return "interactive"
+    if ep == "sdk-cli":
+        return "programmatic"
+    return "unknown"
+
+
+def _codex_task_type(originator: Optional[str]) -> str:
+    """Map a Codex session_meta ``originator`` to a task type. ``codex_exec``
+    (headless exec / app-server) and ``Claude Code`` (SDK-orchestrated over the
+    app-server) are programmatic; the TUI / editor / desktop originators are a
+    human driving it (interactive). Unrecognized → ``unknown``."""
+    o = (originator or "").strip().lower()
+    if not o:
+        return "unknown"
+    if "exec" in o or o == "claude code":
+        return "programmatic"
+    if o in ("codex-tui", "codex_vscode", "codex desktop") or "tui" in o or "vscode" in o or "desktop" in o:
+        return "interactive"
+    return "unknown"
+
+
+# Cline CLI ``status`` values that mean the run ended cleanly vs. with an error.
+_CLINE_CLEAN_STATUS = {"completed", "done", "finished", "success", "succeeded"}
+_CLINE_ERROR_STATUS = {"failed", "error", "errored", "cancelled", "canceled",
+                       "aborted", "crashed", "timeout", "timed_out", "killed"}
+
+
+def _cline_completed(status: Optional[str]) -> str:
+    s = (status or "").strip().lower()
+    if s in _CLINE_CLEAN_STATUS:
+        return "clean"
+    if s in _CLINE_ERROR_STATUS:
+        return "errored"
+    return "unknown"
 
 
 def _scan_sessions_sync():
@@ -3552,16 +3604,27 @@ def _scan_sessions_sync():
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
                     last_real_ts = None
+                    # Cost-attribution raw signals, derived in this single pass:
+                    # `entrypoint` (task type) is the same on every line; the last
+                    # assistant turn's stop_reason / isApiErrorMessage decide the
+                    # completed state.
+                    entrypoint = None
+                    last_stop_reason = None
+                    last_is_error = False
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
                                 try:
                                     data = json.loads(line)
                                 except Exception: continue
+                                if entrypoint is None and data.get("entrypoint"):
+                                    entrypoint = data["entrypoint"]
                                 if data.get("type") in ("user", "assistant") and data.get("timestamp"):
                                     last_real_ts = data["timestamp"]
                                 if data.get("type") == "assistant":
                                     msg = data.get("message", {})
+                                    last_stop_reason = msg.get("stop_reason")
+                                    last_is_error = bool(data.get("isApiErrorMessage"))
                                     m = msg.get("model")
                                     if m and m != "<synthetic>" and not sess.get("model"):
                                         sess["model"] = m
@@ -3611,6 +3674,13 @@ def _scan_sessions_sync():
                             sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
                         except ValueError:
                             pass
+                    sess["task_type"] = _claude_task_type(entrypoint)
+                    if last_is_error:
+                        sess["completed"] = "errored"
+                    elif last_stop_reason == "end_turn":
+                        sess["completed"] = "clean"
+                    else:
+                        sess["completed"] = "unknown"
                     _attach_tool_usage(sess, tool_counts, skill_counts)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
@@ -3699,6 +3769,10 @@ def _scan_sessions_sync():
                             if data.get("type") == "session_meta":
                                 sess["_raw_cwd"] = data["payload"].get("cwd", "unknown")
                                 sess["project"] = apply_alias(sess["_raw_cwd"])
+                                if sess.get("task_type", "unknown") == "unknown":
+                                    _tt = _codex_task_type(data["payload"].get("originator"))
+                                    if _tt != "unknown":
+                                        sess["task_type"] = _tt
                                 if not sess.get("model") and data["payload"].get("model"):
                                     sess["model"] = data["payload"].get("model")
                                 if not sess.get("_provider"):
@@ -3724,6 +3798,11 @@ def _scan_sessions_sync():
                             if data.get("type") == "turn_context" and not sess.get("model"):
                                 sess["model"] = data.get("payload", {}).get("model")
                             if data.get("type") == "event_msg":
+                                # A `task_complete` event means the turn agent
+                                # finished cleanly; presence anywhere in the
+                                # rollout marks the session clean.
+                                if (data.get("payload") or {}).get("type") == "task_complete":
+                                    sess["completed"] = "clean"
                                 ts_str = data.get("timestamp")
                                 event_day = None
                                 if ts_str:
@@ -4724,6 +4803,11 @@ def _scan_sessions_sync():
     # still "supported", just not scanned yet.
     for s in sessions:
         s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
+        # Cost-attribution raw signals default to "unknown" for every scanner
+        # that couldn't derive them (never guess). Scanners that DID derive a
+        # value (Claude/Codex/Cline) already set it above.
+        s.setdefault("task_type", "unknown")
+        s.setdefault("completed", "unknown")
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -4863,15 +4947,62 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         return _sessions_cache["data"]
 
 
+# ---------------------------------------------------------------------------
+# Cost-attribution read-time derivation
+# ---------------------------------------------------------------------------
+# `task_type` / `completed` are STORED raw at scan time; the billing *bucket* a
+# session drains depends on the user's CURRENT billing mode + plan, so it's
+# re-derived here at read time (never persisted), mirroring how energy/savings
+# are re-derived from power config. Buckets: included | api_rate | electricity |
+# unknown (the last for agents whose billing we genuinely can't resolve).
+def _resolve_session_bucket(
+    sess: Dict[str, Any],
+    mode_cache: Dict[str, str],
+    plans: Dict[str, str],
+    today,
+) -> tuple:
+    """Return ``(bucket, marginal_cost_zero)`` for one session.
+
+    ``mode_cache`` memoizes ``billing_mode.get_mode`` per agent (it touches disk),
+    ``plans`` is ``billing_route.load_plans()`` (read once by the caller).
+    """
+    import billing_mode, billing_route
+    agent = sess.get("agent") or ""
+    mode = mode_cache.get(agent)
+    if mode is None:
+        mode = billing_mode.get_mode(agent).get("mode", "unknown")
+        mode_cache[agent] = mode
+    plan = plans.get(agent, billing_route.DEFAULT_PLAN)
+    route = billing_route.resolve_billing_route(
+        agent, sess.get("task_type") or "unknown", plan, mode, today)
+    active = route.get("active")
+    if not active or active.get("id") == "unknown":
+        return "unknown", False
+    return (active.get("charges") or "unknown"), bool(route.get("marginal_cost_zero"))
+
+
 @app.get("/sessions")
 async def get_sessions(fresh: bool = False):
     """Return the session list. Pass ?fresh=1 to force a re-scan."""
+    import datetime as _date_mod
     data = await get_sessions_cached(fresh=fresh)
     # `stub` is scan→persist plumbing (history_store.upsert_sessions keys its
     # conflict clause on it), not API surface. Strip it on shallow copies —
     # never mutate the cached dicts, which the async history persist may
-    # still be reading.
-    return [{k: v for k, v in s.items() if k != "stub"} for s in data]
+    # still be reading. While copying, attach the read-time-derived billing
+    # bucket + marginal_cost_zero (config-dependent, so never stored).
+    import billing_route
+    plans = billing_route.load_plans()
+    mode_cache: Dict[str, str] = {}
+    today = _date_mod.date.today()
+    out = []
+    for s in data:
+        c = {k: v for k, v in s.items() if k != "stub"}
+        bucket, mcz = _resolve_session_bucket(s, mode_cache, plans, today)
+        c["billing_bucket"] = bucket
+        c["marginal_cost_zero"] = mcz
+        out.append(c)
+    return out
 
 
 @app.get("/pricing")
@@ -7072,6 +7203,60 @@ async def get_analytics(
             arow["child_tokens"] += (s.get("tokens") or {}).get("total", 0)
             arow["child_cost"] = round(arow["child_cost"] + (s.get("cost") or 0), 6)
 
+    # Cost attribution (read-time, config-dependent — never stored). Buckets the
+    # SAME filtered `sessions` set the other keys use. `by_bucket` = which credit
+    # pool pays: included (subscription-covered → marginal $0), api_rate
+    # (metered/paygo), electricity (local power), unknown (billing unresolved).
+    # `local_vs_cloud` reuses is_local_session (the pricing branch, not a
+    # re-derivation). `per_session` reports cost per session and per *cleanly-
+    # completed* session (completed=="clean" only; unknown is its own bucket,
+    # never folded into clean).
+    import billing_route as _billing_route
+    _plans = _billing_route.load_plans()
+    _mode_cache: Dict[str, str] = {}
+    _ca_today = datetime.now().date()
+
+    def _ca_row() -> Dict[str, Any]:
+        return {"cost": 0.0, "tokens": 0, "sessions": 0}
+
+    ca_by_bucket = {b: _ca_row() for b in ("included", "api_rate", "electricity", "unknown")}
+    ca_local = {"local": _ca_row(), "cloud": _ca_row()}
+    ca_completed = {"clean": 0, "errored": 0, "unknown": 0}
+    ca_cost_all = 0.0
+    ca_cost_clean = 0.0
+    ca_clean_n = 0
+    for s in sessions:
+        st = s.get("tokens", {}) or {}
+        toks = st.get("total", 0) or 0
+        scost = s.get("cost", 0.0) or 0.0
+        bucket, _mcz = _resolve_session_bucket(s, _mode_cache, _plans, _ca_today)
+        row = ca_by_bucket.get(bucket) or ca_by_bucket["unknown"]
+        row["cost"] += scost; row["tokens"] += toks; row["sessions"] += 1
+        loc = "local" if is_local_session(
+            model_name=s.get("model"), endpoint=s.get("endpoint"),
+            provider=s.get("provider"), billing_mode=s.get("billing_mode"), config=pc,
+        ) else "cloud"
+        ca_local[loc]["cost"] += scost; ca_local[loc]["tokens"] += toks; ca_local[loc]["sessions"] += 1
+        comp = s.get("completed") or "unknown"
+        if comp not in ca_completed:
+            comp = "unknown"
+        ca_completed[comp] += 1
+        ca_cost_all += scost
+        if comp == "clean":
+            ca_cost_clean += scost; ca_clean_n += 1
+    n_sessions = len(sessions)
+    cost_attribution = {
+        "by_bucket": {b: {"cost": round(v["cost"], 6), "tokens": v["tokens"], "sessions": v["sessions"]}
+                      for b, v in ca_by_bucket.items()},
+        "local_vs_cloud": {k: {"cost": round(v["cost"], 6), "tokens": v["tokens"], "sessions": v["sessions"]}
+                           for k, v in ca_local.items()},
+        "per_session": {
+            "avg_cost_all": round(ca_cost_all / n_sessions, 6) if n_sessions else 0.0,
+            "avg_cost_completed": round(ca_cost_clean / ca_clean_n, 6) if ca_clean_n else None,
+            "completed_counts": ca_completed,
+        },
+    }
+
     return {
         "by_agent": by_agent,
         "by_day": sorted_days,
@@ -7080,6 +7265,7 @@ async def get_analytics(
         "by_mcp_server": by_mcp_server,
         "by_subagent_type": by_subagent_type,
         "delegation": delegation_totals,
+        "cost_attribution": cost_attribution,
         "total": {
             "input": total_input,
             "output": total_output,

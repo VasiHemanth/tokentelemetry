@@ -3,6 +3,7 @@
   "pages": [
     "dashboard",
     "analytics",
+    "cost-attribution",
     "projects",
     "budgets",
     "traces",
