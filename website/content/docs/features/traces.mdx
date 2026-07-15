@@ -18,11 +18,12 @@ At the top of every trace is a summary header showing:
 - **Input tokens** — tokens the agent sent to the model
 - **Output tokens** — tokens the model returned
 - **Cache tokens** — input tokens served from the model's prompt cache (where available)
+- **Delegated** — extra tokens spent inside sub-agents this session spawned, shown as `+N` and kept separate from the parent's own tokens. Only appears when the session delegated work — see [Delegation & sub-agents](#delegation--sub-agents) below.
 - **Cost** — the API-equivalent cost for this session
 - **Model** — the model that handled the session
 - **Duration** — wall-clock time from session start to end
 
-These numbers come directly from the session log — no estimation.
+A row of stat pills sits beside the token header — **Steps**, **Tools**, **Reason** (reasoning blocks), **Turns**, **Dur**, and **Err** (errors) — so you can size up a session before scrubbing through it. These numbers come directly from the session log — no estimation.
 
 ## Five tabs
 
@@ -87,9 +88,31 @@ Each event type has a distinct visual style so the trace is scannable at a glanc
 
 Claude's extended thinking feature can produce **encrypted reasoning blocks** — thinking tokens that Anthropic encrypts before including in the session log. TokenTelemetry labels these blocks honestly: "Extended thinking (encrypted — content not available)." It never fabricates or infers reasoning content.
 
-## Parent session link
+## Split-brain view
 
-For sub-agent sessions spawned by a parent (e.g. via Claude Code's `Task` tool), a **parent session** link appears in the header. Clicking it opens the parent trace, so you can see the full delegation chain — from the top-level session down through every sub-agent it spawned.
+The **Split brain** toggle in the header splits the trace into two synchronized columns: **User & Agent Dialogue** on the left (the conversation as it happened) and **Internal Reasoning & Tools** on the right (the model's thinking and the tool calls it made alongside it). It separates *what the agent said* from *what it was doing and thinking* while it said it. Toggle back to **Unified view** for the single-stream timeline.
+
+## Delegation & sub-agents
+
+Many agents farm work out to sub-agents — Claude Code's `Task` tool, Hermes' `delegate_task`, and similar. When a session spawns sub-agents, the trace attributes their token spend and cost back to the parent and lets you drill into each child's own trace.
+
+![Delegated work and the sub-agent inspector in a session trace](/screenshots/trace-delegated-work.png)
+
+### Delegated token stat
+
+When a session delegated work, the token header gains a **Delegated** figure (e.g. `+429.9k`) alongside Input / Output / Cached. This is the token spend that happened *inside* sub-agents, kept separate from the parent's own tokens so you can see at a glance how much of the session's real cost was farmed out.
+
+### Delegated work card
+
+The **Delegated work** card lists every sub-agent the session spawned. Summary tiles across the top show the sub-agent count, total delegated tokens, cache writes, and delegated cost; each row then breaks down one sub-agent: its type (e.g. `general-purpose`, `Explore`), the task it was given, the model it ran on, its input/output and cached tokens, and its cost. Click **view** on any row to open that sub-agent's full trace.
+
+### Sub-agents inspector
+
+The right-hand inspector's **Context** tab carries a **Sub-agents** list — the same children in an at-a-glance sidebar. Click one to open its trace in a slide-over without leaving the parent session.
+
+### Parent session link
+
+The link works the other way too. Open a sub-agent session on its own and a **parent session** link appears in its header; clicking it opens the parent trace. Between the two you can walk the full delegation chain from any point — down from a parent into the sub-agents it spawned, or up from a child to the session that spawned it.
 
 ## Tips
 
