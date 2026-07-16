@@ -117,12 +117,14 @@ export default function Home() {
           <StatTile
             label="Sessions"
             value={loading ? <Skeleton className="h-8 w-20" /> : sessions.length.toLocaleString()}
+            hint="All time"
             icon={<Clock size={16} />}
             accent="var(--tt-brand)"
           />
           <StatTile
             label="Tokens"
             value={loading ? <Skeleton className="h-8 w-20" /> : formatTokens(totalTokens)}
+            hint="All time"
             icon={<TrendingUp size={16} />}
             accent="var(--tt-success)"
           />
@@ -135,7 +137,7 @@ export default function Home() {
           <StatTile
             label="API equiv. (est.)"
             value={loading ? <Skeleton className="h-8 w-20" /> : formatCost(totalCost)}
-            hint={framing.hint}
+            hint={framing.hint ? `${framing.hint} · all time` : "All time"}
             icon={<DollarSign size={16} />}
             accent="var(--tt-warn)"
           />

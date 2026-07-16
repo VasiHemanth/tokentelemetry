@@ -128,6 +128,18 @@ export default function AnalyticsPage() {
   const ct = useChartTheme();
   const AXIS = { stroke: ct.axisStroke, fontSize: 10, tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
 
+  // Human label for the active window — the dashboard KPI strip is all-time,
+  // so spelling out the analytics window here keeps the two totals from
+  // reading as a mismatch (they measure different scopes).
+  const rangeLabel = (() => {
+    const m: Record<string, string> = {
+      "7d": "Last 7 days", "30d": "Last 30 days", "90d": "Last 90 days",
+      "month": "This month", "year": "This year", "all": "All time",
+    };
+    if (range === "custom") return (customFrom || customTo) ? `${customFrom || "…"} → ${customTo || "…"}` : "Custom range";
+    return m[range] || range;
+  })();
+
   // Accumulate every model we've seen so selecting one doesn't collapse the
   // option list (the response only carries models in the current window).
   const [allModels, setAllModels] = useState<string[]>([]);
@@ -297,12 +309,12 @@ export default function AnalyticsPage() {
       )}
 
       {/* KPI strip */}
-      <Section title="Totals">
+      <Section title="Totals" description={`${rangeLabel} · all agents. The dashboard shows all-time totals, so these differ by window.`}>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatTile
             label="Total tokens"
             value={data.total.total.toLocaleString()}
-            hint="Across all agents"
+            hint={rangeLabel}
             icon={<TrendingUp size={16} />}
             accent="var(--tt-brand)"
           />
