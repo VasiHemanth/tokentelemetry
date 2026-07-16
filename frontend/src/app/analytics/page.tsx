@@ -46,6 +46,8 @@ interface AnalyticsData {
     iterations: number;
     tokens: number;
     cost: number;
+    session_tokens?: number;
+    session_cost?: number;
     agent: string;
     session_id: string;
     job_id: string | null;
@@ -624,7 +626,7 @@ function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
   return (
     <Section
       title="Recurring loops"
-      description="Cron- and heartbeat-scheduled sessions an agent set up to re-run itself. Token and cost figures are an attribution view — they're already included in the session totals above."
+      description="Cron- and heartbeat-scheduled sessions an agent set up to re-run itself. Token and cost here are the loop's OWN turns (its fire responses), not the whole session — a session may do plenty of non-loop work too. These are already part of the session totals above."
     >
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatTile
@@ -651,7 +653,7 @@ function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
         <StatTile
           label="Loop cost"
           value={`$${loops.loop_cost.toFixed(2)}`}
-          hint={`${compact(loops.loop_tokens)} tok · already in session totals`}
+          hint={`${compact(loops.loop_tokens)} tok · loop turns only`}
           icon={<DollarSign size={16} />}
           accent="var(--tt-warn)"
         />
@@ -681,7 +683,10 @@ function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
                   </span>
                   <span className="text-right shrink-0">
                     <span className="block tabular font-semibold text-[var(--tt-fg)]" title="observed fires (lower bound)">≥{l.iterations.toLocaleString()}</span>
-                    <span className="block tabular text-[var(--tt-fg-dim)]">{compact(l.tokens)} tok · ${l.cost.toFixed(2)}</span>
+                    <span className="block tabular text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{compact(l.tokens)} tok · ${l.cost.toFixed(2)}</span>
+                    {l.session_cost != null && l.session_cost > l.cost + 0.005 && (
+                      <span className="block tabular text-[var(--tt-fg-dim)] text-[10px] opacity-70">of ${l.session_cost.toFixed(2)} session</span>
+                    )}
                   </span>
                 </li>
               );

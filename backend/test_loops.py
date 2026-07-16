@@ -222,3 +222,62 @@ def test_scan_non_loop_session_has_no_loop_field(scan_env):
         encoding="utf-8")
     s = [s for s in main._scan_sessions_sync() if s["id"] == sid][0]
     assert "loop" not in s
+
+
+FOOT_SID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+
+def test_scan_loop_footprint_only_counts_fire_turns(scan_env):
+    """The loop's footprint = usage from its fire-response turns ONLY, never the
+    whole session. A tool_result echoing the prompt is not a fire; a genuine
+    non-loop turn's usage is excluded and must not be attributed to the loop."""
+    proj = (scan_env / ".claude") / "projects" / PROJ
+    proj.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "user", "timestamp": "2026-07-16T00:00:00Z", "cwd": "/tmp/loop",
+         "message": {"role": "user", "content": "/loop 7 * * * * do X"}},
+        # Setup turn (usage 10/5) — span not open yet, must NOT be attributed.
+        {"type": "assistant", "timestamp": "2026-07-16T00:00:01Z",
+         "message": {"model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 10, "output_tokens": 5},
+                     "content": [{"type": "tool_use", "name": "CronCreate", "id": "tu1",
+                                  "input": {"cron": "7 * * * *", "recurring": True,
+                                            "prompt": "do X"}}]}},
+        {"type": "user", "timestamp": "2026-07-16T00:00:02Z",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu1",
+              "content": "Scheduled recurring job abc123 (runs at 7 * * * *)"}]}},
+        # A tool_result that ECHOES the prompt "do X" — must NOT be a fire.
+        {"type": "user", "timestamp": "2026-07-16T00:30:00Z",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu9", "content": "grep found: do X"}]}},
+        # Real fire — opens the span.
+        {"type": "user", "timestamp": "2026-07-16T01:00:00Z",
+         "message": {"role": "user", "content": "do X"}},
+        # Fire response (usage 100/50) — MUST be attributed to the loop.
+        {"type": "assistant", "timestamp": "2026-07-16T01:00:01Z",
+         "message": {"model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 100, "output_tokens": 50},
+                     "content": [{"type": "text", "text": "here is X"}]}},
+        # Genuine non-loop user turn — closes the span.
+        {"type": "user", "timestamp": "2026-07-16T02:00:00Z",
+         "message": {"role": "user", "content": "now do something completely unrelated"}},
+        # Non-loop response (usage 1000/500) — MUST NOT be attributed.
+        {"type": "assistant", "timestamp": "2026-07-16T02:00:01Z",
+         "message": {"model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 1000, "output_tokens": 500},
+                     "content": [{"type": "text", "text": "done"}]}},
+    ]
+    (proj / f"{FOOT_SID}.jsonl").write_text(
+        "".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    s = [s for s in main._scan_sessions_sync() if s["id"] == FOOT_SID][0]
+    lp = s["loop"]
+    # Footprint = ONLY the fire response's input+output (100+50), not the setup
+    # turn (10+5), not the unrelated turn (1000+500).
+    assert lp["footprint_tokens"] == 150
+    assert lp["footprint_cost"] > 0
+    # Always <= the whole session.
+    assert lp["footprint_tokens"] < s["tokens"]["total"]
+    assert lp["footprint_cost"] <= (s.get("cost") or 0) + 1e-9
+    # The tool_result echoing "do X" was NOT counted as a fire.
+    assert lp["iterations"] == 1
