@@ -3225,24 +3225,153 @@ def _attach_tool_usage(sess: Dict[str, Any], tool_counts: Dict[str, int],
         ]
 
 
-def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, Any]]:
-    """Roll up subagent (Task/Agent tool) usage for one Claude Code session.
+def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
+                             description: Optional[str] = None,
+                             tool_use_id: Optional[str] = None,
+                             extra: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Parse ONE Claude subagent/workflow transcript file into a usage entry.
 
-    Claude Code writes each spawned subagent's full transcript to
-      <project-dir>/<sessionId>/subagents/agent-<agentId>.jsonl
-    with a sibling agent-<agentId>.meta.json {agentType, description, toolUseId}.
-    These files are NOT sessions — their usage is counted nowhere else, so this
-    rollup is the only place it surfaces (count-once invariant: the parent's own
-    token fields stay untouched; delegated usage is a separate bucket).
-
-    Each subagent runs its own context and often a DIFFERENT model than the
+    Each transcript runs its own context and often a DIFFERENT model than the
     parent (e.g. Explore on Haiku under an Opus session), so cost is computed
     per file with that file's model. Cache semantics match the main scanner:
     cached = high-water-mark of cache_read per transcript, cache writes are
-    billed per event and accumulate.
+    billed per event and accumulate. Returns None if the file can't be read.
 
-    Returns None when the session has no subagents/ dir; otherwise
-    {spawn_count, subagents: [...], totals: {...}, cost}.
+    Shared by _claude_subagent_usage (flat Task/Agent transcripts) and
+    _claude_workflow_entries (dynamic-workflow agents) so the token/cost math
+    can't drift between the two.
+    """
+    tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+              "cache_creation_1h": 0, "total": 0}
+    model = None
+    try:
+        with open(f, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                if data.get("type") != "assistant":
+                    continue
+                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                m = msg.get("model")
+                if m and m != "<synthetic>" and not model:
+                    model = m
+                # Fallback identity when meta.json is missing/corrupt.
+                if not agent_type and data.get("attributionAgent"):
+                    agent_type = data.get("attributionAgent")
+                usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
+                if not usage:
+                    continue
+                cr = usage.get("cache_read_input_tokens", 0) or 0
+                cc = usage.get("cache_creation_input_tokens", 0) or 0
+                cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
+                tokens["input"] += usage.get("input_tokens", 0) or 0
+                tokens["output"] += usage.get("output_tokens", 0) or 0
+                tokens["cached"] = max(tokens["cached"], cr)
+                tokens["cache_creation"] += cc
+                tokens["cache_creation_1h"] += cc_1h
+    except Exception:
+        return None
+    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
+                          cache_creation_tokens=tokens["cache_creation"],
+                          cache_creation_1h_tokens=tokens["cache_creation_1h"])
+    entry = {
+        "agent_id": f.stem[len("agent-"):],
+        "agent_type": agent_type or "unknown",
+        "description": description,
+        "tool_use_id": tool_use_id,
+        "model": model,
+        "tokens": tokens,
+        "cost": cost,
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
+def _claude_workflow_entries(sub_dir: Path) -> List[Dict[str, Any]]:
+    """Dynamic-workflow (Workflow tool) subagent usage for one Claude session.
+
+    The Workflow tool writes each spawned agent one level deeper than a normal
+    Task subagent:
+      <sid>/subagents/workflows/wf_<id>/agent-<agentId>.jsonl
+    with a sibling journal.jsonl whose {"type":"result", agentId, result} lines
+    map an agent to a human label (its phase/area). These files are NEVER
+    discovered as sessions (the session glob is non-recursive), and the flat
+    subagents/ scanner only globs agent-*.jsonl one directory shallower, so
+    without this pass their tokens and cost are counted NOWHERE — the parent
+    trace, delegation overlay, and analytics all undercount by the full
+    workflow. Count-once still holds: these are files inside the parent's dir,
+    not sessions.
+    """
+    out: List[Dict[str, Any]] = []
+    wf_root = sub_dir / "workflows"
+    try:
+        if not wf_root.is_dir():
+            return out
+    except Exception:
+        return out
+    for wf_dir in sorted(wf_root.glob("wf_*")):
+        # journal maps agentId -> a human label. result is usually a dict
+        # ({area, summary, ...}) but is a plain string for some agents, so
+        # guard the type before .get() or it raises.
+        labels: Dict[str, str] = {}
+        try:
+            with open(wf_dir / "journal.jsonl", "r", encoding="utf-8", errors="replace") as jf:
+                for line in jf:
+                    try:
+                        j = json.loads(line)
+                    except Exception:
+                        continue
+                    if j.get("type") != "result":
+                        continue
+                    aid = j.get("agentId")
+                    res = j.get("result")
+                    if isinstance(res, dict):
+                        # Structured agent output — pull whatever human label the
+                        # agent's schema happens to carry. Some (e.g. verify agents
+                        # returning {results:[...]}) have none; that's fine, the row
+                        # falls back to the agent id.
+                        label = (res.get("area") or res.get("summary") or res.get("label")
+                                 or res.get("title") or res.get("name"))
+                    elif isinstance(res, str):
+                        label = res[:80]
+                    else:
+                        label = None
+                    if aid and label and aid not in labels:
+                        labels[aid] = str(label)[:120]
+        except Exception:
+            pass
+        wf_id = wf_dir.name
+        for f in sorted(wf_dir.glob("agent-*.jsonl")):
+            phase = labels.get(f.stem[len("agent-"):])
+            e = _rollup_agent_transcript(
+                f, agent_type="workflow-subagent", description=phase,
+                extra={"kind": "workflow", "workflow_id": wf_id, "phase": phase},
+            )
+            if e:
+                out.append(e)
+    return out
+
+
+def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, Any]]:
+    """Roll up subagent usage (Task/Agent tool AND dynamic workflows) for one
+    Claude Code session.
+
+    Claude Code writes each spawned Task subagent's full transcript to
+      <project-dir>/<sessionId>/subagents/agent-<agentId>.jsonl
+    with a sibling agent-<agentId>.meta.json {agentType, description, toolUseId},
+    and each dynamic-workflow agent one level deeper under
+      <sessionId>/subagents/workflows/wf_<id>/agent-<agentId>.jsonl.
+    None of these are sessions — their usage is counted nowhere else, so this
+    rollup is the only place it surfaces (count-once invariant: the parent's own
+    token fields stay untouched; delegated usage is a separate bucket).
+
+    Returns None when the session has no subagents/ dir and no workflow agents;
+    otherwise {spawn_count, subagents: [...], totals: {...}, by_type, cost,
+    workflow_count}.
     """
     sub_dir = session_file.parent / sid / "subagents"
     try:
@@ -3252,7 +3381,6 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         return None
     entries: List[Dict[str, Any]] = []
     for f in sorted(sub_dir.glob("agent-*.jsonl")):
-        agent_id = f.stem[len("agent-"):]
         agent_type = None
         description = None
         tool_use_id = None
@@ -3265,51 +3393,12 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
                 tool_use_id = meta.get("toolUseId")
         except Exception:
             pass
-        tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
-                  "cache_creation_1h": 0, "total": 0}
-        model = None
-        try:
-            with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    try:
-                        data = json.loads(line)
-                    except Exception:
-                        continue
-                    if data.get("type") != "assistant":
-                        continue
-                    msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
-                    m = msg.get("model")
-                    if m and m != "<synthetic>" and not model:
-                        model = m
-                    # Fallback identity when meta.json is missing/corrupt.
-                    if not agent_type and data.get("attributionAgent"):
-                        agent_type = data.get("attributionAgent")
-                    usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
-                    if not usage:
-                        continue
-                    cr = usage.get("cache_read_input_tokens", 0) or 0
-                    cc = usage.get("cache_creation_input_tokens", 0) or 0
-                    cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
-                    tokens["input"] += usage.get("input_tokens", 0) or 0
-                    tokens["output"] += usage.get("output_tokens", 0) or 0
-                    tokens["cached"] = max(tokens["cached"], cr)
-                    tokens["cache_creation"] += cc
-                    tokens["cache_creation_1h"] += cc_1h
-        except Exception:
-            continue
-        tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-        cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
-                              cache_creation_tokens=tokens["cache_creation"],
-                              cache_creation_1h_tokens=tokens["cache_creation_1h"])
-        entries.append({
-            "agent_id": agent_id,
-            "agent_type": agent_type or "unknown",
-            "description": description,
-            "tool_use_id": tool_use_id,
-            "model": model,
-            "tokens": tokens,
-            "cost": cost,
-        })
+        e = _rollup_agent_transcript(f, agent_type=agent_type, description=description,
+                                     tool_use_id=tool_use_id, extra={"kind": "task"})
+        if e:
+            entries.append(e)
+    # Dynamic-workflow agents live under subagents/workflows/wf_*/ (see above).
+    entries.extend(_claude_workflow_entries(sub_dir))
     if not entries:
         return None
     totals = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
@@ -3324,6 +3413,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         bt["cost"] = round(bt["cost"] + (e["cost"] or 0), 6)
     return {
         "spawn_count": len(entries),
+        "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
         "subagents": entries,
         "totals": totals,
         "by_type": by_type,
@@ -3537,6 +3627,15 @@ def _scan_sessions_sync():
                     sub_dir = session_file.parent / sid / "subagents"
                     if sub_dir.is_dir():
                         for sub_f in sub_dir.glob("agent-*.jsonl"):
+                            try:
+                                source_mtime = max(source_mtime, sub_f.stat().st_mtime)
+                            except OSError:
+                                continue
+                        # Dynamic-workflow agents (subagents/workflows/wf_*/) run in
+                        # the background and often finish AFTER the parent's last
+                        # write; without them here the cache serves a stale
+                        # undercount of delegated tokens forever.
+                        for sub_f in sub_dir.glob("workflows/wf_*/agent-*.jsonl"):
                             try:
                                 source_mtime = max(source_mtime, sub_f.stat().st_mtime)
                             except OSError:
@@ -5708,8 +5807,12 @@ async def session_subagent_trace(session_id: str, agent_id: str, agent: str):
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl"))
         if not files:
             return {"error": "Not found"}
-        t = files[0].parent / session_id / "subagents" / f"agent-{agent_id}.jsonl"
+        sub_dir = files[0].parent / session_id / "subagents"
+        t = sub_dir / f"agent-{agent_id}.jsonl"
         if not t.exists():
+            # Dynamic-workflow agents live one level deeper, under workflows/wf_*/.
+            t = next((sub_dir / "workflows").glob(f"wf_*/agent-{agent_id}.jsonl"), None)
+        if not t or not t.exists():
             return {"error": "Not found"}
         return _jsonl_events(t)
     if agent == "cursor":
