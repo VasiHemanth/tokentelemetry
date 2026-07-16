@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-16",
+      "title": "See which sessions ran a loop",
+      "highlights": [
+        {
+          "title": "Loop badge on every session trace",
+          "description": "When a session scheduled a recurring or self-paced prompt (a /loop, a cron, or a self-perpetuating agent), its trace header now shows a Loop badge with the live state: active, expired, or cancelled. Open any past session to see which loop ran, its cadence and job id, and why it ended."
+        },
+        {
+          "title": "Recurring loops in Analytics",
+          "description": "A new Recurring loops section counts your active, expired and cancelled loops with their observed fire counts, cadence and cost, so a forgotten hourly loop quietly burning tokens is easy to spot. It's detected from the actual scheduling calls, so it catches loops even when the /loop command left no trace.",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-13",
       "title": "Compare two Hermes profiles head-to-head",
       "highlights": [

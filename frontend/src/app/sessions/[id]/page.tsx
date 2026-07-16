@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -49,6 +49,8 @@ interface Session {
   hermes_profile?: string;
   parent_session_id?: string | null;
   end_reason?: string | null;
+  /** TRACE loop metadata; present only on loop sessions (see backend /sessions) */
+  loop?: any;
 }
 
 interface Event {
@@ -602,6 +604,21 @@ export default function SessionDetailPage() {
                 <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
                 <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
                 <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
+                {sessionInfo?.loop?.is_loop && (() => {
+                  const lp = sessionInfo.loop;
+                  const state: string = lp.state ?? "unknown";
+                  const variant =
+                    state === "active"    ? "success" :
+                    state === "expired"   ? "neutral" :
+                    state === "cancelled" ? "warn" :
+                    "outline";
+                  const tip = `${lp.mode} · ${lp.cadence} · ≥${lp.iterations} fires${lp.expired_reason ? " · " + lp.expired_reason : ""}`;
+                  return (
+                    <Badge variant={variant} size="sm" className="normal-case" title={tip}>
+                      <Repeat size={11} /> Loop · {state}
+                    </Badge>
+                  );
+                })()}
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
