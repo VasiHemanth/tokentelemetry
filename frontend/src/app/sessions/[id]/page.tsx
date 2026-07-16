@@ -765,6 +765,8 @@ export default function SessionDetailPage() {
              {agent === "hermes" && hermesOverlay && <HermesOverlayCard overlay={hermesOverlay} />}
              {/* Grok Build forensics — token growth, permissions, tool lifecycle, plan mode */}
              {agent === "grok" && grokForensics && <GrokForensicsCard forensics={grokForensics} cost={sessionInfo?.tokens?.cost ?? sessionInfo?.cost} />}
+             {/* Recurring loop (/loop, cron, self-perpetuating agent) — full detail */}
+             {sessionInfo?.loop?.is_loop && <LoopCard loop={sessionInfo.loop} />}
              {/* Delegated work — subagent spawns and what they actually cost */}
              {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
              <div className={splitView ? "grid grid-cols-2 gap-8" : "space-y-8"}>
@@ -2221,6 +2223,105 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
     </div>
   );
 }
+
+function LoopCard({ loop }: { loop: any }) {
+  const state: string = loop.state ?? "unknown";
+  const tone =
+    state === "active"    ? { ring: "border-emerald-500/40", dot: "bg-emerald-400",       text: "text-emerald-400" } :
+    state === "cancelled" ? { ring: "border-amber-500/40",   dot: "bg-amber-400",         text: "text-amber-400" } :
+                            { ring: "border-[var(--tt-border)]", dot: "bg-[var(--tt-fg-dim)]", text: "text-[var(--tt-fg-dim)]" };
+
+  const interval = (() => {
+    const s = loop.cadence_seconds;
+    if (loop.mode === "fixed_cron") {
+      if (s && s % 86400 === 0) return `Every ${s / 86400}d`;
+      if (s && s % 3600 === 0)  return `Every ${s / 3600}h`;
+      if (s && s % 60 === 0)    return `Every ${s / 60}m`;
+      return s ? `Every ${s}s` : "Cron schedule";
+    }
+    return s ? `~${s}s heartbeat` : "Self-paced";
+  })();
+
+  const reasonLabel = (r: string | null | undefined) => ({
+    cron_expired_7d: "reached its 7-day auto-expiry",
+    one_shot_completed: "ran once and finished",
+    stale_session_ended: "session ended (no recent fire)",
+    cancelled: "cancelled",
+  } as Record<string, string>)[r || ""] || r || "";
+
+  const fmt = (iso?: string | null) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+  };
+  const rel = (iso?: string | null) => {
+    if (!iso) return "";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return "";
+    const diff = Date.now() - t, abs = Math.abs(diff);
+    const unit = abs >= 86400000 ? `${Math.round(abs / 86400000)}d`
+      : abs >= 3600000 ? `${Math.round(abs / 3600000)}h`
+      : `${Math.round(abs / 60000)}m`;
+    return diff >= 0 ? `${unit} ago` : `in ${unit}`;
+  };
+
+  const Row = ({ k, v, accent }: { k: string; v: React.ReactNode; accent?: string }) => (
+    <div className="flex justify-between gap-3">
+      <span className="text-[var(--tt-fg-dim)]">{k}</span>
+      <span className={accent || "text-[var(--tt-fg)]"}>{v}</span>
+    </div>
+  );
+
+  return (
+    <div className={`mb-8 bg-[var(--tt-panel)]/60 border ${tone.ring} rounded-[var(--tt-radius-lg)] p-5`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-fg)] flex items-center gap-2">
+          <Repeat size={12} strokeWidth={3} /> Recurring loop
+        </div>
+        <span className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] ${tone.text}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {state}
+        </span>
+      </div>
+
+      {loop.prompt_preview && (
+        <div className="mb-3 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-3 py-2">
+          <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] block mb-1">Runs this prompt</span>
+          <span className="text-[12px] text-[var(--tt-fg-muted)] line-clamp-3">{loop.prompt_preview}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+        <Stat label="Interval" value={interval} />
+        <Stat label="Fires (min)" value={`≥${(loop.iterations ?? 0).toLocaleString()}`} />
+        <Stat label="Job id" value={loop.job_id || "—"} />
+        <Stat label="Trigger" value={loop.source_signal || loop.mode || "—"} />
+      </div>
+
+      <div className="space-y-1 text-[11px] font-mono text-[var(--tt-fg-muted)]">
+        <Row k="Cadence" v={loop.cadence || "—"} />
+        <Row k="Created" v={<>{fmt(loop.created_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.created_at)})</span></>} />
+        <Row k="Last fired" v={<>{fmt(loop.last_fired)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.last_fired)})</span></>} />
+        {loop.expires_at && (
+          <Row k={state === "expired" ? "Expired" : "Expires"} v={<>{fmt(loop.expires_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.expires_at)})</span></>} />
+        )}
+        {loop.cancelled_at && (
+          <Row k="Cancelled" v={<>{fmt(loop.cancelled_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.cancelled_at)})</span></>} />
+        )}
+        {loop.expired_reason && <Row k="Reason" v={reasonLabel(loop.expired_reason)} accent={tone.text} />}
+      </div>
+
+      {state === "active" && loop.recurring && (
+        <div className="mt-3 text-[10px] text-[var(--tt-fg-dim)]">
+          Still scheduled — liveness is recomputed from its last fire and cadence on each load, never cached.
+        </div>
+      )}
+      <div className="mt-1 text-[10px] text-[var(--tt-fg-dim)]">
+        Fires is a lower bound (counted from re-injected prompts in this session).
+      </div>
+    </div>
+  );
+}
+
 
 function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: any; agent: string; sessionId: string; onOpenSubagent?: (entry: any) => void }) {
   const subagents: any[] = delegation?.subagents || [];
