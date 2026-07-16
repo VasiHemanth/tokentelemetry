@@ -34,7 +34,7 @@ logger = logging.getLogger("tokentelemetry.scan_cache")
 # update that affects cached costs. `_mtime` only detects source-transcript
 # changes; this detects code changes. A mismatch is a miss, so stale entries
 # are transparently reparsed and rewritten — never migrated in place.
-CACHE_VERSION = 1
+CACHE_VERSION = 3  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost
 
 
 def _require_safe_component(candidate: str) -> str:
