@@ -3740,6 +3740,9 @@ def _scan_sessions_sync():
                     loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
                     loop_prompts: set = set()                # loop prompt text, to count re-injected fires
                     loop_fires: List[str] = []               # ts of each re-injected fire
+                    in_loop_span = False                     # inside a loop-fire response turn right now
+                    loop_usage = {"input": 0, "output": 0, "cached": 0,
+                                  "cache_creation": 0, "cache_creation_1h": 0}  # loop's OWN footprint
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
@@ -3764,6 +3767,14 @@ def _scan_sessions_sync():
                                         sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
                                         sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
                                         sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
+                                        if in_loop_span:
+                                            # This assistant turn is answering a loop fire, so its
+                                            # usage is the loop's OWN footprint (not the whole session).
+                                            loop_usage["input"] += usage.get("input_tokens", 0) or 0
+                                            loop_usage["output"] += usage.get("output_tokens", 0) or 0
+                                            loop_usage["cached"] = max(loop_usage["cached"], cr)
+                                            loop_usage["cache_creation"] += cc
+                                            loop_usage["cache_creation_1h"] += cc_1h
                                     sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
                                     sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
                                     for item in msg.get("content", []):
@@ -3830,10 +3841,22 @@ def _scan_sessions_sync():
                                                 for sc in loop_sched:
                                                     if sc.get("tool_use_id") == tuid and not sc.get("job_id"):
                                                         sc["job_id"] = mjob.group(1)
-                                    if loop_prompts:
-                                        utext = str(u_content)
-                                        if any(lp and lp in utext for lp in loop_prompts):
-                                            loop_fires.append(data.get("timestamp"))
+                                    # Loop-fire attribution span. Match the loop prompt ONLY in
+                                    # TEXT content — a tool_result that echoes the prompt (e.g. a
+                                    # grep of the transcript) is NOT a fire. A fire opens the span;
+                                    # a genuine user message closes it; tool_result / injected
+                                    # context lines (no text) leave it open, so the whole
+                                    # fire-response turn is attributed to the loop.
+                                    u_text = u_content if isinstance(u_content, str) else (
+                                        " ".join(b.get("text", "") for b in u_content
+                                                 if isinstance(b, dict) and b.get("type") == "text")
+                                        if isinstance(u_content, list) else "")
+                                    is_fire = bool(loop_prompts) and any(lp and lp in u_text for lp in loop_prompts)
+                                    if is_fire:
+                                        loop_fires.append(data.get("timestamp"))
+                                        in_loop_span = True
+                                    elif _strip_context_tags(u_text).strip():
+                                        in_loop_span = False
                     except Exception: continue
                     if last_real_ts:
                         try:
@@ -3852,6 +3875,18 @@ def _scan_sessions_sync():
                         fire_ts = [t for t in loop_fires if t] + [sc.get("ts") for sc in loop_sched if sc.get("ts")]
                         last_fired = max([t for t in fire_ts if t], default=created_at)
                         prompt = str(primary.get("prompt") or "")
+                        # Loop's OWN footprint: usage from the fire-response turns only, NOT
+                        # the whole session (a session may do lots of non-loop work).
+                        lu = loop_usage
+                        # Cost uses the same basis as the session (cached=high-water-mark), so
+                        # footprint_cost is guaranteed <= the session's own cost.
+                        footprint_cost = calculate_cost(sess.get("model"), lu["input"], lu["output"],
+                            lu["cached"], cache_creation_tokens=lu["cache_creation"],
+                            cache_creation_1h_tokens=lu["cache_creation_1h"])
+                        # Billed tokens the loop's own turns produced/processed (input+output).
+                        # Cache read/write is session context overhead, excluded — so this is the
+                        # loop's actual work and is always <= the session's input+output.
+                        footprint_tokens = lu["input"] + lu["output"]
                         # Raw, cacheable facts only. Lifecycle (state/active/expires_at) is
                         # recomputed per request by _annotate_loop_lifecycle, never cached.
                         sess["loop"] = {
@@ -3868,6 +3903,8 @@ def _scan_sessions_sync():
                             "iterations": len(loop_fires),
                             "cancelled": bool(loop_cancels),
                             "cancelled_at": (loop_cancels[-1].get("ts") if loop_cancels else None),
+                            "footprint_tokens": footprint_tokens,
+                            "footprint_cost": footprint_cost,
                         }
                     _attach_tool_usage(sess, tool_counts, skill_counts)
                     deleg = _claude_subagent_usage(session_file, sid)
@@ -7287,16 +7324,20 @@ async def get_analytics(
             elif st == "expired": loops["expired_loops"] += 1
             elif st == "cancelled": loops["cancelled_loops"] += 1
             loops["total_iterations"] += lp.get("iterations", 0) or 0
-            tok = (s.get("tokens") or {}).get("total", 0) or 0
+            # Footprint = the loop's OWN fire-response turns, not the whole session.
+            tok = lp.get("footprint_tokens", 0) or 0
+            cost = lp.get("footprint_cost", 0) or 0
+            session_tok = (s.get("tokens") or {}).get("total", 0) or 0
             loops["loop_tokens"] += tok
-            loops["loop_cost"] = round(loops["loop_cost"] + (s.get("cost") or 0), 6)
+            loops["loop_cost"] = round(loops["loop_cost"] + cost, 6)
             key = lp.get("job_id") or s.get("id")
             by_loop[key] = {
                 "label": lp.get("prompt_preview") or "(loop)",
                 "mode": lp.get("mode"), "cadence": lp.get("cadence"),
                 "state": st, "expired_reason": lp.get("expired_reason"),
                 "iterations": lp.get("iterations", 0) or 0,
-                "tokens": tok, "cost": s.get("cost") or 0,
+                "tokens": tok, "cost": cost,
+                "session_tokens": session_tok, "session_cost": s.get("cost") or 0,
                 "agent": agent, "session_id": s.get("id"),
                 "job_id": lp.get("job_id"), "last_fired": lp.get("last_fired"),
                 "expires_at": lp.get("expires_at"),
