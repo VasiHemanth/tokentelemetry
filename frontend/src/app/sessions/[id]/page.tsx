@@ -2247,8 +2247,14 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
               className={`flex items-center justify-between gap-3 text-[11px] font-mono text-[var(--tt-fg-muted)] py-1.5 px-2 rounded ${onOpenSubagent ? "cursor-pointer hover:bg-[var(--tt-sunken)] hover:text-[var(--tt-fg)]" : "hover:bg-[var(--tt-sunken)]"}`}
             >
               <span className="flex items-center gap-2 min-w-0">
+                {s.kind === "workflow" && (
+                  <span
+                    title={s.workflow_id ? `dynamic workflow ${s.workflow_id}` : "dynamic workflow"}
+                    className="text-[9px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--tt-cyan-fg)]/15 text-[var(--tt-cyan-fg)] shrink-0"
+                  >wf</span>
+                )}
                 <Badge>{s.agent_type || s.agent_role || "subagent"}</Badge>
-                <span className="truncate text-[var(--tt-fg)]">{s.description || s.nickname || s.agent_id}</span>
+                <span className="truncate text-[var(--tt-fg)]">{s.description || s.phase || s.nickname || s.agent_id}</span>
               </span>
               <span className="flex items-center gap-3 shrink-0">
                 {s.model && <span className="text-[var(--tt-fg-dim)]">{s.model.replace(/-\d{8}$/, "")}</span>}

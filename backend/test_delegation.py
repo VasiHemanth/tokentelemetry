@@ -105,6 +105,74 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
     return session_file
 
 
+def add_workflow_agents(session_file: Path, sid: str = SID, wf_id: str = "wf_test") -> Path:
+    """Add dynamic-workflow (Workflow tool) agents under
+    <sid>/subagents/workflows/<wf_id>/ — a journal.jsonl mapping agentId->label
+    plus per-agent transcripts. Mirrors what the Workflow tool writes on disk."""
+    wf = session_file.parent / sid / "subagents" / "workflows" / wf_id
+    wf.mkdir(parents=True, exist_ok=True)
+    # Journal: a labelled result (dict), a string result, and an unlabelled
+    # result ({results:[...]}, e.g. a verify agent) that must degrade to no phase.
+    (wf / "journal.jsonl").write_text(
+        _jl(type="started", key="v2:aaa", agentId="wfa")
+        + _jl(type="result", key="v2:aaa", agentId="wfa", result={"area": "Phase A"})
+        + _jl(type="result", key="v2:bbb", agentId="wfb", result="a plain string summary")
+        + _jl(type="result", key="v2:ccc", agentId="wfc", result={"results": [1, 2]}),
+        encoding="utf-8",
+    )
+    (wf / "agent-wfa.jsonl").write_text(
+        _assistant_line(model="claude-opus-4-8", inp=100, out=200,
+                        cache_read=1000, cache_creation=500), encoding="utf-8")
+    (wf / "agent-wfb.jsonl").write_text(
+        _assistant_line(model="claude-haiku-4-5-20251001", inp=10, out=20,
+                        cache_read=100, cache_creation=50), encoding="utf-8")
+    (wf / "agent-wfc.jsonl").write_text(
+        _assistant_line(model="claude-opus-4-8", inp=5, out=5), encoding="utf-8")
+    return wf
+
+
+def test_workflow_agents_attributed(tmp_path):
+    """Dynamic-workflow agents (subagents/workflows/wf_*/) are rolled into
+    delegation, tagged kind='workflow' with their workflow id and journal
+    label, and counted ON TOP of the flat Task subagents (not instead of)."""
+    sf = make_claude_tree(tmp_path / ".claude")
+    add_workflow_agents(sf)
+    deleg = main._claude_subagent_usage(sf, SID)
+    tasks = [e for e in deleg["subagents"] if e.get("kind") == "task"]
+    wf = [e for e in deleg["subagents"] if e.get("kind") == "workflow"]
+    assert len(tasks) == 3          # the flat Task subagents still present
+    assert len(wf) == 3             # the three workflow agents newly attributed
+    assert deleg["workflow_count"] == 3
+    assert deleg["spawn_count"] == 6
+    by_id = {e["agent_id"]: e for e in wf}
+    assert by_id["wfa"]["workflow_id"] == "wf_test"
+    assert by_id["wfa"]["agent_type"] == "workflow-subagent"
+    assert by_id["wfa"]["phase"] == "Phase A"                 # dict label
+    assert by_id["wfb"]["phase"] == "a plain string summary"  # string label
+    assert by_id["wfc"]["phase"] is None                     # no label -> None
+    assert by_id["wfa"]["description"] == "Phase A"          # description carries the phase
+    # Per-file model-correct: wfb rolled up under Haiku, wfa under Opus.
+    assert by_id["wfb"]["model"] == "claude-haiku-4-5-20251001"
+    # Tokens fold into the by_type bucket and totals.
+    assert "workflow-subagent" in deleg["by_type"]
+    assert deleg["by_type"]["workflow-subagent"]["count"] == 3
+    # wfa: in100+out200+cached1000 = 1300; wfb: 10+20+100=130; wfc: 5+5+0=10
+    assert by_id["wfa"]["tokens"]["total"] == 1300
+    wf_total = sum(e["tokens"]["total"] for e in wf)
+    assert wf_total == 1440
+    # Count-once: the workflow tokens are additive on top of the flat totals.
+    task_total = sum(e["tokens"]["total"] for e in tasks)
+    assert deleg["totals"]["total"] == task_total + wf_total
+
+
+def test_no_workflow_dir_is_harmless(tmp_path):
+    """A session with flat subagents but no workflows/ dir is unchanged."""
+    sf = make_claude_tree(tmp_path / ".claude")
+    deleg = main._claude_subagent_usage(sf, SID)
+    assert deleg["workflow_count"] == 0
+    assert all(e.get("kind") == "task" for e in deleg["subagents"])
+
+
 # --- helper unit tests ------------------------------------------------------
 
 def test_sqlite_ro_uri_cross_platform():
