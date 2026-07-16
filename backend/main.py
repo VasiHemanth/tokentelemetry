@@ -3421,9 +3421,94 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     }
 
 
+# --- /loop detection + lifecycle -------------------------------------------
+# A loop is a session that scheduled a recurring/self-paced prompt. We detect
+# it from the SCHEDULING TOOL CALLS, never the "/loop" marker: a /goal-launched
+# loop leaves no /loop breadcrumb but still self-perpetuates via ScheduleWakeup.
+# Claude: CronCreate (fixed cron) / ScheduleWakeup (dynamic) / CronDelete (stop).
+# The job id lives in the CronCreate tool_RESULT, not its input (verified).
+_LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
+
+
+def _loop_parse_ts(ts: Any) -> Optional[datetime]:
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _cron_to_seconds(cron: Optional[str]) -> Optional[int]:
+    """Coarse cadence in seconds for the common 5-field cron shapes we emit.
+    Returns None when the expression isn't one we can bound (keeps lifecycle
+    honest: an unknown cadence never fakes an 'active' staleness window)."""
+    if not cron or not isinstance(cron, str):
+        return None
+    parts = cron.split()
+    if len(parts) != 5:
+        return None
+    minute, hour, dom, mon, dow = parts
+    try:
+        if minute.startswith("*/") and hour == "*":
+            return int(minute[2:]) * 60          # every N minutes
+        if hour.startswith("*/"):
+            return int(hour[2:]) * 3600           # every N hours
+        if minute.isdigit() and hour == "*":
+            return 3600                           # hourly at minute M
+        if minute.isdigit() and hour.isdigit() and dom == "*" and mon == "*":
+            return 604800 if dow != "*" else 86400  # weekly vs daily
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> None:
+    """Recompute the VOLATILE loop lifecycle from now() for every loop session.
+
+    Detection writes only raw, cacheable facts (mode/cadence/job_id/iterations/
+    created_at/last_fired/cancelled). Liveness is wall-clock-derived and must be
+    recomputed per request, never cached — an idle loop writes nothing, so a
+    cached 'active' would stick forever. State machine, first match wins:
+    cancelled -> one-shot-done -> cron-7d-expired -> stale(session ended) ->
+    active -> unknown. "unknown" is only the never-fired case (no last_fired to
+    age against); an idle dynamic loop with a known last_fired ages into
+    "expired" via the cadence-relative grace, not "unknown". Claude crons are
+    in-memory and auto-expire 7 days after creation; that ceiling is Claude-only."""
+    for s in sessions:
+        lp = s.get("loop")
+        if not isinstance(lp, dict) or not lp.get("is_loop"):
+            continue
+        created = _loop_parse_ts(lp.get("created_at"))
+        last = _loop_parse_ts(lp.get("last_fired")) or created
+        cs = lp.get("cadence_seconds")
+        recurring = bool(lp.get("recurring", True))
+        expires_at = created + timedelta(days=7) if (recurring and lp.get("mode") == "fixed_cron" and created) else None
+        lp["expires_at"] = expires_at.isoformat() if expires_at else None
+        if lp.get("cancelled"):
+            state, reason = "cancelled", "cancelled"
+        elif not recurring and lp.get("iterations", 0) >= 1:
+            state, reason = "expired", "one_shot_completed"
+        elif expires_at and now > expires_at:
+            state, reason = "expired", "cron_expired_7d"
+        elif last:
+            grace = (cs or 3600) + max(900, int(0.10 * (cs or 3600)))
+            if (now - last).total_seconds() <= grace:
+                state, reason = "active", None
+            else:
+                state, reason = "expired", "stale_session_ended"
+        else:
+            state, reason = "unknown", None
+        lp["state"] = state
+        lp["active"] = (state == "active")
+        lp["expired_reason"] = reason
+
+
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
+    "loop",
 )
 
 
@@ -3651,6 +3736,10 @@ def _scan_sessions_sync():
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
                     last_real_ts = None
+                    loop_sched: List[Dict[str, Any]] = []   # scheduling tool calls (CronCreate/ScheduleWakeup)
+                    loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
+                    loop_prompts: set = set()                # loop prompt text, to count re-injected fires
+                    loop_fires: List[str] = []               # ts of each re-injected fire
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
@@ -3691,6 +3780,26 @@ def _scan_sessions_sync():
                                                 if plan_text:
                                                     sess["has_plan"] = True
                                                     sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": plan_text})
+                                            # /loop detection: scheduling tool calls (see _annotate_loop_lifecycle).
+                                            if tool == "CronCreate":
+                                                ip = item.get("input") or {}
+                                                loop_sched.append({"source": "CronCreate", "mode": "fixed_cron",
+                                                                   "cron": ip.get("cron"), "recurring": ip.get("recurring", True),
+                                                                   "prompt": ip.get("prompt"), "tool_use_id": item.get("id"),
+                                                                   "ts": data.get("timestamp")})
+                                                if ip.get("prompt"): loop_prompts.add(str(ip["prompt"])[:120])
+                                            elif tool == "ScheduleWakeup":
+                                                ip = item.get("input") or {}
+                                                if ip.get("stop"):
+                                                    loop_cancels.append({"ts": data.get("timestamp")})
+                                                else:
+                                                    loop_sched.append({"source": "ScheduleWakeup", "mode": "dynamic",
+                                                                       "delay": ip.get("delaySeconds"), "recurring": True,
+                                                                       "prompt": ip.get("prompt"), "ts": data.get("timestamp")})
+                                                    if ip.get("prompt"): loop_prompts.add(str(ip["prompt"])[:120])
+                                            elif tool in ("CronDelete", "CronStop"):
+                                                ip = item.get("input") or {}
+                                                loop_cancels.append({"job_id": ip.get("id") or ip.get("job_id"), "ts": data.get("timestamp")})
                                         if item.get("type") == "thinking":
                                             t_text = item.get("thinking", "")
                                             if "plan" in t_text.lower() and len(t_text) > 100:
@@ -3704,12 +3813,62 @@ def _scan_sessions_sync():
                                     for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
+                                    # Loop: pull the CronCreate job id from its tool_result, and
+                                    # count each re-injected fire (Claude crons re-inject the prompt
+                                    # into THIS same file, verified — so iterations are same-file).
+                                    if loop_sched and isinstance(u_content, list):
+                                        for blk in u_content:
+                                            if not isinstance(blk, dict) or blk.get("type") != "tool_result":
+                                                continue
+                                            rc = blk.get("content")
+                                            rtext = rc if isinstance(rc, str) else (
+                                                " ".join(b.get("text", "") for b in rc if isinstance(b, dict))
+                                                if isinstance(rc, list) else "")
+                                            mjob = _LOOP_JOB_RE.search(rtext or "")
+                                            if mjob:
+                                                tuid = blk.get("tool_use_id")
+                                                for sc in loop_sched:
+                                                    if sc.get("tool_use_id") == tuid and not sc.get("job_id"):
+                                                        sc["job_id"] = mjob.group(1)
+                                    if loop_prompts:
+                                        utext = str(u_content)
+                                        if any(lp and lp in utext for lp in loop_prompts):
+                                            loop_fires.append(data.get("timestamp"))
                     except Exception: continue
                     if last_real_ts:
                         try:
                             sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
                         except ValueError:
                             pass
+                    if loop_sched:
+                        primary = loop_sched[0]
+                        job_id = next((sc.get("job_id") for sc in loop_sched if sc.get("job_id")), None)
+                        mode = primary.get("mode")
+                        cron = primary.get("cron")
+                        delay = primary.get("delay")
+                        cadence = cron if mode == "fixed_cron" else (f"~{delay}s heartbeat" if delay else "self-paced")
+                        cadence_seconds = _cron_to_seconds(cron) if mode == "fixed_cron" else (int(delay) if isinstance(delay, (int, float)) else None)
+                        created_at = primary.get("ts")
+                        fire_ts = [t for t in loop_fires if t] + [sc.get("ts") for sc in loop_sched if sc.get("ts")]
+                        last_fired = max([t for t in fire_ts if t], default=created_at)
+                        prompt = str(primary.get("prompt") or "")
+                        # Raw, cacheable facts only. Lifecycle (state/active/expires_at) is
+                        # recomputed per request by _annotate_loop_lifecycle, never cached.
+                        sess["loop"] = {
+                            "is_loop": True,
+                            "mode": mode,
+                            "cadence": cadence,
+                            "cadence_seconds": cadence_seconds,
+                            "recurring": bool(primary.get("recurring", True)),
+                            "job_id": job_id,
+                            "source_signal": primary.get("source"),
+                            "prompt_preview": _strip_context_tags(prompt)[:160],
+                            "created_at": created_at,
+                            "last_fired": last_fired,
+                            "iterations": len(loop_fires),
+                            "cancelled": bool(loop_cancels),
+                            "cancelled_at": (loop_cancels[-1].get("ts") if loop_cancels else None),
+                        }
                     _attach_tool_usage(sess, tool_counts, skill_counts)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
@@ -4823,6 +4982,10 @@ def _scan_sessions_sync():
     # still "supported", just not scanned yet.
     for s in sessions:
         s.setdefault("delegation", {"supported": s.get("agent") in _DELEGATION_CAPABLE_AGENTS})
+
+    # Loop lifecycle: recompute active/expired/cancelled from now() for every
+    # loop session (raw facts were parsed above; liveness is never cached).
+    _annotate_loop_lifecycle(sessions, datetime.now(timezone.utc))
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -7089,6 +7252,15 @@ async def get_analytics(
         "linked_children": 0, "linked_child_tokens": 0, "linked_child_cost": 0.0,
         "by_agent": {},
     }
+    # Recurring loops (/loop): attribution-only view. A loop session is already
+    # an ordinary session in by_agent/by_day/total, so loop_tokens/loop_cost are
+    # a VIEW, never re-summed into totals (same discipline as linked_child_*).
+    by_loop: Dict[str, Dict[str, Any]] = {}
+    loops: Dict[str, Any] = {
+        "total_loops": 0, "active_loops": 0, "expired_loops": 0, "cancelled_loops": 0,
+        "loop_sessions": 0, "total_iterations": 0, "loop_tokens": 0, "loop_cost": 0.0,
+    }
+
     # Child sessions are looked up per (agent, id) so grok by_type rows can
     # attribute each child's tokens to its subagent type.
     sess_by_key = {(s.get("agent"), s.get("id")): s for s in sessions}
@@ -7106,6 +7278,29 @@ async def get_analytics(
 
     for s in sessions:
         agent = s.get("agent")
+        lp = s.get("loop")
+        if isinstance(lp, dict) and lp.get("is_loop"):
+            st = lp.get("state")
+            loops["total_loops"] += 1
+            loops["loop_sessions"] += 1
+            if st == "active": loops["active_loops"] += 1
+            elif st == "expired": loops["expired_loops"] += 1
+            elif st == "cancelled": loops["cancelled_loops"] += 1
+            loops["total_iterations"] += lp.get("iterations", 0) or 0
+            tok = (s.get("tokens") or {}).get("total", 0) or 0
+            loops["loop_tokens"] += tok
+            loops["loop_cost"] = round(loops["loop_cost"] + (s.get("cost") or 0), 6)
+            key = lp.get("job_id") or s.get("id")
+            by_loop[key] = {
+                "label": lp.get("prompt_preview") or "(loop)",
+                "mode": lp.get("mode"), "cadence": lp.get("cadence"),
+                "state": st, "expired_reason": lp.get("expired_reason"),
+                "iterations": lp.get("iterations", 0) or 0,
+                "tokens": tok, "cost": s.get("cost") or 0,
+                "agent": agent, "session_id": s.get("id"),
+                "job_id": lp.get("job_id"), "last_fired": lp.get("last_fired"),
+                "expires_at": lp.get("expires_at"),
+            }
         for sk in s.get("skills_used") or []:
             row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
             row["invocations"] += sk["count"]
@@ -7182,6 +7377,8 @@ async def get_analytics(
         "by_skill": by_skill,
         "by_mcp_server": by_mcp_server,
         "by_subagent_type": by_subagent_type,
+        "by_loop": by_loop,
+        "loops": loops,
         "delegation": delegation_totals,
         "total": {
             "input": total_input,

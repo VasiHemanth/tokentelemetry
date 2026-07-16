@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   BarChart3, TrendingUp, ArrowDownToLine, ArrowUpFromLine,
-  Zap, DollarSign, Cpu, GitBranch,
+  Zap, DollarSign, Cpu, GitBranch, Repeat,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart as RePieChart, Pie, Cell,
@@ -33,6 +33,25 @@ interface AnalyticsData {
     linked_children?: number; linked_child_tokens?: number; linked_child_cost?: number;
     by_agent?: Record<string, { parents: number; spawns: number; children: number; child_tokens: number; child_cost: number; delegated_tokens: number; delegated_cost: number }>;
   };
+  loops?: {
+    total_loops: number; active_loops: number; expired_loops: number; cancelled_loops: number;
+    loop_sessions: number; total_iterations: number; loop_tokens: number; loop_cost: number;
+  };
+  by_loop?: Record<string, {
+    label: string;
+    mode: "fixed_cron" | "dynamic" | string;
+    cadence: string;
+    state: "active" | "expired" | "cancelled" | "unknown" | string;
+    expired_reason: string | null;
+    iterations: number;
+    tokens: number;
+    cost: number;
+    agent: string;
+    session_id: string;
+    job_id: string | null;
+    last_fired: string;
+    expires_at: string | null;
+  }>;
   total: { input: number; output: number; cached: number; total: number; cost: number };
   coverage?: {
     earliest: string | null;
@@ -584,7 +603,105 @@ export default function AnalyticsPage() {
       )}
 
       <EcosystemSection data={data} />
+
+      <RecurringLoopsSection data={data} />
     </div>
+  );
+}
+
+/* Recurring loops — cron/heartbeat-driven sessions the agent scheduled for
+   itself. Distinct from the "doom-loop" concept elsewhere. Tokens/cost here are
+   an attribution view: they're already counted in the session totals above.
+   Self-hides when there are no loop sessions (no fake zeros). State colours:
+   active=emerald, expired=muted, cancelled=amber, unknown=outline. */
+const LOOP_STATE = {
+  active:    { dot: "bg-emerald-400",              label: "text-emerald-300" },
+  expired:   { dot: "bg-[var(--tt-fg-dim)]",       label: "text-[var(--tt-fg-dim)]" },
+  cancelled: { dot: "bg-amber-400",                label: "text-amber-300" },
+  unknown:   { dot: "bg-transparent border border-[var(--tt-border-strong)]", label: "text-[var(--tt-fg-muted)]" },
+} as const;
+
+function loopState(s: string) {
+  return LOOP_STATE[s as keyof typeof LOOP_STATE] ?? LOOP_STATE.unknown;
+}
+
+function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
+  const loops = data.loops;
+  if (!loops || loops.total_loops === 0) return null;
+
+  const entries = Object.entries(data.by_loop || {})
+    .map(([key, l]) => ({ key, ...l }))
+    .sort((a, b) => b.iterations - a.iterations);
+
+  return (
+    <Section
+      title="Recurring loops"
+      description="Cron- and heartbeat-scheduled sessions an agent set up to re-run itself. Token and cost figures are an attribution view — they're already included in the session totals above."
+    >
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatTile
+          label="Active loops"
+          value={String(loops.active_loops)}
+          hint={`${loops.total_loops} loop${loops.total_loops === 1 ? "" : "s"} total`}
+          icon={<Repeat size={16} />}
+          accent="var(--tt-success)"
+        />
+        <StatTile
+          label="Expired"
+          value={String(loops.expired_loops)}
+          hint={`${loops.cancelled_loops} cancelled`}
+          icon={<Repeat size={16} />}
+          accent="var(--tt-fg-dim)"
+        />
+        <StatTile
+          label="Loop runs"
+          value={`≥${loops.total_iterations.toLocaleString()}`}
+          hint={`Observed fires (min) across ${loops.loop_sessions} loop session${loops.loop_sessions === 1 ? "" : "s"}`}
+          icon={<TrendingUp size={16} />}
+          accent="var(--tt-brand)"
+        />
+        <StatTile
+          label="Loop cost"
+          value={`$${loops.loop_cost.toFixed(2)}`}
+          hint={`${compact(loops.loop_tokens)} tok · already in session totals`}
+          icon={<DollarSign size={16} />}
+          accent="var(--tt-warn)"
+        />
+      </div>
+
+      {entries.length > 0 && (
+        <Card padding="lg">
+          <CardHeader>
+            <CardTitle><Repeat size={14} className="text-[var(--tt-brand)]" /> Loops by activity</CardTitle>
+            <CardEyebrow>{entries.length} loop{entries.length === 1 ? "" : "s"}</CardEyebrow>
+          </CardHeader>
+          <ul className="space-y-2 max-h-96 overflow-y-auto pr-1">
+            {entries.map((l) => {
+              const st = loopState(l.state);
+              return (
+                <li key={l.key} className="flex items-center justify-between gap-3 text-[11px]">
+                  <span className="min-w-0 flex items-start gap-2">
+                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5", st.dot)} />
+                    <span className="min-w-0 flex flex-col">
+                      <span className="text-[var(--tt-fg)] truncate" title={l.label}>{l.label || "(no prompt)"}</span>
+                      <span className="text-[var(--tt-fg-dim)] truncate">
+                        <span className={cn("uppercase tracking-[0.1em] text-[10px]", st.label)}>{l.state}</span>
+                        {" · "}{l.cadence}{" · "}{l.mode}
+                        {l.expired_reason && <> · {l.expired_reason}</>}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="text-right shrink-0">
+                    <span className="block tabular font-semibold text-[var(--tt-fg)]" title="observed fires (lower bound)">≥{l.iterations.toLocaleString()}</span>
+                    <span className="block tabular text-[var(--tt-fg-dim)]">{compact(l.tokens)} tok · ${l.cost.toFixed(2)}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+    </Section>
   );
 }
 
