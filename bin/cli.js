@@ -30,6 +30,17 @@ const venvPython = isWindows
   ? path.join(venvDir, 'Scripts', 'python.exe')
   : path.join(venvDir, 'bin', 'python3');
 
+// Enterprise / air-gapped installs: route the two first-run dependency installs
+// (pip + npm) through a private mirror such as JFrog Artifactory or Nexus,
+// without needing to edit global pip.conf / .npmrc — which a locked-down VDI may
+// not permit. When unset, nothing changes. Note pip already reads PIP_INDEX_URL
+// and npm reads npm_config_registry from the inherited environment, so an org
+// that configures those globally needs neither of these.
+const pipIndexUrl = (process.env.TT_PIP_INDEX_URL || '').trim();
+const npmRegistry = (process.env.TT_NPM_REGISTRY || '').trim();
+const pipIndexArgs = pipIndexUrl ? ['--index-url', pipIndexUrl] : [];
+const npmRegistryArgs = npmRegistry ? ['--registry', npmRegistry] : [];
+
 function die(msg) {
   console.error('\nERROR: ' + msg + '\n');
   process.exit(1);
@@ -262,9 +273,9 @@ function ensureBackend() {
   if (cachedSha === currentSha) return;
   console.log('→ installing backend dependencies…');
   if (useLock) {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r', 'requirements.lock'], { cwd: backendDir });
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', ...pipIndexArgs, '-r', 'requirements.lock'], { cwd: backendDir });
   } else {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', ...pipIndexArgs, '-r', 'requirements.txt'], { cwd: backendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
@@ -295,9 +306,9 @@ function ensureFrontend() {
   // checkouts predating the committed lockfile (or a repo where it was deleted)
   // fall back to `npm install` so those users aren't broken.
   if (fs.existsSync(lockPath)) {
-    run('npm', ['ci'], { cwd: frontendDir });
+    run('npm', ['ci', ...npmRegistryArgs], { cwd: frontendDir });
   } else {
-    run('npm', ['install'], { cwd: frontendDir });
+    run('npm', ['install', ...npmRegistryArgs], { cwd: frontendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
