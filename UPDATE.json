@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-07-17",
+      "title": "Run TokenTelemetry in Docker or Podman",
+      "highlights": [
+        {
+          "title": "Container support via Docker or Podman",
+          "description": "TokenTelemetry now ships Dockerfiles and a compose file so you can run the backend and frontend as containers alongside other apps. Frontend serves on port 13000, backend on 18000 to avoid conflicts. A Makefile handles everything: make up builds and starts (skipping the build if images already exist), make down stops, make logs tails output — auto-detecting whether you have Docker or Podman."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-16",
       "title": "See which sessions ran a loop",
       "highlights": [
