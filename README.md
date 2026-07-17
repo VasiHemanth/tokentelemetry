@@ -147,6 +147,22 @@ Then open: **http://localhost:3000**
 
 `./start.sh` is also how you relaunch it later — there's no global `tokentelemetry` command, by design, so it stays a self-contained local checkout. Re-run it from the repo folder whenever you want to start it again.
 
+### Option 3: Docker or Podman
+
+```bash
+git clone https://github.com/VasiHemanth/tokentelemetry.git
+cd tokentelemetry
+make up
+```
+
+Then open: **http://localhost:13000**
+
+Requires Docker or Podman (auto-detected). Images are built on first run and reused on subsequent runs — `make up` skips the build if images already exist. Run `make` to see all available targets (`make build`, `make down`, `make logs`, etc.).
+
+The frontend runs on host port **13000** and the backend on **18000** to avoid conflicts with other containers or dev servers. Override with `PORT=` and `TT_API_PORT=` environment variables.
+
+Pre-built images are published to GitHub Container Registry on every push to main — `ghcr.io/<owner>/tokentelemetry-backend:latest` and `ghcr.io/<owner>/tokentelemetry-frontend:latest` — so you can pull them directly instead of building locally.
+
 ---
 
 ## Updating
@@ -331,11 +347,15 @@ This method requires no firewall changes on the remote machine and reuses your e
 
 ```
 tokentelemetry/
-  backend/        FastAPI app (Python) — reads agent logs, serves REST API
-  frontend/       Next.js 16 dashboard — React UI
-  bin/cli.js      Cross-platform launcher
-  install.sh      One-line installer (macOS/Linux)
-  install.ps1     One-line installer (Windows)
+  backend/           FastAPI app (Python) — reads agent logs, serves REST API
+  backend/Dockerfile
+  frontend/          Next.js 16 dashboard — React UI
+  frontend/Dockerfile
+  compose.yml        Container compose file (Docker / Podman)
+  Makefile           Container management (make up / down / build / logs …)
+  bin/cli.js         Cross-platform launcher
+  install.sh         One-line installer (macOS/Linux)
+  install.ps1        One-line installer (Windows)
 ```
 
 ---
@@ -421,7 +441,8 @@ Know of another? [Open an issue](https://github.com/VasiHemanth/tokentelemetry/i
 
 ## Troubleshooting
 
-**Port conflicts:** Check/kill processes on ports 3000 and 8000.  
+**Port conflicts (native):** Check/kill processes on ports 3000 and 8000.  
+**Port conflicts (container):** The container path uses ports 13000 (frontend) and 18000 (backend) by default — override with `PORT=` and `TT_API_PORT=`.  
 **Python not found:** Install Python 3.9+ and ensure it's in your PATH.  
 **No sessions showing:** Run an agent (Claude Code, Gemini CLI, etc.) first — TokenTelemetry needs existing log files.  
 **How do I start it again?** `cd` into the clone folder and run `./start.sh` (`start.bat` on Windows) — there's no global command.  
