@@ -1,6 +1,6 @@
 # Auto-select compose tool: podman compose > docker compose
 COMPOSE      := $(if $(shell command -v podman 2>/dev/null),podman compose,docker compose)
-COMPOSE_PROD := $(COMPOSE) -f compose.yml -f compose.prod.yml
+COMPOSE_PROD := $(COMPOSE) -f compose.yml -f docker-compose.prod.yml
 CONTAINER    := $(if $(shell command -v podman 2>/dev/null),podman,docker)
 PROJECT    := $(notdir $(CURDIR))
 _BUILD_LOG := /tmp/tt-build.log

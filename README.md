@@ -360,7 +360,7 @@ tokentelemetry/
   frontend/          Next.js 16 dashboard — React UI
   frontend/Dockerfile
   compose.yml        Container compose file (Docker / Podman) — dev, builds locally
-  compose.prod.yml   Production overlay — pulls pre-built images from GHCR
+  docker-compose.prod.yml  Production overlay — pulls pre-built images from GHCR
   Makefile           Container management (make up / up-prod / down / build / logs …)
   bin/cli.js         Cross-platform launcher
   install.sh         One-line installer (macOS/Linux)

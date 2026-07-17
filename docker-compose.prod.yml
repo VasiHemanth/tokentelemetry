@@ -1,8 +1,8 @@
-# compose.prod.yml — Production overlay: pulls pre-built images from GHCR
+# docker-compose.prod.yml — Production overlay: pulls pre-built images from GHCR
 # instead of building locally.  Merge with compose.yml at runtime:
 #
-#   docker compose -f compose.yml -f compose.prod.yml pull
-#   docker compose -f compose.yml -f compose.prod.yml up -d
+#   docker compose -f compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f compose.yml -f docker-compose.prod.yml up -d
 #   Or via Makefile: make up-prod
 #
 # GHCR_OWNER  — GitHub username where CI published the images (default: slmingol)
