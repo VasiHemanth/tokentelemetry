@@ -161,7 +161,15 @@ Requires Docker or Podman (auto-detected). Images are built on first run and reu
 
 The frontend runs on host port **13000** and the backend on **18000** to avoid conflicts with other containers or dev servers. Override with `PORT=` and `TT_API_PORT=` environment variables.
 
-Pre-built images are published to GitHub Container Registry on every push to main — `ghcr.io/<owner>/tokentelemetry-backend:latest` and `ghcr.io/<owner>/tokentelemetry-frontend:latest` — so you can pull them directly instead of building locally.
+Pre-built images are published to GitHub Container Registry on every push to main. To run without building locally, use the production overlay:
+
+```bash
+make up-prod          # pull from GHCR and start detached
+# or pin a specific build:
+TT_IMAGE_TAG=sha-abc1234 make up-prod
+```
+
+`make up` (dev) builds images locally. `make up-prod` pulls `ghcr.io/<owner>/tokentelemetry-{backend,frontend}:latest` from GHCR and is the faster path on machines where you don't have the source.
 
 ---
 
@@ -351,8 +359,9 @@ tokentelemetry/
   backend/Dockerfile
   frontend/          Next.js 16 dashboard — React UI
   frontend/Dockerfile
-  compose.yml        Container compose file (Docker / Podman)
-  Makefile           Container management (make up / down / build / logs …)
+  compose.yml        Container compose file (Docker / Podman) — dev, builds locally
+  compose.prod.yml   Production overlay — pulls pre-built images from GHCR
+  Makefile           Container management (make up / up-prod / down / build / logs …)
   bin/cli.js         Cross-platform launcher
   install.sh         One-line installer (macOS/Linux)
   install.ps1        One-line installer (Windows)

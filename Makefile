@@ -1,12 +1,13 @@
 # Auto-select compose tool: podman compose > docker compose
-COMPOSE    := $(if $(shell command -v podman 2>/dev/null),podman compose,docker compose)
-CONTAINER  := $(if $(shell command -v podman 2>/dev/null),podman,docker)
+COMPOSE      := $(if $(shell command -v podman 2>/dev/null),podman compose,docker compose)
+COMPOSE_PROD := $(COMPOSE) -f compose.yml -f compose.prod.yml
+CONTAINER    := $(if $(shell command -v podman 2>/dev/null),podman,docker)
 PROJECT    := $(notdir $(CURDIR))
 _BUILD_LOG := /tmp/tt-build.log
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up up-detach down build logs ps clean _cleanup
+.PHONY: help up up-detach down build logs ps clean _cleanup up-prod pull
 
 # Shared quiet-build recipe: one-liner status, full log only on failure
 define quiet-build
@@ -62,6 +63,14 @@ down: ## Stop and remove containers
 
 build: ## Build (or rebuild) images without starting
 	$(quiet-build)
+
+up-prod: _cleanup ## Pull GHCR images and start in background (production)
+	@$(COMPOSE_PROD) pull
+	@$(COMPOSE_PROD) up -d
+	$(print-urls)
+
+pull: ## Pull latest images from GHCR without starting
+	@$(COMPOSE_PROD) pull
 
 ##@ Observability
 logs: ## Tail logs from all services

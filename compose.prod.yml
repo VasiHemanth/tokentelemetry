@@ -1,0 +1,18 @@
+# compose.prod.yml — Production overlay: pulls pre-built images from GHCR
+# instead of building locally.  Merge with compose.yml at runtime:
+#
+#   docker compose -f compose.yml -f compose.prod.yml pull
+#   docker compose -f compose.yml -f compose.prod.yml up -d
+#   Or via Makefile: make up-prod
+#
+# GHCR_OWNER  — GitHub username where CI published the images (default: slmingol)
+# TT_IMAGE_TAG — pin a specific tag, e.g. sha-abc1234 (default: latest)
+
+services:
+  backend:
+    image: ghcr.io/${GHCR_OWNER:-slmingol}/tokentelemetry-backend:${TT_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER:-slmingol}/tokentelemetry-frontend:${TT_IMAGE_TAG:-latest}
+    pull_policy: always
