@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-18",
+      "title": "See which experimental features each agent has on",
+      "highlights": [
+        {
+          "title": "Agent feature flags in Settings",
+          "description": "Settings now shows the experimental and preview features each coding agent has enabled in its own local config — at a glance whether Copilot's experimental mode (the one that unlocks /every and /loop), Codex's per-feature flags, or Claude Code's feature toggles are on or off. It's read-only and local-first; agents that gate features server-side aren't listed rather than faked.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-16",
       "title": "See which sessions ran a loop",
       "highlights": [

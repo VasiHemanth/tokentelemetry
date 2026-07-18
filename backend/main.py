@@ -6766,6 +6766,100 @@ async def put_billing_config(payload: dict = Body(...)):
     return {"agents": get_all(_list_available_agents()), "modes": list(MODES)}
 
 
+# Feature/experimental flags each agent persists in its own local config. There
+# is no shared "experimental mode" across harnesses — each exposes it
+# differently (or server-side, or not at all), so we read only the agents with a
+# clean, secret-free local signal and surface an allowlist of scalar flags. This
+# is read-only and informational; TokenTelemetry never writes these back.
+def _scalar(v: Any) -> bool:
+    return isinstance(v, (bool, int, float, str)) and not isinstance(v, bytes)
+
+
+def _agent_feature_flags() -> List[Dict[str, Any]]:
+    """Per-agent experimental/feature flags, read from each agent's own config.
+
+    Best-effort and read-only: a missing/corrupt config is simply omitted, never
+    raised. Only allowlisted, scalar, non-secret keys are surfaced (no auth
+    tokens, no whole-file dumps). Bool flags carry kind="bool" so the UI can show
+    an on/off pill; everything else is kind="value".
+    """
+    out: List[Dict[str, Any]] = []
+
+    def _flag(name: str, value: Any) -> Dict[str, Any]:
+        return {"name": name, "value": value,
+                "kind": "bool" if isinstance(value, bool) else "value"}
+
+    # Copilot — ~/.copilot/settings.json: a single `experimental` boolean that
+    # gates preview features incl. the /every, /loop and /after scheduled prompts.
+    cp = HOME / ".copilot" / "settings.json"
+    if cp.exists():
+        try:
+            d = json.loads(cp.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                flags = [_flag(k, d[k]) for k in ("experimental",) if k in d and _scalar(d[k])]
+                out.append({
+                    "agent": "copilot", "detected": True,
+                    "source": "~/.copilot/settings.json",
+                    "flags": flags,
+                    "note": "Turns on preview features, including the /every, /loop and /after scheduled prompts.",
+                })
+        except Exception:
+            pass
+
+    # Codex — ~/.codex/config.toml [features]: per-feature booleans (e.g. js_repl).
+    cx = CODEX_DIR / "config.toml"
+    if cx.exists():
+        try:
+            import tomllib
+            with open(cx, "rb") as f:
+                t = tomllib.load(f)
+            feats = t.get("features") if isinstance(t, dict) else None
+            if isinstance(feats, dict):
+                flags = [_flag(k, v) for k, v in feats.items() if _scalar(v)]
+                out.append({
+                    "agent": "codex", "detected": True,
+                    "source": "~/.codex/config.toml  [features]",
+                    "flags": flags,
+                    "note": "Experimental Codex capabilities, toggled per feature.",
+                })
+        except Exception:
+            pass
+
+    # Claude Code — ~/.claude/settings.json: no single experimental switch, so we
+    # surface an allowlist of its individual feature toggles.
+    CLAUDE_KEYS = ("enableWorkflows", "effortLevel", "editorMode",
+                   "voiceEnabled", "agentPushNotifEnabled")
+    cl = CLAUDE_DIR / "settings.json"
+    if cl.exists():
+        try:
+            d = json.loads(cl.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                flags = [_flag(k, d[k]) for k in CLAUDE_KEYS if k in d and _scalar(d[k])]
+                if flags:
+                    out.append({
+                        "agent": "claude", "detected": True,
+                        "source": "~/.claude/settings.json",
+                        "flags": flags,
+                        "note": "Claude Code has no single experimental switch; these are its individual feature toggles.",
+                    })
+        except Exception:
+            pass
+
+    return out
+
+
+@app.get("/config/agent-features")
+async def get_agent_features():
+    """Experimental/feature flags each agent stores in its own local config.
+
+    Covers the agents with a clean, locally-readable signal (Copilot, Codex,
+    Claude Code). Agents that gate features server-side or in opaque stores
+    (Cursor, cloud harnesses) aren't listed — an absent agent means "not exposed
+    locally", never "off". Read-only.
+    """
+    return {"agents": _agent_feature_flags()}
+
+
 @app.get("/config/billing-route")
 async def get_billing_route_config():
     """Drain-priority billing routes per agent: which credit *bucket* pays, and
