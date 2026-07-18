@@ -164,9 +164,9 @@ The frontend runs on host port **13000** and the backend on **18000** to avoid c
 Pre-built images are published to GitHub Container Registry on every push to main. To run without building locally, use the production overlay:
 
 ```bash
-GHCR_OWNER=vasihemanth make up-prod          # pull from GHCR and start detached
+make up-prod                                   # pull from GHCR and start detached
 # or pin a specific build:
-GHCR_OWNER=vasihemanth TT_IMAGE_TAG=sha-abc1234 make up-prod
+TT_IMAGE_TAG=sha-abc1234 make up-prod
 ```
 
 `make up` (dev) builds images locally. `make up-prod` pulls `ghcr.io/<GHCR_OWNER>/tokentelemetry-{backend,frontend}:latest` from GHCR and is the faster path on machines where you don't have the source.
