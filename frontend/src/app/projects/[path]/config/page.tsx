@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Settings2, Folder, Puzzle, Users, BookOpen, Terminal, Wrench, FileText,
-  Globe, Package,
+  Globe, Package, Repeat, ChevronRight,
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/api";
@@ -11,8 +12,13 @@ import {
   Card, CardHeader, CardTitle, CardEyebrow, Section, Badge, AgentBadge,
   EmptyState, Skeleton,
 } from "@/components/ui";
+import { cn } from "@/lib/cn";
 import BudgetEditor from "@/components/budgets/BudgetEditor";
 import { useProject } from "../_lib/project-context";
+import {
+  deriveProjectLoops, loopStateTone, loopInterval, loopRel, loopFmtNum,
+  type LoopRow,
+} from "../_lib/loops";
 
 interface ConfigItem { name: string; agent: string; scope: "project" | "user"; description?: string; source?: string; pluginRef?: string; [k: string]: unknown }
 interface SubagentItem extends ConfigItem { model?: string; tools?: string }
@@ -39,8 +45,9 @@ interface UsageData {
 }
 
 export default function ConfigTab() {
-  const { decodedPath, project } = useProject();
+  const { decodedPath, project, sessions } = useProject();
   const projectAgents = project?.agents ?? [];
+  const loops = useMemo(() => deriveProjectLoops(sessions), [sessions]);
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +113,12 @@ export default function ConfigTab() {
     <div className="space-y-7">
       {/* Budgets — set spend limits for this project (overall + per agent) */}
       <BudgetEditor projectPath={decodedPath} agents={projectAgents} />
+
+      {/* Recurring loops set up in this project — the automations a session
+          scheduled to re-run itself (/loop, cron, self-pacing heartbeat).
+          Sits with the rest of the project's configured surface; the Insights
+          tab carries the token/cost breakdown. Self-hides when there are none. */}
+      <ProjectLoopsInventory rows={loops.rows} decodedPath={decodedPath} />
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -386,5 +399,73 @@ function CountChip({ color, label, value }: { color: string; label: string; valu
       <span className="font-semibold tabular" style={{ color }}>{value}</span>
       <span>{label}</span>
     </span>
+  );
+}
+
+/* ─────────────────── Recurring loops (config inventory) ─────────────────── */
+
+function ProjectLoopsInventory({ rows, decodedPath }: { rows: LoopRow[]; decodedPath: string }) {
+  if (rows.length === 0) return null;
+  const active = rows.filter((r) => r.state === "active").length;
+  return (
+    <Section
+      title={<span className="flex items-center gap-2"><Repeat size={12} className="text-[var(--tt-brand)]" /> Recurring loops</span>}
+      description="Sessions in this project that scheduled themselves to re-run — /loop, cron, or a self-pacing heartbeat. Liveness is recomputed from each loop's last fire and cadence; token & cost economics live on the Insights tab."
+      actions={<Badge variant={active > 0 ? "success" : "neutral"} size="sm">{active} active · {rows.length} total</Badge>}
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {rows.map((r) => <LoopInventoryCard key={r.key} row={r} decodedPath={decodedPath} />)}
+      </div>
+    </Section>
+  );
+}
+
+function LoopInventoryCard({ row, decodedPath }: { row: LoopRow; decodedPath: string }) {
+  const tone = loopStateTone(row.state);
+  const href = `/sessions/${encodeURIComponent(row.sessionId)}?agent=${encodeURIComponent(row.agent)}&back=${encodeURIComponent(`/projects/${encodeURIComponent(decodedPath)}/config`)}`;
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "group block rounded-[var(--tt-radius-lg)] border bg-[var(--tt-panel)] p-4 transition-colors hover:tt-tint-1",
+        tone.ring,
+      )}
+    >
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <Repeat size={12} className="text-[var(--tt-brand)] shrink-0" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] flex items-center gap-1.5" >
+            <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", tone.dot)} />
+            <span className={tone.label}>{row.state}</span>
+          </span>
+        </span>
+        <span className="flex items-center gap-1.5 shrink-0">
+          <AgentBadge agent={row.agent} />
+          <ChevronRight size={13} className="text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-brand)] group-hover:translate-x-0.5 transition-all" />
+        </span>
+      </div>
+
+      {row.label ? (
+        <p className="text-[12px] text-[var(--tt-fg)] leading-relaxed line-clamp-2 mb-2.5" title={row.label}>{row.label}</p>
+      ) : (
+        <p className="text-[12px] text-[var(--tt-fg-dim)] italic mb-2.5">(no prompt captured)</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant="brand" size="xs" className="normal-case">{loopInterval(row)}</Badge>
+        <Badge variant="neutral" size="xs" className="normal-case">≥{row.iterations.toLocaleString()} fires</Badge>
+        {row.mode && <Badge variant="neutral" size="xs" className="font-mono normal-case">{row.mode}</Badge>}
+        {row.jobId && <Badge variant="neutral" size="xs" className="font-mono normal-case">{row.jobId}</Badge>}
+      </div>
+
+      {(row.lastFired || row.expiresAt) && (
+        <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-[var(--tt-fg-dim)] tabular">
+          {row.lastFired && <span>last fired {loopRel(row.lastFired)}</span>}
+          {row.state === "active" && row.expiresAt && <span>expires {loopRel(row.expiresAt)}</span>}
+          {row.state === "expired" && row.expiredReason && <span className="text-[var(--tt-fg-muted)]">{row.expiredReason}</span>}
+          {row.tokens > 0 && <span>{loopFmtNum(row.tokens)} tok · ${row.cost.toFixed(2)} loop turns</span>}
+        </div>
+      )}
+    </Link>
   );
 }

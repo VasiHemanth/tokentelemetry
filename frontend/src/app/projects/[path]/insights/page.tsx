@@ -1,15 +1,23 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { Sparkles, Activity, Flame, Clock4, Wrench, GitBranch, Zap, Cpu } from "lucide-react";
+import Link from "next/link";
+import {
+  Sparkles, Activity, Flame, Clock4, Wrench, GitBranch, Zap, Cpu,
+  Repeat, TrendingUp, DollarSign,
+} from "lucide-react";
 
 import { getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import {
-  Card, CardHeader, CardTitle, StatTile, EmptyState,
+  Card, CardHeader, CardTitle, CardEyebrow, StatTile, EmptyState,
 } from "@/components/ui";
 import BudgetCard from "@/components/budgets/BudgetCard";
 import { useProject } from "../_lib/project-context";
+import {
+  deriveProjectLoops, loopStateTone, loopInterval, loopRel, loopFmtNum,
+  type LoopRow, type LoopSummary,
+} from "../_lib/loops";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -179,6 +187,11 @@ export default function InsightsTab() {
       any: sessionsWithSpawns > 0 || Object.keys(skills).length > 0 || Object.keys(mcp).length > 0,
     };
   }, [sessions]);
+
+  // Recurring loops in this project — same fold the global Analytics tab does,
+  // but scoped to these sessions. Footprint tokens/cost are the loop's own fire
+  // turns, already part of the totals above (an attribution view).
+  const loops = useMemo(() => deriveProjectLoops(sessions), [sessions]);
 
   const totalTokens = insights.agents.reduce((a, [, x]) => a + x.tokens, 0);
   const totalSessions = insights.agents.reduce((a, [, x]) => a + x.count, 0);
@@ -395,6 +408,10 @@ export default function InsightsTab() {
         </Card>
       )}
 
+      {/* Recurring loops — this project's /loop automations, broken down by
+          state and by the token/cost footprint of their own fire turns. */}
+      <RecurringLoopsBreakdown rows={loops.rows} summary={loops.summary} decodedPath={decodedPath} />
+
       {/* Leaderboard + migration ribbon */}
       <Card padding="lg">
         <CardHeader>
@@ -511,6 +528,96 @@ export default function InsightsTab() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/* Recurring loops, scoped to this project. Tiles mirror the global Analytics
+   tab; the list breaks each loop down by its own fire-turn footprint and puts
+   that in context of the whole session ("of $X session"). Self-hides at zero. */
+function RecurringLoopsBreakdown({
+  rows, summary, decodedPath,
+}: { rows: LoopRow[]; summary: LoopSummary; decodedPath: string }) {
+  if (summary.total === 0) return null;
+  return (
+    <Card padding="lg">
+      <CardHeader>
+        <div>
+          <CardTitle><Repeat size={14} className="text-[var(--tt-brand)]" /> Recurring loops</CardTitle>
+          <p className="text-[11px] text-[var(--tt-fg-dim)] mt-0.5">
+            /loop, cron and heartbeat-scheduled sessions that re-run themselves. Token & cost are the loop&apos;s OWN
+            fire turns — a fraction of the session, and already part of the totals above.
+          </p>
+        </div>
+        <CardEyebrow>{rows.length} loop{rows.length === 1 ? "" : "s"}</CardEyebrow>
+      </CardHeader>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+        <StatTile
+          label="Active loops"
+          value={String(summary.active)}
+          hint={`${summary.total} loop${summary.total === 1 ? "" : "s"} total`}
+          icon={<Repeat size={16} />}
+          accent="var(--tt-success)"
+        />
+        <StatTile
+          label="Expired / cancelled"
+          value={`${summary.expired} / ${summary.cancelled}`}
+          hint={summary.unknown > 0 ? `${summary.unknown} never fired` : "no longer running"}
+          icon={<Repeat size={16} />}
+          accent="var(--tt-fg-dim)"
+        />
+        <StatTile
+          label="Loop runs"
+          value={`≥${summary.totalIterations.toLocaleString()}`}
+          hint={`observed fires (min) across ${summary.loopSessions} session${summary.loopSessions === 1 ? "" : "s"}`}
+          icon={<TrendingUp size={16} />}
+          accent="var(--tt-brand)"
+        />
+        <StatTile
+          label="Loop cost"
+          value={`$${summary.loopCost.toFixed(2)}`}
+          hint={`${loopFmtNum(summary.loopTokens)} tok · loop turns only`}
+          icon={<DollarSign size={16} />}
+          accent="var(--tt-warn)"
+        />
+      </div>
+
+      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+        {rows.map((r) => {
+          const tone = loopStateTone(r.state);
+          const href = `/sessions/${encodeURIComponent(r.sessionId)}?agent=${encodeURIComponent(r.agent)}&back=${encodeURIComponent(`/projects/${encodeURIComponent(decodedPath)}/insights`)}`;
+          const meta = getAgent(r.agent);
+          return (
+            <Link
+              key={r.key}
+              href={href}
+              className="group flex items-center justify-between gap-3 rounded-[var(--tt-radius)] border border-transparent hover:border-[var(--tt-border)] hover:tt-tint-1 px-2 py-1.5 -mx-1 transition-colors"
+            >
+              <span className="min-w-0 flex items-start gap-2">
+                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5", tone.dot)} />
+                <span className="min-w-0 flex flex-col">
+                  <span className="text-[12px] text-[var(--tt-fg)] truncate" title={r.label}>{r.label || "(no prompt captured)"}</span>
+                  <span className="text-[10px] text-[var(--tt-fg-dim)] truncate flex items-center gap-1.5">
+                    <span className={cn("uppercase tracking-[0.1em]", tone.label)}>{r.state}</span>
+                    <span>· {loopInterval(r)}</span>
+                    <span className="hidden sm:inline" style={{ color: meta.hex }}>· {meta.label}</span>
+                    {r.state === "active" && r.lastFired && <span className="hidden md:inline">· last fired {loopRel(r.lastFired)}</span>}
+                    {r.state === "expired" && r.expiredReason && <span className="hidden md:inline">· {r.expiredReason}</span>}
+                  </span>
+                </span>
+              </span>
+              <span className="text-right shrink-0">
+                <span className="block tabular font-semibold text-[12px] text-[var(--tt-fg)]" title="observed fires (lower bound)">≥{r.iterations.toLocaleString()}</span>
+                <span className="block tabular text-[10px] text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{loopFmtNum(r.tokens)} tok · ${r.cost.toFixed(2)}</span>
+                {r.sessionCost > r.cost + 0.005 && (
+                  <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]">of ${r.sessionCost.toFixed(2)} session</span>
+                )}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

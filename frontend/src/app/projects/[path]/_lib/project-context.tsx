@@ -38,6 +38,37 @@ export interface SessionRow {
   subagent_info?: { role?: string; nickname?: string; depth?: number };
   skills_used?: { name: string; count: number }[];
   mcp_usage?: Record<string, Record<string, number>>;
+  /* /loop telemetry; present only on sessions that scheduled a recurring loop.
+     Lifecycle (state/active/expires_at/expired_reason) is annotated by the
+     backend scan; footprint_* are the loop's own fire-turn tokens, not the
+     whole session. See SessionLoop and _lib/loops.ts. */
+  loop?: SessionLoop;
+}
+
+/* Mirror of backend sess["loop"] (backend/main.py) — raw facts plus the
+   per-request lifecycle annotation. All fields optional/loose because the
+   shape is owned by the scanner; consumers guard on `is_loop`. */
+export interface SessionLoop {
+  is_loop?: boolean;
+  mode?: string;                // "fixed_cron" | "dynamic"
+  cadence?: string;             // human cadence, e.g. "every 1h"
+  cadence_seconds?: number;
+  recurring?: boolean;
+  job_id?: string | null;
+  source_signal?: string;
+  prompt_preview?: string;
+  created_at?: string | null;
+  last_fired?: string | null;
+  iterations?: number;
+  cancelled?: boolean;
+  cancelled_at?: string | null;
+  footprint_tokens?: number;
+  footprint_cost?: number;
+  // lifecycle (recomputed per scan, never cached)
+  state?: "active" | "expired" | "cancelled" | "unknown";
+  active?: boolean;
+  expires_at?: string | null;
+  expired_reason?: string | null;
 }
 
 export interface WorktreeSummary {
