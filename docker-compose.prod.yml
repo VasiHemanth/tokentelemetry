@@ -5,14 +5,14 @@
 #   docker compose -f compose.yml -f docker-compose.prod.yml up -d
 #   Or via Makefile: make up-prod
 #
-# GHCR_OWNER  — GitHub username where CI published the images (default: slmingol)
+# GHCR_OWNER  — GitHub username/org where CI published the images (required, no default)
 # TT_IMAGE_TAG — pin a specific tag, e.g. sha-abc1234 (default: latest)
 
 services:
   backend:
-    image: ghcr.io/${GHCR_OWNER:-slmingol}/tokentelemetry-backend:${TT_IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:?Set GHCR_OWNER to the GitHub user where images are published}/tokentelemetry-backend:${TT_IMAGE_TAG:-latest}
     pull_policy: always
 
   frontend:
-    image: ghcr.io/${GHCR_OWNER:-slmingol}/tokentelemetry-frontend:${TT_IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/tokentelemetry-frontend:${TT_IMAGE_TAG:-latest}
     pull_policy: always
