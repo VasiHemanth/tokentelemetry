@@ -159,7 +159,9 @@ Then open: **http://localhost:13000**
 
 Requires Docker or Podman (auto-detected). Images are built on first run and reused on subsequent runs — `make up` skips the build if images already exist. Run `make` to see all available targets (`make build`, `make down`, `make logs`, etc.).
 
-The frontend runs on host port **13000** and the backend on **18000** to avoid conflicts with other containers or dev servers. Override with `PORT=` and `TT_API_PORT=` environment variables.
+The frontend runs on host port **13000** and the backend on **18000**, bound to loopback by default. Override ports with `PORT=` and `TT_API_PORT=` — but note that `TT_API_PORT` also controls `NEXT_PUBLIC_API_PORT`, which is baked into the Next.js client bundle at build time. If you change `TT_API_PORT` after images are already built, run `make build` first so the frontend bundle picks up the new port.
+
+**Windows:** the container path requires WSL or Git Bash — `${HOME}` is not set in plain `cmd.exe` or PowerShell, which causes the `~/.claude` mount to fail silently.
 
 Pre-built images are published to GitHub Container Registry on every push to main. To run without building locally, use the production overlay:
 
@@ -169,7 +171,7 @@ make up-prod                                   # pull from GHCR and start detach
 TT_IMAGE_TAG=sha-abc1234 make up-prod
 ```
 
-`make up` (dev) builds images locally. `make up-prod` pulls `ghcr.io/<GHCR_OWNER>/tokentelemetry-{backend,frontend}:latest` from GHCR and is the faster path on machines where you don't have the source.
+`make up` (dev) builds images locally. `make up-prod` pulls pre-built GHCR images and is the faster path on machines where you don't have the source. Because the GHCR images have `TT_API_PORT` baked in, do not override `TT_API_PORT` with `make up-prod`.
 
 ---
 
