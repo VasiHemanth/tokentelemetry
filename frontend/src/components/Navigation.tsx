@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Folder, BarChart3, Activity, Settings2,
-  PanelLeftOpen, PanelLeftClose, Zap,
+  PanelLeftOpen, PanelLeftClose, Zap, Users,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
@@ -23,6 +23,7 @@ const LINKS = [
   { name: "Projects",  href: "/projects", icon: Folder },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Local Models", href: "/local-models", icon: Zap },
+  { name: "Team", href: "/team", icon: Users },
 ];
 
 export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationProps) {
