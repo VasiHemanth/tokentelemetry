@@ -6802,6 +6802,9 @@ def _agent_feature_flags() -> List[Dict[str, Any]]:
                     "source": "~/.copilot/settings.json",
                     "flags": flags,
                     "note": "Turns on preview features, including the /every, /loop and /after scheduled prompts.",
+                    "how_to_enable": "In the Copilot CLI, run /experimental to toggle it (or start it with --experimental). Copilot restarts to apply.",
+                    "enable_command": "/experimental",
+                    "docs_url": "https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/schedule-prompts",
                 })
         except Exception:
             pass
@@ -6821,6 +6824,9 @@ def _agent_feature_flags() -> List[Dict[str, Any]]:
                     "source": "~/.codex/config.toml  [features]",
                     "flags": flags,
                     "note": "Experimental Codex capabilities, toggled per feature.",
+                    "how_to_enable": "Edit ~/.codex/config.toml and set a flag under [features] (e.g. js_repl = true), then restart Codex.",
+                    "enable_command": "~/.codex/config.toml  →  [features]",
+                    "docs_url": "https://learn.chatgpt.com/docs/config-file/config-reference",
                 })
         except Exception:
             pass
@@ -6841,6 +6847,9 @@ def _agent_feature_flags() -> List[Dict[str, Any]]:
                         "source": "~/.claude/settings.json",
                         "flags": flags,
                         "note": "Claude Code has no single experimental switch; these are its individual feature toggles.",
+                        "how_to_enable": "In Claude Code run /config (or /config <key>=<value> on v2.1.181+), or edit ~/.claude/settings.json.",
+                        "enable_command": "/config",
+                        "docs_url": "https://code.claude.com/docs/en/settings",
                     })
         except Exception:
             pass

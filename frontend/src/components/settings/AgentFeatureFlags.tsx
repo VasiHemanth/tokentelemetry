@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FlaskConical, Check, X } from "lucide-react";
+import { FlaskConical, Check, X, ExternalLink } from "lucide-react";
 
 import { apiFetch } from "@/lib/api";
 import { Card, Badge, AgentBadge, Skeleton, EmptyState } from "@/components/ui";
@@ -18,6 +18,9 @@ interface AgentFeatures {
   source: string;
   flags: Flag[];
   note?: string;
+  how_to_enable?: string;
+  enable_command?: string;
+  docs_url?: string;
 }
 
 export function AgentFeatureFlags() {
@@ -89,7 +92,45 @@ function AgentFlagsCard({ a }: { a: AgentFeatures }) {
           {a.flags.map((f) => <FlagPill key={f.name} flag={f} />)}
         </div>
       )}
+
+      {(a.how_to_enable || a.docs_url) && (
+        <div className="mt-3 pt-3 border-t border-[var(--tt-border)] flex items-start justify-between gap-4">
+          {a.how_to_enable && (
+            <p className="text-[11px] text-[var(--tt-fg-dim)] leading-relaxed min-w-0">
+              <span className="text-[var(--tt-fg-muted)] font-medium">Change it in the agent — </span>
+              {renderWithCommand(a.how_to_enable, a.enable_command)}
+            </p>
+          )}
+          {a.docs_url && (
+            <a
+              href={a.docs_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--tt-brand)] hover:underline"
+            >
+              Docs <ExternalLink size={11} />
+            </a>
+          )}
+        </div>
+      )}
     </Card>
+  );
+}
+
+// Render the how-to text, styling the enable_command substring as a code chip
+// wherever it appears (robust: if the command isn't found, plain text is shown).
+function renderWithCommand(text: string, cmd?: string): React.ReactNode {
+  if (!cmd) return text;
+  const i = text.indexOf(cmd);
+  if (i === -1) return text;
+  return (
+    <>
+      {text.slice(0, i)}
+      <code className="font-mono text-[var(--tt-brand)] bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-1 py-0.5">
+        {cmd}
+      </code>
+      {text.slice(i + cmd.length)}
+    </>
   );
 }
 
