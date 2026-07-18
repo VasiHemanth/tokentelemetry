@@ -281,3 +281,252 @@ def test_scan_loop_footprint_only_counts_fire_turns(scan_env):
     assert lp["footprint_cost"] <= (s.get("cost") or 0) + 1e-9
     # The tool_result echoing "do X" was NOT counted as a fire.
     assert lp["iterations"] == 1
+
+
+# --- Grok Build scheduler loop (~/.grok/sessions/.../chat_history.jsonl) -----
+
+@pytest.mark.parametrize("text,expected", [
+    ("every 2 hours", 7200),
+    ("2h", 7200),
+    ("every 30 minutes", 1800),
+    ("30 minutes", 1800),
+    ("60s", 60),
+    ("45 seconds", 45),
+    ("1 day", 86400),
+    ("1d", 86400),
+    ("every 5 minutes", 300),
+    ("garbage", None),
+    (None, None),
+])
+def test_grok_interval_to_seconds(text, expected):
+    assert main._grok_interval_to_seconds(text) == expected
+
+
+def _grok_fire(prompt="Run /tt-hot-topics-post for Reddit.", task="019f6409a0a1",
+               interval="every 2 hours", recurring=True):
+    reminder = (f"<user_query>\n<system-reminder>\nThis is a scheduled task execution "
+                f"(task {task}, {interval}, {'recurring' if recurring else 'once'}).\n"
+                f"</system-reminder>\n\n{prompt}")
+    return {"type": "user", "synthetic_reason": "scheduler_fired",
+            "content": [{"type": "text", "text": reminder}]}
+
+
+def _grok_session_dir(tmp_path, *, fires, events=None):
+    d = tmp_path / "grok_sess"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / main.GROK_CHAT_HISTORY).write_text(
+        "".join(json.dumps(x) + "\n" for x in fires), encoding="utf-8")
+    if events is not None:
+        (d / main.GROK_EVENTS).write_text(
+            "".join(json.dumps(x) + "\n" for x in events), encoding="utf-8")
+    return d
+
+
+def test_grok_loop_detect_happy_path(tmp_path):
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-15T20:00:00Z")
+    assert lp is not None
+    assert lp["is_loop"] is True
+    assert lp["mode"] == "scheduler"
+    assert lp["job_id"] == "019f6409a0a1"
+    assert lp["cadence"] == "every 2 hours"
+    assert lp["cadence_seconds"] == 7200
+    assert lp["iterations"] == 8
+    assert lp["recurring"] is True
+    assert lp["source_signal"] == "grok_scheduler"
+    assert lp["prompt_preview"].startswith("Run /tt-hot-topics-post")
+    # created_at comes from the scheduler_create event; cancel from scheduler_delete.
+    assert lp["created_at"] == "2026-07-15T04:29:40.384Z"
+    assert lp["cancelled"] is True
+    assert lp["cancelled_at"] == "2026-07-17T18:31:46.026Z"
+    # Grok exposes no per-turn token split -> honest zero footprint (no fabrication).
+    assert lp["footprint_tokens"] == 0
+    assert lp["footprint_cost"] == 0
+
+
+def test_grok_loop_detect_gated_on_scheduler_create(tmp_path):
+    """No scheduler_create in signals.toolsUsed -> the deeper scan never runs."""
+    d = _grok_session_dir(tmp_path, fires=[_grok_fire()])
+    assert main._grok_loop_detect(d, ["read_file", "grep"], None, None) is None
+
+
+def test_grok_loop_detect_ignores_one_shot(tmp_path):
+    """A scheduled run marked 'once' (not recurring) is not a loop."""
+    d = _grok_session_dir(tmp_path, fires=[_grok_fire(recurring=False)])
+    assert main._grok_loop_detect(d, ["scheduler_create"], None, None) is None
+
+
+def test_grok_loop_detect_requires_a_fire(tmp_path):
+    """scheduler_create present but zero firings -> not detected (task id +
+    interval only exist in the fire reminder)."""
+    d = _grok_session_dir(tmp_path, fires=[
+        {"type": "user", "content": [{"type": "text", "text": "ordinary prompt"}]}])
+    assert main._grok_loop_detect(d, ["scheduler_create"], None, None) is None
+
+
+def test_grok_loop_lifecycle_no_7day_cap(tmp_path):
+    """A Grok 'scheduler' loop is a fixed interval but NOT a Claude cron, so the
+    7-day auto-expiry must not apply — an old, uncancelled one ages to expired
+    via cadence staleness, not the cron ceiling."""
+    fires = [_grok_fire() for _ in range(3)]
+    d = _grok_session_dir(tmp_path, fires=fires)
+    lp = main._grok_loop_detect(d, ["scheduler_create"],
+                                _iso(NOW - timedelta(days=10)),
+                                _iso(NOW - timedelta(days=9)))
+    s = {"id": "g", "agent": "grok", "loop": lp}
+    main._annotate_loop_lifecycle([s], NOW)
+    assert lp["expires_at"] is None                 # no 7-day cap for scheduler mode
+    assert lp["state"] == "expired"
+    assert lp["expired_reason"] == "stale_session_ended"
+
+
+# --- Cline "Scheduled Agents" (cron.db) -------------------------------------
+
+def _cline_cron_db(path, *, specs, runs):
+    """Build a cron.db with the real (subset) Cline schema and seed rows."""
+    import sqlite3 as _sq
+    conn = _sq.connect(str(path))
+    conn.execute("""CREATE TABLE cron_specs (
+        spec_id TEXT PRIMARY KEY, external_id TEXT, source_path TEXT,
+        trigger_kind TEXT, enabled INTEGER DEFAULT 1, removed INTEGER DEFAULT 0,
+        title TEXT, prompt TEXT, schedule_expr TEXT, last_run_at TEXT,
+        next_run_at TEXT, created_at TEXT, updated_at TEXT)""")
+    conn.execute("""CREATE TABLE cron_runs (
+        run_id TEXT PRIMARY KEY, spec_id TEXT, trigger_kind TEXT, status TEXT,
+        session_id TEXT, completed_at TEXT, created_at TEXT)""")
+    conn.executemany(
+        "INSERT INTO cron_specs (spec_id,external_id,source_path,trigger_kind,enabled,"
+        "removed,title,prompt,schedule_expr,last_run_at,next_run_at,created_at,updated_at) "
+        "VALUES (:spec_id,:external_id,:source_path,:trigger_kind,:enabled,:removed,:title,"
+        ":prompt,:schedule_expr,:last_run_at,:next_run_at,:created_at,:updated_at)", specs)
+    conn.executemany(
+        "INSERT INTO cron_runs (run_id,spec_id,trigger_kind,status,session_id,completed_at,created_at) "
+        "VALUES (:run_id,:spec_id,:trigger_kind,:status,:session_id,:completed_at,:created_at)", runs)
+    conn.commit()
+    conn.close()
+
+
+def test_cline_loop_specs_schedule(tmp_path):
+    db = tmp_path / "cron.db"
+    _cline_cron_db(
+        db,
+        specs=[{"spec_id": "spec-1", "external_id": "nightly-audit", "source_path": "/w/a.md",
+                "trigger_kind": "schedule", "enabled": 1, "removed": 0, "title": "Nightly audit",
+                "prompt": "Audit the repo for new TODOs", "schedule_expr": "0 9 * * *",
+                "last_run_at": "2026-07-16T09:00:00Z", "next_run_at": "2026-07-17T09:00:00Z",
+                "created_at": "2026-07-10T09:00:00Z", "updated_at": "2026-07-16T09:00:00Z"}],
+        runs=[
+            {"run_id": "r1", "spec_id": "spec-1", "trigger_kind": "schedule", "status": "done",
+             "session_id": "sess-old", "completed_at": "2026-07-15T09:00:00Z", "created_at": "2026-07-15T09:00:00Z"},
+            {"run_id": "r2", "spec_id": "spec-1", "trigger_kind": "schedule", "status": "done",
+             "session_id": "sess-latest", "completed_at": "2026-07-16T09:00:00Z", "created_at": "2026-07-16T09:00:00Z"},
+        ],
+    )
+    loops = main._cline_loop_specs(db)
+    # Anchored to the LATEST run's session, not the older one.
+    assert set(loops.keys()) == {"sess-latest"}
+    lp = loops["sess-latest"]
+    assert lp["is_loop"] is True
+    assert lp["mode"] == "cron"
+    assert lp["job_id"] == "nightly-audit"
+    assert lp["cadence"] == "0 9 * * *"
+    assert lp["cadence_seconds"] == 86400          # daily
+    assert lp["iterations"] == 2                    # both done runs
+    assert lp["prompt_preview"].startswith("Audit the repo")
+    assert lp["cancelled"] is False
+    assert lp["footprint_tokens"] == 0             # each fire is its own counted session
+
+
+def test_cline_loop_specs_ignores_one_off_and_disabled(tmp_path):
+    db = tmp_path / "cron.db"
+    _cline_cron_db(
+        db,
+        specs=[
+            {"spec_id": "one", "external_id": "x", "source_path": "/w/1.md", "trigger_kind": "one_off",
+             "enabled": 1, "removed": 0, "title": "once", "prompt": "p", "schedule_expr": None,
+             "last_run_at": None, "next_run_at": None, "created_at": "2026-07-16T00:00:00Z",
+             "updated_at": "2026-07-16T00:00:00Z"},
+            {"spec_id": "disabled", "external_id": "y", "source_path": "/w/2.md", "trigger_kind": "schedule",
+             "enabled": 0, "removed": 0, "title": "paused", "prompt": "p", "schedule_expr": "0 * * * *",
+             "last_run_at": "2026-07-16T00:00:00Z", "next_run_at": None, "created_at": "2026-07-10T00:00:00Z",
+             "updated_at": "2026-07-16T00:00:00Z"},
+        ],
+        runs=[
+            {"run_id": "a", "spec_id": "one", "trigger_kind": "one_off", "status": "done",
+             "session_id": "s-oneoff", "completed_at": "2026-07-16T00:00:00Z", "created_at": "2026-07-16T00:00:00Z"},
+            {"run_id": "b", "spec_id": "disabled", "trigger_kind": "schedule", "status": "done",
+             "session_id": "s-disabled", "completed_at": "2026-07-16T00:00:00Z", "created_at": "2026-07-16T00:00:00Z"},
+        ],
+    )
+    loops = main._cline_loop_specs(db)
+    # one_off is not a loop; the disabled schedule IS surfaced but marked cancelled.
+    assert "s-oneoff" not in loops
+    assert "s-disabled" in loops
+    assert loops["s-disabled"]["cancelled"] is True
+
+
+def test_cline_loop_specs_never_fired_has_no_anchor(tmp_path):
+    db = tmp_path / "cron.db"
+    _cline_cron_db(
+        db,
+        specs=[{"spec_id": "spec-nf", "external_id": "z", "source_path": "/w/3.md", "trigger_kind": "schedule",
+                "enabled": 1, "removed": 0, "title": "never fired", "prompt": "p", "schedule_expr": "0 9 * * *",
+                "last_run_at": None, "next_run_at": "2026-07-20T09:00:00Z", "created_at": "2026-07-16T00:00:00Z",
+                "updated_at": "2026-07-16T00:00:00Z"}],
+        runs=[],
+    )
+    assert main._cline_loop_specs(db) == {}
+
+
+def test_cline_loop_specs_missing_db(tmp_path):
+    assert main._cline_loop_specs(tmp_path / "nope.db") == {}
+
+
+def test_cline_scan_attaches_loop_to_anchor_session(tmp_path, monkeypatch):
+    """End-to-end: a schedule in cron.db attaches its loop to the matching
+    session row from sessions.db, and only that one."""
+    import sqlite3 as _sq
+    db_dir = tmp_path / "data" / "db"
+    db_dir.mkdir(parents=True)
+    # Minimal sessions.db with the columns the scanner reads.
+    sdb = _sq.connect(str(db_dir / "sessions.db"))
+    sdb.execute("""CREATE TABLE sessions (
+        session_id TEXT, model TEXT, workspace_root TEXT, cwd TEXT, started_at TEXT,
+        metadata_json TEXT, messages_path TEXT, prompt TEXT, provider TEXT, status TEXT,
+        is_subagent INTEGER, parent_session_id TEXT, agent_id TEXT, team_name TEXT)""")
+    for sid in ("sess-latest", "sess-plain"):
+        sdb.execute(
+            "INSERT INTO sessions (session_id,model,workspace_root,cwd,started_at,metadata_json,"
+            "messages_path,prompt,provider,status,is_subagent,parent_session_id,agent_id,team_name) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, "claude-opus-4-8", "/w", "/w", "2026-07-16T09:00:00Z",
+             '{"usage":{"inputTokens":100,"outputTokens":50}}', None, "hi", "anthropic",
+             "done", 0, None, None, None))
+    sdb.commit(); sdb.close()
+
+    _cline_cron_db(
+        db_dir / "cron.db",
+        specs=[{"spec_id": "spec-1", "external_id": "nightly", "source_path": "/w/a.md",
+                "trigger_kind": "schedule", "enabled": 1, "removed": 0, "title": "Nightly",
+                "prompt": "Do the nightly thing", "schedule_expr": "0 9 * * *",
+                "last_run_at": "2026-07-16T09:00:00Z", "next_run_at": "2026-07-17T09:00:00Z",
+                "created_at": "2026-07-10T09:00:00Z", "updated_at": "2026-07-16T09:00:00Z"}],
+        runs=[{"run_id": "r2", "spec_id": "spec-1", "trigger_kind": "schedule", "status": "done",
+               "session_id": "sess-latest", "completed_at": "2026-07-16T09:00:00Z",
+               "created_at": "2026-07-16T09:00:00Z"}],
+    )
+
+    monkeypatch.setattr(main, "CLINE_DIR", tmp_path)
+    monkeypatch.setattr(main, "CLINE_VSCODE_DIR", tmp_path / "no_vscode")
+    monkeypatch.setattr(main, "_load_project_aliases", lambda: {})
+    sessions = {s["id"]: s for s in main._scan_cline_sessions()}
+    assert "loop" in sessions["sess-latest"] and sessions["sess-latest"]["loop"]["job_id"] == "nightly"
+    assert "loop" not in sessions["sess-plain"]

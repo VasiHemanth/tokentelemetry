@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { PageHeader, Section, Card, CardHeader, CardTitle, Button, Badge, Skeleton } from "@/components/ui";
 import { BackendPicker } from "@/components/summarizer/BackendPicker";
 import { BillingSettings } from "@/components/settings/BillingSettings";
+import { AgentFeatureFlags } from "@/components/settings/AgentFeatureFlags";
 import { RetentionSettings } from "@/components/settings/RetentionSettings";
 import UsagePrivacySettings from "@/components/settings/UsagePrivacySettings";
 import { ConnectDevice } from "@/components/ConnectDevice";
@@ -213,6 +214,13 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <BillingSettings />
         </div>
+      </Section>
+
+      <Section
+        title="Agent feature flags"
+        description="Experimental and preview features each agent has enabled in its own local config — read-only. There's no shared 'experimental mode' across harnesses, so this covers the agents that expose it on disk (Copilot, Codex, Claude Code); agents that gate features server-side or in opaque stores aren't listed."
+      >
+        <AgentFeatureFlags />
       </Section>
 
       <Section
