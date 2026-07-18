@@ -286,7 +286,57 @@ OLLAMA_DIR = HOME / ".ollama"
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
 HF_DIR = HOME / ".cache/huggingface"
-OPENCODE_DB = HOME / ".local/share/opencode/opencode.db"
+def _opencode_db_candidates() -> List[Path]:
+    """OpenCode SQLite DB locations to probe, highest-priority first.
+
+    OpenCode does NOT use one fixed path: it resolves a data dir honoring
+    ``$OPENCODE_DATA_DIR`` and ``$XDG_DATA_HOME`` with a per-OS default. We used
+    to look only at ``~/.local/share/opencode`` and so silently missed relocated
+    or non-Linux installs — the scan is gated on ``.exists()`` inside a bare
+    ``try/except``, so a wrong path means the whole agent vanishes with no error
+    (discussion #170). Probe every place the agent could have written; the scan
+    uses the first that exists. Extra non-existent candidates are harmless.
+    """
+    c: List[Path] = []
+    env = os.environ.get("OPENCODE_DATA_DIR")
+    if env:
+        c.append(Path(env).expanduser() / "opencode.db")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        c.append(Path(xdg).expanduser() / "opencode" / "opencode.db")
+    if sys.platform == "win32":
+        for var in ("APPDATA", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                c.append(Path(base) / "opencode" / "opencode.db")
+    # Standard XDG data dir — the confirmed default on BOTH Linux and macOS
+    # (OpenCode does not use ~/Library/Application Support, verified on 1.15.13).
+    c.append(HOME / ".local/share/opencode/opencode.db")
+    # macOS env-paths-style location, in case a build ever used it.
+    if sys.platform == "darwin":
+        c.append(HOME / "Library/Application Support/opencode/opencode.db")
+    seen: set = set()
+    out: List[Path] = []
+    for p in c:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _opencode_db_path() -> Path:
+    """First existing OpenCode DB among the candidates, else the canonical XDG
+    default (so a not-yet-created DB still has a stable path to display)."""
+    for p in _opencode_db_candidates():
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return HOME / ".local/share/opencode/opencode.db"
+
+
+OPENCODE_DB = _opencode_db_path()
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -4958,11 +5008,24 @@ def _scan_sessions_sync():
     # 8. OpenCode (SQLite: session / message / part)
     if OPENCODE_DB.exists():
         try:
-            # immutable=1 so we don't block the live TUI process's write lock
+            # mode=ro (via _sqlite_ro_uri) so we never take a write lock on the
+            # live TUI's DB. It's a WAL database, so a read can still time out if
+            # OpenCode is mid-write — that lands in the outer except, which now
+            # logs instead of silently dropping the whole agent.
             uri = _sqlite_ro_uri(OPENCODE_DB)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             try:
+                # OpenCode's schema drifts across versions (tables get added and
+                # renamed). Detect which tables exist so one missing *peripheral*
+                # table (e.g. `todo`) can't throw into the outer except and wipe
+                # out every session — the failure mode behind discussion #170's
+                # neighbours.
+                try:
+                    _tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'")}
+                except Exception:
+                    _tables = set()
                 # Some OpenCode versions added a session-level `model` column
                 # (e.g. the github-copilot provider stores the model only there,
                 # not on assistant messages — see issue #39). Detect it so we can
@@ -5070,8 +5133,10 @@ def _scan_sessions_sync():
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
-                    # Todos (opencode's plan-like artifact)
-                    todo_rows = conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                    # Todos (opencode's plan-like artifact). Optional table —
+                    # absent on older/newer schemas, so gate on its presence.
+                    todo_rows = (conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                                 if "todo" in _tables else [])
                     if todo_rows:
                         has_plan = True
                         plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
@@ -5104,8 +5169,13 @@ def _scan_sessions_sync():
                                                  "linked_children": len(kids)}
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Don't let a schema/lock hiccup silently erase the whole agent —
+            # log it at debug so "no OpenCode sessions" is diagnosable instead
+            # of invisible (discussion #170).
+            import logging
+            logging.getLogger("tokentelemetry.opencode").debug(
+                "OpenCode scan skipped (%s): %r", OPENCODE_DB, e)
 
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
