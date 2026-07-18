@@ -5142,11 +5142,13 @@ def _scan_sessions_sync():
                 # schemas (the outer try/except would otherwise drop all sessions).
                 _cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
                 _base_url_col = "billing_base_url" if "billing_base_url" in _cols else "NULL AS billing_base_url"
+                _cost_status_col = "cost_status" if "cost_status" in _cols else "NULL AS cost_status"
+                _cost_source_col = "cost_source" if "cost_source" in _cols else "NULL AS cost_source"
                 srows = conn.execute(
                     "SELECT id, source, model, parent_session_id, started_at, ended_at, "
                     "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
                     "reasoning_tokens, estimated_cost_usd, actual_cost_usd, title, "
-                    f"billing_provider, {_base_url_col}, end_reason "
+                    f"billing_provider, {_base_url_col}, {_cost_status_col}, {_cost_source_col}, end_reason "
                     "FROM sessions"
                 ).fetchall()
                 for srow in srows:
@@ -5173,6 +5175,14 @@ def _scan_sessions_sync():
                     model = srow["model"]
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
+                    # Hermes stores estimated_cost_usd=0.0 (not NULL) with cost_status='unknown'
+                    # / cost_source='none' when it couldn't price the session itself (proxied or
+                    # unrecognized endpoint, subscription-included model). Don't take that 0.0 at
+                    # face value — fall through to calculate_cost() below, which prices from the
+                    # model + token counts and lets TT's own subscription config (not Hermes's)
+                    # decide the framing. Only override the *estimate*; a real actual_cost_usd wins.
+                    if srow["actual_cost_usd"] is None and (srow["cost_status"] == "unknown" or srow["cost_source"] == "none"):
+                        cost = None
                     # Bind before the branch: it's referenced unconditionally in the
                     # session dict below, but only computed when cost must be derived.
                     _measured_tps = None
@@ -6907,7 +6917,7 @@ async def get_power_config():
 
 @app.put("/config/power")
 async def put_power_config(payload: dict = Body(...)):
-    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?}.
+    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?, subscriptionModels?}.
 
     Validation happens in power_config.save_power_config (bad values are skipped,
     never surfaced as raw errors). Returns the full saved config.
