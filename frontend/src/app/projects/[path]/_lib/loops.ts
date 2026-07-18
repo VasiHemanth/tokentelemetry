@@ -134,16 +134,17 @@ export function loopStateTone(s: LoopState) {
   return LOOP_STATE[s] ?? LOOP_STATE.unknown;
 }
 
-/** Human interval from cadence_seconds + mode (matches the trace LoopCard). */
+/** Human interval from cadence_seconds + mode (matches the trace LoopCard).
+    Only Claude's dynamic ScheduleWakeup loop is a self-pacing heartbeat; every
+    other mode (Claude fixed_cron, Grok's "scheduler") is a fixed interval. */
 export function loopInterval(row: Pick<LoopRow, "cadenceSeconds" | "mode">): string {
   const s = row.cadenceSeconds;
-  if (row.mode === "fixed_cron") {
-    if (s && s % 86400 === 0) return `Every ${s / 86400}d`;
-    if (s && s % 3600 === 0) return `Every ${s / 3600}h`;
-    if (s && s % 60 === 0) return `Every ${s / 60}m`;
-    return s ? `Every ${s}s` : "Cron schedule";
-  }
-  return s ? `~${s}s heartbeat` : "Self-paced";
+  if (row.mode === "dynamic") return s ? `~${s}s heartbeat` : "Self-paced";
+  if (s && s % 86400 === 0) return `Every ${s / 86400}d`;
+  if (s && s % 3600 === 0) return `Every ${s / 3600}h`;
+  if (s && s % 60 === 0) return `Every ${s / 60}m`;
+  if (s) return `Every ${s}s`;
+  return row.mode === "fixed_cron" ? "Cron schedule" : "Self-paced";
 }
 
 export function loopReasonLabel(r?: string | null): string {
