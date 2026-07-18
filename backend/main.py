@@ -6857,16 +6857,32 @@ def _agent_feature_flags() -> List[Dict[str, Any]]:
     return out
 
 
+# Agents that DO have experimental/preview features but store the toggle
+# somewhere TokenTelemetry can't honestly read (an opaque local state store or
+# server-side), so we name them explicitly rather than silently omitting them —
+# absence would otherwise read as "we forgot", not "not exposed locally".
+_FEATURES_NOT_DETECTABLE = [
+    {"agent": "antigravity",
+     "reason": "Its Scheduled Tasks and preview features live in an opaque local state store (state.vscdb) / server-side, not a readable flag."},
+    {"agent": "cursor",
+     "reason": "Automations and preview features are gated in Cursor's cloud / opaque store, with no local flag."},
+]
+
+
 @app.get("/config/agent-features")
 async def get_agent_features():
     """Experimental/feature flags each agent stores in its own local config.
 
-    Covers the agents with a clean, locally-readable signal (Copilot, Codex,
-    Claude Code). Agents that gate features server-side or in opaque stores
-    (Cursor, cloud harnesses) aren't listed — an absent agent means "not exposed
-    locally", never "off". Read-only.
+    `agents` are the ones with a clean, locally-readable signal (Copilot, Codex,
+    Claude Code). `not_detectable` names agents that HAVE such features but gate
+    them where we can't honestly read them (Antigravity, Cursor). Any other agent
+    simply has no experimental/feature-flag concept in local config. An absent or
+    not_detectable agent means "not exposed locally", never "off". Read-only.
     """
-    return {"agents": _agent_feature_flags()}
+    detected = _agent_feature_flags()
+    present = {a["agent"] for a in detected}
+    not_detectable = [x for x in _FEATURES_NOT_DETECTABLE if x["agent"] not in present]
+    return {"agents": detected, "not_detectable": not_detectable}
 
 
 @app.get("/config/billing-route")

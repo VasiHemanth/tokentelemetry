@@ -22,16 +22,25 @@ interface AgentFeatures {
   enable_command?: string;
   docs_url?: string;
 }
+interface NotDetectable {
+  agent: string;
+  reason: string;
+}
 
 export function AgentFeatureFlags() {
   const [data, setData] = useState<AgentFeatures[] | null>(null);
+  const [notDetectable, setNotDetectable] = useState<NotDetectable[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     apiFetch("/config/agent-features")
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) setData(d.agents ?? []); })
+      .then((d) => {
+        if (cancelled) return;
+        setData(d.agents ?? []);
+        setNotDetectable(d.not_detectable ?? []);
+      })
       .catch(() => { if (!cancelled) setData([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -46,7 +55,7 @@ export function AgentFeatureFlags() {
     );
   }
 
-  if (!data || data.length === 0) {
+  if ((!data || data.length === 0) && notDetectable.length === 0) {
     return (
       <Card>
         <EmptyState
@@ -60,8 +69,33 @@ export function AgentFeatureFlags() {
 
   return (
     <div className="space-y-3">
-      {data.map((a) => <AgentFlagsCard key={a.agent} a={a} />)}
+      {(data ?? []).map((a) => <AgentFlagsCard key={a.agent} a={a} />)}
+      {notDetectable.length > 0 && <NotDetectableNote items={notDetectable} />}
     </div>
+  );
+}
+
+// Agents that have experimental features but keep the toggle where we can't
+// read it — named so their absence reads as "not exposed", not "forgotten".
+function NotDetectableNote({ items }: { items: NotDetectable[] }) {
+  return (
+    <Card padding="md" className="bg-transparent border-dashed">
+      <div className="flex items-center gap-2 mb-2.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-muted)]">
+        <FlaskConical size={12} /> Not exposed locally
+      </div>
+      <div className="space-y-2">
+        {items.map((x) => (
+          <div key={x.agent} className="flex items-start gap-2.5">
+            <AgentBadge agent={x.agent} />
+            <p className="text-[11px] text-[var(--tt-fg-dim)] leading-relaxed min-w-0">{x.reason}</p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 pt-3 border-t border-[var(--tt-border)] text-[11px] text-[var(--tt-fg-faint)] leading-relaxed">
+        Other agents (Gemini, Qwen, Grok, OpenCode, Pi, Hermes…) don&apos;t expose an experimental or
+        feature-flag toggle in local config, so there&apos;s nothing to read.
+      </p>
+    </Card>
   );
 }
 
