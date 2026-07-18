@@ -2141,6 +2141,157 @@ async def get_available_agents():
 #     return status
 
 
+# Grok Build recurring loop ("Grok Tasks" / the `/loop <interval> <prompt>`
+# command). A firing re-injects the prompt into the SAME session, tagged in
+# chat_history.jsonl with synthetic_reason="scheduler_fired" and a reminder of
+# the form: "scheduled task execution (task <id>, every <interval>, recurring)".
+# This is the Grok analog of Claude's CronCreate/ScheduleWakeup loop.
+_GROK_LOOP_RE = re.compile(
+    r"scheduled task execution \(task\s+([0-9a-fA-F]+),\s*([^,]+?),\s*(recurring|once)\)",
+    re.IGNORECASE,
+)
+
+
+def _grok_interval_to_seconds(text: Optional[str]) -> Optional[int]:
+    """Parse a Grok scheduler interval to seconds.
+
+    Handles both the expanded reminder form ("every 2 hours", "30 minutes",
+    "45 seconds", "1 day") and Grok's compact input grammar ("2h", "5m", "60s",
+    "1d"). Returns None when unparseable so lifecycle falls back to defaults.
+    """
+    if not text:
+        return None
+    t = text.strip().lower()
+    if t.startswith("every"):
+        t = t[len("every"):].strip()
+    m = re.fullmatch(r"(\d+)\s*([smhd])", t)
+    if m:
+        return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    m = re.fullmatch(r"(\d+)\s*(second|minute|hour|day)s?", t)
+    if m:
+        return int(m.group(1)) * {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[m.group(2)]
+    return None
+
+
+def _grok_record_text(rec: Dict[str, Any]) -> str:
+    """Flatten a Grok chat_history.jsonl record's content to plain text."""
+    c = rec.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "\n".join(
+            b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
+def _grok_strip_reminder(text: str) -> str:
+    """Strip the <user_query>/<system-reminder> scheduler wrapper, leaving the
+    actual prompt the loop runs each fire."""
+    t = re.sub(r"<system-reminder>.*?</system-reminder>", "", text, flags=re.DOTALL)
+    t = t.replace("<user_query>", "").replace("</user_query>", "")
+    return t.strip()
+
+
+def _grok_loop_detect(
+    sess_dir: Path, tools_used: List[str], created_iso: Optional[str], updated_iso: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Detect a Grok Build recurring scheduler loop for one session.
+
+    Gated on `scheduler_create` appearing in signals.toolsUsed (cheap — already
+    loaded) so the fuller chat_history/events scan only runs for the rare
+    session that actually set up a loop. Recurrence signature: scheduler_fired
+    records in chat_history.jsonl whose reminder text names the task id +
+    interval + "recurring". created_at and cancellation come from the
+    timestamped scheduler_create / scheduler_delete events in events.jsonl.
+
+    Grok exposes only a session-level context-token total (no per-turn split),
+    so a per-fire footprint isn't computable — footprint_tokens/cost are 0 and
+    the loop surfaces its cadence + fire count without a fabricated cost.
+    Requires at least one firing (that's where the task id + interval live); a
+    created-but-never-fired Grok task isn't detected.
+    """
+    if "scheduler_create" not in (tools_used or []):
+        return None
+    chat_path = sess_dir / GROK_CHAT_HISTORY
+    if not chat_path.exists():
+        return None
+
+    task_id: Optional[str] = None
+    interval_text: Optional[str] = None
+    prompt_preview: Optional[str] = None
+    iterations = 0
+    try:
+        with open(chat_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if "scheduler_fired" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("synthetic_reason") != "scheduler_fired":
+                    continue
+                text = _grok_record_text(rec)
+                m = _GROK_LOOP_RE.search(text or "")
+                if not m or m.group(3).lower() != "recurring":
+                    continue
+                iterations += 1
+                if task_id is None:
+                    task_id = m.group(1)
+                    interval_text = (m.group(2) or "").strip()
+                    prompt_preview = _grok_strip_reminder(text)
+    except Exception:
+        return None
+
+    if iterations == 0 or not task_id:
+        return None
+
+    # created_at + cancellation from the timestamped scheduler_* tool events.
+    created_at: Optional[str] = None
+    cancelled = False
+    cancelled_at: Optional[str] = None
+    events_path = sess_dir / GROK_EVENTS
+    if events_path.exists():
+        try:
+            with open(events_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "scheduler_" not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    name = ev.get("tool_name")
+                    ets = ev.get("ts")
+                    if name == "scheduler_create" and created_at is None:
+                        created_at = ets
+                    elif (name == "scheduler_delete" and ev.get("type") == "tool_completed"
+                          and ev.get("outcome") == "success"):
+                        cancelled = True
+                        cancelled_at = ets
+        except Exception:
+            pass
+
+    return {
+        "is_loop": True,
+        "mode": "scheduler",                 # Grok Tasks scheduler (fixed interval)
+        "cadence": interval_text or "",
+        "cadence_seconds": _grok_interval_to_seconds(interval_text),
+        "recurring": True,
+        "job_id": task_id,
+        "source_signal": "grok_scheduler",
+        "prompt_preview": (prompt_preview or "")[:160],
+        "created_at": created_at or created_iso,
+        "last_fired": updated_iso,           # grok fires carry no per-record ts; session's last activity ≈ last fire
+        "iterations": iterations,
+        "cancelled": cancelled,
+        "cancelled_at": cancelled_at,
+        "footprint_tokens": 0,               # grok has no per-turn token split
+        "footprint_cost": 0,
+    }
+
+
 def _scan_grok_sessions() -> List[Dict[str, Any]]:
     """Scan Grok Build sessions under ~/.grok/sessions/.
 
@@ -2335,6 +2486,17 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                     "last_active_at": summary.get("last_active_at"),
                 },
             }
+            # Recurring loop (/loop / Grok Tasks scheduler). Gated on
+            # scheduler_create in signals.toolsUsed so the deeper scan is skipped
+            # for the vast majority of sessions.
+            loop = _grok_loop_detect(
+                sess_id_dir,
+                tools_used if isinstance(tools_used, list) else [],
+                created, updated,
+            )
+            if loop:
+                sess["loop"] = loop
+
             if grok_spawns:
                 by_type: Dict[str, Dict[str, Any]] = {}
                 for sp in grok_spawns:
@@ -2473,6 +2635,74 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
                 "cost": tokens["cost"],
             })
 
+    return out
+
+
+def _cline_loop_specs(db_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Read Cline "Scheduled Agents" from cron.db and return {anchor_session_id:
+    loop_dict} for each genuinely recurring schedule.
+
+    Cline's model differs from Claude/Grok: a recurring schedule is a row in
+    `cron_specs` (trigger_kind='schedule'), and every firing spawns its OWN
+    Cline session, recorded in `cron_runs` with a session_id. To reuse the
+    session-based loop UI we anchor the loop to the LATEST run's session (the
+    most recent fire) — the same "loop lives in the session that ran it" model
+    Grok uses. A schedule that has never fired (no run with a session_id) has no
+    anchor and isn't surfaced. one_off/event triggers are not loops.
+
+    Cline's per-run sessions are each counted on their own, so the loop's
+    footprint is left at 0 here (iterations + cadence carry the signal) rather
+    than re-summing already-counted child sessions.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    if not db_path.exists():
+        return out
+    try:
+        uri = _sqlite_ro_uri(db_path)
+        conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            specs = conn.execute(
+                "SELECT * FROM cron_specs WHERE trigger_kind='schedule'"
+            ).fetchall()
+            for spec in specs:
+                spec_id = spec["spec_id"]
+                runs = conn.execute(
+                    "SELECT session_id, status, completed_at, created_at FROM cron_runs "
+                    "WHERE spec_id=? ORDER BY created_at DESC",
+                    (spec_id,),
+                ).fetchall()
+                # Anchor to the most recent run that actually has a session.
+                anchor = next((r["session_id"] for r in runs if r["session_id"]), None)
+                if not anchor:
+                    continue
+                fired = [r for r in runs if r["status"] in ("done", "failed", "cancelled")]
+                schedule_expr = spec["schedule_expr"]
+                removed = bool(spec["removed"]) if "removed" in spec.keys() else False
+                enabled = bool(spec["enabled"]) if "enabled" in spec.keys() else True
+                cancelled = removed or not enabled
+                out[anchor] = {
+                    "is_loop": True,
+                    "mode": "cron",                       # cron/interval schedule, NOT a Claude 7-day cron
+                    "cadence": schedule_expr or "",
+                    "cadence_seconds": _cron_to_seconds(schedule_expr) if schedule_expr else None,
+                    "recurring": True,
+                    "job_id": spec["external_id"] or spec_id,
+                    "source_signal": "cline_schedule",
+                    "prompt_preview": ((spec["prompt"] if "prompt" in spec.keys() else None)
+                                       or spec["title"] or "")[:160],
+                    "created_at": spec["created_at"] if "created_at" in spec.keys() else None,
+                    "last_fired": (spec["last_run_at"] if "last_run_at" in spec.keys() else None),
+                    "iterations": len(fired),
+                    "cancelled": cancelled,
+                    "cancelled_at": (spec["updated_at"] if cancelled and "updated_at" in spec.keys() else None),
+                    "footprint_tokens": 0,                # each fire is its own already-counted session
+                    "footprint_cost": 0,
+                }
+        finally:
+            conn.close()
+    except Exception:
+        return out
     return out
 
 
@@ -2711,6 +2941,15 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                     },
                 })
                 seen_ids.add(sid)
+
+    # Recurring "Scheduled Agents" (cron.db) — anchor each schedule's loop to its
+    # latest run session. Gated on the file existing; cheap SQLite read.
+    loop_by_sid = _cline_loop_specs(CLINE_DIR / "data" / "db" / "cron.db")
+    if loop_by_sid:
+        for rec in out:
+            lp = loop_by_sid.get(rec["id"])
+            if lp:
+                rec["loop"] = lp
 
     return out
 
