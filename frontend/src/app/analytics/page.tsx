@@ -695,9 +695,15 @@ function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
                   </span>
                   <span className="text-right shrink-0">
                     <span className="block tabular font-semibold text-[var(--tt-fg)]" title="observed fires (lower bound)">≥{l.iterations.toLocaleString()}</span>
-                    <span className="block tabular text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{compact(l.tokens)} tok · ${l.cost.toFixed(2)}</span>
-                    {l.session_cost != null && l.session_cost > l.cost + 0.005 && (
-                      <span className="block tabular text-[var(--tt-fg-dim)] text-[10px] opacity-70">of ${l.session_cost.toFixed(2)} session</span>
+                    {l.tokens > 0 ? (
+                      <>
+                        <span className="block tabular text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{compact(l.tokens)} tok · ${l.cost.toFixed(2)}</span>
+                        {l.session_cost != null && l.session_cost > l.cost + 0.005 && (
+                          <span className="block tabular text-[var(--tt-fg-dim)] text-[10px] opacity-70">of ${l.session_cost.toFixed(2)} session</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="block tabular text-[var(--tt-fg-dim)] text-[10px] opacity-70" title="this agent exposes no per-turn token split">tokens n/a</span>
                     )}
                   </span>
                 </li>

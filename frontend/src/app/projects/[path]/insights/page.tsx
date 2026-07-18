@@ -608,9 +608,15 @@ function RecurringLoopsBreakdown({
               </span>
               <span className="text-right shrink-0">
                 <span className="block tabular font-semibold text-[12px] text-[var(--tt-fg)]" title="observed fires (lower bound)">≥{r.iterations.toLocaleString()}</span>
-                <span className="block tabular text-[10px] text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{loopFmtNum(r.tokens)} tok · ${r.cost.toFixed(2)}</span>
-                {r.sessionCost > r.cost + 0.005 && (
-                  <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]">of ${r.sessionCost.toFixed(2)} session</span>
+                {r.tokens > 0 ? (
+                  <>
+                    <span className="block tabular text-[10px] text-[var(--tt-fg-dim)]" title="the loop's own fire-response turns">{loopFmtNum(r.tokens)} tok · ${r.cost.toFixed(2)}</span>
+                    {r.sessionCost > r.cost + 0.005 && (
+                      <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]">of ${r.sessionCost.toFixed(2)} session</span>
+                    )}
+                  </>
+                ) : (
+                  <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]" title="this agent exposes no per-turn token split">tokens n/a</span>
                 )}
               </span>
             </Link>

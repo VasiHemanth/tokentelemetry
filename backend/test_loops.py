@@ -281,3 +281,108 @@ def test_scan_loop_footprint_only_counts_fire_turns(scan_env):
     assert lp["footprint_cost"] <= (s.get("cost") or 0) + 1e-9
     # The tool_result echoing "do X" was NOT counted as a fire.
     assert lp["iterations"] == 1
+
+
+# --- Grok Build scheduler loop (~/.grok/sessions/.../chat_history.jsonl) -----
+
+@pytest.mark.parametrize("text,expected", [
+    ("every 2 hours", 7200),
+    ("2h", 7200),
+    ("every 30 minutes", 1800),
+    ("30 minutes", 1800),
+    ("60s", 60),
+    ("45 seconds", 45),
+    ("1 day", 86400),
+    ("1d", 86400),
+    ("every 5 minutes", 300),
+    ("garbage", None),
+    (None, None),
+])
+def test_grok_interval_to_seconds(text, expected):
+    assert main._grok_interval_to_seconds(text) == expected
+
+
+def _grok_fire(prompt="Run /tt-hot-topics-post for Reddit.", task="019f6409a0a1",
+               interval="every 2 hours", recurring=True):
+    reminder = (f"<user_query>\n<system-reminder>\nThis is a scheduled task execution "
+                f"(task {task}, {interval}, {'recurring' if recurring else 'once'}).\n"
+                f"</system-reminder>\n\n{prompt}")
+    return {"type": "user", "synthetic_reason": "scheduler_fired",
+            "content": [{"type": "text", "text": reminder}]}
+
+
+def _grok_session_dir(tmp_path, *, fires, events=None):
+    d = tmp_path / "grok_sess"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / main.GROK_CHAT_HISTORY).write_text(
+        "".join(json.dumps(x) + "\n" for x in fires), encoding="utf-8")
+    if events is not None:
+        (d / main.GROK_EVENTS).write_text(
+            "".join(json.dumps(x) + "\n" for x in events), encoding="utf-8")
+    return d
+
+
+def test_grok_loop_detect_happy_path(tmp_path):
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-15T20:00:00Z")
+    assert lp is not None
+    assert lp["is_loop"] is True
+    assert lp["mode"] == "scheduler"
+    assert lp["job_id"] == "019f6409a0a1"
+    assert lp["cadence"] == "every 2 hours"
+    assert lp["cadence_seconds"] == 7200
+    assert lp["iterations"] == 8
+    assert lp["recurring"] is True
+    assert lp["source_signal"] == "grok_scheduler"
+    assert lp["prompt_preview"].startswith("Run /tt-hot-topics-post")
+    # created_at comes from the scheduler_create event; cancel from scheduler_delete.
+    assert lp["created_at"] == "2026-07-15T04:29:40.384Z"
+    assert lp["cancelled"] is True
+    assert lp["cancelled_at"] == "2026-07-17T18:31:46.026Z"
+    # Grok exposes no per-turn token split -> honest zero footprint (no fabrication).
+    assert lp["footprint_tokens"] == 0
+    assert lp["footprint_cost"] == 0
+
+
+def test_grok_loop_detect_gated_on_scheduler_create(tmp_path):
+    """No scheduler_create in signals.toolsUsed -> the deeper scan never runs."""
+    d = _grok_session_dir(tmp_path, fires=[_grok_fire()])
+    assert main._grok_loop_detect(d, ["read_file", "grep"], None, None) is None
+
+
+def test_grok_loop_detect_ignores_one_shot(tmp_path):
+    """A scheduled run marked 'once' (not recurring) is not a loop."""
+    d = _grok_session_dir(tmp_path, fires=[_grok_fire(recurring=False)])
+    assert main._grok_loop_detect(d, ["scheduler_create"], None, None) is None
+
+
+def test_grok_loop_detect_requires_a_fire(tmp_path):
+    """scheduler_create present but zero firings -> not detected (task id +
+    interval only exist in the fire reminder)."""
+    d = _grok_session_dir(tmp_path, fires=[
+        {"type": "user", "content": [{"type": "text", "text": "ordinary prompt"}]}])
+    assert main._grok_loop_detect(d, ["scheduler_create"], None, None) is None
+
+
+def test_grok_loop_lifecycle_no_7day_cap(tmp_path):
+    """A Grok 'scheduler' loop is a fixed interval but NOT a Claude cron, so the
+    7-day auto-expiry must not apply — an old, uncancelled one ages to expired
+    via cadence staleness, not the cron ceiling."""
+    fires = [_grok_fire() for _ in range(3)]
+    d = _grok_session_dir(tmp_path, fires=fires)
+    lp = main._grok_loop_detect(d, ["scheduler_create"],
+                                _iso(NOW - timedelta(days=10)),
+                                _iso(NOW - timedelta(days=9)))
+    s = {"id": "g", "agent": "grok", "loop": lp}
+    main._annotate_loop_lifecycle([s], NOW)
+    assert lp["expires_at"] is None                 # no 7-day cap for scheduler mode
+    assert lp["state"] == "expired"
+    assert lp["expired_reason"] == "stale_session_ended"

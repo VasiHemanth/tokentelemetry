@@ -2233,13 +2233,14 @@ function LoopCard({ loop }: { loop: any }) {
 
   const interval = (() => {
     const s = loop.cadence_seconds;
-    if (loop.mode === "fixed_cron") {
-      if (s && s % 86400 === 0) return `Every ${s / 86400}d`;
-      if (s && s % 3600 === 0)  return `Every ${s / 3600}h`;
-      if (s && s % 60 === 0)    return `Every ${s / 60}m`;
-      return s ? `Every ${s}s` : "Cron schedule";
-    }
-    return s ? `~${s}s heartbeat` : "Self-paced";
+    // Only Claude's dynamic ScheduleWakeup loop self-paces; fixed_cron and
+    // Grok's "scheduler" mode are fixed intervals.
+    if (loop.mode === "dynamic") return s ? `~${s}s heartbeat` : "Self-paced";
+    if (s && s % 86400 === 0) return `Every ${s / 86400}d`;
+    if (s && s % 3600 === 0)  return `Every ${s / 3600}h`;
+    if (s && s % 60 === 0)    return `Every ${s / 60}m`;
+    if (s) return `Every ${s}s`;
+    return loop.mode === "fixed_cron" ? "Cron schedule" : "Self-paced";
   })();
 
   const reasonLabel = (r: string | null | undefined) => ({
