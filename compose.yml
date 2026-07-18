@@ -1,0 +1,66 @@
+# TokenTelemetry — Container Compose (Docker or Podman)
+#
+# Prefer the Makefile targets which auto-select the right tool:
+#   make up          # build + start (foreground)
+#   make up-detach   # build + start (background)
+#   make down        # stop and remove containers
+#   make clean       # also remove images and the tt_data volume
+#
+# Host ports (override via env vars):
+#   TT_API_PORT  backend  default 18000  →  http://localhost:18000
+#   PORT         frontend default 13000  →  http://localhost:13000
+#
+# Container-internal ports are always 8000 (backend) and 3000 (frontend).
+# NEXT_PUBLIC_API_PORT is baked into the Next.js client bundle at build time —
+# rebuild the frontend image if TT_API_PORT changes.
+#
+# The backend reads agent log directories from the host as read-only mounts.
+# ~/.claude is enabled by default; uncomment any others you use.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "${TT_API_PORT:-18000}:8000"
+    environment:
+      - TT_HOST=0.0.0.0
+      - TT_API_PORT=8000
+      - TOKENTELEMETRY_DATA_DIR=/tt-data
+    volumes:
+      - tt_data:/tt-data
+      # Agent log directories (read-only) — add/remove to match what's on this host
+      - ${HOME}/.claude:/root/.claude:ro
+      # - ${HOME}/.codex:/root/.codex:ro
+      # - ${HOME}/.gemini:/root/.gemini:ro
+      # - ${HOME}/.cline:/root/.cline:ro
+      # - ${HOME}/.copilot:/root/.copilot:ro
+      # - ${HOME}/.grok:/root/.grok:ro
+      # - ${HOME}/.hermes:/root/.hermes:ro
+      # - ${HOME}/.ollama:/root/.ollama:ro
+      # macOS VS Code / Cursor extension storage (path contains spaces — quote required):
+      # - "${HOME}/Library/Application Support/Code/User:/root/.config/Code/User:ro"
+      # - "${HOME}/Library/Application Support/Cursor/User:/root/.config/Cursor/User:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 8000)); s.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Browser uses the host port to reach the API — must match TT_API_PORT above
+        NEXT_PUBLIC_API_PORT: ${TT_API_PORT:-18000}
+    ports:
+      - "${PORT:-13000}:3000"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  tt_data:
