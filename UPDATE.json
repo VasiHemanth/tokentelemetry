@@ -18,8 +18,8 @@
           "description": "Open any project and its Config tab now lists every recurring loop set up there — state, cadence, fire count and job id — so you can see at a glance which automations are still running in that repo. The Insights tab adds the numbers: active/expired/cancelled counts and the token & cost footprint of the loops' own fire turns, scoped to that project."
         },
         {
-          "title": "Grok Build loops, not just Claude",
-          "description": "Recurring loops set up in Grok Build (its `/loop` scheduler / Grok Tasks) are now detected too — the task's cadence, fire count and cancelled/expired state show up in the trace and the loop views alongside Claude's, tagged Grok Build. Grok reports only a whole-session token total, so its loops show cadence and fires with cost marked n/a rather than a made-up number."
+          "title": "Loops from other agents, not just Claude",
+          "description": "Recurring loops set up in Grok Build (its `/loop` scheduler / Grok Tasks) and Cline (Scheduled Agents) are now detected too — each schedule's cadence, fire count and cancelled/expired state show up in the trace and the loop views alongside Claude's, tagged with the agent that ran it. Where an agent reports only a whole-session token total (Grok) or fires each run as its own session (Cline), the loop shows cadence and fires with cost marked n/a rather than a made-up number."
         }
       ]
     },

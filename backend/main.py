@@ -2638,6 +2638,74 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def _cline_loop_specs(db_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Read Cline "Scheduled Agents" from cron.db and return {anchor_session_id:
+    loop_dict} for each genuinely recurring schedule.
+
+    Cline's model differs from Claude/Grok: a recurring schedule is a row in
+    `cron_specs` (trigger_kind='schedule'), and every firing spawns its OWN
+    Cline session, recorded in `cron_runs` with a session_id. To reuse the
+    session-based loop UI we anchor the loop to the LATEST run's session (the
+    most recent fire) — the same "loop lives in the session that ran it" model
+    Grok uses. A schedule that has never fired (no run with a session_id) has no
+    anchor and isn't surfaced. one_off/event triggers are not loops.
+
+    Cline's per-run sessions are each counted on their own, so the loop's
+    footprint is left at 0 here (iterations + cadence carry the signal) rather
+    than re-summing already-counted child sessions.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    if not db_path.exists():
+        return out
+    try:
+        uri = _sqlite_ro_uri(db_path)
+        conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            specs = conn.execute(
+                "SELECT * FROM cron_specs WHERE trigger_kind='schedule'"
+            ).fetchall()
+            for spec in specs:
+                spec_id = spec["spec_id"]
+                runs = conn.execute(
+                    "SELECT session_id, status, completed_at, created_at FROM cron_runs "
+                    "WHERE spec_id=? ORDER BY created_at DESC",
+                    (spec_id,),
+                ).fetchall()
+                # Anchor to the most recent run that actually has a session.
+                anchor = next((r["session_id"] for r in runs if r["session_id"]), None)
+                if not anchor:
+                    continue
+                fired = [r for r in runs if r["status"] in ("done", "failed", "cancelled")]
+                schedule_expr = spec["schedule_expr"]
+                removed = bool(spec["removed"]) if "removed" in spec.keys() else False
+                enabled = bool(spec["enabled"]) if "enabled" in spec.keys() else True
+                cancelled = removed or not enabled
+                out[anchor] = {
+                    "is_loop": True,
+                    "mode": "cron",                       # cron/interval schedule, NOT a Claude 7-day cron
+                    "cadence": schedule_expr or "",
+                    "cadence_seconds": _cron_to_seconds(schedule_expr) if schedule_expr else None,
+                    "recurring": True,
+                    "job_id": spec["external_id"] or spec_id,
+                    "source_signal": "cline_schedule",
+                    "prompt_preview": ((spec["prompt"] if "prompt" in spec.keys() else None)
+                                       or spec["title"] or "")[:160],
+                    "created_at": spec["created_at"] if "created_at" in spec.keys() else None,
+                    "last_fired": (spec["last_run_at"] if "last_run_at" in spec.keys() else None),
+                    "iterations": len(fired),
+                    "cancelled": cancelled,
+                    "cancelled_at": (spec["updated_at"] if cancelled and "updated_at" in spec.keys() else None),
+                    "footprint_tokens": 0,                # each fire is its own already-counted session
+                    "footprint_cost": 0,
+                }
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    return out
+
+
 def _scan_cline_sessions() -> List[Dict[str, Any]]:
     """Scan Cline sessions from BOTH stores it writes to, deduping by session id
     (the CLI row wins when a session id appears in both).
@@ -2873,6 +2941,15 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                     },
                 })
                 seen_ids.add(sid)
+
+    # Recurring "Scheduled Agents" (cron.db) — anchor each schedule's loop to its
+    # latest run session. Gated on the file existing; cheap SQLite read.
+    loop_by_sid = _cline_loop_specs(CLINE_DIR / "data" / "db" / "cron.db")
+    if loop_by_sid:
+        for rec in out:
+            lp = loop_by_sid.get(rec["id"])
+            if lp:
+                rec["loop"] = lp
 
     return out
 
