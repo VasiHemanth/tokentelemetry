@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-07-19",
+      "title": "Maintain your project wiki from any coding agent",
+      "highlights": [
+        {
+          "title": "tokentelemetry wiki CLI",
+          "description": "The second-brain toolchain now ships as CLI subcommands: wiki status (is a page FRESH, STALE, or TAMPERED), wiki lint (validate the bundle), wiki mine (evidence from every local agent's session store), plus census, manifest, and context. Any coding agent with a shell — Cursor, Codex, OpenCode, not just Claude Code — can keep the wiki fresh using its own model. No extra API key, no hidden inference: the CLI checks, your agent writes."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-18",
       "title": "See which experimental features each agent has on",
       "highlights": [
