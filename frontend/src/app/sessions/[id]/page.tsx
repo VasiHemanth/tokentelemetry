@@ -16,6 +16,7 @@ import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { resolveSessionBackTarget } from "@/lib/navigation";
+import { coerceReasoningText } from "@/lib/reasoning";
 
 interface Artifact {
   name: string;
@@ -2007,9 +2008,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
               {renderTimestamp()}
             </div>
             <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{
-              Array.isArray(payload.content)
-                ? payload.content.map((c: any) => c?.text ?? c?.summary ?? c?.content ?? (typeof c === 'string' ? c : "")).filter(Boolean).join("\n\n")
-                : (typeof payload.content === 'string' ? payload.content : (payload.summary ?? payload.text ?? ""))
+              coerceReasoningText(payload.content ?? payload.summary ?? payload.text)
             }</div>
           </div>
        );
