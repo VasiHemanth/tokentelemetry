@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-19",
+      "title": "See the reasoning effort Codex ran at",
+      "highlights": [
+        {
+          "title": "Reasoning effort on Codex sessions",
+          "description": "A Codex session's context panel now shows the model reasoning effort it actually ran at (minimal / low / medium / high / xhigh). Because Codex can change effort between turns, sessions that shifted show the progression (e.g. \"medium → xhigh\") rather than a single value. The Sandbox and Approval Policy rows, which were silently blank for Codex before, now populate too.",
+          "href": "/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-18",
       "title": "See which experimental features each agent has on",
       "highlights": [

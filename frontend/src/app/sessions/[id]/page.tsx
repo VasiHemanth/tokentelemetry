@@ -245,6 +245,11 @@ export default function SessionDetailPage() {
   })();
 
   const [events, setEvents] = useState<Event[]>([]);
+  // Raw, un-normalized trace events. normalizeTraceEvents drops `turn_context`
+  // (and token_count) for Codex so they don't clutter the step view, but the
+  // Session Context panel still needs turn_context (sandbox / approval policy /
+  // reasoning effort). Keep the raw array so the context reads survive.
+  const [rawEvents, setRawEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
   const [hermesOverlay, setHermesOverlay] = useState<any | null>(null);
@@ -285,6 +290,7 @@ export default function SessionDetailPage() {
         .then((res) => res.json())
         .then((data) => {
           const evts = normalizeTraceEvents(agent, data);
+          setRawEvents(Array.isArray(data) ? data : []);
           setEvents(evts);
           setPlaybackIndex(evts.length);
           setLoading(false)
@@ -447,9 +453,21 @@ export default function SessionDetailPage() {
 
   // Context Inspector
   const context = useMemo(() => {
+    // turn_context is stripped from `events` (see normalizeTraceEvents), so read
+    // it from the raw trace for the context panel.
     const meta = events.find((e) => e.type === "session_meta")?.payload;
-    const turnCtx = events.find((e) => e.type === "turn_context")?.payload;
+    const turnCtx = rawEvents.find((e) => e.type === "turn_context")?.payload;
     const firstSystem = events.find((e) => e.type === "user" && typeof e.message?.content === "string")?.message?.content;
+    // Codex records the model reasoning effort per turn in
+    // turn_context.payload.effort (newer builds also mirror it under
+    // collaboration_mode.settings.reasoning_effort). It can change across
+    // turns, so collect the distinct values in order rather than showing one.
+    const reasoningEfforts: string[] = [];
+    for (const e of rawEvents) {
+      if (e.type !== "turn_context") continue;
+      const eff = e.payload?.effort ?? e.payload?.collaboration_mode?.settings?.reasoning_effort;
+      if (typeof eff === "string" && eff && !reasoningEfforts.includes(eff)) reasoningEfforts.push(eff);
+    }
     return {
       sessionId: id,
       agent: sessionInfo?.agent,
@@ -457,15 +475,20 @@ export default function SessionDetailPage() {
       modelsUsed,
       provider: meta?.model_provider,
       cwd: meta?.cwd || sessionInfo?.project,
-      sandbox: meta?.sandbox_policy || turnCtx?.sandbox_policy,
+      sandbox: (() => {
+        const sb = meta?.sandbox_policy || turnCtx?.sandbox_policy;
+        // Codex sandbox_policy is an object ({type/mode, network_access, …});
+        // show the mode compactly instead of dumping the whole JSON blob.
+        return sb && typeof sb === "object" ? (sb.mode || sb.type || JSON.stringify(sb)) : sb;
+      })(),
       approvalPolicy: meta?.approval_policy || turnCtx?.approval_policy,
-      reasoningEffort: turnCtx?.model_reasoning_effort,
+      reasoningEffort: reasoningEfforts.length ? reasoningEfforts.join(" → ") : undefined,
       instructions: meta?.instructions || turnCtx?.instructions,
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
     };
-  }, [events, sessionInfo, modelsUsed, projectConfig, id]);
+  }, [events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
 
   // Fetch per-project config (skills + MCPs) once we know the cwd
   useEffect(() => {
