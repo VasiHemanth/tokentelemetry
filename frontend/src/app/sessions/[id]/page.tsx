@@ -190,6 +190,38 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
   return evts;
 }
 
+/* Extract the model reasoning-effort setting an agent ran at, as ordered-distinct
+   enum strings (e.g. ["medium","xhigh"]). Each supported agent records it in its
+   own place in the raw (pre-normalization) detail events; agents that don't
+   record a discrete effort/level setting return []. The caller joins the result
+   with " → " so a session that changed effort mid-run shows the progression.
+   Only agents with a real signal are listed — see the reasoning-effort audit. */
+function extractReasoningEfforts(agent: string | null, rawEvents: any[]): string[] {
+  const out: string[] = [];
+  const push = (v: any) => { if (typeof v === "string" && v && !out.includes(v)) out.push(v); };
+  switch (agent) {
+    case "codex": // per-turn turn_context; newer builds mirror under collaboration_mode
+      for (const e of rawEvents) if (e.type === "turn_context") push(e.payload?.effort ?? e.payload?.collaboration_mode?.settings?.reasoning_effort);
+      break;
+    case "claude": // top-level `effort` on assistant records (CLI 2.1.212+; absent = unknown)
+      for (const e of rawEvents) if (e.type === "assistant") push(e.effort);
+      break;
+    case "grok": // top-level reasoning_effort on assistant turns
+      for (const e of rawEvents) if (e.type === "assistant") push(e.reasoning_effort);
+      break;
+    case "copilot": // model_change events surfaced as reasoning_effort by the backend
+      for (const e of rawEvents) if (e.type === "reasoning_effort") push(e.payload?.effort);
+      break;
+    case "hermes": // session-level reasoning_config.effort surfaced on session_meta
+      push(rawEvents.find((e) => e.type === "session_meta")?.payload?.effort);
+      break;
+    case "pi": // dedicated thinking_level_change events (off/medium/high)
+      for (const e of rawEvents) if (e.type === "thinking_level_change") push(e.thinkingLevel);
+      break;
+  }
+  return out;
+}
+
 function normalizeTs(evt: Event): number | undefined {
   if (typeof evt.normalized_timestamp === "number") return evt.normalized_timestamp;
   if (evt.timestamp) {
@@ -458,16 +490,9 @@ export default function SessionDetailPage() {
     const meta = events.find((e) => e.type === "session_meta")?.payload;
     const turnCtx = rawEvents.find((e) => e.type === "turn_context")?.payload;
     const firstSystem = events.find((e) => e.type === "user" && typeof e.message?.content === "string")?.message?.content;
-    // Codex records the model reasoning effort per turn in
-    // turn_context.payload.effort (newer builds also mirror it under
-    // collaboration_mode.settings.reasoning_effort). It can change across
-    // turns, so collect the distinct values in order rather than showing one.
-    const reasoningEfforts: string[] = [];
-    for (const e of rawEvents) {
-      if (e.type !== "turn_context") continue;
-      const eff = e.payload?.effort ?? e.payload?.collaboration_mode?.settings?.reasoning_effort;
-      if (typeof eff === "string" && eff && !reasoningEfforts.includes(eff)) reasoningEfforts.push(eff);
-    }
+    // Reasoning effort the agent ran at, per agent (see extractReasoningEfforts).
+    // Dispatch on the `agent` the trace was fetched with, so it agrees with rawEvents.
+    const reasoningEfforts = extractReasoningEfforts(agent, rawEvents);
     return {
       sessionId: id,
       agent: sessionInfo?.agent,
@@ -488,7 +513,7 @@ export default function SessionDetailPage() {
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
     };
-  }, [events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
+  }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
 
   // Fetch per-project config (skills + MCPs) once we know the cwd
   useEffect(() => {
