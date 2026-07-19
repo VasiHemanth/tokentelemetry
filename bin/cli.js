@@ -95,6 +95,7 @@ function pickConnectHost(host, allowedOrigins) {
 function printHelp() {
   console.log([
     'Usage: tokentelemetry [options]',
+    '       tokentelemetry wiki <subcommand>   (see: tokentelemetry wiki --help)',
     '',
     'Options:',
     '  -p, --port <N>            Frontend (Next.js) port. Default 3000.',
@@ -302,6 +303,117 @@ function ensureFrontend() {
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
+// --- `tokentelemetry wiki` — deterministic second-brain toolchain ---------
+// Wraps the pure-Python scripts in wikicli/ so ANY coding agent (not just
+// Claude Code) can maintain a docs/wiki OKF bundle via its bash tool. No
+// model, no network: these commands referee (freshness, lint, evidence);
+// whatever agent invoked them does the actual writing.
+
+function printWikiHelp() {
+  console.log([
+    'Usage: tokentelemetry wiki <subcommand> [options] [-- script args]',
+    '',
+    'Subcommands:',
+    '  status [page-id]      Freshness of wiki pages (FRESH/STALE/TAMPERED).',
+    '                        Runs the status.py installed in the wiki bundle.',
+    '  lint                  Validate the OKF bundle (frontmatter, links, index,',
+    '                        manifest). Exit 0 clean / 1 findings / 2 tool error.',
+    '  mine                  Structural signals from ALL local coding-agent session',
+    '                        stores for this project (re-read files, loop',
+    '                        signatures, tool mix). Flags: --harness, --limit, --json.',
+    '  census                Project shape scan + suggested wiki profile. --json.',
+    '  manifest <init|update|stamp> [flags]',
+    '                        Manage manifest.json (provenance stamping installs',
+    '                        the status.py freshness checker).',
+    '  context (--check|--write)',
+    '                        Install/refresh the wiki pointer block in AGENTS.md',
+    '                        and CLAUDE.md.',
+    '',
+    'Options:',
+    '  --project <dir>       Target project. Default: current directory.',
+    '  --wiki <dir>          Wiki dir relative to project. Default: docs/wiki.',
+    '',
+    'All other flags pass through to the underlying script (e.g. --json).',
+  ].join('\n'));
+}
+
+// Prefer system python (zero-setup: everything is stdlib except lint's PyYAML);
+// fall back to the backend venv, whose requirements.txt pins pyyaml.
+function wikiPython(needsYaml) {
+  for (const cmd of ['python3', 'python']) {
+    if (!which(cmd)) continue;
+    const check = 'import sys' + (needsYaml ? ', yaml' : '') +
+      '; sys.exit(0 if sys.version_info >= (3, 9) else 1)';
+    const probe = spawnSync(cmd, ['-c', check], { encoding: 'utf8' });
+    if (probe.status === 0) return cmd;
+  }
+  ensureBackend();
+  return venvPython;
+}
+
+function runWiki(argv) {
+  let project = process.cwd();
+  let wiki = 'docs/wiki';
+  let sub = null;
+  const rest = [];
+  const take = (i, flag) => {
+    if (i + 1 >= argv.length) die(`expected a value after ${flag}`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') { printWikiHelp(); process.exit(0); }
+    else if (a === '--project')            { project = take(i, a); i++; }
+    else if (a.startsWith('--project='))   { project = a.slice('--project='.length); }
+    else if (a === '--wiki')               { wiki = take(i, a); i++; }
+    else if (a.startsWith('--wiki='))      { wiki = a.slice('--wiki='.length); }
+    else if (!sub && !a.startsWith('-'))   { sub = a; }
+    else rest.push(a);
+  }
+  if (!sub) { printWikiHelp(); process.exit(2); }
+
+  const projectAbs = path.resolve(project);
+  const wikiAbs = path.resolve(projectAbs, wiki);
+  const script = (name) => path.join(rootDir, 'wikicli', name);
+
+  let cmd;
+  let args;
+  if (sub === 'status') {
+    // The freshness checker is installed INTO the bundle by `manifest stamp`,
+    // so collaborators without this CLI can still run it. We just locate it.
+    const statusPy = path.join(wikiAbs, 'status.py');
+    if (!fs.existsSync(statusPy)) {
+      die(`no wiki freshness checker at ${statusPy}\n` +
+          'If this project has no wiki yet, compile one first (e.g. /brain-init in your agent).\n' +
+          'If it has a wiki but no status.py, run: tokentelemetry wiki manifest stamp');
+    }
+    cmd = wikiPython(false);
+    args = [statusPy, ...rest];
+  } else if (sub === 'lint') {
+    cmd = wikiPython(true);
+    args = [script('okf_lint.py'), wikiAbs, ...rest];
+  } else if (sub === 'mine') {
+    cmd = wikiPython(false);
+    args = [script('session_scan.py'), projectAbs, ...rest];
+  } else if (sub === 'census') {
+    cmd = wikiPython(false);
+    args = [script('profile_census.py'), projectAbs, ...rest];
+  } else if (sub === 'manifest') {
+    cmd = wikiPython(false);
+    args = [script('wiki_manifest.py'), wikiAbs, ...rest];
+  } else if (sub === 'context') {
+    cmd = wikiPython(false);
+    args = [script('agent_context.py'), projectAbs, ...rest, '--wiki', wiki];
+  } else {
+    die(`unknown wiki subcommand: ${sub}\nRun \`tokentelemetry wiki --help\` for usage.`);
+  }
+
+  // Exit codes are the contract (0 ok / 1 findings / 2 tool error) — agents
+  // branch on them, so pass them through instead of run()'s die-on-nonzero.
+  const res = spawnSync(cmd, args, { stdio: 'inherit' });
+  process.exit(res.status === null ? 2 : res.status);
+}
+
 async function start() {
   const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir } = parseArgs(process.argv.slice(2));
 
@@ -467,4 +579,8 @@ async function start() {
   frontend.on('exit', (code) => shutdown(code || 0));
 }
 
-start();
+if (process.argv[2] === 'wiki') {
+  runWiki(process.argv.slice(3));
+} else {
+  start();
+}
