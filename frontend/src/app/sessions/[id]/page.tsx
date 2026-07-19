@@ -508,6 +508,8 @@ export default function SessionDetailPage() {
       })(),
       approvalPolicy: meta?.approval_policy || turnCtx?.approval_policy,
       reasoningEffort: reasoningEfforts.length ? reasoningEfforts.join(" → ") : undefined,
+      // pi calls it "thinking level" (off/medium/high); label its row to match.
+      reasoningEffortLabel: agent === "pi" ? "Thinking Level" : "Reasoning Effort",
       instructions: meta?.instructions || turnCtx?.instructions,
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
@@ -1294,7 +1296,7 @@ function ContextPanel({ ctx }: { ctx: any }) {
 
       <Row k="Sandbox" v={ctx.sandbox} />
       <Row k="Approval Policy" v={ctx.approvalPolicy} />
-      <Row k="Reasoning Effort" v={ctx.reasoningEffort} />
+      <Row k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
       {ctx.instructions && (
         <details>
           <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
