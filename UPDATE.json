@@ -2,11 +2,11 @@
   "releases": [
     {
       "tag": "2026-07-19",
-      "title": "See the reasoning effort Codex ran at",
+      "title": "See the reasoning effort each session ran at",
       "highlights": [
         {
-          "title": "Reasoning effort on Codex sessions",
-          "description": "A Codex session's context panel now shows the model reasoning effort it actually ran at (minimal / low / medium / high / xhigh). Because Codex can change effort between turns, sessions that shifted show the progression (e.g. \"medium → xhigh\") rather than a single value. The Sandbox and Approval Policy rows, which were silently blank for Codex before, now populate too.",
+          "title": "Reasoning effort across agents",
+          "description": "A session's context panel now shows the model reasoning effort it actually ran at — for every agent that records one: Claude, Codex, Copilot, Grok, Hermes and Pi (values like minimal / low / medium / high / xhigh, or Pi's off). When the effort changed mid-session, the progression is shown (e.g. \"medium → xhigh\") instead of a single value. Agents that don't record a discrete effort setting simply don't show the row.",
           "href": "/sessions"
         }
       ]
