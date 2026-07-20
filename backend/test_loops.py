@@ -352,6 +352,44 @@ def test_grok_loop_detect_happy_path(tmp_path):
     assert lp["footprint_cost"] == 0
 
 
+def test_grok_loop_detect_delete_before_last_fire_not_cancelled(tmp_path):
+    """A successful scheduler_delete that happened at or before the loop's last
+    firing cannot have cancelled the still-firing task. Grok deletes carry no
+    task id, so we scope by timing: delete (07-17) predates last fire (07-20)
+    -> the loop is NOT cancelled (this is the confirmed real-case shape)."""
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-20T12:33:35Z")
+    assert lp is not None
+    assert lp["cancelled"] is False
+    assert lp["cancelled_at"] is None
+
+
+def test_grok_loop_detect_delete_after_last_fire_is_cancelled(tmp_path):
+    """A successful scheduler_delete strictly after the loop's last firing did
+    cancel it -> cancelled stays True with the delete timestamp preserved."""
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-16T09:00:00Z")
+    assert lp is not None
+    assert lp["cancelled"] is True
+    assert lp["cancelled_at"] == "2026-07-17T18:31:46.026Z"
+
+
 def test_grok_loop_detect_gated_on_scheduler_create(tmp_path):
     """No scheduler_create in signals.toolsUsed -> the deeper scan never runs."""
     d = _grok_session_dir(tmp_path, fires=[_grok_fire()])

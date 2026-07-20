@@ -2273,6 +2273,30 @@ def _grok_loop_detect(
         except Exception:
             pass
 
+    # Scope the cancellation by TIMING, not by task id: Grok's scheduler_delete
+    # tool_completed record carries no task id ({ts, type, tool_name, duration_ms,
+    # outcome}), so a delete can't be matched to the task it targeted. A session
+    # may create/delete several tasks over its life; a delete that happened at or
+    # before this loop's most recent firing cannot have cancelled a task that is
+    # still firing. Keep cancelled=True only if the delete strictly post-dates the
+    # last fire (updated_iso ≈ last activity ≈ last fire). If either timestamp is
+    # missing or unparseable, treat as NOT cancelled — a live-firing loop is the
+    # safer default than a false "cancelled".
+    if cancelled and cancelled_at:
+        try:
+            del_dt = _aware(datetime.fromisoformat(str(cancelled_at).replace("Z", "+00:00")))
+            fire_dt = _aware(datetime.fromisoformat(str(updated_iso).replace("Z", "+00:00")))
+            if not (del_dt > fire_dt):
+                cancelled = False
+                cancelled_at = None
+        except Exception:
+            cancelled = False
+            cancelled_at = None
+    elif cancelled:
+        # cancelled flagged but no timestamp to validate against -> be conservative.
+        cancelled = False
+        cancelled_at = None
+
     return {
         "is_loop": True,
         "mode": "scheduler",                 # Grok Tasks scheduler (fixed interval)
