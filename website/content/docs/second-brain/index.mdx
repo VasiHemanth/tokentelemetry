@@ -1,0 +1,108 @@
+---
+title: Second Brain plugin
+description: Compile your project into a small, typed wiki that every supported coding agent reads instead of re-exploring the codebase. Compiled with Claude Code; consumed by all agents.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every time a coding agent opens your project, it spends tokens re-reading the
+same files to figure out what the project is. The Second Brain plugin pays
+that cost once: it compiles the project into a wiki at `docs/wiki/` (short,
+typed pages: overview, subsystems, features, decisions, conventions,
+playbooks), then a pointer block in `AGENTS.md` routes later agent sessions
+through those pages instead of a codebase walk.
+
+The compile step runs as a Claude Code plugin today, but the output is for
+every agent you use: the pointer block lands in `AGENTS.md` (and `CLAUDE.md`),
+which Codex, Gemini CLI, Cursor, Copilot, and the other supported agents
+already read, and the freshness checker is plain Python that runs from any
+harness. Compile once with Claude Code; every agent on the project benefits.
+
+The wiki is also a map humans can read. This is the second brain the plugin
+compiled for the TokenTelemetry repo itself, one node per page, clustered by
+page type:
+
+<img
+  src="/screenshots/second-brain-graph.png"
+  alt="Second brain graph of the TokenTelemetry repo, one node per page, clustered by page type (light theme)"
+  className="dark:hidden"
+/>
+
+<img
+  src="/screenshots/second-brain-graph-dark.png"
+  alt="Second brain graph of the TokenTelemetry repo, one node per page, clustered by page type (dark theme)"
+  className="hidden dark:block"
+/>
+
+<Callout title="It will pair with the dashboard, but needs neither signup nor server">
+A planned dashboard panel will detect `docs/wiki/manifest.json` in scanned
+projects and show an observed before/after split of token metrics at the
+wiki's creation date. No causal savings claim: a flat or negative delta will
+be reported as-is. See
+[the evidence page](/docs/second-brain/evidence) for measured results today.
+</Callout>
+
+## How it works
+
+1. `/brain-init` censuses the project (languages, doc surfaces, prior
+   knowledge like ADRs, graphify output, or Obsidian vaults), derives a
+   project-specific page schema, and scaffolds `docs/wiki/` after you confirm.
+2. `/brain-compile` builds pages in resumable batches from source files, git
+   history, and structural session signals. Interrupt it anytime; rerunning
+   resumes from the first unfinished item.
+3. Every compile and ingest ends with a stamp step that records per-page
+   content-hash provenance and installs `docs/wiki/status.py`, a stdlib-only
+   freshness checker that works from any harness, no plugin required.
+4. Day to day, `/brain query` answers from the wiki, `/brain ingest` keeps it
+   in step with merged changes, `/brain save` and `/brain idea` capture
+   thinking from chats, `/brain lint` checks health.
+
+Nothing runs automatically: no hook, cron, or daemon ever mutates the wiki.
+
+## Freshness without nagging
+
+The wiki is a cache; code stays authoritative. `status.py` reports each page
+as FRESH, STALE, TAMPERED, or UNVERIFIABLE against the stamped hashes. A
+stale page never blocks work: the agent reads the page's source files,
+answers from code, and queues a refresh note the next `/brain ingest` sweeps.
+
+## Privacy
+
+Session mining extracts structural signals only (file-read frequencies, tool
+mix, error-loop signatures) across 11 supported harnesses. It never reads
+transcript prose, user messages, or tool output content. Everything runs
+locally; no network calls.
+
+## Install
+
+<Callout title="Being prepared for public release">
+The plugin ships separately from the dashboard and its repository is not yet
+public. Once it is, installation is two commands:
+</Callout>
+
+```bash
+claude plugin marketplace add <plugin-repo-url>
+claude plugin install tokentelemetry
+```
+
+Manual install (no marketplace): copy the plugin's `skills/`, `agents/`,
+`profiles/`, and `scripts/` directories into your project's `.claude/`
+directory. The skills locate scripts via `${CLAUDE_PLUGIN_ROOT}`, which only
+a plugin install sets; after a manual copy, point it at `.claude/` or replace
+the variable in the copied files.
+
+Then, inside any project (in Claude Code):
+
+```
+/brain-init
+/brain-compile
+```
+
+That is the only Claude Code-specific part. Once compiled, the wiki works
+with every supported agent with no further setup: they pick it up through
+the `AGENTS.md` pointer block, and anyone can check freshness with
+`python3 docs/wiki/status.py`, plugin installed or not.
+
+Full command surface: [Commands](/docs/second-brain/commands). Measured
+results behind the token-efficiency claim:
+[Evidence](/docs/second-brain/evidence).

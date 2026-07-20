@@ -168,6 +168,13 @@ Full docs site: https://tokentelemetry.com/docs
 - [Artifacts](https://tokentelemetry.com/docs/features/artifacts): Screenshots, browser recordings, and documents captured by your agents, viewable inline.
 - [Hermes Agent](https://tokentelemetry.com/docs/features/hermes): Dedicated autonomous-agent observability — gateway health, 38 source platforms, skills, and memory.
 
+### Second Brain Plugin
+
+- [Second Brain Plugin](https://tokentelemetry.com/docs/second-brain): Compile a project wiki with content-hash provenance so any coding agent starts with project context instead of re-reading the codebase.
+- [Command Reference](https://tokentelemetry.com/docs/second-brain/commands): Every skill (/brain-init, /brain-compile, /brain, /skillsmith), subagent, and script.
+- [Evidence](https://tokentelemetry.com/docs/second-brain/evidence): The A/B measurements behind the token-efficiency claim (turns and cost halve on covered questions, -18% overall), including the memory-as-images experiment that failed.
+- [Exploration Loop](https://tokentelemetry.com/docs/second-brain/exploration-loop): A recurring prompt that lets agents stress-test the second brain and record honest numbers.
+
 ### Configuration
 
 - [Billing & Cost Modes](https://tokentelemetry.com/docs/configuration/billing): How sessions are classified as subscription, API, local, or unknown — and how to override per agent.

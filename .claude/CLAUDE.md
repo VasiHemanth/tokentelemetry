@@ -170,3 +170,20 @@ validate after the fact" is exactly what this rule exists to kill.
 
 Put the evidence (the diff, the numbers, the passing checks) in the done
 message, not just the word "done". `/ship` runs this loop as a command.
+
+## All supported agents, never just Claude Code
+
+TokenTelemetry supports many coding agents (Claude Code, Codex, Gemini CLI,
+Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline,
+SmallCode, Pi, Hermes). Anything user-facing you add — docs pages, feature
+copy, README sections, UPDATE.json entries — must speak to ALL of them, not
+just Claude Code. Concretely:
+
+- Never describe a feature as "for Claude Code" when it works elsewhere. The
+  second-brain plugin *compiles* via Claude Code today, but the wiki it
+  produces is consumed by every agent (AGENTS.md pointer block, stdlib
+  `status.py`); say so.
+- When listing agents, either name the full supported set or say "all
+  supported agents"; don't let examples read as an exhaustive list.
+- New features should state their per-agent behavior (works everywhere /
+  Claude-Code-only step / degraded elsewhere) rather than leaving it implied.
