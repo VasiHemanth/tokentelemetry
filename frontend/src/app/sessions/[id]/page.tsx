@@ -196,29 +196,39 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
    record a discrete effort/level setting return []. The caller joins the result
    with " → " so a session that changed effort mid-run shows the progression.
    Only agents with a real signal are listed — see the reasoning-effort audit. */
+function reasoningEffortTimeline(agent: string | null, rawEvents: any[]): { ts: number; effort: string }[] {
+  const pts: { ts: number; effort: string }[] = [];
+  const add = (e: any, v: any) => { if (typeof v === "string" && v) pts.push({ ts: normalizeTs(e) ?? 0, effort: v }); };
+  for (const e of rawEvents) {
+    switch (agent) {
+      case "codex": // per-turn turn_context; newer builds mirror under collaboration_mode
+        if (e.type === "turn_context") add(e, e.payload?.effort ?? e.payload?.collaboration_mode?.settings?.reasoning_effort);
+        break;
+      case "claude": // top-level `effort` on assistant records (CLI 2.1.212+; absent = unknown)
+        if (e.type === "assistant") add(e, e.effort);
+        break;
+      case "grok": // top-level reasoning_effort on assistant turns
+        if (e.type === "assistant") add(e, e.reasoning_effort);
+        break;
+      case "copilot": // model_change events surfaced as reasoning_effort by the backend
+        if (e.type === "reasoning_effort") add(e, e.payload?.effort);
+        break;
+      case "hermes": // session-level reasoning_config.effort surfaced on session_meta
+        if (e.type === "session_meta") add(e, e.payload?.effort);
+        break;
+      case "pi": // dedicated thinking_level_change events (off/medium/high)
+        if (e.type === "thinking_level_change") add(e, e.thinkingLevel);
+        break;
+    }
+  }
+  return pts;
+}
+
+/* Ordered-distinct effort values across the session (e.g. ["medium","xhigh"]),
+   for the single context-panel row; the caller joins them with " → ". */
 function extractReasoningEfforts(agent: string | null, rawEvents: any[]): string[] {
   const out: string[] = [];
-  const push = (v: any) => { if (typeof v === "string" && v && !out.includes(v)) out.push(v); };
-  switch (agent) {
-    case "codex": // per-turn turn_context; newer builds mirror under collaboration_mode
-      for (const e of rawEvents) if (e.type === "turn_context") push(e.payload?.effort ?? e.payload?.collaboration_mode?.settings?.reasoning_effort);
-      break;
-    case "claude": // top-level `effort` on assistant records (CLI 2.1.212+; absent = unknown)
-      for (const e of rawEvents) if (e.type === "assistant") push(e.effort);
-      break;
-    case "grok": // top-level reasoning_effort on assistant turns
-      for (const e of rawEvents) if (e.type === "assistant") push(e.reasoning_effort);
-      break;
-    case "copilot": // model_change events surfaced as reasoning_effort by the backend
-      for (const e of rawEvents) if (e.type === "reasoning_effort") push(e.payload?.effort);
-      break;
-    case "hermes": // session-level reasoning_config.effort surfaced on session_meta
-      push(rawEvents.find((e) => e.type === "session_meta")?.payload?.effort);
-      break;
-    case "pi": // dedicated thinking_level_change events (off/medium/high)
-      for (const e of rawEvents) if (e.type === "thinking_level_change") push(e.thinkingLevel);
-      break;
-  }
+  for (const { effort } of reasoningEffortTimeline(agent, rawEvents)) if (!out.includes(effort)) out.push(effort);
   return out;
 }
 
@@ -418,6 +428,22 @@ export default function SessionDetailPage() {
     });
     return out;
   }, [events]);
+
+  // The reasoning effort in effect at each step, so a reasoning card can show it
+  // and a mid-session change is visible where it happened. Built from the raw
+  // (pre-normalization) events because some agents record effort on events that
+  // normalizeTraceEvents strips from the step view (e.g. codex turn_context).
+  const stepReasoningEffort = useMemo(() => {
+    const timeline = reasoningEffortTimeline(agent, rawEvents);
+    if (!timeline.length) return new Array(events.length).fill(undefined);
+    const sorted = [...timeline].sort((a, b) => a.ts - b.ts);
+    const effortAt = (ts: number) => {
+      let cur: string | undefined = sorted[0].effort; // before the first change → first known effort
+      for (const p of sorted) { if (p.ts <= ts) cur = p.effort; else break; }
+      return cur;
+    };
+    return events.map((e) => effortAt(normalizeTs(e) ?? 0));
+  }, [agent, rawEvents, events]);
 
   // Steps for left index
   const steps: Step[] = useMemo(
@@ -843,7 +869,7 @@ export default function SessionDetailPage() {
 
                       return (
                          <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
-                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} tokens={stepTokens[idx]} />
+                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} tokens={stepTokens[idx]} reasoningEffort={stepReasoningEffort[idx]} />
                          </div>
                       );
                    })}
@@ -1251,6 +1277,9 @@ function ContextPanel({ ctx }: { ctx: any }) {
           </div>
         </div>
       )}
+      <Row k="Sandbox" v={ctx.sandbox} />
+      <Row k="Approval Policy" v={ctx.approvalPolicy} />
+      <Row k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
       <Row k="CWD" v={ctx.cwd} />
 
       {ctx.projectConfig && (ctx.projectConfig.counts?.skills > 0 || ctx.projectConfig.counts?.mcps > 0) && (
@@ -1294,9 +1323,6 @@ function ContextPanel({ ctx }: { ctx: any }) {
         </div>
       )}
 
-      <Row k="Sandbox" v={ctx.sandbox} />
-      <Row k="Approval Policy" v={ctx.approvalPolicy} />
-      <Row k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
       {ctx.instructions && (
         <details>
           <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
@@ -1533,8 +1559,21 @@ function ArtifactViewer({ path }: { path: string }) {
   );
 }
 
-function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null, tokens?: StepTokens | null }) {
+function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null, tokens?: StepTokens | null, reasoningEffort?: string }) {
   const { type, timestamp, message, attachment, toolUseResult, payload, content, thoughts, toolCalls } = event;
+
+  // Small badge showing the model reasoning effort in effect for this reasoning
+  // step, so a mid-session effort change is visible on the card where it happened
+  // (constant effort just repeats the same value on every reasoning card).
+  const effortLabel = agent === "pi" ? "thinking level" : "effort";
+  const effortBadge = reasoningEffort ? (
+    <span
+      title={`Model reasoning ${effortLabel} in effect for this step`}
+      className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono normal-case tracking-normal text-[var(--tt-warn-fg)] bg-amber-500/10 border border-amber-500/30"
+    >
+      {effortLabel}: {reasoningEffort}
+    </span>
+  ) : null;
 
   // Render a tiny timestamp badge if available
   const renderTimestamp = () => {
@@ -1600,7 +1639,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
         <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-indigo-500/50 group">
           <div className="flex justify-between items-start mb-3">
             <div className="flex items-center gap-2 text-[var(--tt-violet-fg)] font-bold text-xs uppercase tracking-widest">
-              <Brain size={16} /> Copilot Reasoning
+              <Brain size={16} /> Copilot Reasoning{effortBadge}
             </div>
             {renderTimestamp()}
           </div>
@@ -1619,7 +1658,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
              <div key={`copilot-think-${i}`} className="bg-indigo-500/5 border border-indigo-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-indigo-500/50 group">
                <div className="flex justify-between items-start mb-3">
                  <div className="flex items-center gap-2 text-[var(--tt-violet-fg)] font-bold text-xs uppercase tracking-widest">
-                   <Brain size={16} /> Reasoning
+                   <Brain size={16} /> Reasoning{effortBadge}
                  </div>
                  {renderTimestamp()}
                </div>
@@ -1928,7 +1967,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
         <div className={`${bg} border ${border} rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 ${accent} group`}>
           <div className="flex justify-between items-start mb-3">
             <div className={`flex items-center gap-2 ${textColor} font-bold text-xs uppercase tracking-widest`}>
-              <Brain size={16} /> Reasoning
+              <Brain size={16} /> Reasoning{effortBadge}
             </div>
             {renderTimestamp()}
           </div>
@@ -1992,7 +2031,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
             <div key={`think-${i}`} className="bg-amber-500/5 border border-amber-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-amber-500/50 group">
               <div className="flex justify-between items-start mb-3">
                 <div className="flex items-center gap-2 text-[var(--tt-warn-fg)] font-bold text-xs uppercase tracking-widest">
-                  <Brain size={16} /> Reasoning {isEncrypted && <span className="text-[9px] font-mono normal-case tracking-normal text-[var(--tt-warn-fg)]/70 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">encrypted</span>}
+                  <Brain size={16} /> Reasoning{effortBadge} {isEncrypted && <span className="text-[9px] font-mono normal-case tracking-normal text-[var(--tt-warn-fg)]/70 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">encrypted</span>}
                 </div>
                 {renderTimestamp()}
               </div>
@@ -2053,7 +2092,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
           <div className="bg-purple-500/5 border border-purple-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-purple-500/50 group">
             <div className="flex justify-between items-start mb-3">
               <div className="flex items-center gap-2 text-[var(--tt-violet-fg)] font-bold mb-3 text-xs uppercase tracking-widest">
-                <Brain size={16} /> Reasoning
+                <Brain size={16} /> Reasoning{effortBadge}
               </div>
               {renderTimestamp()}
             </div>
@@ -2151,7 +2190,7 @@ function EventCard({ event, mode = "all", agent, tokens }: { event: any, mode?: 
         <div className="bg-purple-500/5 border border-purple-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-purple-500/50 group">
           <div className="flex justify-between items-start mb-3">
             <div className="flex items-center gap-2 text-[var(--tt-violet-fg)] font-bold text-xs uppercase tracking-widest">
-              <Brain size={16} /> Reasoning
+              <Brain size={16} /> Reasoning{effortBadge}
             </div>
             {renderTimestamp()}
           </div>
