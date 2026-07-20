@@ -5491,41 +5491,61 @@ async def invalidate_cache():
     return {"ok": True}
 
 
+# --- Session-detail parse cache -------------------------------------------------
+# get_session_detail re-reads and re-parses a session's full transcript on every
+# open; large transcripts (tens of MB) made re-opens slow. Memoize the parsed
+# event list on (mtime_ns, size) so an unchanged file is parsed only once. The key
+# changes the instant the file is appended to, so a live session never goes stale.
+_SESSION_DETAIL_CACHE: Dict[str, Tuple[Tuple[int, int], List[Dict[str, Any]]]] = {}
+_SESSION_DETAIL_CACHE_MAX = 16
+
+
+def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
+    """Parse a JSONL transcript into normalized event dicts, memoized on file
+    identity + (mtime_ns, size). Returns the cached list on a hit (callers must
+    treat it as read-only — the detail endpoint only serializes it)."""
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    key = str(path)
+    if stamp is not None:
+        hit = _SESSION_DETAIL_CACHE.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    events: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            # Add a normalized_timestamp for the waterfall view.
+            if data.get("timestamp"):
+                try:
+                    ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
+                    data["normalized_timestamp"] = ts.timestamp() * 1000
+                except Exception:
+                    pass
+            events.append(data)
+    if stamp is not None:
+        if key not in _SESSION_DETAIL_CACHE and len(_SESSION_DETAIL_CACHE) >= _SESSION_DETAIL_CACHE_MAX:
+            _SESSION_DETAIL_CACHE.pop(next(iter(_SESSION_DETAIL_CACHE)))
+        _SESSION_DETAIL_CACHE[key] = (stamp, events)
+    return events
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    # Add a normalized_timestamp for waterfall
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
