@@ -30,6 +30,17 @@ const venvPython = isWindows
   ? path.join(venvDir, 'Scripts', 'python.exe')
   : path.join(venvDir, 'bin', 'python3');
 
+// Enterprise / air-gapped installs: route the two first-run dependency installs
+// (pip + npm) through a private mirror such as JFrog Artifactory or Nexus,
+// without needing to edit global pip.conf / .npmrc — which a locked-down VDI may
+// not permit. When unset, nothing changes. Note pip already reads PIP_INDEX_URL
+// and npm reads npm_config_registry from the inherited environment, so an org
+// that configures those globally needs neither of these.
+const pipIndexUrl = (process.env.TT_PIP_INDEX_URL || '').trim();
+const npmRegistry = (process.env.TT_NPM_REGISTRY || '').trim();
+const pipIndexArgs = pipIndexUrl ? ['--index-url', pipIndexUrl] : [];
+const npmRegistryArgs = npmRegistry ? ['--registry', npmRegistry] : [];
+
 function die(msg) {
   console.error('\nERROR: ' + msg + '\n');
   process.exit(1);
@@ -122,7 +133,47 @@ function printHelp() {
   ].join('\n'));
 }
 
-function run(cmd, args, opts = {}) {
+// Print actionable guidance when a dependency install fails. stdio is inherited
+// so pip/npm's real error is already on screen — but behind a private registry
+// the cause (auth, TLS, hash pinning) is rarely obvious from that output, so we
+// spell out the usual suspects instead of leaving the user with a bare exit
+// code. `tool` is 'pip' or 'npm'.
+function printInstallFailureHelp(tool) {
+  const bar = '─'.repeat(64);
+  const usingMirror = tool === 'pip' ? Boolean(pipIndexUrl) : Boolean(npmRegistry);
+  console.error('\n' + bar);
+  console.error(`The ${tool} dependency install above failed.`);
+  console.error('If this machine reaches packages through a private registry or');
+  console.error('proxy (e.g. JFrog Artifactory, Nexus), the usual causes are:');
+  console.error('');
+  console.error('  • Auth — the registry needs an identity token. The URL alone');
+  if (tool === 'npm') {
+    console.error('    is not enough; add it to ~/.npmrc:');
+    console.error('        //<host>/<repo>/:_authToken=<token>');
+  } else {
+    console.error('    is not enough; use pip.conf or embed it in the URL:');
+    console.error('        https://<user>:<token>@<host>/.../simple');
+  }
+  console.error('  • TLS — the internal CA cert must be trusted, else the');
+  console.error('    download fails cert verification:');
+  console.error(tool === 'npm'
+    ? '        set NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem'
+    : '        set PIP_CERT=/path/to/corp-ca.pem (or add to the OS trust store)');
+  if (tool === 'pip') {
+    console.error('  • Hash mismatch — requirements.lock pins exact wheel hashes.');
+    console.error('    A read-through PyPI proxy serves the real upstream files so');
+    console.error('    hashes match; only a mirror that REPACKAGES wheels breaks it.');
+  }
+  if (!usingMirror) {
+    console.error(`  • Registry — point the install at your mirror with`);
+    console.error(tool === 'npm'
+      ? '        TT_NPM_REGISTRY=<url>'
+      : '        TT_PIP_INDEX_URL=<url>');
+  }
+  console.error(bar + '\n');
+}
+
+function run(cmd, args, opts = {}, hintOnFail = null) {
   // On Windows we spawn through the shell so PATH-resolved commands (`py`, the
   // python launcher, etc.) work — but cmd.exe re-parses the line and does NOT
   // quote for us. When the repo lives in a path with spaces (e.g.
@@ -140,7 +191,10 @@ function run(cmd, args, opts = {}) {
     useShell ? args.map(quote) : args,
     { stdio: 'inherit', shell: useShell, ...opts },
   );
-  if (res.status !== 0) die(`"${cmd} ${args.join(' ')}" exited with ${res.status}`);
+  if (res.status !== 0) {
+    if (hintOnFail) hintOnFail();
+    die(`"${cmd} ${args.join(' ')}" exited with ${res.status}`);
+  }
 }
 
 function canConnect(host, port, timeoutMs = 300) {
@@ -262,9 +316,9 @@ function ensureBackend() {
   if (cachedSha === currentSha) return;
   console.log('→ installing backend dependencies…');
   if (useLock) {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r', 'requirements.lock'], { cwd: backendDir });
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', ...pipIndexArgs, '-r', 'requirements.lock'], { cwd: backendDir }, () => printInstallFailureHelp('pip'));
   } else {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', ...pipIndexArgs, '-r', 'requirements.txt'], { cwd: backendDir }, () => printInstallFailureHelp('pip'));
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
@@ -295,9 +349,9 @@ function ensureFrontend() {
   // checkouts predating the committed lockfile (or a repo where it was deleted)
   // fall back to `npm install` so those users aren't broken.
   if (fs.existsSync(lockPath)) {
-    run('npm', ['ci'], { cwd: frontendDir });
+    run('npm', ['ci', ...npmRegistryArgs], { cwd: frontendDir }, () => printInstallFailureHelp('npm'));
   } else {
-    run('npm', ['install'], { cwd: frontendDir });
+    run('npm', ['install', ...npmRegistryArgs], { cwd: frontendDir }, () => printInstallFailureHelp('npm'));
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
