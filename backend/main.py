@@ -5604,6 +5604,12 @@ async def get_session_detail(session_id: str, agent: str):
                                 })
                             if content_blocks:
                                 norm = {"type": "assistant", "message": {"role": "assistant", "content": content_blocks}}
+                                # Surface the reasoning-effort setting so the
+                                # session context panel can show it (grok records
+                                # it per assistant turn; low/medium/high/xhigh).
+                                _re = entry.get("reasoning_effort")
+                                if isinstance(_re, str) and _re:
+                                    norm["reasoning_effort"] = _re
 
                         elif etype == "reasoning":
                             summ = entry.get("summary") or []
@@ -5662,6 +5668,21 @@ async def get_session_detail(session_id: str, agent: str):
                 try:
                     evt = json.loads(line)
                 except Exception:
+                    continue
+                # pi records the thinking-level setting (off/medium/high) as
+                # dedicated events; pass them through so the context panel can
+                # show the reasoning effort the session ran at.
+                if evt.get("type") == "thinking_level_change":
+                    _tl = evt.get("thinkingLevel")
+                    if isinstance(_tl, str) and _tl:
+                        _tle = {"type": "thinking_level_change", "thinkingLevel": _tl}
+                        _tlts = evt.get("timestamp")
+                        if _tlts:
+                            try:
+                                _tle["normalized_timestamp"] = _aware(datetime.fromisoformat(str(_tlts).replace("Z", "+00:00"))).timestamp() * 1000
+                            except Exception:
+                                pass
+                        events.append(_tle)
                     continue
                 if evt.get("type") != "message":
                     continue
@@ -5930,6 +5951,13 @@ async def get_session_detail(session_id: str, agent: str):
                             "tool": tr.get("name"), "callID": tr.get("toolCallId"),
                             "arguments": tr.get("arguments"),
                         }, **base})
+                elif et == "session.model_change":
+                    # Copilot records the reasoning-effort setting on model-change
+                    # events (null on Claude models, which have no effort enum);
+                    # surface it so the context panel can show it.
+                    _ce = d.get("reasoningEffort")
+                    if isinstance(_ce, str) and _ce:
+                        events.append({"type": "reasoning_effort", "payload": {"effort": _ce}, **base})
             return events
         # VS Code ~1.100+ stores sessions as <id>.jsonl (delta log) instead of
         # <id>.json (single object); match both and reconstruct the .jsonl form.
@@ -6005,10 +6033,20 @@ async def get_session_detail(session_id: str, agent: str):
                 conn = sqlite3.connect(uri, uri=True, timeout=1.0)
                 conn.row_factory = sqlite3.Row
                 try:
-                    srow = conn.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
+                    srow = conn.execute("SELECT id, model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
                     if not srow:
                         continue
                     events: List[Dict[str, Any]] = []
+                    # Surface the reasoning-effort setting (model_config.
+                    # reasoning_config.effort) as a session-level meta event so the
+                    # context panel can show it, mirroring the codex session_meta shape.
+                    try:
+                        _mc = json.loads(srow["model_config"] or "{}")
+                        _rc = _mc.get("reasoning_config") or {}
+                        if _rc.get("enabled") and isinstance(_rc.get("effort"), str) and _rc.get("effort"):
+                            events.append({"type": "session_meta", "payload": {"effort": _rc["effort"]}})
+                    except Exception:
+                        pass
                     for mrow in conn.execute(
                         "SELECT role, content, tool_calls, tool_call_id, tool_name, "
                         "timestamp, reasoning_content FROM messages WHERE session_id=? "
