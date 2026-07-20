@@ -1,0 +1,117 @@
+# Log
+
+## 2026-07-06
+
+**Update** `analyses/wiki-staleness-failure-modes.md` moved to
+status: adopted, refined per the maintainer: stale pages fall back to
+reading source (wiki-as-cache, code authoritative) rather than nudging
+for updates. Implemented in the plugin (v0.5.0, commit 060b674): stamp
+writes content-hash provenance and installs a self-contained status.py
+per wiki; verdicts FRESH/STALE/TAMPERED/UNVERIFIABLE; refresh notes
+queue in raw/stale-notes.md for the next ingest. A 100-case validation
+set (10 agents) and a 4-role hardening review (red-team, tests,
+integration, docs) preceded the ship; this wiki and education_video are
+stamped and carry status.py.
+
+**Creation** Analysis page `analyses/wiki-staleness-failure-modes.md`,
+saved from a maintainer chat after a real forgotten-ingest incident
+produced a stale answer. An 11-agent simulation (6 personas, 5
+adversarial critics, ~66 findings) mapped staleness failure modes; the
+critics also verified live gaps in this repo's own bundle (no
+manifest.json, no compiled_from_sha anywhere, 6/6 playbooks without
+resource:). Recommendation: content-hash provenance, a committed
+stateless status.py check script referenced by one stable pointer-block
+line, point-of-use trust demotion, a raw/ inbox escape hatch for
+non-Claude harnesses, and a CI staleness marker; auto-ingest stays
+rejected. Status: proposed.
+
+**Update** `analyses/multi-harness-session-mining.md` moved to
+status: adopted. The maintainer picked option A the same day, approving
+codex shell-string path extraction (in-memory tokenization, only path
+tokens emitted); shipped as the plugin's harness_adapters registry
+(11 adapters, 16 fixture tests), plugin commit 09762fe / v0.4.0.
+
+**Creation** Analysis page `analyses/multi-harness-session-mining.md`, saved
+from a maintainer chat. The plugin's `session_scan.py` mines only Claude
+Code sessions while TokenTelemetry parses ~13 agent sources; the page maps
+each harness's store, project attribution, and signal richness, and ranks
+three options (adapter registry in the plugin, backend signals endpoint,
+shared parser library). Recommendation: adapter registry now with
+per-adapter fixtures, shared library later; gemini skipped as legacy.
+Status: proposed, awaiting the maintainer's option pick.
+
+**Update** `ideas/prove-brain-token-savings.md` gained a fourth dated
+refinement: the A/B benchmark from Doubt 2 ran against the regenerated
+census-schema education_video wiki (2 arms x 7 questions x 2 replicates,
+28 sessions). Where the wiki answers the question, turns and cost halve;
+overall cost -18%; adherence of the shipped page-map pointer block 12/14
+(12/12 on questions not naming a source file); correctness equal in both
+arms. The new data-store page flipped the previously partially-covered
+tracker-DB question to a 3-turn half-cost answer.
+
+**Update** `ideas/prove-brain-token-savings.md` gained a third dated
+refinement: Doubt 1 sharpened from "starting kits, not boxes" to dropping
+the three-profile menu entirely. Wiki generation should derive the
+page-type table dynamically from the census, on top of a fixed universal
+skeleton (Overview/Decision/Playbook/Convention plus a never-LLM-derived
+redaction core); the three profile YAMLs demote to few-shot exemplars.
+Plugin-side brain-init changes drafted separately in the plugin repo.
+
+**Creation** Analysis page
+`analyses/next-token-optimization-techniques.md`: four candidate
+techniques (turn batching, tool-result diet, scout delegation,
+checkpoint-restart) attacking conversation-shape waste pools the existing
+seeds do not cover. Grounded in a 105-transcript waste-pool measurement
+(1.5% batching rate, 26M replayed tokens in collapsible turns, 1.7% of tool
+results carrying 24.8% of bytes) plus an independent Codex session that
+converged on the same shapes. Status: proposed; each becomes a skillsmith
+seed only after its experiment shows an effect.
+
+**Finding** The adherence experiment proposed by
+`analyses/brain-savings-approaches.md` ran the same day (24 sessions, 3
+routing arms on education_video copies). Index-in-pointer routing reached
+8/8 wiki consultation at a third of the turns and half the cost of the
+current pointer block (5/8); a skillsmith-generated skill never fired (0/8
+invocations while loaded). Recorded as a dated refinement on
+`ideas/prove-brain-token-savings.md`; plugin-side changes (pointer block
+gains an embedded page map, skillsmith routing role rethought) are direction,
+not yet implemented.
+
+**Creation** Analysis page `analyses/brain-savings-approaches.md`, saved from
+the research session that assessed `ideas/prove-brain-token-savings.md`.
+Evidence: a 2-arm pilot on education_video (16 headless sessions) and a
+51-session trace audit, plus two adversarial reviews. Ranked five approaches;
+headline finding is that agent adherence to the wiki, not wiki quality, is
+the current bottleneck. The idea page gained a dated refinement pointing at
+the analysis. Status: proposed.
+
+**Creation** First `Idea` page via the new `/brain idea` workflow:
+`ideas/prove-brain-token-savings.md`. Captured from a maintainer prompt:
+domain profiles may be too restrictive (starting kits, not boxes), and the
+token-savings claim behind the plugin pipeline needs benchmarks plus an
+in-product payback metric next to the build-cost badge. Status: captured.
+
+## 2026-07-05
+
+**Creation** New page type `Analysis` (`analyses/`, snapshot pages saved from
+agent chats via the new `/brain save` workflow; body immutable after save,
+only `status` may change). First page:
+`analyses/graphify-vs-tt-plugin.md`, comparing the graphify knowledge-graph
+skill with the tokentelemetry second-brain plugin, saved from the 2026-07-05
+chat session, status proposed.
+
+## 2026-07-02
+
+**Creation** Initial compile of the bundle: overview, 13 harness pages, 9
+subsystem pages, 7 feature pages, 3 decision pages, 6 playbooks, 5
+conventions. Sources: repo at 8215d60 (`DESIGN.md`, `docs/adr/`,
+`docs/design/`, `.claude/CLAUDE.md`, `llms.txt`, `backend/`, `bin/cli.js`,
+`website/content/docs/`).
+
+**Finding** `llms.txt` and `README.md` still list 10 coding agents; Cline and
+SmallCode landed in PR #120 (commit 90f7ad0), so the real count is 12. The
+source files need the update, not the wiki.
+
+**Finding** ADR-0004 (resource-history sampling) and the
+`docs/design/resource-history.md` design doc exist only on an unmerged branch;
+the bundle documents main only and will pick them up on merge.
