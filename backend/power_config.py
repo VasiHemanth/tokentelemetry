@@ -56,6 +56,10 @@ DEFAULT_CARBON_INTENSITY = 400
 # Sane upper bound for carbon intensity.
 MAX_CARBON_INTENSITY = 2000
 DEFAULT_SUBSCRIPTION_ENDPOINTS: List[str] = []
+# Specific model ids billed under a flat monthly subscription regardless of which
+# endpoint served them (one proxy can front both subscription and pay-per-token
+# models). Opt-in; empty by default. Matched by exact case-insensitive model id.
+DEFAULT_SUBSCRIPTION_MODELS: List[str] = []
 # Extra endpoints (beyond loopback) the user runs models on locally, e.g. a LAN
 # box at http://192.168.1.50:11434. Loopback is always treated as local.
 DEFAULT_LOCAL_ENDPOINTS: List[str] = []
@@ -65,6 +69,7 @@ DEFAULTS: Dict[str, Any] = {
     "costPerKwh": DEFAULT_COST_PER_KWH,
     "gridCarbonIntensity": DEFAULT_CARBON_INTENSITY,
     "subscriptionEndpoints": list(DEFAULT_SUBSCRIPTION_ENDPOINTS),
+    "subscriptionModels": list(DEFAULT_SUBSCRIPTION_MODELS),
     "localEndpoints": list(DEFAULT_LOCAL_ENDPOINTS),
     "referenceCloudModel": "claude-sonnet-4-6",
 }
@@ -165,6 +170,7 @@ def load_power_config() -> Dict[str, Any]:
     """
     config = dict(DEFAULTS)
     config["subscriptionEndpoints"] = list(DEFAULT_SUBSCRIPTION_ENDPOINTS)
+    config["subscriptionModels"] = list(DEFAULT_SUBSCRIPTION_MODELS)
     # Baseline wattage is device-aware (chip estimate) — an explicit value in
     # power.json below still overrides it.
     config["loadWatts"] = device_default_watts()
@@ -196,6 +202,12 @@ def load_power_config() -> Dict[str, Any]:
     if isinstance(eps, list):
         config["subscriptionEndpoints"] = [
             e.strip() for e in eps if isinstance(e, str) and e.strip()
+        ]
+
+    sms = raw.get("subscriptionModels")
+    if isinstance(sms, list):
+        config["subscriptionModels"] = [
+            m.strip() for m in sms if isinstance(m, str) and m.strip()
         ]
 
     leps = raw.get("localEndpoints")
@@ -235,6 +247,12 @@ def save_power_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(eps, list):
         config["subscriptionEndpoints"] = [
             e.strip() for e in eps if isinstance(e, str) and e.strip()
+        ]
+
+    sms = updates.get("subscriptionModels")
+    if isinstance(sms, list):
+        config["subscriptionModels"] = [
+            m.strip() for m in sms if isinstance(m, str) and m.strip()
         ]
 
     leps = updates.get("localEndpoints")
@@ -277,6 +295,18 @@ def is_subscription_endpoint(
         if s in ep or ep in s:
             return True
     return False
+
+
+def is_subscription_model(
+    model_name: Optional[str], config: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True if model_name exactly matches a configured flat-subscription model id (case-insensitive)."""
+    if not model_name:
+        return False
+    if config is None:
+        config = load_power_config()
+    m = str(model_name).lower().strip()
+    return any(m == s.lower().strip() for s in config.get("subscriptionModels", []) if s and s.strip())
 
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
