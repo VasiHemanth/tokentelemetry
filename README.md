@@ -311,7 +311,7 @@ This pattern is common when your agents (and their logs) run on a remote VPS or 
 NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
 ```
 
-The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is inherited by the Next.js dev server.
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is baked into the frontend build, so setting, changing, or clearing it triggers a rebuild on the next `./start.sh`.
 
 **On your laptop:**
 

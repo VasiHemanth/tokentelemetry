@@ -337,13 +337,19 @@ function ensureFrontendBuild(apiPort) {
   // .package-json.sha convention in ensureFrontend().
   const stampPath = path.join(frontendDir, 'node_modules', '.tt-build-key');
   // NEXT_PUBLIC_* values are inlined at BUILD time — unlike `next dev`, which
-  // re-reads them per request — so the API port api.ts calls is frozen when we
-  // build. Bake in the actual --api-port and fold it into the key so changing the
-  // port triggers a rebuild. The host is NOT baked (api.ts derives it from
-  // window.location), so one build still serves localhost / LAN / tailnet; only
-  // the port is fixed per build, and it's the same port from every host.
+  // re-reads them per request — so anything api.ts reads from env is frozen when
+  // we build. Fold every such value into the key so changing it triggers a
+  // rebuild that re-inlines the current value:
+  //   - apiPort (NEXT_PUBLIC_API_PORT): the backend port the client calls.
+  //   - apiBase (NEXT_PUBLIC_API_BASE): the documented explicit-base override
+  //     (e.g. SSH-tunnel setups). Without it in the key, a value baked into an
+  //     earlier build would silently win on later launches — the launch-time
+  //     override would be ignored, and a stale localhost base would break remote
+  //     access with no rebuild to recover. The host is NOT baked (api.ts derives
+  //     it from window.location), so one build still serves localhost/LAN/tailnet.
   const base = frontendBuildKey();
-  const key = base ? `${base}:${apiPort}` : '';
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
+  const key = base ? `${base}:${apiPort}:${apiBase}` : '';
   let cachedKey = null;
   try { cachedKey = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
   if (fs.existsSync(buildIdPath) && key && cachedKey === key) return;
