@@ -553,6 +553,23 @@ export default function SessionDetailPage() {
       .catch(() => {});
   }, [events, sessionInfo]);
 
+  // Map each tool_use_id -> the user event carrying its tool_result. Built once
+  // per events change so the tool summary and waterfall can pair a call to its
+  // result in O(1) instead of rescanning the whole event array per tool_use
+  // (that rescan was O(n²) and dominated load time on long traces).
+  const toolResultByUseId = useMemo(() => {
+    const map = new Map<string, Event>();
+    for (const e of events) {
+      if (e.type === "user" && Array.isArray(e.message?.content)) {
+        for (const c of e.message.content as any[]) {
+          const rid = c?.tool_use_id;
+          if (rid && !map.has(rid)) map.set(rid, e);
+        }
+      }
+    }
+    return map;
+  }, [events]);
+
   // Tool summary
   const toolSummary = useMemo(() => {
     const rows: { name: string; start: number; duration: number }[] = [];
@@ -561,7 +578,7 @@ export default function SessionDetailPage() {
       if (evt.message?.role === "assistant" && Array.isArray(evt.message?.content)) {
         const tu = evt.message.content.find((c: any) => c.type === "tool_use");
         if (tu && ts) {
-          const result = events.slice(idx + 1).find((e) => e.type === "user" && Array.isArray(e.message?.content) && e.message.content.some((c: any) => c.tool_use_id === tu.id));
+          const result = toolResultByUseId.get(tu.id);
           const end = (result && normalizeTs(result)) || ts + 200;
           rows.push({ name: tu.name, start: ts, duration: end - ts });
         }
@@ -582,7 +599,7 @@ export default function SessionDetailPage() {
     return Object.entries(m)
       .map(([name, v]) => ({ name, count: v.count, avg: v.total / v.count }))
       .sort((a, b) => b.count - a.count);
-  }, [events]);
+  }, [events, toolResultByUseId]);
 
   const jumpTo = (idx: number) => {
     setActiveStep(idx);
@@ -605,7 +622,7 @@ export default function SessionDetailPage() {
            if (tu) {
               toolName = tu.name;
               // Look ahead for tool_result from user
-              const result = events.slice(idx).find(e => e.type === "user" && Array.isArray(e.message?.content) && e.message.content.some((c: any) => c.tool_use_id === tu.id));
+              const result = toolResultByUseId.get(tu.id);
               const endTime = result?.normalized_timestamp || (result?.timestamp ? new Date(result.timestamp).getTime() : startTime + 2000);
               tools.push({ name: toolName, start: startTime, end: endTime, id: tu.id });
            }
@@ -622,7 +639,7 @@ export default function SessionDetailPage() {
         }
      });
      return tools;
-  }, [events]);
+  }, [events, toolResultByUseId]);
 
   return (
     <div className="min-h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col">
