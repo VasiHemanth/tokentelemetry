@@ -330,20 +330,30 @@ function frontendBuildKey() {
 // around ~20MB. The one-time cost is a `next build` (~30-60s) on first run and
 // after each update; the build key below skips it on every unchanged launch.
 // `--dev` opts back into the dev server (HMR) for working on the repo itself.
-function ensureFrontendBuild() {
+function ensureFrontendBuild(apiPort) {
   const buildIdPath = path.join(frontendDir, '.next', 'BUILD_ID');
   // Stamp lives in node_modules (gitignored, untouched by `next build`, and wiped
   // on reinstall — a dep change then correctly forces a rebuild), mirroring the
   // .package-json.sha convention in ensureFrontend().
   const stampPath = path.join(frontendDir, 'node_modules', '.tt-build-key');
-  const key = frontendBuildKey();
+  // NEXT_PUBLIC_* values are inlined at BUILD time — unlike `next dev`, which
+  // re-reads them per request — so the API port api.ts calls is frozen when we
+  // build. Bake in the actual --api-port and fold it into the key so changing the
+  // port triggers a rebuild. The host is NOT baked (api.ts derives it from
+  // window.location), so one build still serves localhost / LAN / tailnet; only
+  // the port is fixed per build, and it's the same port from every host.
+  const base = frontendBuildKey();
+  const key = base ? `${base}:${apiPort}` : '';
   let cachedKey = null;
   try { cachedKey = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
   if (fs.existsSync(buildIdPath) && key && cachedKey === key) return;
   console.log(fs.existsSync(buildIdPath)
     ? '→ building frontend (code changed; this can take a minute)…'
     : '→ building frontend (first run can take a minute)…');
-  run('npm', ['run', 'build'], { cwd: frontendDir });
+  run('npm', ['run', 'build'], {
+    cwd: frontendDir,
+    env: { ...process.env, NEXT_PUBLIC_API_PORT: String(apiPort) },
+  });
   try { fs.writeFileSync(stampPath, key); } catch {}
 }
 
@@ -363,7 +373,9 @@ async function start() {
   ensureBackend();
   ensureFrontend();
   // Serve a production build (next start) unless --dev asks for the dev server.
-  if (!dev) ensureFrontendBuild();
+  // apiPort is baked into the build (NEXT_PUBLIC_API_PORT is build-time), so it
+  // must be passed here, not just to the runtime spawn below.
+  if (!dev) ensureFrontendBuild(apiPort);
 
   // Fail fast if either required port is taken — otherwise Next bumps to N+1
   // and the auto-opened browser lands on the wrong URL.
