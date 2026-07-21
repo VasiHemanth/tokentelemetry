@@ -9,7 +9,7 @@ import yaml
 import sqlite3
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set, Iterable, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
 
@@ -227,6 +227,12 @@ def _presented_token(request: Request) -> str:
 
 class RemoteAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # /org/ingest is exempt from the TT_AUTH_TOKEN gate: shipping machines
+        # hold a per-machine token from org.json, not the dashboard token. The
+        # endpoint enforces its own X-TT-Machine-Token check on EVERY request,
+        # loopback included, so this bypass never opens an unauthenticated path.
+        if request.url.path == "/org/ingest":
+            return await call_next(request)
         token = os.environ.get("TT_AUTH_TOKEN", "").strip()
         if not token:
             return await call_next(request)  # gate disabled (local default)
@@ -7061,6 +7067,69 @@ async def put_billing_config(payload: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Could not save billing config to disk.")
     _invalidate_sessions_cache()
     return {"agents": get_all(_list_available_agents()), "modes": list(MODES)}
+
+
+# --- Org mode (self-hosted collector) ----------------------------------------
+# Metrics-only rollups shipped from teammate machines (see org_store docstring).
+import org_store
+
+
+class OrgTokenUsage(BaseModel):
+    input: int = 0
+    output: int = 0
+    cached: int = 0
+    total: int = 0
+
+
+# A machine token is lower-privilege than the dashboard token but writes to
+# org.db, so the request shape is bounded: string fields are capped and a batch
+# tops out at 1000 sessions (the shipper defaults to 200 per POST).
+class OrgSessionRollup(BaseModel):
+    id: str = Field(max_length=256)
+    agent: str = Field(max_length=128)
+    project: str = Field(max_length=512)
+    timestamp: str = Field(max_length=64)
+    tokens: OrgTokenUsage = OrgTokenUsage()
+    model: Optional[str] = Field(default=None, max_length=256)
+    cost: Optional[float] = None
+
+
+class OrgIngestRequest(BaseModel):
+    sessions: List[OrgSessionRollup] = Field(max_length=1000)
+
+
+@app.post("/org/ingest")
+async def org_ingest(payload: OrgIngestRequest, request: Request):
+    """Accept a batch of session rollups from one machine's shipping agent.
+
+    Auth is the X-TT-Machine-Token header, required on EVERY request (loopback
+    included; RemoteAuthMiddleware deliberately skips this path). The machine
+    label comes from the matching org.json entry, never from the body, so a
+    machine can only ever write under its own label. Upsert keyed on
+    (machine, session_id) keeps re-sends idempotent.
+    """
+    machine = org_store.resolve_machine(request.headers.get("X-TT-Machine-Token", ""))
+    if machine is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "A valid X-TT-Machine-Token header is required."},
+        )
+    accepted, updated = org_store.upsert_sessions(
+        machine, [s.model_dump() for s in payload.sessions]
+    )
+    return {"accepted": accepted, "updated": updated}
+
+
+@app.get("/org/status")
+async def org_status():
+    """Whether org mode is configured (org.json has machines) plus row counts."""
+    return org_store.status()
+
+
+@app.get("/org/summary")
+async def org_summary():
+    """Org-wide rollup: totals plus by-machine/agent/project and recent sessions."""
+    return org_store.summary()
 
 
 # Feature/experimental flags each agent persists in its own local config. There

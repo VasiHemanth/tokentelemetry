@@ -13,6 +13,21 @@
     },
     {
       "tag": "2026-07-18",
+      "title": "Org mode: see your whole team's usage in one place",
+      "highlights": [
+        {
+          "title": "Team dashboard (early preview)",
+          "description": "A new Team page rolls up sessions, tokens and cost across every machine that ships metrics to your own self-hosted collector — split by machine, agent and project. Only metric rollups travel; prompts, code and file paths never leave a dev's machine.",
+          "href": "/team"
+        },
+        {
+          "title": "Ship metrics from each dev machine",
+          "description": "A small stdlib-only shipper (backend/org_ship.py) reads your local session list and posts rollups to the collector on a schedule, authenticated by a per-machine token. Re-sends are idempotent, so nothing double-counts. Setup steps live on the Team page until data arrives."
+        }
+      ]
+    },
+    {
+      "tag": "2026-07-18",
       "title": "See which experimental features each agent has on",
       "highlights": [
         {
