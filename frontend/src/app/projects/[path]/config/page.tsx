@@ -461,6 +461,11 @@ function LoopInventoryCard({ row, decodedPath }: { row: LoopRow; decodedPath: st
       {(row.lastFired || row.expiresAt) && (
         <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-[var(--tt-fg-dim)] tabular">
           {row.lastFired && <span>last fired {loopRel(row.lastFired)}</span>}
+          {row.state === "active" && row.nextFireAt && (
+            <span className="text-emerald-300">
+              next run {new Date(row.nextFireAt).getTime() <= Date.now() ? "due now" : loopRel(row.nextFireAt)}
+            </span>
+          )}
           {row.state === "active" && row.expiresAt && <span>expires {loopRel(row.expiresAt)}</span>}
           {row.state === "expired" && row.expiredReason && <span className="text-[var(--tt-fg-muted)]">{row.expiredReason}</span>}
           {row.tokens > 0 && <span>{loopFmtNum(row.tokens)} tok · ${row.cost.toFixed(2)} loop turns</span>}
