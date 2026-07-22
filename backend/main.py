@@ -4339,6 +4339,26 @@ def _scan_sessions_sync():
                         # Cache read/write is session context overhead, excluded — so this is the
                         # loop's actual work and is always <= the session's input+output.
                         footprint_tokens = lu["input"] + lu["output"]
+                        # Scope cancels to THIS loop — a session may create and
+                        # delete several jobs over its life (same hazard the Grok
+                        # scanner guards by timing, but Claude deletes DO carry
+                        # the target id, so match on it). A ScheduleWakeup stop
+                        # (no job_id key at all) halts the session's own
+                        # self-pacing, so it counts only for dynamic loops. An
+                        # id-carrying delete counts when it names this loop's
+                        # job id; when either id is unknown, fall back to the
+                        # timing rule — a delete at or before the last fire
+                        # cannot have cancelled a still-firing loop. Timestamps
+                        # here are same-format Zulu ISO strings from the same
+                        # transcript, so lexical order is chronological order.
+                        def _cancel_hits(c: Dict[str, Any]) -> bool:
+                            if "job_id" not in c:
+                                return mode == "dynamic"
+                            cid = c.get("job_id")
+                            if cid and job_id:
+                                return cid == job_id
+                            return bool(c.get("ts") and last_fired and str(c["ts"]) > str(last_fired))
+                        my_cancels = [c for c in loop_cancels if _cancel_hits(c)]
                         # Raw, cacheable facts only. Lifecycle (state/active/expires_at) is
                         # recomputed per request by _annotate_loop_lifecycle, never cached.
                         sess["loop"] = {
@@ -4353,8 +4373,8 @@ def _scan_sessions_sync():
                             "created_at": created_at,
                             "last_fired": last_fired,
                             "iterations": len(loop_fires),
-                            "cancelled": bool(loop_cancels),
-                            "cancelled_at": (loop_cancels[-1].get("ts") if loop_cancels else None),
+                            "cancelled": bool(my_cancels),
+                            "cancelled_at": (my_cancels[-1].get("ts") if my_cancels else None),
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
