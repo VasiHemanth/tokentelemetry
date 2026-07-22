@@ -9,6 +9,19 @@ export interface PlanSnippet {
   content: string;
 }
 
+/* A web artifact published by Claude Code's Artifact tool — a hosted
+   claude.ai page, extracted from the session transcript by the backend scan. */
+export interface PublishedArtifact {
+  url: string;
+  title?: string | null;
+  description?: string | null;
+  favicon?: string | null;
+  file_name?: string | null;
+  session_id?: string;
+  agent?: string;
+  timestamp?: string | null;
+}
+
 export interface SessionRow {
   id: string;
   agent: string;
@@ -43,6 +56,7 @@ export interface SessionRow {
      backend scan; footprint_* are the loop's own fire-turn tokens, not the
      whole session. See SessionLoop and _lib/loops.ts. */
   loop?: SessionLoop;
+  published_artifacts?: PublishedArtifact[];
 }
 
 /* Mirror of backend sess["loop"] (backend/main.py) — raw facts plus the
@@ -90,6 +104,7 @@ export interface ProjectData {
   configured_subagent_count?: number;
   plan_count: number;
   plans: PlanSnippet[];
+  artifacts?: PublishedArtifact[];
   tokens?: { input: number; output: number; cached: number; total: number };
   // Git-worktree grouping (added by the backend)
   canonical_repo?: string;

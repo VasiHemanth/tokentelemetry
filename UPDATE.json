@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-22",
+      "title": "Published artifact pages, per project",
+      "highlights": [
+        {
+          "title": "Claude Code published artifacts",
+          "description": "When Claude Code publishes an artifact (a hosted claude.ai page), TokenTelemetry now finds it in the session transcript and shows it: each project workspace gets an Artifacts tab listing every published page with its title, description and link, and the session inspector shows the pages published in that session. Publishes made from git worktrees roll up to the main repo's card.",
+          "href": "/projects"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-19",
       "title": "See the reasoning effort each session ran at",
       "highlights": [
