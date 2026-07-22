@@ -54,6 +54,7 @@ export default function ProjectShellLayout({ children }: { children: React.React
   const directCost = sessions.reduce((sum, s) => sum + (s.cost ?? 0), 0);
   const subagents = (project?.configured_subagent_count ?? 0) + (project?.subagent_count ?? 0);
   const plansCount = project?.plans?.length ?? 0;
+  const artifactsCount = project?.artifacts?.length ?? 0;
 
   // Project-total budget (project scope, no agent/model) drives the header pill.
   const projBudget = budgets.find(
@@ -212,7 +213,7 @@ export default function ProjectShellLayout({ children }: { children: React.React
             {TABS.map((t) => {
               const I = t.icon;
               const isActive = t.key === activeKey;
-              const count = t.key === "plans" ? plansCount : t.key === "activity" ? sessions.length : undefined;
+              const count = t.key === "plans" ? plansCount : t.key === "artifacts" ? artifactsCount : t.key === "activity" ? sessions.length : undefined;
               return (
                 <Link
                   key={t.key}
