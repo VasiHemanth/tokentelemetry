@@ -90,6 +90,7 @@ def test_publish_extracted(scan_env):
     assert len(arts) == 1
     a = arts[0]
     assert a["url"] == URL1
+    assert a["path"] == "/tmp/proj/report.html"   # local source, for /artifacts preview
     assert a["title"] == "report"          # falls back to file basename
     assert a["description"] == "A report page"
     assert a["favicon"] == "📐"

@@ -14,6 +14,8 @@ out/
 
 # --- Python / backend ---
 backend/venv/
+# also match a symlinked venv (the dir pattern above doesn't)
+backend/venv
 __pycache__/
 *.pyc
 *.pyo

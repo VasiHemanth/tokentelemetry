@@ -20,6 +20,8 @@ Two kinds appear on the project Artifacts tab:
 
 When Claude Code publishes an artifact — a hosted page at a `claude.ai/code/artifact/…` URL — the transcript records the publish: the file it rendered, the description, and the hosted URL in the tool result. TokenTelemetry extracts these when scanning `~/.claude/projects/`, so each published page shows up with its title, description, and an external link.
 
+![Claude Code published pages on the project Artifacts tab](/screenshots/artifacts-claude.png)
+
 Details worth knowing:
 
 - **Redeploys keep their URL.** Republishing the same page updates the existing entry rather than adding a duplicate; the latest publish wins, and metadata a redeploy omitted is kept from the earlier one.
@@ -35,7 +37,16 @@ Google Antigravity writes first-class artifacts per session into its brain store
 - the summary Antigravity wrote for it,
 - a link to the raw document and to the session that produced it.
 
+![Antigravity documents on the project Artifacts tab](/screenshots/artifacts-antigravity.png)
+
 Documents Antigravity marks as not user-facing (internal notes) are excluded from the project tab, though they remain visible among the session's raw files.
+
+## Viewing options
+
+The project Artifacts tab has a **Cards / List** toggle. The choice is persisted per browser.
+
+- **Card view** shows an inline preview for each artifact. Claude published pages render a scaled-down preview of the local HTML source, only while that source file still exists on disk; the hosted page itself is never fetched. Antigravity documents get an expandable markdown preview.
+- **List view** is a compact table, one row per artifact, for scanning many at once.
 
 ## The session Artifacts tab
 

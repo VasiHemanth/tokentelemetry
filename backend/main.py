@@ -4175,6 +4175,7 @@ def _scan_sessions_sync():
                                             published_arts[url] = {
                                                 "kind": "page",
                                                 "url": url,
+                                                "path": meta.get("file_path") or prev.get("path"),
                                                 "title": meta.get("title") or prev.get("title")
                                                          or (os.path.splitext(fname)[0] or None),
                                                 "description": meta.get("description") or prev.get("description"),
@@ -5617,6 +5618,7 @@ async def get_remote_access(request: Request):
 
 
 @app.get("/artifacts")
+@app.head("/artifacts")  # the artifacts-tab preview HEAD-checks file existence
 async def get_artifact(path: str):
     """Stream a local artifact file securely."""
     from fastapi.responses import FileResponse

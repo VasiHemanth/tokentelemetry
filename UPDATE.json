@@ -13,6 +13,11 @@
           "title": "Antigravity artifacts too",
           "description": "Google Antigravity's own artifacts — the task list, implementation plan and walkthrough it writes per session — appear on the same Artifacts tab, with the summary and updated time from Antigravity's metadata. Internal (non-user-facing) docs are left out.",
           "href": "/projects"
+        },
+        {
+          "title": "Artifact previews and a list view",
+          "description": "Cards on the Artifacts tab now preview the artifact itself: a scaled-down render of the page's local HTML source for Claude publishes (while the file still exists — nothing is fetched from the internet), and an expandable markdown preview for Antigravity docs. A Cards/List toggle switches to a compact row view; your choice is remembered.",
+          "href": "/projects"
         }
       ]
     },
