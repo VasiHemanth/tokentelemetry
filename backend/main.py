@@ -768,6 +768,24 @@ class Artifact(BaseModel):
     path: str
     type: str # 'video', 'image', 'document', 'terminal'
 
+class PublishedArtifact(BaseModel):
+    """A user-facing artifact an agent produced as a deliverable, shown on the
+    project Artifacts tab. Two kinds: "page" — a hosted claude.ai page from
+    Claude Code's Artifact tool (has `url`); "document" — a local doc like
+    Antigravity's task/plan/walkthrough (has `path`, served via
+    /artifacts?path=). Unlike `Artifact`, entries carry display metadata
+    (title/description) mined from the transcript or metadata sidecars."""
+    kind: str = "page"
+    url: Optional[str] = None
+    path: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    favicon: Optional[str] = None
+    file_name: Optional[str] = None
+    session_id: Optional[str] = None
+    agent: Optional[str] = None
+    timestamp: Optional[str] = None
+
 # class QualityMetrics(BaseModel):
 #     edit_turns: int = 0
 #     retry_turns: int = 0
@@ -786,6 +804,7 @@ class Session(BaseModel):
     tokens: TokenUsage = TokenUsage()
     plans: List[PlanSnippet] = []
     artifacts: List[Artifact] = []
+    published_artifacts: List[PublishedArtifact] = []
     # quality: QualityMetrics = QualityMetrics()
 
 # EDIT_TOOLS: Set[str] = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
@@ -3718,6 +3737,10 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
 # The job id lives in the CronCreate tool_RESULT, not its input (verified).
 _LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
 
+# Hosted artifact URL Claude Code's Artifact tool prints in its tool_result
+# ("Published <path> at https://claude.ai/code/artifact/<uuid>").
+_ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/code/artifact/[0-9a-f-]{36}")
+
 
 def _loop_parse_ts(ts: Any) -> Optional[datetime]:
     if not ts or not isinstance(ts, str):
@@ -3797,7 +3820,7 @@ def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> N
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop",
+    "loop", "published_artifacts",
 )
 
 
@@ -4032,6 +4055,8 @@ def _scan_sessions_sync():
                     in_loop_span = False                     # inside a loop-fire response turn right now
                     loop_usage = {"input": 0, "output": 0, "cached": 0,
                                   "cache_creation": 0, "cache_creation_1h": 0}  # loop's OWN footprint
+                    artifact_calls: Dict[str, Dict[str, Any]] = {}  # Artifact tool_use_id -> input meta
+                    published_arts: Dict[str, Dict[str, Any]] = {}  # hosted url -> published-artifact record
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
@@ -4080,6 +4105,18 @@ def _scan_sessions_sync():
                                                 if plan_text:
                                                     sess["has_plan"] = True
                                                     sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": plan_text})
+                                            if tool == "Artifact":
+                                                ip = item.get("input") or {}
+                                                # Publishes only — `action: "list"` enumerates existing
+                                                # artifacts rather than creating one.
+                                                if item.get("id") and ip.get("action") in (None, "publish"):
+                                                    artifact_calls[item["id"]] = {
+                                                        "title": ip.get("title"),
+                                                        "description": ip.get("description"),
+                                                        "favicon": ip.get("favicon"),
+                                                        "file_path": ip.get("file_path"),
+                                                        "ts": data.get("timestamp"),
+                                                    }
                                             # /loop detection: scheduling tool calls (see _annotate_loop_lifecycle).
                                             if tool == "CronCreate":
                                                 ip = item.get("input") or {}
@@ -4113,6 +4150,41 @@ def _scan_sessions_sync():
                                     for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
+                                    # Published Claude artifacts: pair each Artifact tool_use with
+                                    # its tool_result, which carries the hosted URL ("Published
+                                    # <path> at https://claude.ai/code/artifact/<uuid>"). Redeploys
+                                    # keep the URL, so later publishes upsert the same entry.
+                                    if artifact_calls and isinstance(u_content, list):
+                                        for blk in u_content:
+                                            if not isinstance(blk, dict) or blk.get("type") != "tool_result":
+                                                continue
+                                            meta = artifact_calls.get(blk.get("tool_use_id"))
+                                            if not meta:
+                                                continue
+                                            rc = blk.get("content")
+                                            rtext = rc if isinstance(rc, str) else (
+                                                " ".join(b.get("text", "") for b in rc if isinstance(b, dict))
+                                                if isinstance(rc, list) else "")
+                                            m_url = _ARTIFACT_URL_RE.search(rtext or "")
+                                            if not m_url:
+                                                continue
+                                            url = m_url.group(0)
+                                            fname = os.path.basename(meta.get("file_path") or "")
+                                            prev = published_arts.get(url, {})
+                                            # Later publish wins; keep earlier metadata a redeploy omitted.
+                                            published_arts[url] = {
+                                                "kind": "page",
+                                                "url": url,
+                                                "path": meta.get("file_path") or prev.get("path"),
+                                                "title": meta.get("title") or prev.get("title")
+                                                         or (os.path.splitext(fname)[0] or None),
+                                                "description": meta.get("description") or prev.get("description"),
+                                                "favicon": meta.get("favicon") or prev.get("favicon"),
+                                                "file_name": fname or prev.get("file_name"),
+                                                "session_id": sid,
+                                                "agent": "claude",
+                                                "timestamp": data.get("timestamp") or meta.get("ts") or prev.get("timestamp"),
+                                            }
                                     # Loop: pull the CronCreate job id from its tool_result, and
                                     # count each re-injected fire (Claude crons re-inject the prompt
                                     # into THIS same file, verified — so iterations are same-file).
@@ -4152,6 +4224,10 @@ def _scan_sessions_sync():
                             sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
                         except ValueError:
                             pass
+                    if published_arts:
+                        sess["published_artifacts"] = sorted(
+                            published_arts.values(),
+                            key=lambda a: str(a.get("timestamp") or ""), reverse=True)
                     if loop_sched:
                         primary = loop_sched[0]
                         job_id = next((sc.get("job_id") for sc in loop_sched if sc.get("job_id")), None)
@@ -4606,27 +4682,51 @@ def _scan_sessions_sync():
                 task = plan = walkthrough = ""
                 latest_ts = None
                 artifacts = []
-                # Scan for base documents as artifacts
+                doc_arts: List[Dict[str, Any]] = []
+                # Scan for base documents as artifacts. These are Antigravity's
+                # first-class "Artifacts" (its UI shows them in an Artifacts
+                # panel); each has a .metadata.json sidecar with a summary,
+                # updatedAt and a userFacing flag. User-facing ones also become
+                # `published_artifacts` entries (kind "document") so they show
+                # on the project Artifacts tab alongside Claude's hosted pages.
                 for fname in ("task.md", "implementation_plan.md", "walkthrough.md"):
                     fp = sess_dir / fname
                     mp = sess_dir / f"{fname}.metadata.json"
+                    md_summary = None; md_updated = None; user_facing = True
+                    if mp.exists():
+                        try:
+                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
+                            md_summary = md.get("summary")
+                            user_facing = md.get("userFacing", True)
+                            md_updated = md.get("updatedAt")
+                            if md_updated:
+                                ts = _aware(datetime.fromisoformat(md_updated.replace("Z", "+00:00")))
+                                if latest_ts is None or ts > latest_ts: latest_ts = ts
+                        except Exception: pass
                     if fp.exists():
                         artifacts.append({"name": fname, "path": str(fp), "type": "document"})
-                        try: 
+                        try:
                             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                                 body = f.read()
                         except Exception: body = ""
                         if fname == "task.md": task = body
                         elif fname == "implementation_plan.md": plan = body
                         else: walkthrough = body
-                    if mp.exists():
-                        try:
-                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
-                            updated = md.get("updatedAt")
-                            if updated:
-                                ts = _aware(datetime.fromisoformat(updated.replace("Z", "+00:00")))
-                                if latest_ts is None or ts > latest_ts: latest_ts = ts
-                        except Exception: pass
+                        if user_facing:
+                            heading = next((ln.lstrip("#").strip() for ln in body.splitlines()
+                                            if ln.strip().startswith("#")), None)
+                            doc_arts.append({
+                                "kind": "document",
+                                "path": str(fp),
+                                "file_name": fname,
+                                "title": heading or {"task.md": "Task List",
+                                                     "implementation_plan.md": "Implementation Plan",
+                                                     "walkthrough.md": "Walkthrough"}[fname],
+                                "description": md_summary,
+                                "session_id": sid,
+                                "agent": "antigravity",
+                                "timestamp": md_updated,
+                            })
                 
                 # Scan for media artifacts at the brain session root (Antigravity drops
                 # previews/screenshots here) and optionally in an artifacts/ subdir.
@@ -4695,6 +4795,7 @@ def _scan_sessions_sync():
                     "artifacts": artifacts,
                     "antigravity_source": _ag_surface.get(sid),
                     "cost": 0.0,
+                    **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
 
@@ -5517,6 +5618,7 @@ async def get_remote_access(request: Request):
 
 
 @app.get("/artifacts")
+@app.head("/artifacts")  # the artifacts-tab preview HEAD-checks file existence
 async def get_artifact(path: str):
     """Stream a local artifact file securely."""
     from fastapi.responses import FileResponse
@@ -6683,7 +6785,7 @@ async def get_projects(include_hidden: bool = False):
         if proj not in projects:
             # Basename that handles both POSIX (/) and Windows (\) separators
             proj_name = (os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown").strip()
-            projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
+            projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": [], "artifacts": []}
         projects[proj]["session_count"] += 1; projects[proj]["agents"].add(s["agent"])
         for t in s.get("mcp_tools", []): projects[proj]["mcp_tools"].add(t)
         if s.get("has_plan"): projects[proj]["plan_count"] += 1
@@ -6692,10 +6794,12 @@ async def get_projects(include_hidden: bool = False):
         for k in ["input", "output", "cached", "total"]: projects[proj]["tokens"][k] += st.get(k, 0)
         projects[proj]["tokens"]["cost"] += s.get("cost", 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
+        projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
     for p in projects.values():
         p["agents"] = list(p["agents"])
         p["mcp_tools"] = list(p["mcp_tools"])
         p["plans"] = sorted(p["plans"], key=lambda x: str(x["timestamp"]), reverse=True)
+        p["artifacts"] = sorted(p["artifacts"], key=lambda x: str(x.get("timestamp") or ""), reverse=True)
         # Status: is this project folder still on disk?
         try:
             p["status"] = "active" if Path(p["path"]).exists() else "missing"
@@ -6815,7 +6919,7 @@ async def get_projects(include_hidden: bool = False):
                 "path": repo, "session_count": 0, "agents": [], "mcp_tools": [],
                 "subagent_count": 0, "plan_count": 0, "configured_subagent_count": 0,
                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0},
-                "plans": [], "status": status, "hidden": repo in hidden_set,
+                "plans": [], "artifacts": [], "status": status, "hidden": repo in hidden_set,
                 "canonical_repo": repo, "is_worktree": False, "synthesized": True,
             }
             synthesized.append(parent)
@@ -6824,6 +6928,19 @@ async def get_projects(include_hidden: bool = False):
         parent["is_repo_root"] = True
         parent["worktrees"] = wt_summaries
         parent["aggregate"] = _aggregate(members)
+        # Surface worktree-published artifacts on the repo-root card too —
+        # publishes usually happen from worktree sessions but belong to the repo.
+        # Identity is the hosted url for "page" artifacts, the file path for
+        # "document" ones.
+        seen_keys = {a.get("url") or a.get("path") for a in parent.get("artifacts", [])}
+        for c in children:
+            for a in c.get("artifacts", []):
+                key = a.get("url") or a.get("path")
+                if key and key not in seen_keys:
+                    parent.setdefault("artifacts", []).append(a)
+                    seen_keys.add(key)
+        parent["artifacts"] = sorted(parent.get("artifacts", []),
+                                     key=lambda x: str(x.get("timestamp") or ""), reverse=True)
         for c in children:
             c["parent_path"] = repo
             c["parent_name"] = parent["name"]
