@@ -1,20 +1,56 @@
 ---
 title: Artifacts
-description: Screenshots, browser recordings, and documents captured by your agents — viewable inline.
+description: Deliverables your agents produce — hosted Claude artifact pages, Antigravity task/plan/walkthrough docs, screenshots, recordings — collected per session and per project.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-The Artifacts feature surfaces files your agents create or capture during a session — screenshots, browser recordings, and documents — so you can review them without leaving the TokenTelemetry UI.
+Artifacts are the things your agents produce beyond code: hosted result pages, task lists and walkthroughs, screenshots, browser recordings. TokenTelemetry finds them in each agent's own storage and shows them in two places:
 
-<Callout title="Coming soon">
-Full Artifacts documentation is coming soon. When published, this page will cover:
+- **Per project** — the **Artifacts** tab in a project workspace lists the deliverable artifacts from every session in that project.
+- **Per session** — the **Artifacts** tab in a session trace lists everything that session produced, including raw files.
 
-- **Screenshots** — images captured by browser automation agents (Antigravity and others), viewable inline with zoom.
-- **Antigravity browser recordings** — sampled thumbnail strips from `browser_recordings` that let you scrub a visual replay of what the agent browsed.
-- **Documents** — `task.md`, `plan.md`, `walkthrough.md`, and similar files written by the agent, rendered as formatted text in the browser.
-- The Artifacts tab inside a session trace.
-- How TokenTelemetry locates artifact files relative to the session log.
+Everything is read from local agent storage. Nothing is uploaded or fetched remotely.
+
+## What counts as an artifact
+
+Two kinds appear on the project Artifacts tab:
+
+### Claude Code published pages
+
+When Claude Code publishes an artifact — a hosted page at a `claude.ai/code/artifact/…` URL — the transcript records the publish: the file it rendered, the description, and the hosted URL in the tool result. TokenTelemetry extracts these when scanning `~/.claude/projects/`, so each published page shows up with its title, description, and an external link.
+
+Details worth knowing:
+
+- **Redeploys keep their URL.** Republishing the same page updates the existing entry rather than adding a duplicate; the latest publish wins, and metadata a redeploy omitted is kept from the earlier one.
+- **Worktree publishes roll up.** Pages published from a git worktree session appear on the main repository's project card, since that's where the work belongs.
+- **Links outlive transcripts.** Published URLs are kept in the durable history store, so deleting old Claude transcripts doesn't lose the links — the pages themselves are hosted.
+- Only real publishes are listed. Listing calls and failed publishes are ignored.
+
+### Antigravity documents
+
+Google Antigravity writes first-class artifacts per session into its brain store: `task.md`, `implementation_plan.md`, and `walkthrough.md`, each with a metadata sidecar carrying a summary and updated time. TokenTelemetry surfaces the user-facing ones with:
+
+- a title taken from the document's first heading,
+- the summary Antigravity wrote for it,
+- a link to the raw document and to the session that produced it.
+
+Documents Antigravity marks as not user-facing (internal notes) are excluded from the project tab, though they remain visible among the session's raw files.
+
+## The session Artifacts tab
+
+Inside a session trace, the Artifacts tab shows everything the session produced:
+
+- **Published pages** — Claude Code's hosted pages, linked externally.
+- **Screenshots and images** — captured by browser automation, viewable inline with zoom.
+- **Browser recordings** — for Antigravity, sampled thumbnail strips from its `browser_recordings` store let you scrub a visual replay of what the agent browsed.
+- **Documents** — `task.md`, plans, walkthroughs, audit reports, and similar files, downloadable or viewable in the browser.
+- **Videos** — `.mp4` / `.mov` / `.webm` files, played inline.
+
+<Callout title="Per-agent support">
+Published pages come from Claude Code. Document, screenshot, and recording artifacts come from Antigravity's brain store. Other agents' sessions show whatever files their storage exposes — for example Claude project memory files — and gain artifact types as their agents start producing them.
 </Callout>
 
-Artifacts are already captured and linked from session traces — open any Antigravity session and click the **Artifacts** tab in the trace view to see what's available today.
+## How files are located
+
+Local artifact files are served by the backend's `/artifacts` endpoint from their original location on disk — TokenTelemetry never copies them. If an agent deletes its session data, its file artifacts disappear with it; Claude published pages keep working because only the URL is stored.
