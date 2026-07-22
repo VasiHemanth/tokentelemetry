@@ -43,7 +43,7 @@ SCHEMA_VERSION = 2
 # core rollup columns.
 _ECOSYSTEM_KEYS = (
     "skills_used", "mcp_usage", "delegation", "subagent_info", "parent_session_id",
-    "loop",
+    "loop", "published_artifacts",
 )
 
 

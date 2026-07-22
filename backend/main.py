@@ -286,7 +286,57 @@ OLLAMA_DIR = HOME / ".ollama"
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
 HF_DIR = HOME / ".cache/huggingface"
-OPENCODE_DB = HOME / ".local/share/opencode/opencode.db"
+def _opencode_db_candidates() -> List[Path]:
+    """OpenCode SQLite DB locations to probe, highest-priority first.
+
+    OpenCode does NOT use one fixed path: it resolves a data dir honoring
+    ``$OPENCODE_DATA_DIR`` and ``$XDG_DATA_HOME`` with a per-OS default. We used
+    to look only at ``~/.local/share/opencode`` and so silently missed relocated
+    or non-Linux installs — the scan is gated on ``.exists()`` inside a bare
+    ``try/except``, so a wrong path means the whole agent vanishes with no error
+    (discussion #170). Probe every place the agent could have written; the scan
+    uses the first that exists. Extra non-existent candidates are harmless.
+    """
+    c: List[Path] = []
+    env = os.environ.get("OPENCODE_DATA_DIR")
+    if env:
+        c.append(Path(env).expanduser() / "opencode.db")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        c.append(Path(xdg).expanduser() / "opencode" / "opencode.db")
+    if sys.platform == "win32":
+        for var in ("APPDATA", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                c.append(Path(base) / "opencode" / "opencode.db")
+    # Standard XDG data dir — the confirmed default on BOTH Linux and macOS
+    # (OpenCode does not use ~/Library/Application Support, verified on 1.15.13).
+    c.append(HOME / ".local/share/opencode/opencode.db")
+    # macOS env-paths-style location, in case a build ever used it.
+    if sys.platform == "darwin":
+        c.append(HOME / "Library/Application Support/opencode/opencode.db")
+    seen: set = set()
+    out: List[Path] = []
+    for p in c:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _opencode_db_path() -> Path:
+    """First existing OpenCode DB among the candidates, else the canonical XDG
+    default (so a not-yet-created DB still has a stable path to display)."""
+    for p in _opencode_db_candidates():
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return HOME / ".local/share/opencode/opencode.db"
+
+
+OPENCODE_DB = _opencode_db_path()
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -718,6 +768,24 @@ class Artifact(BaseModel):
     path: str
     type: str # 'video', 'image', 'document', 'terminal'
 
+class PublishedArtifact(BaseModel):
+    """A user-facing artifact an agent produced as a deliverable, shown on the
+    project Artifacts tab. Two kinds: "page" — a hosted claude.ai page from
+    Claude Code's Artifact tool (has `url`); "document" — a local doc like
+    Antigravity's task/plan/walkthrough (has `path`, served via
+    /artifacts?path=). Unlike `Artifact`, entries carry display metadata
+    (title/description) mined from the transcript or metadata sidecars."""
+    kind: str = "page"
+    url: Optional[str] = None
+    path: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    favicon: Optional[str] = None
+    file_name: Optional[str] = None
+    session_id: Optional[str] = None
+    agent: Optional[str] = None
+    timestamp: Optional[str] = None
+
 # class QualityMetrics(BaseModel):
 #     edit_turns: int = 0
 #     retry_turns: int = 0
@@ -736,6 +804,7 @@ class Session(BaseModel):
     tokens: TokenUsage = TokenUsage()
     plans: List[PlanSnippet] = []
     artifacts: List[Artifact] = []
+    published_artifacts: List[PublishedArtifact] = []
     # quality: QualityMetrics = QualityMetrics()
 
 # EDIT_TOOLS: Set[str] = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
@@ -3692,6 +3761,10 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
 # The job id lives in the CronCreate tool_RESULT, not its input (verified).
 _LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
 
+# Hosted artifact URL Claude Code's Artifact tool prints in its tool_result
+# ("Published <path> at https://claude.ai/code/artifact/<uuid>").
+_ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/code/artifact/[0-9a-f-]{36}")
+
 
 def _loop_parse_ts(ts: Any) -> Optional[datetime]:
     if not ts or not isinstance(ts, str):
@@ -3834,7 +3907,7 @@ def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> N
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop",
+    "loop", "published_artifacts",
 )
 
 
@@ -4069,6 +4142,8 @@ def _scan_sessions_sync():
                     in_loop_span = False                     # inside a loop-fire response turn right now
                     loop_usage = {"input": 0, "output": 0, "cached": 0,
                                   "cache_creation": 0, "cache_creation_1h": 0}  # loop's OWN footprint
+                    artifact_calls: Dict[str, Dict[str, Any]] = {}  # Artifact tool_use_id -> input meta
+                    published_arts: Dict[str, Dict[str, Any]] = {}  # hosted url -> published-artifact record
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
@@ -4117,6 +4192,18 @@ def _scan_sessions_sync():
                                                 if plan_text:
                                                     sess["has_plan"] = True
                                                     sess["plans"].append({"session_id": sid, "agent": "claude", "timestamp": sess["timestamp"], "content": plan_text})
+                                            if tool == "Artifact":
+                                                ip = item.get("input") or {}
+                                                # Publishes only — `action: "list"` enumerates existing
+                                                # artifacts rather than creating one.
+                                                if item.get("id") and ip.get("action") in (None, "publish"):
+                                                    artifact_calls[item["id"]] = {
+                                                        "title": ip.get("title"),
+                                                        "description": ip.get("description"),
+                                                        "favicon": ip.get("favicon"),
+                                                        "file_path": ip.get("file_path"),
+                                                        "ts": data.get("timestamp"),
+                                                    }
                                             # /loop detection: scheduling tool calls (see _annotate_loop_lifecycle).
                                             if tool == "CronCreate":
                                                 ip = item.get("input") or {}
@@ -4150,6 +4237,41 @@ def _scan_sessions_sync():
                                     for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
+                                    # Published Claude artifacts: pair each Artifact tool_use with
+                                    # its tool_result, which carries the hosted URL ("Published
+                                    # <path> at https://claude.ai/code/artifact/<uuid>"). Redeploys
+                                    # keep the URL, so later publishes upsert the same entry.
+                                    if artifact_calls and isinstance(u_content, list):
+                                        for blk in u_content:
+                                            if not isinstance(blk, dict) or blk.get("type") != "tool_result":
+                                                continue
+                                            meta = artifact_calls.get(blk.get("tool_use_id"))
+                                            if not meta:
+                                                continue
+                                            rc = blk.get("content")
+                                            rtext = rc if isinstance(rc, str) else (
+                                                " ".join(b.get("text", "") for b in rc if isinstance(b, dict))
+                                                if isinstance(rc, list) else "")
+                                            m_url = _ARTIFACT_URL_RE.search(rtext or "")
+                                            if not m_url:
+                                                continue
+                                            url = m_url.group(0)
+                                            fname = os.path.basename(meta.get("file_path") or "")
+                                            prev = published_arts.get(url, {})
+                                            # Later publish wins; keep earlier metadata a redeploy omitted.
+                                            published_arts[url] = {
+                                                "kind": "page",
+                                                "url": url,
+                                                "path": meta.get("file_path") or prev.get("path"),
+                                                "title": meta.get("title") or prev.get("title")
+                                                         or (os.path.splitext(fname)[0] or None),
+                                                "description": meta.get("description") or prev.get("description"),
+                                                "favicon": meta.get("favicon") or prev.get("favicon"),
+                                                "file_name": fname or prev.get("file_name"),
+                                                "session_id": sid,
+                                                "agent": "claude",
+                                                "timestamp": data.get("timestamp") or meta.get("ts") or prev.get("timestamp"),
+                                            }
                                     # Loop: pull the CronCreate job id from its tool_result, and
                                     # count each re-injected fire (Claude crons re-inject the prompt
                                     # into THIS same file, verified — so iterations are same-file).
@@ -4189,6 +4311,10 @@ def _scan_sessions_sync():
                             sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
                         except ValueError:
                             pass
+                    if published_arts:
+                        sess["published_artifacts"] = sorted(
+                            published_arts.values(),
+                            key=lambda a: str(a.get("timestamp") or ""), reverse=True)
                     if loop_sched:
                         primary = loop_sched[0]
                         job_id = next((sc.get("job_id") for sc in loop_sched if sc.get("job_id")), None)
@@ -4643,27 +4769,51 @@ def _scan_sessions_sync():
                 task = plan = walkthrough = ""
                 latest_ts = None
                 artifacts = []
-                # Scan for base documents as artifacts
+                doc_arts: List[Dict[str, Any]] = []
+                # Scan for base documents as artifacts. These are Antigravity's
+                # first-class "Artifacts" (its UI shows them in an Artifacts
+                # panel); each has a .metadata.json sidecar with a summary,
+                # updatedAt and a userFacing flag. User-facing ones also become
+                # `published_artifacts` entries (kind "document") so they show
+                # on the project Artifacts tab alongside Claude's hosted pages.
                 for fname in ("task.md", "implementation_plan.md", "walkthrough.md"):
                     fp = sess_dir / fname
                     mp = sess_dir / f"{fname}.metadata.json"
+                    md_summary = None; md_updated = None; user_facing = True
+                    if mp.exists():
+                        try:
+                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
+                            md_summary = md.get("summary")
+                            user_facing = md.get("userFacing", True)
+                            md_updated = md.get("updatedAt")
+                            if md_updated:
+                                ts = _aware(datetime.fromisoformat(md_updated.replace("Z", "+00:00")))
+                                if latest_ts is None or ts > latest_ts: latest_ts = ts
+                        except Exception: pass
                     if fp.exists():
                         artifacts.append({"name": fname, "path": str(fp), "type": "document"})
-                        try: 
+                        try:
                             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                                 body = f.read()
                         except Exception: body = ""
                         if fname == "task.md": task = body
                         elif fname == "implementation_plan.md": plan = body
                         else: walkthrough = body
-                    if mp.exists():
-                        try:
-                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
-                            updated = md.get("updatedAt")
-                            if updated:
-                                ts = _aware(datetime.fromisoformat(updated.replace("Z", "+00:00")))
-                                if latest_ts is None or ts > latest_ts: latest_ts = ts
-                        except Exception: pass
+                        if user_facing:
+                            heading = next((ln.lstrip("#").strip() for ln in body.splitlines()
+                                            if ln.strip().startswith("#")), None)
+                            doc_arts.append({
+                                "kind": "document",
+                                "path": str(fp),
+                                "file_name": fname,
+                                "title": heading or {"task.md": "Task List",
+                                                     "implementation_plan.md": "Implementation Plan",
+                                                     "walkthrough.md": "Walkthrough"}[fname],
+                                "description": md_summary,
+                                "session_id": sid,
+                                "agent": "antigravity",
+                                "timestamp": md_updated,
+                            })
                 
                 # Scan for media artifacts at the brain session root (Antigravity drops
                 # previews/screenshots here) and optionally in an artifacts/ subdir.
@@ -4732,6 +4882,7 @@ def _scan_sessions_sync():
                     "artifacts": artifacts,
                     "antigravity_source": _ag_surface.get(sid),
                     "cost": 0.0,
+                    **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
 
@@ -5045,11 +5196,24 @@ def _scan_sessions_sync():
     # 8. OpenCode (SQLite: session / message / part)
     if OPENCODE_DB.exists():
         try:
-            # immutable=1 so we don't block the live TUI process's write lock
+            # mode=ro (via _sqlite_ro_uri) so we never take a write lock on the
+            # live TUI's DB. It's a WAL database, so a read can still time out if
+            # OpenCode is mid-write — that lands in the outer except, which now
+            # logs instead of silently dropping the whole agent.
             uri = _sqlite_ro_uri(OPENCODE_DB)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             try:
+                # OpenCode's schema drifts across versions (tables get added and
+                # renamed). Detect which tables exist so one missing *peripheral*
+                # table (e.g. `todo`) can't throw into the outer except and wipe
+                # out every session — the failure mode behind discussion #170's
+                # neighbours.
+                try:
+                    _tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'")}
+                except Exception:
+                    _tables = set()
                 # Some OpenCode versions added a session-level `model` column
                 # (e.g. the github-copilot provider stores the model only there,
                 # not on assistant messages — see issue #39). Detect it so we can
@@ -5157,8 +5321,10 @@ def _scan_sessions_sync():
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
-                    # Todos (opencode's plan-like artifact)
-                    todo_rows = conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                    # Todos (opencode's plan-like artifact). Optional table —
+                    # absent on older/newer schemas, so gate on its presence.
+                    todo_rows = (conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                                 if "todo" in _tables else [])
                     if todo_rows:
                         has_plan = True
                         plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
@@ -5191,8 +5357,13 @@ def _scan_sessions_sync():
                                                  "linked_children": len(kids)}
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Don't let a schema/lock hiccup silently erase the whole agent —
+            # log it at debug so "no OpenCode sessions" is diagnosable instead
+            # of invisible (discussion #170).
+            import logging
+            logging.getLogger("tokentelemetry.opencode").debug(
+                "OpenCode scan skipped (%s): %r", OPENCODE_DB, e)
 
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
@@ -5229,11 +5400,13 @@ def _scan_sessions_sync():
                 # schemas (the outer try/except would otherwise drop all sessions).
                 _cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
                 _base_url_col = "billing_base_url" if "billing_base_url" in _cols else "NULL AS billing_base_url"
+                _cost_status_col = "cost_status" if "cost_status" in _cols else "NULL AS cost_status"
+                _cost_source_col = "cost_source" if "cost_source" in _cols else "NULL AS cost_source"
                 srows = conn.execute(
                     "SELECT id, source, model, parent_session_id, started_at, ended_at, "
                     "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
                     "reasoning_tokens, estimated_cost_usd, actual_cost_usd, title, "
-                    f"billing_provider, {_base_url_col}, end_reason "
+                    f"billing_provider, {_base_url_col}, {_cost_status_col}, {_cost_source_col}, end_reason "
                     "FROM sessions"
                 ).fetchall()
                 for srow in srows:
@@ -5260,6 +5433,14 @@ def _scan_sessions_sync():
                     model = srow["model"]
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
+                    # Hermes stores estimated_cost_usd=0.0 (not NULL) with cost_status='unknown'
+                    # / cost_source='none' when it couldn't price the session itself (proxied or
+                    # unrecognized endpoint, subscription-included model). Don't take that 0.0 at
+                    # face value — fall through to calculate_cost() below, which prices from the
+                    # model + token counts and lets TT's own subscription config (not Hermes's)
+                    # decide the framing. Only override the *estimate*; a real actual_cost_usd wins.
+                    if srow["actual_cost_usd"] is None and (srow["cost_status"] == "unknown" or srow["cost_source"] == "none"):
+                        cost = None
                     # Bind before the branch: it's referenced unconditionally in the
                     # session dict below, but only computed when cost must be derived.
                     _measured_tps = None
@@ -5524,6 +5705,7 @@ async def get_remote_access(request: Request):
 
 
 @app.get("/artifacts")
+@app.head("/artifacts")  # the artifacts-tab preview HEAD-checks file existence
 async def get_artifact(path: str):
     """Stream a local artifact file securely."""
     from fastapi.responses import FileResponse
@@ -5578,41 +5760,61 @@ async def invalidate_cache():
     return {"ok": True}
 
 
+# --- Session-detail parse cache -------------------------------------------------
+# get_session_detail re-reads and re-parses a session's full transcript on every
+# open; large transcripts (tens of MB) made re-opens slow. Memoize the parsed
+# event list on (mtime_ns, size) so an unchanged file is parsed only once. The key
+# changes the instant the file is appended to, so a live session never goes stale.
+_SESSION_DETAIL_CACHE: Dict[str, Tuple[Tuple[int, int], List[Dict[str, Any]]]] = {}
+_SESSION_DETAIL_CACHE_MAX = 16
+
+
+def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
+    """Parse a JSONL transcript into normalized event dicts, memoized on file
+    identity + (mtime_ns, size). Returns the cached list on a hit (callers must
+    treat it as read-only — the detail endpoint only serializes it)."""
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    key = str(path)
+    if stamp is not None:
+        hit = _SESSION_DETAIL_CACHE.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    events: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            # Add a normalized_timestamp for the waterfall view.
+            if data.get("timestamp"):
+                try:
+                    ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
+                    data["normalized_timestamp"] = ts.timestamp() * 1000
+                except Exception:
+                    pass
+            events.append(data)
+    if stamp is not None:
+        if key not in _SESSION_DETAIL_CACHE and len(_SESSION_DETAIL_CACHE) >= _SESSION_DETAIL_CACHE_MAX:
+            _SESSION_DETAIL_CACHE.pop(next(iter(_SESSION_DETAIL_CACHE)))
+        _SESSION_DETAIL_CACHE[key] = (stamp, events)
+    return events
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    # Add a normalized_timestamp for waterfall
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
@@ -6670,7 +6872,7 @@ async def get_projects(include_hidden: bool = False):
         if proj not in projects:
             # Basename that handles both POSIX (/) and Windows (\) separators
             proj_name = (os.path.basename((proj or "").replace("\\", "/").rstrip("/")) or proj or "unknown").strip()
-            projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": []}
+            projects[proj] = {"name": proj_name, "path": proj, "session_count": 0, "agents": set(), "mcp_tools": set(), "subagent_count": 0, "plan_count": 0, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}, "plans": [], "artifacts": []}
         projects[proj]["session_count"] += 1; projects[proj]["agents"].add(s["agent"])
         for t in s.get("mcp_tools", []): projects[proj]["mcp_tools"].add(t)
         if s.get("has_plan"): projects[proj]["plan_count"] += 1
@@ -6679,10 +6881,12 @@ async def get_projects(include_hidden: bool = False):
         for k in ["input", "output", "cached", "total"]: projects[proj]["tokens"][k] += st.get(k, 0)
         projects[proj]["tokens"]["cost"] += s.get("cost", 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
+        projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
     for p in projects.values():
         p["agents"] = list(p["agents"])
         p["mcp_tools"] = list(p["mcp_tools"])
         p["plans"] = sorted(p["plans"], key=lambda x: str(x["timestamp"]), reverse=True)
+        p["artifacts"] = sorted(p["artifacts"], key=lambda x: str(x.get("timestamp") or ""), reverse=True)
         # Status: is this project folder still on disk?
         try:
             p["status"] = "active" if Path(p["path"]).exists() else "missing"
@@ -6802,7 +7006,7 @@ async def get_projects(include_hidden: bool = False):
                 "path": repo, "session_count": 0, "agents": [], "mcp_tools": [],
                 "subagent_count": 0, "plan_count": 0, "configured_subagent_count": 0,
                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0},
-                "plans": [], "status": status, "hidden": repo in hidden_set,
+                "plans": [], "artifacts": [], "status": status, "hidden": repo in hidden_set,
                 "canonical_repo": repo, "is_worktree": False, "synthesized": True,
             }
             synthesized.append(parent)
@@ -6811,6 +7015,19 @@ async def get_projects(include_hidden: bool = False):
         parent["is_repo_root"] = True
         parent["worktrees"] = wt_summaries
         parent["aggregate"] = _aggregate(members)
+        # Surface worktree-published artifacts on the repo-root card too —
+        # publishes usually happen from worktree sessions but belong to the repo.
+        # Identity is the hosted url for "page" artifacts, the file path for
+        # "document" ones.
+        seen_keys = {a.get("url") or a.get("path") for a in parent.get("artifacts", [])}
+        for c in children:
+            for a in c.get("artifacts", []):
+                key = a.get("url") or a.get("path")
+                if key and key not in seen_keys:
+                    parent.setdefault("artifacts", []).append(a)
+                    seen_keys.add(key)
+        parent["artifacts"] = sorted(parent.get("artifacts", []),
+                                     key=lambda x: str(x.get("timestamp") or ""), reverse=True)
         for c in children:
             c["parent_path"] = repo
             c["parent_name"] = parent["name"]
@@ -7032,7 +7249,7 @@ async def get_power_config():
 
 @app.put("/config/power")
 async def put_power_config(payload: dict = Body(...)):
-    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?}.
+    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?, subscriptionModels?}.
 
     Validation happens in power_config.save_power_config (bad values are skipped,
     never surfaced as raw errors). Returns the full saved config.

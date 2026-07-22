@@ -6,6 +6,11 @@ rate). These tests pin that behaviour and guard backward compatibility of the
 positional signature.
 """
 
+import json
+import os
+import tempfile
+from pathlib import Path
+
 from pricing import calculate_cost
 
 
@@ -80,6 +85,29 @@ def test_cache_write_uses_input_rate_even_without_cached_read_config():
     write = calculate_cost(model, 0, 0, 0, provider="groq", cache_creation_tokens=MTOK)
     assert write == in_rate * 1.25
 
+def test_subscription_model_returns_zero():
+    """A model listed in power.json subscriptionModels prices to 0.0 regardless
+    of endpoint (issue #176: model-level flat subscription)."""
+    prev = os.environ.get("TOKENTELEMETRY_HOME")
+    with tempfile.TemporaryDirectory() as home:
+        d = Path(home) / ".tokentelemetry"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "power.json").write_text(
+            json.dumps({"subscriptionModels": ["some-model"]}), encoding="utf-8"
+        )
+        os.environ["TOKENTELEMETRY_HOME"] = home
+        try:
+            # load_power_config resolves the path lazily on each call, so no reload.
+            assert calculate_cost("some-model", 1000, 1000) == 0.0
+            # A non-subscription model is still priced normally.
+            assert calculate_cost("some-model-mini", 1000, 1000) > 0
+        finally:
+            if prev is None:
+                os.environ.pop("TOKENTELEMETRY_HOME", None)
+            else:
+                os.environ["TOKENTELEMETRY_HOME"] = prev
+
+
 if __name__ == "__main__":
     test_cache_write_priced_at_1_25x_input()
     test_cache_write_1h_priced_at_2x_input()
@@ -89,4 +117,5 @@ if __name__ == "__main__":
     test_backward_compat_positional_provider_still_works()
     test_combined_read_and_write()
     test_cache_write_uses_input_rate_even_without_cached_read_config()
+    test_subscription_model_returns_zero()
     print("All tests passed!")

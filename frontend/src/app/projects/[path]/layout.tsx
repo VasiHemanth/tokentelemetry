@@ -5,7 +5,7 @@ import { useParams, usePathname } from "next/navigation";
 import { useMemo } from "react";
 import {
   ChevronRight, Folder, Activity, Sparkles, ClipboardList, Settings2,
-  Clock, Users, Zap, GitBranch, Wallet,
+  Clock, Users, Zap, GitBranch, Wallet, Globe,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -16,10 +16,11 @@ import { type BudgetStatus, budgetTone } from "@/lib/budgets";
 import { ProjectProvider, type ProjectData, type SessionRow } from "./_lib/project-context";
 
 const TABS = [
-  { key: "activity", label: "Activity",  icon: Activity,      href: "activity"  },
-  { key: "insights", label: "Insights",  icon: Sparkles,      href: "insights"  },
-  { key: "plans",    label: "Plans",     icon: ClipboardList, href: "plans"     },
-  { key: "config",   label: "Config",    icon: Settings2,     href: "config"    },
+  { key: "activity",  label: "Activity",  icon: Activity,      href: "activity"  },
+  { key: "insights",  label: "Insights",  icon: Sparkles,      href: "insights"  },
+  { key: "plans",     label: "Plans",     icon: ClipboardList, href: "plans"     },
+  { key: "artifacts", label: "Artifacts", icon: Globe,         href: "artifacts" },
+  { key: "config",    label: "Config",    icon: Settings2,     href: "config"    },
 ];
 
 export default function ProjectShellLayout({ children }: { children: React.ReactNode }) {
@@ -53,6 +54,7 @@ export default function ProjectShellLayout({ children }: { children: React.React
   const directCost = sessions.reduce((sum, s) => sum + (s.cost ?? 0), 0);
   const subagents = (project?.configured_subagent_count ?? 0) + (project?.subagent_count ?? 0);
   const plansCount = project?.plans?.length ?? 0;
+  const artifactsCount = project?.artifacts?.length ?? 0;
 
   // Project-total budget (project scope, no agent/model) drives the header pill.
   const projBudget = budgets.find(
@@ -211,7 +213,7 @@ export default function ProjectShellLayout({ children }: { children: React.React
             {TABS.map((t) => {
               const I = t.icon;
               const isActive = t.key === activeKey;
-              const count = t.key === "plans" ? plansCount : t.key === "activity" ? sessions.length : undefined;
+              const count = t.key === "plans" ? plansCount : t.key === "artifacts" ? artifactsCount : t.key === "activity" ? sessions.length : undefined;
               return (
                 <Link
                   key={t.key}

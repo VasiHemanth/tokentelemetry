@@ -217,6 +217,66 @@ def test_no_config_file_preserves_per_token_behaviour():
         assert with_ep > 0
 
 
+# --------------------------------------------------------------------------
+# Model-level subscriptions (per-model flat billing)
+# --------------------------------------------------------------------------
+def test_is_subscription_model_exact_match():
+    with tempfile.TemporaryDirectory() as home:
+        _write_power_json(home, {"subscriptionModels": ["gpt-5", "claude-opus-4-7"]})
+        pc, _ = _fresh_modules(home)
+        assert pc.is_subscription_model("gpt-5") is True
+        assert pc.is_subscription_model("claude-opus-4-7") is True
+
+
+def test_is_subscription_model_case_insensitive():
+    with tempfile.TemporaryDirectory() as home:
+        _write_power_json(home, {"subscriptionModels": ["GPT-5"]})
+        pc, _ = _fresh_modules(home)
+        assert pc.is_subscription_model("gpt-5") is True
+        assert pc.is_subscription_model("  GpT-5  ") is True
+
+
+def test_is_subscription_model_no_substring_false_positive():
+    # Model ids are short; substring matching would over-match. gpt-5 must NOT
+    # match gpt-5-mini (a distinct, separately-billed model).
+    with tempfile.TemporaryDirectory() as home:
+        _write_power_json(home, {"subscriptionModels": ["gpt-5"]})
+        pc, _ = _fresh_modules(home)
+        assert pc.is_subscription_model("gpt-5-mini") is False
+        assert pc.is_subscription_model("gpt-5.4") is False
+
+
+def test_is_subscription_model_empty_and_none():
+    with tempfile.TemporaryDirectory() as home:
+        pc, _ = _fresh_modules(home)  # no config → empty subscriptionModels
+        assert pc.is_subscription_model("gpt-5") is False
+        assert pc.is_subscription_model(None) is False
+        assert pc.is_subscription_model("") is False
+
+
+def test_subscription_models_load_save_roundtrip():
+    with tempfile.TemporaryDirectory() as home:
+        pc, _ = _fresh_modules(home)
+        assert pc.load_power_config()["subscriptionModels"] == []
+        saved = pc.save_power_config({
+            "subscriptionModels": ["gpt-5", "", 5, "  claude-x  "],
+        })
+        # Nonempty stripped strings only.
+        assert saved["subscriptionModels"] == ["gpt-5", "claude-x"]
+        assert pc.load_power_config()["subscriptionModels"] == ["gpt-5", "claude-x"]
+
+
+def test_subscription_model_returns_zero_in_calculate_cost():
+    with tempfile.TemporaryDirectory() as home:
+        _write_power_json(home, {"subscriptionModels": ["some-model"]})
+        _, pricing = _fresh_modules(home)
+        # Real token counts, no endpoint hint → still 0.0 because the model is
+        # billed monthly regardless of which endpoint served it.
+        assert pricing.calculate_cost("some-model", 1000, 1000) == 0.0
+        # A non-subscription model is unaffected.
+        assert pricing.calculate_cost("some-model-mini", 1000, 1000) > 0
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

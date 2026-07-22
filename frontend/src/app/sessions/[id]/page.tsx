@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat, Globe, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -24,6 +24,22 @@ interface Artifact {
   type: 'video' | 'image' | 'document' | 'terminal';
 }
 
+/* A deliverable artifact from this session. kind "page" is a hosted claude.ai
+   page published by Claude Code's Artifact tool (has url); kind "document" is
+   a local doc like Antigravity's task/plan/walkthrough (has path) — those
+   already render in the local-files list, so the Published Pages section only
+   shows url-bearing entries. */
+interface PublishedArtifact {
+  kind?: "page" | "document";
+  url?: string | null;
+  path?: string | null;
+  title?: string | null;
+  description?: string | null;
+  favicon?: string | null;
+  file_name?: string | null;
+  timestamp?: string | null;
+}
+
 interface Session {
   id: string;
   agent: string;
@@ -40,6 +56,7 @@ interface Session {
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
   cost?: number;
   artifacts?: Artifact[];
+  published_artifacts?: PublishedArtifact[];
   /** Copilot-only: which surface (cli vs vscode) */
   copilot_source?: string;
   /** Antigravity-only: which surface (cli / ide / app) */
@@ -553,6 +570,23 @@ export default function SessionDetailPage() {
       .catch(() => {});
   }, [events, sessionInfo]);
 
+  // Map each tool_use_id -> the user event carrying its tool_result. Built once
+  // per events change so the tool summary and waterfall can pair a call to its
+  // result in O(1) instead of rescanning the whole event array per tool_use
+  // (that rescan was O(n²) and dominated load time on long traces).
+  const toolResultByUseId = useMemo(() => {
+    const map = new Map<string, Event>();
+    for (const e of events) {
+      if (e.type === "user" && Array.isArray(e.message?.content)) {
+        for (const c of e.message.content as any[]) {
+          const rid = c?.tool_use_id;
+          if (rid && !map.has(rid)) map.set(rid, e);
+        }
+      }
+    }
+    return map;
+  }, [events]);
+
   // Tool summary
   const toolSummary = useMemo(() => {
     const rows: { name: string; start: number; duration: number }[] = [];
@@ -561,7 +595,7 @@ export default function SessionDetailPage() {
       if (evt.message?.role === "assistant" && Array.isArray(evt.message?.content)) {
         const tu = evt.message.content.find((c: any) => c.type === "tool_use");
         if (tu && ts) {
-          const result = events.slice(idx + 1).find((e) => e.type === "user" && Array.isArray(e.message?.content) && e.message.content.some((c: any) => c.tool_use_id === tu.id));
+          const result = toolResultByUseId.get(tu.id);
           const end = (result && normalizeTs(result)) || ts + 200;
           rows.push({ name: tu.name, start: ts, duration: end - ts });
         }
@@ -582,7 +616,7 @@ export default function SessionDetailPage() {
     return Object.entries(m)
       .map(([name, v]) => ({ name, count: v.count, avg: v.total / v.count }))
       .sort((a, b) => b.count - a.count);
-  }, [events]);
+  }, [events, toolResultByUseId]);
 
   const jumpTo = (idx: number) => {
     setActiveStep(idx);
@@ -605,7 +639,7 @@ export default function SessionDetailPage() {
            if (tu) {
               toolName = tu.name;
               // Look ahead for tool_result from user
-              const result = events.slice(idx).find(e => e.type === "user" && Array.isArray(e.message?.content) && e.message.content.some((c: any) => c.tool_use_id === tu.id));
+              const result = toolResultByUseId.get(tu.id);
               const endTime = result?.normalized_timestamp || (result?.timestamp ? new Date(result.timestamp).getTime() : startTime + 2000);
               tools.push({ name: toolName, start: startTime, end: endTime, id: tu.id });
            }
@@ -622,7 +656,7 @@ export default function SessionDetailPage() {
         }
      });
      return tools;
-  }, [events]);
+  }, [events, toolResultByUseId]);
 
   return (
     <div className="min-h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col">
@@ -676,7 +710,7 @@ export default function SessionDetailPage() {
               <div className="flex items-center gap-1 flex-wrap">
                 <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
                 <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
-                {sessionInfo?.artifacts && sessionInfo.artifacts.length > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={sessionInfo.artifacts.length} tone="emerald" />}
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
                 <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
                 <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
                 <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
@@ -912,7 +946,7 @@ export default function SessionDetailPage() {
              <div className="flex border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.18em]">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
-                {sessionInfo?.artifacts && sessionInfo.artifacts.length > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
                 <TabBtn active={sidebarTab === "raw"} onClick={() => setSidebarTab("raw")} icon={<FileCode size={12} />}>Raw</TabBtn>
                 <button
                    onClick={() => setSidebarOpen(false)}
@@ -939,7 +973,7 @@ export default function SessionDetailPage() {
                    });
                    if (idx >= 0) jumpTo(idx);
                 }} />}
-                {sidebarTab === "artifacts" && <ArtifactsPanel artifacts={sessionInfo?.artifacts || []} />}
+                {sidebarTab === "artifacts" && <ArtifactsPanel artifacts={sessionInfo?.artifacts || []} published={sessionInfo?.published_artifacts || []} />}
                 {sidebarTab === "raw" && (
                    <pre className="text-[9px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
                       {JSON.stringify(activeStep !== null ? events[activeStep] : events[0], null, 2)}
@@ -1373,17 +1407,48 @@ function ToolsPanel({ summary, onJump }: { summary: { name: string; count: numbe
   );
 }
 
-function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
+function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts: Artifact[]; published?: PublishedArtifact[] }) {
   // The artifact currently expanded into the full-screen modal (null = closed).
   const [expanded, setExpanded] = useState<Artifact | null>(null);
+  // Only url-bearing (hosted-page) entries render here; "document" entries
+  // are local files already shown in the Session Artifacts list below.
+  const published = publishedAll.filter((p) => p.url);
 
-  if (!artifacts.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
+  if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
 
   return (
     <div className="space-y-6">
+      {published.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+            <Globe size={12} /> Published Pages
+          </div>
+          {published.map((p) => (
+            <a
+              key={p.url}
+              href={p.url ?? undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl px-3 py-2.5 hover:border-[var(--tt-brand)] transition-colors group"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
+                  {p.title || p.file_name || "Untitled artifact"}
+                </span>
+                <ExternalLink size={10} className="shrink-0 text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-brand)] transition-colors" />
+              </div>
+              {p.description && (
+                <div className="mt-1 text-[10px] text-[var(--tt-fg-muted)] line-clamp-2">{p.description}</div>
+              )}
+            </a>
+          ))}
+        </div>
+      )}
+      {artifacts.length === 0 ? null : (
       <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
         <LayoutPanelLeft size={12} /> Session Artifacts
       </div>
+      )}
       <div className="space-y-4">
         {artifacts.map((a, i) => (
           <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-[11px]">
