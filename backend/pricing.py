@@ -322,6 +322,16 @@ def calculate_cost(
         except Exception:
             pass
 
+    # Model-level flat subscription: a specific model billed monthly regardless of
+    # which endpoint served it (one proxy can front both subscription and
+    # pay-per-token models). Opt-in via power.json subscriptionModels; empty by default.
+    try:
+        from power_config import is_subscription_model
+        if is_subscription_model(model_name):
+            return 0.0
+    except Exception:
+        pass
+
     # Confirmed-local sessions (loopback/local endpoint, a local provider id, or
     # the agent set to `local` billing mode) are priced by electricity and WIN
     # over the pricing table — so a local llama-3.3-70b isn't billed at cloud

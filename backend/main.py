@@ -286,7 +286,57 @@ OLLAMA_DIR = HOME / ".ollama"
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
 HF_DIR = HOME / ".cache/huggingface"
-OPENCODE_DB = HOME / ".local/share/opencode/opencode.db"
+def _opencode_db_candidates() -> List[Path]:
+    """OpenCode SQLite DB locations to probe, highest-priority first.
+
+    OpenCode does NOT use one fixed path: it resolves a data dir honoring
+    ``$OPENCODE_DATA_DIR`` and ``$XDG_DATA_HOME`` with a per-OS default. We used
+    to look only at ``~/.local/share/opencode`` and so silently missed relocated
+    or non-Linux installs — the scan is gated on ``.exists()`` inside a bare
+    ``try/except``, so a wrong path means the whole agent vanishes with no error
+    (discussion #170). Probe every place the agent could have written; the scan
+    uses the first that exists. Extra non-existent candidates are harmless.
+    """
+    c: List[Path] = []
+    env = os.environ.get("OPENCODE_DATA_DIR")
+    if env:
+        c.append(Path(env).expanduser() / "opencode.db")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        c.append(Path(xdg).expanduser() / "opencode" / "opencode.db")
+    if sys.platform == "win32":
+        for var in ("APPDATA", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                c.append(Path(base) / "opencode" / "opencode.db")
+    # Standard XDG data dir — the confirmed default on BOTH Linux and macOS
+    # (OpenCode does not use ~/Library/Application Support, verified on 1.15.13).
+    c.append(HOME / ".local/share/opencode/opencode.db")
+    # macOS env-paths-style location, in case a build ever used it.
+    if sys.platform == "darwin":
+        c.append(HOME / "Library/Application Support/opencode/opencode.db")
+    seen: set = set()
+    out: List[Path] = []
+    for p in c:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _opencode_db_path() -> Path:
+    """First existing OpenCode DB among the candidates, else the canonical XDG
+    default (so a not-yet-created DB still has a stable path to display)."""
+    for p in _opencode_db_candidates():
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return HOME / ".local/share/opencode/opencode.db"
+
+
+OPENCODE_DB = _opencode_db_path()
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -4958,11 +5008,24 @@ def _scan_sessions_sync():
     # 8. OpenCode (SQLite: session / message / part)
     if OPENCODE_DB.exists():
         try:
-            # immutable=1 so we don't block the live TUI process's write lock
+            # mode=ro (via _sqlite_ro_uri) so we never take a write lock on the
+            # live TUI's DB. It's a WAL database, so a read can still time out if
+            # OpenCode is mid-write — that lands in the outer except, which now
+            # logs instead of silently dropping the whole agent.
             uri = _sqlite_ro_uri(OPENCODE_DB)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             try:
+                # OpenCode's schema drifts across versions (tables get added and
+                # renamed). Detect which tables exist so one missing *peripheral*
+                # table (e.g. `todo`) can't throw into the outer except and wipe
+                # out every session — the failure mode behind discussion #170's
+                # neighbours.
+                try:
+                    _tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'")}
+                except Exception:
+                    _tables = set()
                 # Some OpenCode versions added a session-level `model` column
                 # (e.g. the github-copilot provider stores the model only there,
                 # not on assistant messages — see issue #39). Detect it so we can
@@ -5070,8 +5133,10 @@ def _scan_sessions_sync():
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
-                    # Todos (opencode's plan-like artifact)
-                    todo_rows = conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                    # Todos (opencode's plan-like artifact). Optional table —
+                    # absent on older/newer schemas, so gate on its presence.
+                    todo_rows = (conn.execute("SELECT content, status FROM todo WHERE session_id=? ORDER BY position", (sid,)).fetchall()
+                                 if "todo" in _tables else [])
                     if todo_rows:
                         has_plan = True
                         plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
@@ -5104,8 +5169,13 @@ def _scan_sessions_sync():
                                                  "linked_children": len(kids)}
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Don't let a schema/lock hiccup silently erase the whole agent —
+            # log it at debug so "no OpenCode sessions" is diagnosable instead
+            # of invisible (discussion #170).
+            import logging
+            logging.getLogger("tokentelemetry.opencode").debug(
+                "OpenCode scan skipped (%s): %r", OPENCODE_DB, e)
 
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
@@ -5142,11 +5212,13 @@ def _scan_sessions_sync():
                 # schemas (the outer try/except would otherwise drop all sessions).
                 _cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
                 _base_url_col = "billing_base_url" if "billing_base_url" in _cols else "NULL AS billing_base_url"
+                _cost_status_col = "cost_status" if "cost_status" in _cols else "NULL AS cost_status"
+                _cost_source_col = "cost_source" if "cost_source" in _cols else "NULL AS cost_source"
                 srows = conn.execute(
                     "SELECT id, source, model, parent_session_id, started_at, ended_at, "
                     "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
                     "reasoning_tokens, estimated_cost_usd, actual_cost_usd, title, "
-                    f"billing_provider, {_base_url_col}, end_reason "
+                    f"billing_provider, {_base_url_col}, {_cost_status_col}, {_cost_source_col}, end_reason "
                     "FROM sessions"
                 ).fetchall()
                 for srow in srows:
@@ -5173,6 +5245,14 @@ def _scan_sessions_sync():
                     model = srow["model"]
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
+                    # Hermes stores estimated_cost_usd=0.0 (not NULL) with cost_status='unknown'
+                    # / cost_source='none' when it couldn't price the session itself (proxied or
+                    # unrecognized endpoint, subscription-included model). Don't take that 0.0 at
+                    # face value — fall through to calculate_cost() below, which prices from the
+                    # model + token counts and lets TT's own subscription config (not Hermes's)
+                    # decide the framing. Only override the *estimate*; a real actual_cost_usd wins.
+                    if srow["actual_cost_usd"] is None and (srow["cost_status"] == "unknown" or srow["cost_source"] == "none"):
+                        cost = None
                     # Bind before the branch: it's referenced unconditionally in the
                     # session dict below, but only computed when cost must be derived.
                     _measured_tps = None
@@ -5491,41 +5571,61 @@ async def invalidate_cache():
     return {"ok": True}
 
 
+# --- Session-detail parse cache -------------------------------------------------
+# get_session_detail re-reads and re-parses a session's full transcript on every
+# open; large transcripts (tens of MB) made re-opens slow. Memoize the parsed
+# event list on (mtime_ns, size) so an unchanged file is parsed only once. The key
+# changes the instant the file is appended to, so a live session never goes stale.
+_SESSION_DETAIL_CACHE: Dict[str, Tuple[Tuple[int, int], List[Dict[str, Any]]]] = {}
+_SESSION_DETAIL_CACHE_MAX = 16
+
+
+def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
+    """Parse a JSONL transcript into normalized event dicts, memoized on file
+    identity + (mtime_ns, size). Returns the cached list on a hit (callers must
+    treat it as read-only — the detail endpoint only serializes it)."""
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    key = str(path)
+    if stamp is not None:
+        hit = _SESSION_DETAIL_CACHE.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    events: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            # Add a normalized_timestamp for the waterfall view.
+            if data.get("timestamp"):
+                try:
+                    ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
+                    data["normalized_timestamp"] = ts.timestamp() * 1000
+                except Exception:
+                    pass
+            events.append(data)
+    if stamp is not None:
+        if key not in _SESSION_DETAIL_CACHE and len(_SESSION_DETAIL_CACHE) >= _SESSION_DETAIL_CACHE_MAX:
+            _SESSION_DETAIL_CACHE.pop(next(iter(_SESSION_DETAIL_CACHE)))
+        _SESSION_DETAIL_CACHE[key] = (stamp, events)
+    return events
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    # Add a normalized_timestamp for waterfall
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        events = []
-        with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    if data.get("timestamp"):
-                        try:
-                            ts = _aware(datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00')))
-                            data["normalized_timestamp"] = ts.timestamp() * 1000
-                        except Exception: pass
-                    events.append(data)
-                except Exception: continue
-        return events
+        return _parse_session_jsonl_cached(files[0])
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
@@ -5604,6 +5704,12 @@ async def get_session_detail(session_id: str, agent: str):
                                 })
                             if content_blocks:
                                 norm = {"type": "assistant", "message": {"role": "assistant", "content": content_blocks}}
+                                # Surface the reasoning-effort setting so the
+                                # session context panel can show it (grok records
+                                # it per assistant turn; low/medium/high/xhigh).
+                                _re = entry.get("reasoning_effort")
+                                if isinstance(_re, str) and _re:
+                                    norm["reasoning_effort"] = _re
 
                         elif etype == "reasoning":
                             summ = entry.get("summary") or []
@@ -5662,6 +5768,21 @@ async def get_session_detail(session_id: str, agent: str):
                 try:
                     evt = json.loads(line)
                 except Exception:
+                    continue
+                # pi records the thinking-level setting (off/medium/high) as
+                # dedicated events; pass them through so the context panel can
+                # show the reasoning effort the session ran at.
+                if evt.get("type") == "thinking_level_change":
+                    _tl = evt.get("thinkingLevel")
+                    if isinstance(_tl, str) and _tl:
+                        _tle = {"type": "thinking_level_change", "thinkingLevel": _tl}
+                        _tlts = evt.get("timestamp")
+                        if _tlts:
+                            try:
+                                _tle["normalized_timestamp"] = _aware(datetime.fromisoformat(str(_tlts).replace("Z", "+00:00"))).timestamp() * 1000
+                            except Exception:
+                                pass
+                        events.append(_tle)
                     continue
                 if evt.get("type") != "message":
                     continue
@@ -5930,6 +6051,13 @@ async def get_session_detail(session_id: str, agent: str):
                             "tool": tr.get("name"), "callID": tr.get("toolCallId"),
                             "arguments": tr.get("arguments"),
                         }, **base})
+                elif et == "session.model_change":
+                    # Copilot records the reasoning-effort setting on model-change
+                    # events (null on Claude models, which have no effort enum);
+                    # surface it so the context panel can show it.
+                    _ce = d.get("reasoningEffort")
+                    if isinstance(_ce, str) and _ce:
+                        events.append({"type": "reasoning_effort", "payload": {"effort": _ce}, **base})
             return events
         # VS Code ~1.100+ stores sessions as <id>.jsonl (delta log) instead of
         # <id>.json (single object); match both and reconstruct the .jsonl form.
@@ -6005,10 +6133,20 @@ async def get_session_detail(session_id: str, agent: str):
                 conn = sqlite3.connect(uri, uri=True, timeout=1.0)
                 conn.row_factory = sqlite3.Row
                 try:
-                    srow = conn.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
+                    srow = conn.execute("SELECT id, model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
                     if not srow:
                         continue
                     events: List[Dict[str, Any]] = []
+                    # Surface the reasoning-effort setting (model_config.
+                    # reasoning_config.effort) as a session-level meta event so the
+                    # context panel can show it, mirroring the codex session_meta shape.
+                    try:
+                        _mc = json.loads(srow["model_config"] or "{}")
+                        _rc = _mc.get("reasoning_config") or {}
+                        if _rc.get("enabled") and isinstance(_rc.get("effort"), str) and _rc.get("effort"):
+                            events.append({"type": "session_meta", "payload": {"effort": _rc["effort"]}})
+                    except Exception:
+                        pass
                     for mrow in conn.execute(
                         "SELECT role, content, tool_calls, tool_call_id, tool_name, "
                         "timestamp, reasoning_content FROM messages WHERE session_id=? "
@@ -6907,7 +7045,7 @@ async def get_power_config():
 
 @app.put("/config/power")
 async def put_power_config(payload: dict = Body(...)):
-    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?}.
+    """Persist power config. Body: {loadWatts?, costPerKwh?, subscriptionEndpoints?, subscriptionModels?}.
 
     Validation happens in power_config.save_power_config (bad values are skipped,
     never surfaced as raw errors). Returns the full saved config.

@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-19",
+      "title": "See the reasoning effort each session ran at",
+      "highlights": [
+        {
+          "title": "Reasoning effort across agents",
+          "description": "A session's context panel now shows the model reasoning effort it actually ran at — for every agent that records one: Claude, Codex, Copilot, Grok, Hermes and Pi (values like minimal / low / medium / high / xhigh, or Pi's off). When the effort changed mid-session, the progression is shown (e.g. \"medium → xhigh\") instead of a single value. Agents that don't record a discrete effort setting simply don't show the row.",
+          "href": "/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-18",
       "title": "See which experimental features each agent has on",
       "highlights": [

@@ -47,9 +47,8 @@ def _make_hermes_db(path: Path, sid: str, tokens=(100, 40)):
     con.close()
 
 
-@pytest.fixture
-def hermes_env(tmp_path, monkeypatch):
-    """Hermetic Hermes home: root state.db plus one 'coder' profile."""
+def _isolate_other_agents(tmp_path, monkeypatch):
+    """Point every non-Hermes source at empty paths so a scan sees Hermes only."""
     missing = tmp_path / "missing"
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
                  "GROK_SESSIONS_DIR", "VSCODE_STORAGE", "CURSOR_STORAGE",
@@ -65,6 +64,12 @@ def hermes_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
 
+
+@pytest.fixture
+def hermes_env(tmp_path, monkeypatch):
+    """Hermetic Hermes home: root state.db plus one 'coder' profile."""
+    _isolate_other_agents(tmp_path, monkeypatch)
+
     home = tmp_path / ".hermes"
     home.mkdir()
     monkeypatch.setattr(main, "HERMES_DIR", home)
@@ -74,6 +79,59 @@ def hermes_env(tmp_path, monkeypatch):
     _make_hermes_db(home / "profiles" / "coder" / "state.db",
                     "20260102_000000_bbbb2222", tokens=(50, 20))
     return home
+
+
+def _make_hermes_db_costcols(path: Path):
+    """Hermes DB on the NEWER schema that carries cost_status / cost_source.
+
+    Two rows:
+      - a BUG row (issue #176): estimated_cost_usd=0.0, actual_cost_usd=NULL,
+        cost_status='unknown', cost_source='none', a priceable model + real
+        tokens. TT must NOT take the 0.0 at face value; it re-prices.
+      - a CONTROL row: cost_source='api' with a real estimated cost preserved
+        as-is (TT must not touch a trustworthy Hermes estimate).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE sessions (id TEXT, source TEXT, model TEXT, "
+                "parent_session_id TEXT, started_at INT, ended_at INT, "
+                "input_tokens INT, output_tokens INT, cache_read_tokens INT, "
+                "cache_write_tokens INT, reasoning_tokens INT, "
+                "estimated_cost_usd REAL, actual_cost_usd REAL, title TEXT, "
+                "billing_provider TEXT, billing_base_url TEXT, "
+                "cost_status TEXT, cost_source TEXT, end_reason TEXT)")
+    con.execute("CREATE TABLE messages (session_id TEXT, role TEXT, content TEXT, "
+                "timestamp INT, tool_name TEXT)")
+    # Bug row: proxied endpoint, Hermes couldn't price it → stored 0.0/'unknown'/'none'.
+    con.execute(
+        "INSERT INTO sessions VALUES ('bug_20260101', 'cli', 'claude-haiku-4.5', NULL, "
+        "1750000000, 1750000100, 115184, 21102, 0, 0, 0, 0.0, NULL, 'bug', "
+        "'openai', 'https://myproxy.example/v1', 'unknown', 'none', 'done')")
+    # Control row: Hermes priced it itself (cost_source='api'), estimate is trustworthy.
+    con.execute(
+        "INSERT INTO sessions VALUES ('ctrl_20260101', 'cli', 'claude-sonnet-4-6', NULL, "
+        "1750000000, 1750000100, 1000, 500, 0, 0, 0, 0.42, NULL, 'ctrl', "
+        "'anthropic', NULL, 'ok', 'api', 'done')")
+    con.commit()
+    con.close()
+
+
+def test_scan_reprices_untrustworthy_hermes_zero(tmp_path, monkeypatch):
+    """Issue #176: a Hermes estimated_cost_usd=0.0 with cost_status='unknown' /
+    cost_source='none' is re-priced from tokens; a trustworthy estimate is kept."""
+    _isolate_other_agents(tmp_path, monkeypatch)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setattr(main, "HERMES_DIR", home)
+    monkeypatch.setattr(main, "HERMES_DB", home / "state.db")
+    monkeypatch.setattr(main, "HERMES_PROFILES_DIR", home / "profiles")
+    _make_hermes_db_costcols(home / "state.db")
+
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "hermes"}
+    # Bug row: TT fell through to calculate_cost() and priced it > 0.
+    assert by_id["bug_20260101"]["cost"] > 0
+    # Control row: a trustworthy Hermes estimate is preserved verbatim.
+    assert by_id["ctrl_20260101"]["cost"] == 0.42
 
 
 def test_dbs_with_profiles(hermes_env):
