@@ -16,7 +16,7 @@ This path suits you if you'd rather not install Python and Node on the host, or 
 - At least one supported AI coding agent already installed, with logs in its default location.
 
 <Callout title="Windows needs WSL or Git Bash" type="warn">
-The container path relies on `${HOME}` being set, which it is not in plain `cmd.exe` or PowerShell. Run the `make` commands from inside WSL or Git Bash. Without it, the `~/.claude` mount resolves to an empty path and no sessions appear.
+The container path relies on `${HOME}` being set, which it is not in plain `cmd.exe` or PowerShell. Run the `make` commands from inside WSL or Git Bash. Without it, the `~/.claude` mount resolves to an empty path and no sessions appear. The mount source paths differ between Git Bash and WSL — see [Mount paths on Windows](#mount-paths-on-windows).
 </Callout>
 
 ## Quick start
@@ -24,10 +24,12 @@ The container path relies on `${HOME}` being set, which it is not in plain `cmd.
 ```bash
 git clone https://github.com/VasiHemanth/tokentelemetry.git
 cd tokentelemetry
-make up
+TZ=Asia/Kolkata PORT=13000 TT_API_PORT=18000 make up
 ```
 
 Then open **http://localhost:13000**.
+
+Replace `Asia/Kolkata` with your own [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) so day buckets and budget windows line up with your local day (see [Timezone](#timezone)). `PORT` and `TT_API_PORT` are shown at their defaults; if either is already taken, change it here on the **first** run. The backend port gets baked into the frontend image at build time, so picking it before the first build avoids a rebuild later (see [Ports and the rebuild caveat](#ports-and-the-rebuild-caveat)).
 
 On the first run, `make up` builds the backend and frontend images (this takes a few minutes). Subsequent runs reuse the built images and skip the build, so they start in seconds. Run `make` on its own to see every target with a short description.
 
@@ -75,6 +77,19 @@ volumes:
 After editing the mounts, restart with `make down && make up` (no rebuild is needed — mounts are a runtime concern).
 
 The `:ro` flag keeps each mount read-only, so TokenTelemetry can never modify your agent logs. The trailing `:z` relabels the mount for SELinux-enforcing hosts (Fedora, RHEL, CentOS); it is harmless on macOS and other Linux distros.
+
+### Mount paths on Windows
+
+Where the mount lines work unchanged depends on which shell you launch from.
+
+- **Git Bash:** the lines work as written. `${HOME}` resolves to `/c/Users/<you>`, which is where Windows agents write their logs (`C:\Users\<you>\.claude`).
+- **WSL:** `${HOME}` is your Linux home (`/home/<you>`). Agents running inside WSL are picked up as-is. But agents installed on the Windows side write to `C:\Users\<you>\.claude`, which WSL sees under `/mnt/c` — so those mount sources must be edited to point there:
+
+  ```yaml
+  - "/mnt/c/Users/<you>/.claude:/root/.claude:ro,z"
+  ```
+
+The two `Library/Application Support` lines are macOS-only; skip them on Windows.
 
 ## Ports and the rebuild caveat
 
