@@ -2390,6 +2390,9 @@ function LoopCard({ loop }: { loop: any }) {
         <Row k="Cadence" v={loop.cadence || "—"} />
         <Row k="Created" v={<>{fmt(loop.created_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.created_at)})</span></>} />
         <Row k="Last fired" v={<>{fmt(loop.last_fired)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.last_fired)})</span></>} />
+        {state === "active" && loop.next_fire_at && (
+          <Row k="Next fire" v={<>{fmt(loop.next_fire_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.next_fire_at)})</span></>} />
+        )}
         {loop.expires_at && (
           <Row k={state === "expired" ? "Expired" : "Expires"} v={<>{fmt(loop.expires_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.expires_at)})</span></>} />
         )}

@@ -3727,6 +3727,57 @@ def _cron_to_seconds(cron: Optional[str]) -> Optional[int]:
     return None
 
 
+def _cron_next_fire(expr: str, after: datetime) -> Optional[datetime]:
+    """Next wall-clock fire of a 5-field cron STRICTLY after `after`.
+
+    Minimal matcher for the shapes agents emit (*, N, */step, lists, ranges);
+    evaluated minute-by-minute in the machine's LOCAL timezone, because that's
+    the clock Claude Code's in-memory crons fire on. Scans at most 8 days
+    (those crons auto-expire after 7). Returns an aware UTC datetime, or None
+    when the expression is unparseable or never matches inside the window.
+    """
+    fields = str(expr or "").split()
+    if len(fields) != 5:
+        return None
+
+    def _parse(field: str, lo: int, hi: int) -> Optional[set]:
+        vals: set = set()
+        for part in field.split(","):
+            part, _, step_s = part.strip().partition("/")
+            step = int(step_s) if step_s.isdigit() and int(step_s) >= 1 else (1 if not step_s else None)
+            if step is None:
+                return None
+            if part in ("*", ""):
+                rng = range(lo, hi + 1)
+            elif "-" in part:
+                a, _, b = part.partition("-")
+                if not (a.isdigit() and b.isdigit()):
+                    return None
+                rng = range(int(a), int(b) + 1)
+            elif part.isdigit():
+                rng = range(int(part), int(part) + 1)
+            else:
+                return None
+            vals.update(v for v in rng if lo <= v <= hi and (v - rng.start) % step == 0)
+        return vals or None
+
+    mins = _parse(fields[0], 0, 59)
+    hours = _parse(fields[1], 0, 23)
+    doms = _parse(fields[2], 1, 31)
+    months = _parse(fields[3], 1, 12)
+    dows = _parse(fields[4], 0, 6)
+    if None in (mins, hours, doms, months, dows):
+        return None
+    t = after.astimezone().replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(8 * 24 * 60):
+        # cron weekday: 0=Sunday; Python weekday(): 0=Monday.
+        if (t.minute in mins and t.hour in hours and t.day in doms
+                and t.month in months and ((t.weekday() + 1) % 7) in dows):
+            return t.astimezone(timezone.utc)
+        t += timedelta(minutes=1)
+    return None
+
+
 def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> None:
     """Recompute the VOLATILE loop lifecycle from now() for every loop session.
 
@@ -3766,6 +3817,18 @@ def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> N
         lp["state"] = state
         lp["active"] = (state == "active")
         lp["expired_reason"] = reason
+        # Next scheduled fire, only meaningful while the loop is live. Cron
+        # loops project from the cron expression (kept in `cadence`); interval
+        # loops project one cadence past the last fire — that instant may
+        # already be in the past inside the grace window (wakeups lag their
+        # schedule), which the UI renders as "due now" rather than hiding.
+        nxt = None
+        if state == "active":
+            if lp.get("mode") == "fixed_cron":
+                nxt = _cron_next_fire(lp.get("cadence") or "", now)
+            elif last:
+                nxt = last + timedelta(seconds=(cs or 3600))
+        lp["next_fire_at"] = nxt.isoformat() if nxt else None
 
 
 _CLAUDE_CACHE_FIELDS = (
@@ -7761,6 +7824,7 @@ async def get_analytics(
                 "agent": agent, "session_id": s.get("id"),
                 "job_id": lp.get("job_id"), "last_fired": lp.get("last_fired"),
                 "expires_at": lp.get("expires_at"),
+                "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
             row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})

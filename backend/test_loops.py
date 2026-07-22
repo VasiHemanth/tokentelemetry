@@ -568,3 +568,68 @@ def test_cline_scan_attaches_loop_to_anchor_session(tmp_path, monkeypatch):
     sessions = {s["id"]: s for s in main._scan_cline_sessions()}
     assert "loop" in sessions["sess-latest"] and sessions["sess-latest"]["loop"]["job_id"] == "nightly"
     assert "loop" not in sessions["sess-plain"]
+
+
+# --- next_fire_at -----------------------------------------------------------
+# _cron_next_fire matches in the machine's LOCAL timezone (that's the clock
+# Claude Code crons fire on), so these assert on the result's LOCAL fields
+# rather than exact UTC instants — the suite must pass in any zone.
+
+def test_cron_next_fire_hourly_minute():
+    nxt = main._cron_next_fire("13 * * * *", NOW)
+    assert nxt is not None and nxt > NOW
+    assert (nxt - NOW) <= timedelta(hours=1)
+    assert nxt.astimezone().minute == 13
+
+
+def test_cron_next_fire_every_5_min():
+    nxt = main._cron_next_fire("*/5 * * * *", NOW)
+    assert nxt is not None and nxt > NOW
+    assert (nxt - NOW) <= timedelta(minutes=5)
+    assert nxt.astimezone().minute % 5 == 0
+
+
+def test_cron_next_fire_strictly_after():
+    # A "* * * * *" cron fires every minute; next must be the NEXT minute, not now.
+    nxt = main._cron_next_fire("* * * * *", NOW)
+    assert nxt == NOW + timedelta(minutes=1)
+
+
+@pytest.mark.parametrize("expr", ["garbage", "1 2 3 4", "61 * * * *", "a * * * *"])
+def test_cron_next_fire_unparseable(expr):
+    assert main._cron_next_fire(expr, NOW) is None
+
+
+def test_next_fire_at_dynamic_interval():
+    # Active heartbeat loop: next fire projects one cadence past the last fire.
+    last = NOW - timedelta(minutes=5)
+    s = _loop_session(mode="dynamic", cadence="~1800s heartbeat",
+                      cadence_seconds=1800, job_id=None,
+                      created_at=_iso(NOW - timedelta(hours=1)), last_fired=_iso(last))
+    main._annotate_loop_lifecycle([s], NOW)
+    lp = s["loop"]
+    assert lp["state"] == "active"
+    assert lp["next_fire_at"] == _iso(last + timedelta(seconds=1800))
+
+
+def test_next_fire_at_fixed_cron():
+    s = _loop_session(mode="fixed_cron", cadence="13 * * * *", cadence_seconds=3600,
+                      created_at=_iso(NOW - timedelta(hours=2)),
+                      last_fired=_iso(NOW - timedelta(minutes=5)))
+    main._annotate_loop_lifecycle([s], NOW)
+    lp = s["loop"]
+    assert lp["state"] == "active"
+    assert lp["next_fire_at"] is not None
+    nxt = datetime.fromisoformat(lp["next_fire_at"])
+    assert nxt > NOW and nxt.astimezone().minute == 13
+
+
+def test_next_fire_at_none_when_not_active():
+    # Cancelled and stale loops advertise no next fire.
+    cancelled = _loop_session(cancelled=True, cancelled_at=_iso(NOW - timedelta(hours=1)))
+    stale = _loop_session(mode="dynamic", cadence_seconds=600, job_id=None,
+                          created_at=_iso(NOW - timedelta(days=3)),
+                          last_fired=_iso(NOW - timedelta(days=3)))
+    main._annotate_loop_lifecycle([cancelled, stale], NOW)
+    assert cancelled["loop"]["state"] == "cancelled" and cancelled["loop"]["next_fire_at"] is None
+    assert stale["loop"]["state"] == "expired" and stale["loop"]["next_fire_at"] is None

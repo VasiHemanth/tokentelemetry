@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-23",
+      "title": "Active loops now show their next run",
+      "highlights": [
+        {
+          "title": "Next run time on active loops",
+          "description": "Every loop that's still live now shows when it fires next — in the Recurring loops list on Analytics and in the loop card on the session trace. Heartbeat loops project from the last fire and cadence; cron loops compute the next real match of their schedule. Overdue-but-alive loops read \"due now\" instead of hiding the field.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Truer cancelled vs expired states for Grok loops",
+          "description": "A Grok Tasks loop is no longer marked cancelled just because its session deleted some other scheduled task. A delete only counts as a cancellation when it happened after the loop's last firing, so still-running loops keep their real state."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-19",
       "title": "See the reasoning effort each session ran at",
       "highlights": [
