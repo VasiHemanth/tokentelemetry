@@ -1,0 +1,200 @@
+---
+title: Docker & Podman
+description: Run TokenTelemetry in a container with Docker or Podman using the bundled Makefile and Compose files.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Instead of the native launcher, you can run TokenTelemetry in containers. The repo ships a `Makefile` and Compose files that work with either **Docker** or **Podman** — `make` auto-detects which one you have, preferring `podman compose` when both are present.
+
+This path suits you if you'd rather not install Python and Node on the host, or you already run other services in containers. It reads your agent logs from the host as read-only mounts and keeps its own state on a named volume, so nothing on your machine is modified.
+
+## Prerequisites
+
+- **Docker** (with Compose v2, i.e. `docker compose`), or **Podman** with a compose provider — see [Podman on macOS](#podman-on-macos) for setup.
+- **GNU Make** (preinstalled on macOS and most Linux distros).
+- At least one supported AI coding agent already installed, with logs in its default location.
+
+<Callout title="Windows needs WSL or Git Bash" type="warn">
+The container path relies on `${HOME}` being set, which it is not in plain `cmd.exe` or PowerShell. Run the `make` commands from inside WSL or Git Bash. Without it, the `~/.claude` mount resolves to an empty path and no sessions appear. The mount source paths differ between Git Bash and WSL — see [Mount paths on Windows](#mount-paths-on-windows).
+</Callout>
+
+## Quick start
+
+```bash
+git clone https://github.com/VasiHemanth/tokentelemetry.git
+cd tokentelemetry
+TZ=Asia/Kolkata PORT=13000 TT_API_PORT=18000 make up
+```
+
+Then open **http://localhost:13000**.
+
+Replace `Asia/Kolkata` with your own [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) so day buckets and budget windows line up with your local day (see [Timezone](#timezone)). `PORT` and `TT_API_PORT` are shown at their defaults; if either is already taken, change it here on the **first** run. The backend port gets baked into the frontend image at build time, so picking it before the first build avoids a rebuild later (see [Ports and the rebuild caveat](#ports-and-the-rebuild-caveat)).
+
+On the first run, `make up` builds the backend and frontend images (this takes a few minutes). Subsequent runs reuse the built images and skip the build, so they start in seconds. Run `make` on its own to see every target with a short description.
+
+The frontend serves on host port **13000** and the backend on **18000**. Both are published to `127.0.0.1` only, so the dashboard is reachable from the same machine and nowhere else by default.
+
+## Make targets
+
+| Target | What it does |
+| --- | --- |
+| `make up` | Build images if needed, then start in the foreground (logs stream to the terminal). |
+| `make up-detach` | Same, but start in the background. |
+| `make down` | Stop and remove the containers. Keeps the `tt_data` volume. |
+| `make build` | Build (or rebuild) the images without starting anything. |
+| `make logs` | Tail logs from all services. |
+| `make ps` | Show running services. |
+| `make up-prod` | Pull pre-built images from GHCR and start in the background. See [Pre-built images](#pre-built-images). |
+| `make pull` | Pull the latest GHCR images without starting. |
+| `make clean` | Stop containers and remove the local images **and** the `tt_data` volume. Destroys stored history. |
+| `make machine-restart` | Restart the Podman machine to clear stale port forwards. See [Troubleshooting](#troubleshooting). |
+
+## Enabling agent mounts
+
+The backend reads each agent's log directory from a read-only host mount. Only `~/.claude` is mounted by default. Every other agent is present in `compose.yml` as a commented-out line — uncomment the ones that match the agents you actually use:
+
+```yaml
+volumes:
+  - tt_data:/tt-data
+  - "${HOME}/.claude:/root/.claude:ro,z"
+  # - "${HOME}/.codex:/root/.codex:ro,z"
+  # - "${HOME}/.gemini:/root/.gemini:ro,z"
+  # - "${HOME}/.cline:/root/.cline:ro,z"
+  # - "${HOME}/.copilot:/root/.copilot:ro,z"
+  # - "${HOME}/.cursor:/root/.cursor:ro,z"
+  # - "${HOME}/.grok:/root/.grok:ro,z"
+  # - "${HOME}/.hermes:/root/.hermes:ro,z"
+  # - "${HOME}/.pi:/root/.pi:ro,z"
+  # - "${HOME}/.qwen:/root/.qwen:ro,z"
+  # - "${HOME}/.vibe:/root/.vibe:ro,z"
+  # - "${HOME}/.local/share/opencode:/root/.local/share/opencode:ro,z"
+  # macOS VS Code / Cursor extension storage (paths contain spaces — keep them quoted):
+  # - "${HOME}/Library/Application Support/Code/User:/root/.config/Code/User:ro,z"
+  # - "${HOME}/Library/Application Support/Cursor/User:/root/.config/Cursor/User:ro,z"
+```
+
+After editing the mounts, restart with `make down && make up` (no rebuild is needed — mounts are a runtime concern).
+
+The `:ro` flag keeps each mount read-only, so TokenTelemetry can never modify your agent logs. The trailing `:z` relabels the mount for SELinux-enforcing hosts (Fedora, RHEL, CentOS); it is harmless on macOS and other Linux distros.
+
+### Mount paths on Windows
+
+Where the mount lines work unchanged depends on which shell you launch from.
+
+- **Git Bash:** the lines work as written. `${HOME}` resolves to `/c/Users/<you>`, which is where Windows agents write their logs (`C:\Users\<you>\.claude`).
+- **WSL:** `${HOME}` is your Linux home (`/home/<you>`). Agents running inside WSL are picked up as-is. But agents installed on the Windows side write to `C:\Users\<you>\.claude`, which WSL sees under `/mnt/c` — so those mount sources must be edited to point there:
+
+  ```yaml
+  - "/mnt/c/Users/<you>/.claude:/root/.claude:ro,z"
+  ```
+
+The two `Library/Application Support` lines are macOS-only; skip them on Windows.
+
+## Ports and the rebuild caveat
+
+Override the host ports with the `PORT` (frontend) and `TT_API_PORT` (backend) environment variables:
+
+```bash
+PORT=3200 TT_API_PORT=8200 make up
+```
+
+<Callout title="Changing the backend port needs a rebuild" type="warn">
+`TT_API_PORT` also sets `NEXT_PUBLIC_API_PORT`, which the browser uses to reach the backend. That value is baked into the Next.js client bundle **at build time**. If you change `TT_API_PORT` after the images are already built, run `make build` first so the frontend picks up the new port — otherwise the dashboard loads but can't talk to the API.
+</Callout>
+
+The ports the containers listen on internally never change (8000 backend, 3000 frontend); only the host-side published ports move.
+
+## Timezone
+
+The container passes through your host's `TZ` environment variable (`TZ: ${TZ:-}`). If your shell does not export `TZ` — which is common on macOS — the container falls back to **UTC**, and day buckets, budget windows, and daily charts shift relative to your local day.
+
+Set `TZ` explicitly when you start it:
+
+```bash
+TZ=Asia/Kolkata make up
+```
+
+Or export it once in your shell profile so every `make up` inherits it.
+
+## Persistence
+
+TokenTelemetry's own state — `history.db`, cached summaries, budgets, settings — lives on a named Docker/Podman volume called `tt_data`, mounted at `/tt-data` inside the container (via `TOKENTELEMETRY_DATA_DIR` and `TOKENTELEMETRY_HOME`).
+
+- `make down` stops the containers but **keeps** `tt_data`. Your history survives across restarts and rebuilds.
+- `make clean` removes the containers, the local images, **and** `tt_data`. This deletes your stored history and settings — use it only when you want a clean slate.
+
+Your agent logs are never stored in the volume; they are read live from the host mounts each time.
+
+## Pre-built images
+
+CI publishes multi-arch images (amd64 + arm64) to GitHub Container Registry on every push to `main`. To run without building anything locally, use the production overlay via `make up-prod`:
+
+```bash
+make up-prod                          # pull the latest images and start detached
+TT_IMAGE_TAG=sha-abc1234 make up-prod # pin a specific build instead of latest
+```
+
+This pulls `ghcr.io/vasihemanth/tokentelemetry-backend` and `ghcr.io/vasihemanth/tokentelemetry-frontend`. On a fork, set `GHCR_OWNER` to your own namespace. `TT_IMAGE_TAG` selects the tag (default `latest`).
+
+<Callout title="Don't override TT_API_PORT with up-prod" type="warn">
+The published frontend image has `NEXT_PUBLIC_API_PORT` baked in at 18000, so the backend host port is fixed for `make up-prod`. You can still move the frontend host port with `PORT=`, but overriding `TT_API_PORT` will point the browser at a port the backend isn't published on.
+</Callout>
+
+## Podman on macOS
+
+Podman is preferred over Docker when both are installed. On macOS:
+
+```bash
+brew install podman podman-compose
+podman machine init --now
+```
+
+`podman machine init --now` creates and starts the Linux VM that runs your containers. It auto-mounts `/Users`, so the home-directory agent mounts resolve without extra configuration.
+
+`podman compose` delegates to an external compose provider (`podman-compose` or `docker compose`); that indirection is expected and works. Once the machine is running, `make up` behaves the same as it does with Docker.
+
+## Security defaults
+
+Both ports publish to `127.0.0.1` only, so the dashboard is loopback-only out of the box — it is not reachable from other devices on your network. The default local experience needs no token.
+
+To reach the dashboard from another device, you need two things:
+
+1. Publish the ports on `0.0.0.0` instead of `127.0.0.1`. Add a local Compose override rather than editing `compose.yml`:
+
+   ```yaml
+   # compose.override.yml
+   services:
+     backend:
+       ports: ["0.0.0.0:${TT_API_PORT:-18000}:8000"]
+     frontend:
+       ports: ["0.0.0.0:${PORT:-13000}:3000"]
+   ```
+
+2. Set an access token so the exposed backend is authenticated:
+
+   ```bash
+   TT_AUTH_TOKEN=your-secret-token make up
+   ```
+
+<Callout type="warn">
+The token is the security boundary, not the port binding or CORS. Never expose the ports on `0.0.0.0` without `TT_AUTH_TOKEN` set. See [Remote Access](/docs/configuration/remote-access) for how the token works and how remote clients supply it.
+</Callout>
+
+## Troubleshooting
+
+**No sessions showing.** Confirm the agent you use is uncommented in the `compose.yml` `volumes` list (only `~/.claude` is on by default), then `make down && make up`. On Windows, make sure you're running from WSL or Git Bash so `${HOME}` is set.
+
+**Dashboard loads but shows no data / API errors after changing `TT_API_PORT`.** The frontend bundle still points at the old port. Run `make build` to rebuild it against the new `TT_API_PORT`, then `make up`.
+
+**Day buckets or budgets look shifted.** The container is running in UTC because `TZ` wasn't exported. Start with `TZ=Asia/Kolkata make up` (or your zone). See [Timezone](#timezone).
+
+**SELinux host can't read the mounts.** The `:z` suffix on each mount handles relabeling; it's already in `compose.yml`. If you add your own mount lines, keep the `:ro,z` suffix.
+
+**Podman on macOS: "proxy already running" or a port forward won't bind.** Podman's `gvproxy` can leave stale port-forward entries after a crash or an interrupted `up`. Clear them with:
+
+```bash
+make machine-restart
+```
+
+The Compose file intentionally uses `service_started` (not `service_healthy`) for the frontend's dependency on the backend, because `service_healthy` triggers this gvproxy double-registration bug on macOS.
