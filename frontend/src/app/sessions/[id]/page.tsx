@@ -1432,7 +1432,6 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
               className="block bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl px-3 py-2.5 hover:border-[var(--tt-brand)] transition-colors group"
             >
               <div className="flex items-center gap-2 min-w-0">
-                {p.favicon && <span className="text-[13px] leading-none shrink-0">{p.favicon}</span>}
                 <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
                   {p.title || p.file_name || "Untitled artifact"}
                 </span>

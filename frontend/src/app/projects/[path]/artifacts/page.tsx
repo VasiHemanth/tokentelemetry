@@ -42,9 +42,7 @@ export default function ArtifactsTab() {
           <Card key={a.url || a.path} padding="none" className="overflow-hidden">
             <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
               <div className="flex items-center gap-3 min-w-0">
-                {a.favicon
-                  ? <span className="text-base leading-none shrink-0">{a.favicon}</span>
-                  : !isPage && <FileText size={14} className="shrink-0 text-[var(--tt-fg-muted)]" />}
+                {!isPage && <FileText size={14} className="shrink-0 text-[var(--tt-fg-muted)]" />}
                 <AgentBadge agent={a.agent || "claude"} />
                 <CardTitle className="!text-[13px] truncate" title={a.title || a.url || a.file_name || undefined}>
                   {a.title || a.file_name || "Untitled artifact"}
