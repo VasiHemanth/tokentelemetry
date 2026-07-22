@@ -165,6 +165,65 @@ def test_cache_roundtrip_preserves_artifacts(scan_env):
     assert restored["published_artifacts"] == fresh["published_artifacts"]
 
 
+def _write_antigravity_brain(tmp_path, monkeypatch):
+    """Minimal Antigravity brain store: gemini/projects.json must exist for the
+    scan's antigravity bookkeeping (_seen_antigravity) to initialize."""
+    gemini = tmp_path / "gemini"
+    gemini.mkdir(parents=True, exist_ok=True)
+    (gemini / "projects.json").write_text(json.dumps({"projects": {}}))
+    monkeypatch.setattr(main, "GEMINI_DIR", gemini)
+    brain = gemini / "antigravity" / "brain"
+    sess = brain / "ag-sid-1"
+    sess.mkdir(parents=True)
+    # Include a file path so _antigravity_infer_project resolves a real
+    # project (not the "unassigned" sentinel, which /projects skips).
+    (sess / "task.md").write_text(
+        "# Task List - Bridge\n- [x] build it in /Users/dev/Documents/Developer/bridge/src\n")
+    (sess / "task.md.metadata.json").write_text(json.dumps({
+        "summary": "Task list for the bridge project.",
+        "updatedAt": "2026-06-24T02:34:10.651300Z", "userFacing": True}))
+    # userFacing: false docs stay session artifacts but are NOT deliverables.
+    (sess / "walkthrough.md").write_text("# Walkthrough - Bridge\nAll done.\n")
+    (sess / "walkthrough.md.metadata.json").write_text(json.dumps({
+        "summary": "internal", "updatedAt": "2026-06-24T02:37:03.091925Z",
+        "userFacing": False}))
+    monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [(brain, "app")])
+    monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_DIRS", [brain])
+    return sess
+
+
+def test_antigravity_docs_become_artifacts(scan_env, monkeypatch):
+    sess_dir = _write_antigravity_brain(scan_env, monkeypatch)
+    s = [s for s in main._scan_sessions_sync() if s["agent"] == "antigravity"][0]
+    arts = s["published_artifacts"]
+    assert len(arts) == 1                       # walkthrough is userFacing: false
+    a = arts[0]
+    assert a["kind"] == "document"
+    assert a.get("url") is None                 # no hosted url for documents
+    assert a["path"] == str(sess_dir / "task.md")
+    assert a["title"] == "Task List - Bridge"   # first markdown heading
+    assert a["description"] == "Task list for the bridge project."
+    assert a["timestamp"] == "2026-06-24T02:34:10.651300Z"
+    assert a["agent"] == "antigravity" and a["session_id"] == "ag-sid-1"
+    # Both docs remain plain session file artifacts regardless of userFacing.
+    assert {x["name"] for x in s["artifacts"]} >= {"task.md", "walkthrough.md"}
+
+
+def test_antigravity_docs_in_projects_rollup(scan_env, monkeypatch):
+    _write_antigravity_brain(scan_env, monkeypatch)
+    sessions = main._scan_sessions_sync()
+
+    async def fake_cached(fresh=False):
+        return sessions
+    monkeypatch.setattr(main, "get_sessions_cached", fake_cached)
+    monkeypatch.setattr(main, "load_hidden", lambda: set())
+    projects = asyncio.run(main.get_projects())
+    ag_sess = [s for s in sessions if s["agent"] == "antigravity"][0]
+    proj = next(p for p in projects if p["path"] == ag_sess["project"])
+    assert any(a.get("kind") == "document" and a.get("session_id") == "ag-sid-1"
+               for a in proj["artifacts"])
+
+
 def test_projects_rollup(scan_env, monkeypatch):
     _write_session(scan_env / ".claude", [
         _artifact_call("t1", "2026-07-20T10:01:00Z", file_path="/tmp/a.html",

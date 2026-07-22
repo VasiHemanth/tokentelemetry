@@ -2,11 +2,16 @@
   "releases": [
     {
       "tag": "2026-07-22",
-      "title": "Published artifact pages, per project",
+      "title": "Agent artifacts, per project",
       "highlights": [
         {
           "title": "Claude Code published artifacts",
           "description": "When Claude Code publishes an artifact (a hosted claude.ai page), TokenTelemetry now finds it in the session transcript and shows it: each project workspace gets an Artifacts tab listing every published page with its title, description and link, and the session inspector shows the pages published in that session. Publishes made from git worktrees roll up to the main repo's card.",
+          "href": "/projects"
+        },
+        {
+          "title": "Antigravity artifacts too",
+          "description": "Google Antigravity's own artifacts — the task list, implementation plan and walkthrough it writes per session — appear on the same Artifacts tab, with the summary and updated time from Antigravity's metadata. Internal (non-user-facing) docs are left out.",
           "href": "/projects"
         }
       ]

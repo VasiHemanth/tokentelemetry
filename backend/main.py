@@ -769,10 +769,15 @@ class Artifact(BaseModel):
     type: str # 'video', 'image', 'document', 'terminal'
 
 class PublishedArtifact(BaseModel):
-    """A web artifact published by Claude Code's Artifact tool — a hosted
-    claude.ai page, unlike `Artifact` which is a local file served by
-    /artifacts?path=. Extracted from session transcripts."""
-    url: str
+    """A user-facing artifact an agent produced as a deliverable, shown on the
+    project Artifacts tab. Two kinds: "page" — a hosted claude.ai page from
+    Claude Code's Artifact tool (has `url`); "document" — a local doc like
+    Antigravity's task/plan/walkthrough (has `path`, served via
+    /artifacts?path=). Unlike `Artifact`, entries carry display metadata
+    (title/description) mined from the transcript or metadata sidecars."""
+    kind: str = "page"
+    url: Optional[str] = None
+    path: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     favicon: Optional[str] = None
@@ -4168,6 +4173,7 @@ def _scan_sessions_sync():
                                             prev = published_arts.get(url, {})
                                             # Later publish wins; keep earlier metadata a redeploy omitted.
                                             published_arts[url] = {
+                                                "kind": "page",
                                                 "url": url,
                                                 "title": meta.get("title") or prev.get("title")
                                                          or (os.path.splitext(fname)[0] or None),
@@ -4675,27 +4681,51 @@ def _scan_sessions_sync():
                 task = plan = walkthrough = ""
                 latest_ts = None
                 artifacts = []
-                # Scan for base documents as artifacts
+                doc_arts: List[Dict[str, Any]] = []
+                # Scan for base documents as artifacts. These are Antigravity's
+                # first-class "Artifacts" (its UI shows them in an Artifacts
+                # panel); each has a .metadata.json sidecar with a summary,
+                # updatedAt and a userFacing flag. User-facing ones also become
+                # `published_artifacts` entries (kind "document") so they show
+                # on the project Artifacts tab alongside Claude's hosted pages.
                 for fname in ("task.md", "implementation_plan.md", "walkthrough.md"):
                     fp = sess_dir / fname
                     mp = sess_dir / f"{fname}.metadata.json"
+                    md_summary = None; md_updated = None; user_facing = True
+                    if mp.exists():
+                        try:
+                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
+                            md_summary = md.get("summary")
+                            user_facing = md.get("userFacing", True)
+                            md_updated = md.get("updatedAt")
+                            if md_updated:
+                                ts = _aware(datetime.fromisoformat(md_updated.replace("Z", "+00:00")))
+                                if latest_ts is None or ts > latest_ts: latest_ts = ts
+                        except Exception: pass
                     if fp.exists():
                         artifacts.append({"name": fname, "path": str(fp), "type": "document"})
-                        try: 
+                        try:
                             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                                 body = f.read()
                         except Exception: body = ""
                         if fname == "task.md": task = body
                         elif fname == "implementation_plan.md": plan = body
                         else: walkthrough = body
-                    if mp.exists():
-                        try:
-                            md = json.loads(mp.read_text(encoding="utf-8", errors="replace"))
-                            updated = md.get("updatedAt")
-                            if updated:
-                                ts = _aware(datetime.fromisoformat(updated.replace("Z", "+00:00")))
-                                if latest_ts is None or ts > latest_ts: latest_ts = ts
-                        except Exception: pass
+                        if user_facing:
+                            heading = next((ln.lstrip("#").strip() for ln in body.splitlines()
+                                            if ln.strip().startswith("#")), None)
+                            doc_arts.append({
+                                "kind": "document",
+                                "path": str(fp),
+                                "file_name": fname,
+                                "title": heading or {"task.md": "Task List",
+                                                     "implementation_plan.md": "Implementation Plan",
+                                                     "walkthrough.md": "Walkthrough"}[fname],
+                                "description": md_summary,
+                                "session_id": sid,
+                                "agent": "antigravity",
+                                "timestamp": md_updated,
+                            })
                 
                 # Scan for media artifacts at the brain session root (Antigravity drops
                 # previews/screenshots here) and optionally in an artifacts/ subdir.
@@ -4764,6 +4794,7 @@ def _scan_sessions_sync():
                     "artifacts": artifacts,
                     "antigravity_source": _ag_surface.get(sid),
                     "cost": 0.0,
+                    **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
 
@@ -6897,12 +6928,15 @@ async def get_projects(include_hidden: bool = False):
         parent["aggregate"] = _aggregate(members)
         # Surface worktree-published artifacts on the repo-root card too —
         # publishes usually happen from worktree sessions but belong to the repo.
-        seen_urls = {a.get("url") for a in parent.get("artifacts", [])}
+        # Identity is the hosted url for "page" artifacts, the file path for
+        # "document" ones.
+        seen_keys = {a.get("url") or a.get("path") for a in parent.get("artifacts", [])}
         for c in children:
             for a in c.get("artifacts", []):
-                if a.get("url") and a["url"] not in seen_urls:
+                key = a.get("url") or a.get("path")
+                if key and key not in seen_keys:
                     parent.setdefault("artifacts", []).append(a)
-                    seen_urls.add(a["url"])
+                    seen_keys.add(key)
         parent["artifacts"] = sorted(parent.get("artifacts", []),
                                      key=lambda x: str(x.get("timestamp") or ""), reverse=True)
         for c in children:

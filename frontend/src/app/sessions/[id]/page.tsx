@@ -24,10 +24,15 @@ interface Artifact {
   type: 'video' | 'image' | 'document' | 'terminal';
 }
 
-/* A hosted claude.ai page published by Claude Code's Artifact tool during
-   this session — a link, not a local file (unlike Artifact above). */
+/* A deliverable artifact from this session. kind "page" is a hosted claude.ai
+   page published by Claude Code's Artifact tool (has url); kind "document" is
+   a local doc like Antigravity's task/plan/walkthrough (has path) — those
+   already render in the local-files list, so the Published Pages section only
+   shows url-bearing entries. */
 interface PublishedArtifact {
-  url: string;
+  kind?: "page" | "document";
+  url?: string | null;
+  path?: string | null;
   title?: string | null;
   description?: string | null;
   favicon?: string | null;
@@ -705,7 +710,7 @@ export default function SessionDetailPage() {
               <div className="flex items-center gap-1 flex-wrap">
                 <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
                 <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
-                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.length ?? 0)} tone="emerald" />}
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
                 <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
                 <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
                 <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
@@ -941,7 +946,7 @@ export default function SessionDetailPage() {
              <div className="flex border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.18em]">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
-                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.length ?? 0)) > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
                 <TabBtn active={sidebarTab === "raw"} onClick={() => setSidebarTab("raw")} icon={<FileCode size={12} />}>Raw</TabBtn>
                 <button
                    onClick={() => setSidebarOpen(false)}
@@ -1402,9 +1407,12 @@ function ToolsPanel({ summary, onJump }: { summary: { name: string; count: numbe
   );
 }
 
-function ArtifactsPanel({ artifacts, published = [] }: { artifacts: Artifact[]; published?: PublishedArtifact[] }) {
+function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts: Artifact[]; published?: PublishedArtifact[] }) {
   // The artifact currently expanded into the full-screen modal (null = closed).
   const [expanded, setExpanded] = useState<Artifact | null>(null);
+  // Only url-bearing (hosted-page) entries render here; "document" entries
+  // are local files already shown in the Session Artifacts list below.
+  const published = publishedAll.filter((p) => p.url);
 
   if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
 
@@ -1418,14 +1426,14 @@ function ArtifactsPanel({ artifacts, published = [] }: { artifacts: Artifact[]; 
           {published.map((p) => (
             <a
               key={p.url}
-              href={p.url}
+              href={p.url ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
               className="block bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl px-3 py-2.5 hover:border-[var(--tt-brand)] transition-colors group"
             >
               <div className="flex items-center gap-2 min-w-0">
                 {p.favicon && <span className="text-[13px] leading-none shrink-0">{p.favicon}</span>}
-                <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url}>
+                <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
                   {p.title || p.file_name || "Untitled artifact"}
                 </span>
                 <ExternalLink size={10} className="shrink-0 text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-brand)] transition-colors" />

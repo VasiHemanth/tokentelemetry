@@ -9,10 +9,14 @@ export interface PlanSnippet {
   content: string;
 }
 
-/* A web artifact published by Claude Code's Artifact tool — a hosted
-   claude.ai page, extracted from the session transcript by the backend scan. */
+/* A user-facing artifact an agent produced as a deliverable. kind "page" is a
+   hosted claude.ai page from Claude Code's Artifact tool (has url); kind
+   "document" is a local doc like Antigravity's task/plan/walkthrough (has
+   path, served via /artifacts?path=). Extracted by the backend scan. */
 export interface PublishedArtifact {
-  url: string;
+  kind?: "page" | "document";
+  url?: string | null;
+  path?: string | null;
   title?: string | null;
   description?: string | null;
   favicon?: string | null;
