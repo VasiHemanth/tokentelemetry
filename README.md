@@ -55,6 +55,7 @@ TokenTelemetry reads session logs from these agents automatically.
 | **Vibe**                    | ✅ Fully supported |
 | **Antigravity**             | ✅ Fully supported |
 | **Grok Build** (xAI)        | ✅ Fully supported |
+| **Pi Coding Agent**         | ✅ Fully supported |
 
 ### Autonomous agents
 
