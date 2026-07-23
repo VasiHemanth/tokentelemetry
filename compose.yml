@@ -1,0 +1,81 @@
+# TokenTelemetry — Container Compose (Docker or Podman)
+#
+# Prefer the Makefile targets which auto-select the right tool:
+#   make up          # build + start (foreground)
+#   make up-detach   # build + start (background)
+#   make down        # stop and remove containers
+#   make clean       # also remove images and the tt_data volume
+#
+# Host ports (override via env vars):
+#   TT_API_PORT  backend  default 18000  →  http://localhost:18000
+#   PORT         frontend default 13000  →  http://localhost:13000
+#
+# Both ports bind to 127.0.0.1 (loopback) by default.  For LAN/tailnet access
+# set TT_AUTH_TOKEN and publish on 0.0.0.0 in a local override file:
+#   ports: ["0.0.0.0:${TT_API_PORT:-18000}:8000"]
+#
+# Container-internal ports are always 8000 (backend) and 3000 (frontend).
+# NEXT_PUBLIC_API_PORT is baked into the Next.js client bundle at build time —
+# rebuild the frontend image if TT_API_PORT changes.
+#
+# The backend reads agent log directories from the host as read-only mounts.
+# ~/.claude is enabled by default; uncomment any others you use.
+# The :z suffix labels volumes for SELinux-enforcing hosts (Fedora/RHEL/CentOS);
+# it is harmless on non-SELinux systems.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "127.0.0.1:${TT_API_PORT:-18000}:8000"
+    environment:
+      - TT_HOST=0.0.0.0
+      - TT_API_PORT=8000
+      - TOKENTELEMETRY_DATA_DIR=/tt-data
+      - TOKENTELEMETRY_HOME=/tt-data
+      - TZ=${TZ:-}
+    volumes:
+      - tt_data:/tt-data
+      # Agent log directories (read-only) — add/remove to match what's on this host.
+      # :z labels the mount for SELinux; harmless elsewhere.
+      - "${HOME}/.claude:/root/.claude:ro,z"
+      # - "${HOME}/.codex:/root/.codex:ro,z"
+      # - "${HOME}/.gemini:/root/.gemini:ro,z"
+      # - "${HOME}/.cline:/root/.cline:ro,z"
+      # - "${HOME}/.copilot:/root/.copilot:ro,z"
+      # - "${HOME}/.cursor:/root/.cursor:ro,z"
+      # - "${HOME}/.grok:/root/.grok:ro,z"
+      # - "${HOME}/.hermes:/root/.hermes:ro,z"
+      # - "${HOME}/.pi:/root/.pi:ro,z"
+      # - "${HOME}/.qwen:/root/.qwen:ro,z"
+      # - "${HOME}/.vibe:/root/.vibe:ro,z"
+      # - "${HOME}/.local/share/opencode:/root/.local/share/opencode:ro,z"
+      # macOS VS Code / Cursor extension storage (path contains spaces — quote required):
+      # - "${HOME}/Library/Application Support/Code/User:/root/.config/Code/User:ro,z"
+      # - "${HOME}/Library/Application Support/Cursor/User:/root/.config/Cursor/User:ro,z"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 8000)); s.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Browser uses the host port to reach the API — must match TT_API_PORT above
+        NEXT_PUBLIC_API_PORT: ${TT_API_PORT:-18000}
+    ports:
+      - "127.0.0.1:${PORT:-13000}:3000"
+    depends_on:
+      backend:
+        # service_started is intentional: service_healthy causes Podman's gvproxy
+        # to double-register port forwards on macOS, producing "proxy already running" errors.
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  tt_data:
