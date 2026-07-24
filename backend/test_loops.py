@@ -352,6 +352,44 @@ def test_grok_loop_detect_happy_path(tmp_path):
     assert lp["footprint_cost"] == 0
 
 
+def test_grok_loop_detect_delete_before_last_fire_not_cancelled(tmp_path):
+    """A successful scheduler_delete that happened at or before the loop's last
+    firing cannot have cancelled the still-firing task. Grok deletes carry no
+    task id, so we scope by timing: delete (07-17) predates last fire (07-20)
+    -> the loop is NOT cancelled (this is the confirmed real-case shape)."""
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-20T12:33:35Z")
+    assert lp is not None
+    assert lp["cancelled"] is False
+    assert lp["cancelled_at"] is None
+
+
+def test_grok_loop_detect_delete_after_last_fire_is_cancelled(tmp_path):
+    """A successful scheduler_delete strictly after the loop's last firing did
+    cancel it -> cancelled stays True with the delete timestamp preserved."""
+    fires = [_grok_fire() for _ in range(8)]
+    events = [
+        {"ts": "2026-07-15T04:29:40.384Z", "type": "tool_completed",
+         "tool_name": "scheduler_create", "outcome": "success"},
+        {"ts": "2026-07-17T18:31:46.026Z", "type": "tool_completed",
+         "tool_name": "scheduler_delete", "outcome": "success"},
+    ]
+    d = _grok_session_dir(tmp_path, fires=fires, events=events)
+    lp = main._grok_loop_detect(d, ["scheduler_create", "scheduler_delete"],
+                                "2026-07-15T04:00:00Z", "2026-07-16T09:00:00Z")
+    assert lp is not None
+    assert lp["cancelled"] is True
+    assert lp["cancelled_at"] == "2026-07-17T18:31:46.026Z"
+
+
 def test_grok_loop_detect_gated_on_scheduler_create(tmp_path):
     """No scheduler_create in signals.toolsUsed -> the deeper scan never runs."""
     d = _grok_session_dir(tmp_path, fires=[_grok_fire()])
@@ -530,3 +568,175 @@ def test_cline_scan_attaches_loop_to_anchor_session(tmp_path, monkeypatch):
     sessions = {s["id"]: s for s in main._scan_cline_sessions()}
     assert "loop" in sessions["sess-latest"] and sessions["sess-latest"]["loop"]["job_id"] == "nightly"
     assert "loop" not in sessions["sess-plain"]
+
+
+# --- next_fire_at -----------------------------------------------------------
+# _cron_next_fire matches in the machine's LOCAL timezone (that's the clock
+# Claude Code crons fire on), so these assert on the result's LOCAL fields
+# rather than exact UTC instants — the suite must pass in any zone.
+
+def test_cron_next_fire_hourly_minute():
+    nxt = main._cron_next_fire("13 * * * *", NOW)
+    assert nxt is not None and nxt > NOW
+    assert (nxt - NOW) <= timedelta(hours=1)
+    assert nxt.astimezone().minute == 13
+
+
+def test_cron_next_fire_every_5_min():
+    nxt = main._cron_next_fire("*/5 * * * *", NOW)
+    assert nxt is not None and nxt > NOW
+    assert (nxt - NOW) <= timedelta(minutes=5)
+    assert nxt.astimezone().minute % 5 == 0
+
+
+def test_cron_next_fire_strictly_after():
+    # A "* * * * *" cron fires every minute; next must be the NEXT minute, not now.
+    nxt = main._cron_next_fire("* * * * *", NOW)
+    assert nxt == NOW + timedelta(minutes=1)
+
+
+@pytest.mark.parametrize("expr", ["garbage", "1 2 3 4", "61 * * * *", "a * * * *"])
+def test_cron_next_fire_unparseable(expr):
+    assert main._cron_next_fire(expr, NOW) is None
+
+
+def test_next_fire_at_dynamic_interval():
+    # Active heartbeat loop: next fire projects one cadence past the last fire.
+    last = NOW - timedelta(minutes=5)
+    s = _loop_session(mode="dynamic", cadence="~1800s heartbeat",
+                      cadence_seconds=1800, job_id=None,
+                      created_at=_iso(NOW - timedelta(hours=1)), last_fired=_iso(last))
+    main._annotate_loop_lifecycle([s], NOW)
+    lp = s["loop"]
+    assert lp["state"] == "active"
+    assert lp["next_fire_at"] == _iso(last + timedelta(seconds=1800))
+
+
+def test_next_fire_at_fixed_cron():
+    s = _loop_session(mode="fixed_cron", cadence="13 * * * *", cadence_seconds=3600,
+                      created_at=_iso(NOW - timedelta(hours=2)),
+                      last_fired=_iso(NOW - timedelta(minutes=5)))
+    main._annotate_loop_lifecycle([s], NOW)
+    lp = s["loop"]
+    assert lp["state"] == "active"
+    assert lp["next_fire_at"] is not None
+    nxt = datetime.fromisoformat(lp["next_fire_at"])
+    assert nxt > NOW and nxt.astimezone().minute == 13
+
+
+def test_next_fire_at_none_when_not_active():
+    # Cancelled and stale loops advertise no next fire.
+    cancelled = _loop_session(cancelled=True, cancelled_at=_iso(NOW - timedelta(hours=1)))
+    stale = _loop_session(mode="dynamic", cadence_seconds=600, job_id=None,
+                          created_at=_iso(NOW - timedelta(days=3)),
+                          last_fired=_iso(NOW - timedelta(days=3)))
+    main._annotate_loop_lifecycle([cancelled, stale], NOW)
+    assert cancelled["loop"]["state"] == "cancelled" and cancelled["loop"]["next_fire_at"] is None
+    assert stale["loop"]["state"] == "expired" and stale["loop"]["next_fire_at"] is None
+
+
+# --- cancel scoping (Claude) -------------------------------------------------
+# A session may create and delete several cron jobs over its life. Only a
+# delete that targets THIS loop's job id (or, when ids are unknown, one that
+# post-dates the last fire) may mark the loop cancelled — mirroring the Grok
+# timing rule tested above.
+
+def _write_claude_session(claude_dir, sid, lines):
+    proj = claude_dir / "projects" / PROJ
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f"{sid}.jsonl").write_text(
+        "".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+
+
+def _cron_loop_lines(delete_id=None, delete_ts="2026-07-16T02:00:00Z", with_job_id=True):
+    """CronCreate(job abc123) + one fire at 01:00, then optionally a CronDelete."""
+    lines = [
+        {"type": "user", "timestamp": "2026-07-16T00:00:00Z", "cwd": "/tmp/loop",
+         "message": {"role": "user", "content": "/loop 7 * * * * do X"}},
+        {"type": "assistant", "timestamp": "2026-07-16T00:00:01Z",
+         "message": {"model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 10, "output_tokens": 5},
+                     "content": [{"type": "tool_use", "name": "CronCreate", "id": "tu1",
+                                  "input": {"cron": "7 * * * *", "recurring": True,
+                                            "prompt": "do X"}}]}},
+    ]
+    if with_job_id:
+        lines.append(
+            {"type": "user", "timestamp": "2026-07-16T00:00:02Z",
+             "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "tu1",
+                  "content": "Scheduled recurring job abc123 (runs at 7 * * * *)"}]}})
+    lines.append(
+        {"type": "user", "timestamp": "2026-07-16T01:00:00Z",
+         "message": {"role": "user", "content": "do X"}})
+    if delete_id is not None:
+        lines.append(
+            {"type": "assistant", "timestamp": delete_ts,
+             "message": {"model": "claude-opus-4-8",
+                         "usage": {"input_tokens": 1, "output_tokens": 1},
+                         "content": [{"type": "tool_use", "name": "CronDelete", "id": "tu2",
+                                      "input": {"id": delete_id}}]}})
+    return lines
+
+
+def _scan_one(sid):
+    return [s for s in main._scan_sessions_sync()
+            if s["agent"] == "claude" and s["id"] == sid][0]
+
+
+def test_scan_unrelated_cron_delete_not_cancelled(scan_env):
+    sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    _write_claude_session(scan_env / ".claude", sid, _cron_loop_lines(delete_id="zzz999"))
+    lp = _scan_one(sid)["loop"]
+    assert lp["job_id"] == "abc123"
+    assert lp["cancelled"] is False
+    assert lp["cancelled_at"] is None
+
+
+def test_scan_matching_cron_delete_cancelled(scan_env):
+    sid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    _write_claude_session(scan_env / ".claude", sid, _cron_loop_lines(delete_id="abc123"))
+    lp = _scan_one(sid)["loop"]
+    assert lp["cancelled"] is True
+    assert lp["cancelled_at"] == "2026-07-16T02:00:00Z"
+
+
+def test_scan_unknown_ids_fall_back_to_timing(scan_env):
+    claude = scan_env / ".claude"
+    # No job-id tool_result, so the loop's id is unknown. Delete BEFORE the
+    # last fire cannot have cancelled it; delete AFTER it can.
+    before = "f1111111-1111-1111-1111-111111111111"
+    _write_claude_session(claude, before, _cron_loop_lines(
+        delete_id="zzz999", delete_ts="2026-07-16T00:30:00Z", with_job_id=False))
+    after = "f2222222-2222-2222-2222-222222222222"
+    _write_claude_session(claude, after, _cron_loop_lines(
+        delete_id="zzz999", delete_ts="2026-07-16T02:00:00Z", with_job_id=False))
+    assert _scan_one(before)["loop"]["cancelled"] is False
+    assert _scan_one(after)["loop"]["cancelled"] is True
+
+
+def test_scan_wakeup_stop_cancels_dynamic_not_cron(scan_env):
+    claude = scan_env / ".claude"
+    stop = {"type": "assistant", "timestamp": "2026-07-16T02:00:00Z",
+            "message": {"model": "claude-opus-4-8",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                        "content": [{"type": "tool_use", "name": "ScheduleWakeup", "id": "tu3",
+                                     "input": {"stop": True}}]}}
+    # Dynamic heartbeat loop + stop -> cancelled.
+    dyn = "f3333333-3333-3333-3333-333333333333"
+    dyn_lines = [
+        {"type": "user", "timestamp": "2026-07-16T00:00:00Z", "cwd": "/tmp/loop",
+         "message": {"role": "user", "content": "/loop do X"}},
+        {"type": "assistant", "timestamp": "2026-07-16T00:00:01Z",
+         "message": {"model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 10, "output_tokens": 5},
+                     "content": [{"type": "tool_use", "name": "ScheduleWakeup", "id": "tu1",
+                                  "input": {"delaySeconds": 1800, "prompt": "do X"}}]}},
+        stop,
+    ]
+    _write_claude_session(claude, dyn, dyn_lines)
+    # Fixed cron loop + a wakeup stop -> the cron is NOT cancelled by it.
+    cron = "f4444444-4444-4444-4444-444444444444"
+    _write_claude_session(claude, cron, _cron_loop_lines() + [stop])
+    assert _scan_one(dyn)["loop"]["cancelled"] is True
+    assert _scan_one(cron)["loop"]["cancelled"] is False

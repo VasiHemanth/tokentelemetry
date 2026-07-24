@@ -37,6 +37,7 @@ export interface LoopRow {
   createdAt?: string | null;
   lastFired?: string | null;
   expiresAt?: string | null;
+  nextFireAt?: string | null;
   expiredReason?: string | null;
   cancelledAt?: string | null;
 }
@@ -111,6 +112,7 @@ export function deriveProjectLoops(sessions: SessionRow[]): ProjectLoops {
       createdAt: lp.created_at,
       lastFired: lp.last_fired,
       expiresAt: lp.expires_at,
+      nextFireAt: lp.next_fire_at,
       expiredReason: lp.expired_reason,
       cancelledAt: lp.cancelled_at,
     });

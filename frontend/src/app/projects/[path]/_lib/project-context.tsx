@@ -86,6 +86,7 @@ export interface SessionLoop {
   state?: "active" | "expired" | "cancelled" | "unknown";
   active?: boolean;
   expires_at?: string | null;
+  next_fire_at?: string | null;
   expired_reason?: string | null;
 }
 
