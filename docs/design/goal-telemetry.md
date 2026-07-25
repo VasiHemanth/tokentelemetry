@@ -92,15 +92,31 @@ Counts are from this machine, deduped, read-only.
 
 | Agent | Has `/goal` | Mechanism | Durable evidence | Local usage |
 |---|---|---|---|---|
-| Claude Code | yes | Stop-hook completion condition + evaluator | transcript text only | 15 sessions armed, 30 goals, 17 block events |
+| Claude Code | yes | Stop-hook completion condition + evaluator | transcript text only | 15 sessions armed, 30 goals, 15 real block events (all in one session) |
 | Codex | yes | `thread_goals` SQLite + `update_goal` tool | dedicated DB with native token/time accounting | 1 goal (270,359 tokens, 2,615 s, `paused`) |
 | Grok Build | yes (feature-gated) | `update_goal` progress tool | `chat_history.jsonl` tool calls | 88 calls across 24 sessions |
 | Antigravity | yes | prompt marker | `transcript.jsonl` user request | ~19 invocations across 10 conversations |
-| Gemini CLI, Cursor, Copilot, OpenCode, Qwen, Vibe, Pi, Cline, Hermes, Omnigent | no evidence found | — | — | — |
+| Cursor, Copilot, OpenCode | not natively | third-party `cursor-goal` port | `~/.cursor-goal/data/goal.json` **if installed** | not installed here |
+| Gemini CLI, Qwen, Vibe, Pi, Cline, Hermes, Omnigent | no | — | — | — |
 
-So: four of roughly fourteen supported agents, not "most". That is still worth
-building for, because all four are agents this user actually runs unattended,
-and because the Codex row alone shows a single goal burning 270k tokens.
+So: four of roughly fourteen supported agents ship it natively, not "most".
+That is still worth building for, because all four are agents this user actually
+runs unattended, and because the Codex row alone shows a single goal burning
+270k tokens.
+
+Both halves of that count were checked two ways, local artifacts **and**
+documentation, because the Codex case proves local emptiness means nothing: its
+feature was fully shipped while one of its two DBs sat empty. Codex `/goal`
+("Goal Mode") reached GA in CLI 0.133 on 2026-05-21, which lines up with the
+`thread goals` migration stamped 2026-05-23 on this machine.
+
+The `cursor-goal` row is the one genuinely optional surface. It is a community
+project, not an official feature, that ports Claude Code's `/goal` to Cursor,
+Copilot and OpenCode using a stop hook plus an evaluator subagent, and it keeps
+runtime state in `~/.cursor-goal/data/goal.json`. That file would be trivial to
+read if a user has it, but it is absent here, so it is explicitly **out of scope
+for the phased build below** and noted only so a future contributor knows the
+hook exists.
 
 ## Why goals cannot reuse the loop schema
 
@@ -115,8 +131,9 @@ the same object everywhere: a cadence, a fire count, a last fire. Goals are not.
    Nobody else does. Claude Code, verified explicitly, emits **no terminal
    event at all**: every hook-related record in a goal session is either "Goal
    set" or "Stop hook feedback". Nothing marks a goal met, cleared, or
-   abandoned. 13 of 15 Claude goal sessions recorded zero blocks, meaning the
-   only honest reading is "armed, outcome unknown".
+   abandoned. 13 of the 15 Claude goal sessions recorded zero blocks, and every
+   genuine block on this machine (15 of them) sits in a single session, so for
+   almost every goal the only honest reading is "armed, outcome unknown".
 3. **"Cost of a goal" means three different things** (see below).
 
 The design therefore is a shared **envelope** plus per-agent **evidence**, with
@@ -187,9 +204,12 @@ Two traps, both hit during research:
 - **Compaction duplicates.** A compacted transcript replays earlier records, so
   the same arm appears at two line numbers with an identical timestamp. Dedupe
   on `(timestamp, sha1(condition)[:12])`.
-- Records whose content is a `tool_result` may quote these strings verbatim (a
-  session that greps for them, like the research that produced this doc).
-  Skip `tool_result` blocks.
+- **Sessions that merely discuss goals look like sessions that ran them.**
+  Skipping `tool_result` blocks is necessary but not sufficient: a session
+  *writing about* the feature puts "Stop hook feedback" into `assistant` prose
+  too. The research session behind this doc produced exactly two such phantom
+  blocks, which is 12% of the naive machine-wide total. Count blocks only from
+  `type: "user"` records, and require the session to have armed a goal first.
 
 Block bursts: group block events with gaps under 5 minutes. Local data shows one
 burst of exactly 8 rapid blocks (15:51:06 to 15:53:39) then a stop, which is the
@@ -199,10 +219,19 @@ documented cap firing, and a later burst of 5.
 
 Read both candidate paths and use whichever has rows (see the migration-level
 table above), via read-only URI and `PRAGMA busy_timeout`, wrapped so a locked,
-missing, or older-schema DB yields no goals rather than an error. Join `thread_id` to the Codex session id already
-parsed from `~/.codex/sessions/**/rollout-*.jsonl` (the rollout filename
-contains the thread id, confirmed: thread `019ebfe9-f0a5-78a3-ba8b-05d68bd72a00`
-matches `rollout-2026-06-13T13-07-20-019ebfe9-….jsonl`).
+missing, or older-schema DB yields no goals rather than an error.
+
+**The join is a straight equality, verified end to end rather than assumed.**
+The scanner builds its Codex session id at `backend/main.py:4411` as
+`sid = "-".join(f.stem.split("-")[-5:])`, which reconstructs the thread UUID out
+of the rollout filename. Checked against the running API: the local goal's
+`thread_id` `019ebfe9-f0a5-78a3-ba8b-05d68bd72a00` matches a live session
+(project `Developer/experiments`, 5,664,120 tokens, $5.07). So
+`thread_goals.thread_id == sess["id"]` needs no translation layer, and phase 1
+really is the cheap one.
+
+That same pair illustrates the double-counting trap below: the goal's 270,359
+tokens are about 5% **of** that session's 5.66M, not an extra 270k on top.
 
 Unlike everything else in the scan, this is **live mutable state**: status moves
 `active → paused → complete`. Treat it like loop lifecycle, not like a cached
