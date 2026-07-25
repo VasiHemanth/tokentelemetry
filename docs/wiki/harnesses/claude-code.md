@@ -4,7 +4,7 @@ title: Claude Code
 description: Richest-signal harness; JSONL transcripts under ~/.claude/projects with full cache fields, subagent rollup, skill and MCP usage.
 resource: /backend/main.py
 tags: [harness, coding-agent, delegation, anthropic]
-timestamp: 2026-07-02
+timestamp: 2026-07-22
 ---
 
 # Claude Code
@@ -17,7 +17,11 @@ timestamp: 2026-07-02
   (`cache_read_input_tokens`, `cache_creation_input_tokens`, 1h ephemeral),
   model per line, tool calls, reasoning steps, skills
   (`Skill` tool_use + `<command-name>` tags, built-in CLI commands filtered),
-  MCP usage from `mcp__<server>__<tool>` names.
+  MCP usage from `mcp__<server>__<tool>` names. Published
+  [artifacts](../features/artifacts.md): an `Artifact` tool_use paired by
+  tool_use_id with its tool_result, which carries the hosted
+  `claude.ai/code/artifact/<uuid>` URL; `action: "list"` calls and
+  URL-less (failed) results are skipped (PR #193).
 - **Delegation:** full token rollup, the only harness with one. Subagent files
   are not sessions; their usage goes into a separate `delegated` bucket that IS
   included in aggregates. Cost each subagent file by its own `message.model`

@@ -2,23 +2,23 @@
   "okf": "0.1",
   "profile": "generic",
   "created": "2026-07-07",
-  "updated": "2026-07-07",
+  "updated": "2026-07-25",
   "status": "complete",
   "batches_done": 0,
   "batches_total": 0,
-  "page_count": 50,
+  "page_count": 51,
   "page_types": {
     "Analysis": 5,
     "Convention": 5,
     "Decision": 3,
-    "Feature": 7,
+    "Feature": 8,
     "Harness": 13,
     "Idea": 1,
     "Overview": 1,
     "Playbook": 6,
     "Subsystem": 9
   },
-  "compiled_from_sha": "422d0a95a075b21296f6ea536bd1e946be0015d2",
+  "compiled_from_sha": "2a67ce4bc55c0b8d62f243a1a1edb33aeaf1dc66",
   "plugin_version": "0.5.0",
   "provenance": {
     "analyses/brain-savings-approaches": {
@@ -109,6 +109,12 @@
       },
       "page_sha": "a93fef816637"
     },
+    "features/artifacts": {
+      "resources": {
+        "website/content/docs/features/artifacts.mdx": "ab7760ba8c5a"
+      },
+      "page_sha": "09dc69ef20d4"
+    },
     "features/hermes-dashboard": {
       "resources": {
         "website/content/docs/features/hermes.mdx": "ab33fb0c9073"
@@ -126,7 +132,7 @@
       "resources": {
         "website/content/docs/features/projects.mdx": "4853d319d015"
       },
-      "page_sha": "0ddc7ce1c0fb"
+      "page_sha": "157c68324899"
     },
     "features/schedules": {
       "resources": {
@@ -145,7 +151,7 @@
       "resources": {
         "website/content/docs/features/traces.mdx": "98eb7c88a1c3"
       },
-      "page_sha": "9eebb56ff3ef"
+      "page_sha": "d603e3ec7a39"
     },
     "harnesses/antigravity": {
       "resources": {
@@ -154,13 +160,13 @@
         "backend/summarizers/antigravity.py": "4d9aa5586c1c",
         "DESIGN.md": "a4d991aa3a82"
       },
-      "page_sha": "930eabeedf0b"
+      "page_sha": "e5a6e6708ffe"
     },
     "harnesses/claude-code": {
       "resources": {
         "backend/main.py": "8e0dd470a9de"
       },
-      "page_sha": "2c216069cd5a"
+      "page_sha": "524a89b38bba"
     },
     "harnesses/cline": {
       "resources": {
@@ -333,7 +339,7 @@
         "docs/design/durable-history.md": "d6a5fd7b520a",
         "backend/agent_retention.py": "9bf7333d5eff"
       },
-      "page_sha": "a9b2e328bf16"
+      "page_sha": "8a4fffce5704"
     },
     "subsystems/power-cost": {
       "resources": {
@@ -368,7 +374,7 @@
       "resources": {
         "backend/main.py": "8e0dd470a9de"
       },
-      "page_sha": "5e8c7477d86c"
+      "page_sha": "fcf447dbb51f"
     },
     "subsystems/summarizers": {
       "resources": {
@@ -379,9 +385,9 @@
       "page_sha": "5c9ed61baca0"
     }
   },
-  "provenance_stamped": "2026-07-07",
+  "provenance_stamped": "2026-07-25",
   "source_tree": {
-    "count": 352,
-    "sha": "548f42cb4551"
+    "count": 354,
+    "sha": "9b0ac95195f1"
   }
 }

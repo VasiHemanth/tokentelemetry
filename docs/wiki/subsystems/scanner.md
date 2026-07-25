@@ -4,7 +4,7 @@ title: Session scanner
 description: The core pipeline in backend/main.py; live-scans every harness's on-disk logs into a unified session list with a 30s cache and 100-session cap.
 resource: /backend/main.py
 tags: [subsystem, backend]
-timestamp: 2026-07-02
+timestamp: 2026-07-22
 ---
 
 # Session scanner
@@ -20,7 +20,12 @@ unified session shape served by `/sessions` and `/analytics`.
 - **Caching:** `get_sessions_cached` holds results in RAM for 30s
   (`SESSIONS_TTL_SEC`); list endpoints work over the top-100 sessions.
   Expensive per-session detail lives on separate endpoints (e.g. the
-  [delegation overlay](delegation-telemetry.md)).
+  [delegation overlay](delegation-telemetry.md)). Claude and Codex sessions
+  also have a per-session sidecar cache (`backend/scan_cache.py`), keyed on
+  source mtime and `CACHE_VERSION`; bump the version whenever cached payload
+  shape or semantics change (v5 as of PR #193, which added
+  `published_artifacts` and page source paths). A version mismatch is a
+  miss, so stale entries reparse transparently.
 - **Parsing is tolerant:** per-line JSON parse, partial trailing lines
   skipped (sessions may still be mid-write), usage-less and `<synthetic>`
   lines skipped for cost.

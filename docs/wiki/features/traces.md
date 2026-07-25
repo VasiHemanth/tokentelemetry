@@ -4,7 +4,7 @@ title: Session traces
 description: Per-session drill-in; tool calls, reasoning steps, artifacts, delegated-work cards, skills and MCP usage.
 resource: /website/content/docs/features/traces.mdx
 tags: [feature, sessions, traces]
-timestamp: 2026-07-02
+timestamp: 2026-07-22
 ---
 
 # Session traces
@@ -13,7 +13,10 @@ timestamp: 2026-07-02
 
 - Detail shows the event trace: tool calls (direct vs MCP grouped by
   server), reasoning steps, and artifacts (images/files; loaded with
-  `?token=` under [remote auth](../subsystems/remote-auth.md)).
+  `?token=` under [remote auth](../subsystems/remote-auth.md)). The
+  artifacts panel also lists Published Pages: url-bearing
+  [published artifacts](artifacts.md) only, since document-kind entries
+  already appear as local files (PR #193).
 - Delegated-work card links subagent spawns to the spawning `Agent`/`Task`
   tool call; tokens shown per subagent where the harness records them
   ([delegation telemetry](../subsystems/delegation-telemetry.md)).

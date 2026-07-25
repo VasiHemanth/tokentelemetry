@@ -4,7 +4,7 @@ title: Durable history store
 description: SQLite rollup at ~/.tokentelemetry/history.db so analytics survive each agent's transcript pruning; raw facts stored, insights recomputed at read.
 resource: /backend/history_store.py
 tags: [subsystem, backend, sqlite, analytics]
-timestamp: 2026-07-02
+timestamp: 2026-07-22
 ---
 
 # Durable history store
@@ -22,7 +22,10 @@ retention in `backend/agent_retention.py`.
   wins for in-flight sessions.
 - **Raw facts only** (tokens, cost, model, tok/s, timestamps, small
   ecosystem JSON); energy/savings/CO2 recomputed at read so
-  [power-config](power-cost.md) changes apply retroactively.
+  [power-config](power-cost.md) changes apply retroactively. The ecosystem
+  blob (`_ECOSYSTEM_KEYS`) carries skills/MCP/delegation/loop plus
+  `published_artifacts` since PR #193, so
+  [artifact](../features/artifacts.md) links survive transcript pruning.
 - **Tiered retention:** tiny core rollup always kept; full transcript
   archival opt-in per agent and deletable; summaries persist past transcript
   deletion.

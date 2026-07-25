@@ -42,6 +42,7 @@ Humans edit sources; the wiki is recompiled from them. History in
 * [Analytics](features/analytics.md) - Cross-agent token/cost analytics with date-range filters served from durable history merged with the live scan.
 * [Session traces](features/traces.md) - Per-session drill-in; tool calls, reasoning steps, artifacts, delegated-work cards, skills and MCP usage.
 * [Projects](features/projects.md) - Groups sessions by working directory/project across agents, with per-project totals.
+* [Artifacts](features/artifacts.md) - Deliverable artifacts per project and per session; Claude Code published pages and Antigravity task/plan/walkthrough docs, with local previews and a Cards/List toggle.
 * [Hermes dashboard](features/hermes-dashboard.md) - Dedicated /hermes surface; sources, skills, memory, cron health, gateway health, cost anomalies.
 * [AI session summaries](features/summarization.md) - One-click session summaries via a user-picked backend (installed CLIs, Ollama, or any OpenAI-compatible endpoint) with classified errors.
 * [Local models](features/local-models.md) - Inventory of local models from Ollama and Hugging Face caches, with electricity-cost context.

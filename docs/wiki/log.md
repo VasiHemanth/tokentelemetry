@@ -1,5 +1,18 @@
 # Log
 
+## 2026-07-22
+
+**Creation** `features/artifacts.md` from the merged PR #193 diff
+(fb41faf): per-project Artifacts tab and session Published Pages;
+Claude Code hosted-page extraction (kind page) and Antigravity
+task/plan/walkthrough docs (kind document), local-only previews,
+Cards/List toggle. Updated `features/projects.md` (workspace tabs),
+`features/traces.md` (Published Pages), `harnesses/claude-code.md`
+(Artifact tool extraction), `harnesses/antigravity.md` (doc artifacts,
+brain-path-only caveat), `subsystems/scanner.md` (sidecar scan cache,
+CACHE_VERSION now v5), `subsystems/history-store.md`
+(published_artifacts in the ecosystem blob).
+
 ## 2026-07-06
 
 **Update** `analyses/wiki-staleness-failure-modes.md` moved to
