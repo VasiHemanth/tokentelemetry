@@ -53,6 +53,7 @@ interface AnalyticsData {
     job_id: string | null;
     last_fired: string;
     expires_at: string | null;
+    next_fire_at?: string | null;
   }>;
   total: { input: number; output: number; cached: number; total: number; cost: number };
   coverage?: {
@@ -627,6 +628,19 @@ function loopState(s: string) {
   return LOOP_STATE[s as keyof typeof LOOP_STATE] ?? LOOP_STATE.unknown;
 }
 
+/* Label for an active loop's next scheduled fire, in the viewer's local time.
+   A past timestamp still inside the grace window reads "due now" — wakeups can
+   lag their schedule, so hiding it would look like a missing field. */
+function nextRunLabel(iso: string): string | null {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const dm = Math.round((t - Date.now()) / 60000);
+  if (dm <= 0) return "next: due now";
+  const hhmm = new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const rel = dm >= 60 ? `${Math.floor(dm / 60)}h ${dm % 60}m` : `${dm}m`;
+  return `next ${hhmm} (in ${rel})`;
+}
+
 function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
   const loops = data.loops;
   if (!loops || loops.total_loops === 0) return null;
@@ -690,6 +704,9 @@ function RecurringLoopsSection({ data }: { data: AnalyticsData }) {
                         <span className={cn("uppercase tracking-[0.1em] text-[10px]", st.label)}>{l.state}</span>
                         {" · "}{l.cadence}{" · "}{l.mode}
                         {l.expired_reason && <> · {l.expired_reason}</>}
+                        {l.state === "active" && l.next_fire_at && nextRunLabel(l.next_fire_at) && (
+                          <> · <span className="text-emerald-300">{nextRunLabel(l.next_fire_at)}</span></>
+                        )}
                       </span>
                     </span>
                   </span>

@@ -2342,6 +2342,30 @@ def _grok_loop_detect(
         except Exception:
             pass
 
+    # Scope the cancellation by TIMING, not by task id: Grok's scheduler_delete
+    # tool_completed record carries no task id ({ts, type, tool_name, duration_ms,
+    # outcome}), so a delete can't be matched to the task it targeted. A session
+    # may create/delete several tasks over its life; a delete that happened at or
+    # before this loop's most recent firing cannot have cancelled a task that is
+    # still firing. Keep cancelled=True only if the delete strictly post-dates the
+    # last fire (updated_iso ≈ last activity ≈ last fire). If either timestamp is
+    # missing or unparseable, treat as NOT cancelled — a live-firing loop is the
+    # safer default than a false "cancelled".
+    if cancelled and cancelled_at:
+        try:
+            del_dt = _aware(datetime.fromisoformat(str(cancelled_at).replace("Z", "+00:00")))
+            fire_dt = _aware(datetime.fromisoformat(str(updated_iso).replace("Z", "+00:00")))
+            if not (del_dt > fire_dt):
+                cancelled = False
+                cancelled_at = None
+        except Exception:
+            cancelled = False
+            cancelled_at = None
+    elif cancelled:
+        # cancelled flagged but no timestamp to validate against -> be conservative.
+        cancelled = False
+        cancelled_at = None
+
     return {
         "is_loop": True,
         "mode": "scheduler",                 # Grok Tasks scheduler (fixed interval)
@@ -3776,6 +3800,57 @@ def _cron_to_seconds(cron: Optional[str]) -> Optional[int]:
     return None
 
 
+def _cron_next_fire(expr: str, after: datetime) -> Optional[datetime]:
+    """Next wall-clock fire of a 5-field cron STRICTLY after `after`.
+
+    Minimal matcher for the shapes agents emit (*, N, */step, lists, ranges);
+    evaluated minute-by-minute in the machine's LOCAL timezone, because that's
+    the clock Claude Code's in-memory crons fire on. Scans at most 8 days
+    (those crons auto-expire after 7). Returns an aware UTC datetime, or None
+    when the expression is unparseable or never matches inside the window.
+    """
+    fields = str(expr or "").split()
+    if len(fields) != 5:
+        return None
+
+    def _parse(field: str, lo: int, hi: int) -> Optional[set]:
+        vals: set = set()
+        for part in field.split(","):
+            part, _, step_s = part.strip().partition("/")
+            step = int(step_s) if step_s.isdigit() and int(step_s) >= 1 else (1 if not step_s else None)
+            if step is None:
+                return None
+            if part in ("*", ""):
+                rng = range(lo, hi + 1)
+            elif "-" in part:
+                a, _, b = part.partition("-")
+                if not (a.isdigit() and b.isdigit()):
+                    return None
+                rng = range(int(a), int(b) + 1)
+            elif part.isdigit():
+                rng = range(int(part), int(part) + 1)
+            else:
+                return None
+            vals.update(v for v in rng if lo <= v <= hi and (v - rng.start) % step == 0)
+        return vals or None
+
+    mins = _parse(fields[0], 0, 59)
+    hours = _parse(fields[1], 0, 23)
+    doms = _parse(fields[2], 1, 31)
+    months = _parse(fields[3], 1, 12)
+    dows = _parse(fields[4], 0, 6)
+    if None in (mins, hours, doms, months, dows):
+        return None
+    t = after.astimezone().replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(8 * 24 * 60):
+        # cron weekday: 0=Sunday; Python weekday(): 0=Monday.
+        if (t.minute in mins and t.hour in hours and t.day in doms
+                and t.month in months and ((t.weekday() + 1) % 7) in dows):
+            return t.astimezone(timezone.utc)
+        t += timedelta(minutes=1)
+    return None
+
+
 def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> None:
     """Recompute the VOLATILE loop lifecycle from now() for every loop session.
 
@@ -3815,6 +3890,18 @@ def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> N
         lp["state"] = state
         lp["active"] = (state == "active")
         lp["expired_reason"] = reason
+        # Next scheduled fire, only meaningful while the loop is live. Cron
+        # loops project from the cron expression (kept in `cadence`); interval
+        # loops project one cadence past the last fire — that instant may
+        # already be in the past inside the grace window (wakeups lag their
+        # schedule), which the UI renders as "due now" rather than hiding.
+        nxt = None
+        if state == "active":
+            if lp.get("mode") == "fixed_cron":
+                nxt = _cron_next_fire(lp.get("cadence") or "", now)
+            elif last:
+                nxt = last + timedelta(seconds=(cs or 3600))
+        lp["next_fire_at"] = nxt.isoformat() if nxt else None
 
 
 _CLAUDE_CACHE_FIELDS = (
@@ -4252,6 +4339,26 @@ def _scan_sessions_sync():
                         # Cache read/write is session context overhead, excluded — so this is the
                         # loop's actual work and is always <= the session's input+output.
                         footprint_tokens = lu["input"] + lu["output"]
+                        # Scope cancels to THIS loop — a session may create and
+                        # delete several jobs over its life (same hazard the Grok
+                        # scanner guards by timing, but Claude deletes DO carry
+                        # the target id, so match on it). A ScheduleWakeup stop
+                        # (no job_id key at all) halts the session's own
+                        # self-pacing, so it counts only for dynamic loops. An
+                        # id-carrying delete counts when it names this loop's
+                        # job id; when either id is unknown, fall back to the
+                        # timing rule — a delete at or before the last fire
+                        # cannot have cancelled a still-firing loop. Timestamps
+                        # here are same-format Zulu ISO strings from the same
+                        # transcript, so lexical order is chronological order.
+                        def _cancel_hits(c: Dict[str, Any]) -> bool:
+                            if "job_id" not in c:
+                                return mode == "dynamic"
+                            cid = c.get("job_id")
+                            if cid and job_id:
+                                return cid == job_id
+                            return bool(c.get("ts") and last_fired and str(c["ts"]) > str(last_fired))
+                        my_cancels = [c for c in loop_cancels if _cancel_hits(c)]
                         # Raw, cacheable facts only. Lifecycle (state/active/expires_at) is
                         # recomputed per request by _annotate_loop_lifecycle, never cached.
                         sess["loop"] = {
@@ -4266,8 +4373,8 @@ def _scan_sessions_sync():
                             "created_at": created_at,
                             "last_fired": last_fired,
                             "iterations": len(loop_fires),
-                            "cancelled": bool(loop_cancels),
-                            "cancelled_at": (loop_cancels[-1].get("ts") if loop_cancels else None),
+                            "cancelled": bool(my_cancels),
+                            "cancelled_at": (my_cancels[-1].get("ts") if my_cancels else None),
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
@@ -7954,6 +8061,7 @@ async def get_analytics(
                 "agent": agent, "session_id": s.get("id"),
                 "job_id": lp.get("job_id"), "last_fired": lp.get("last_fired"),
                 "expires_at": lp.get("expires_at"),
+                "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
             row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
