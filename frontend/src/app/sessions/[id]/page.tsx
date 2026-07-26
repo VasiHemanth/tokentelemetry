@@ -2523,47 +2523,90 @@ function GoalCard({ goal, sessionTokens }: { goal: any; sessionTokens?: number }
   const share = (tokens != null && sessionTokens && sessionTokens > 0)
     ? (tokens / sessionTokens) * 100
     : null;
+  const basis: string = goal.cost_basis ?? "session";
+  const bursts: number[] = Array.isArray(goal.evidence?.block_bursts) ? goal.evidence.block_bursts : [];
+  const AGENT_LABEL: Record<string, string> = {
+    codex: "Codex", claude: "Claude Code", grok: "Grok Build", antigravity: "Antigravity",
+  };
 
   return (
     <div className={`mb-8 bg-[var(--tt-panel)]/60 border ${tone.ring} rounded-[var(--tt-radius-lg)] p-5`}>
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-fg)] flex items-center gap-2">
           <Target size={12} strokeWidth={3} /> Goal mode
+          <span className="text-[9px] font-semibold tracking-[0.1em] text-[var(--tt-fg-dim)]">
+            {AGENT_LABEL[goal.source] || goal.source}
+          </span>
         </div>
         <span className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] ${tone.text}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {state}
+          {goal.state_source === "inferred" && (
+            <span className="text-[9px] font-normal normal-case tracking-normal text-[var(--tt-fg-dim)]"
+                  title="Derived from transcript breadcrumbs — this agent does not record goal status">
+              inferred
+            </span>
+          )}
         </span>
       </div>
 
-      {goal.objective && (
+      {(goal.objective || goal.evidence?.latest_message) && (
         <div className="mb-3 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-3 py-2">
-          <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] block mb-1">Objective</span>
+          <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] block mb-1">
+            {goal.objective ? "Objective" : "Latest progress"}
+          </span>
           <span className="text-[12px] text-[var(--tt-fg-muted)] line-clamp-3">
-            {goal.objective}{goal.objective_truncated ? "…" : ""}
+            {goal.objective || goal.evidence?.latest_message}{goal.objective_truncated ? "…" : ""}
           </span>
         </div>
       )}
 
+      {/* Cost means three different things across agents and the label has to
+          say which, or a native count reads as incremental spend. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-        <Stat label="Tokens used" value={tokens != null ? tokens.toLocaleString() : "—"} />
-        <Stat label="Time in goal" value={dur(goal.duration_seconds)} />
-        <Stat label="Token budget" value={goal.token_budget != null ? goal.token_budget.toLocaleString() : "none set"} />
-        <Stat label="Share of session" value={share != null ? `${share < 0.1 ? "<0.1" : share.toFixed(1)}%` : "—"} />
+        {basis === "native" && <>
+          <Stat label="Tokens used" value={tokens != null ? tokens.toLocaleString() : "—"} />
+          <Stat label="Time in goal" value={dur(goal.duration_seconds)} />
+          <Stat label="Token budget" value={goal.token_budget != null ? goal.token_budget.toLocaleString() : "none set"} />
+          <Stat label="Share of session" value={share != null ? `${share < 0.1 ? "<0.1" : share.toFixed(1)}%` : "—"} />
+        </>}
+        {basis === "attributed_turns" && <>
+          <Stat label="Stops blocked" value={(goal.evidence?.blocks ?? 0).toLocaleString()} />
+          <Stat label="Extra tokens" value={tokens != null ? tokens.toLocaleString() : "none"} />
+          <Stat label="Longest run" value={bursts.length ? `${Math.max(...bursts)} blocks` : "—"} />
+          <Stat label="Share of session" value={share != null ? `${share < 0.1 ? "<0.1" : share.toFixed(1)}%` : "—"} />
+        </>}
+        {basis === "session" && <>
+          <Stat label="Checkpoints" value={goal.evidence?.checkpoints != null ? String(goal.evidence.checkpoints) : "—"} />
+          <Stat label="Goal cost" value="whole session" />
+          <Stat label="Session tokens" value={sessionTokens != null ? sessionTokens.toLocaleString() : "—"} />
+          <Stat label="Reported done" value={goal.evidence?.completed ? "yes" : "not reported"} />
+        </>}
       </div>
 
       <div className="space-y-1 text-[11px] font-mono text-[var(--tt-fg-muted)]">
-        <Row k="Started" v={fmt(goal.created_at)} />
-        <Row k="Last update" v={fmt(goal.updated_at)} />
+        {goal.created_at && <Row k="Started" v={fmt(goal.created_at)} />}
+        {goal.updated_at && <Row k={basis === "attributed_turns" ? "Last block" : "Last update"} v={fmt(goal.updated_at)} />}
         {goal.evidence?.status_raw && <Row k="Status (agent's own)" v={goal.evidence.status_raw} accent={tone.text} />}
         {goal.evidence?.deferrals != null && <Row k="Continuation deferrals" v={goal.evidence.deferrals} />}
+        {bursts.length > 1 && <Row k="Block runs" v={bursts.join(" · ")} />}
+        {goal.evidence?.cap_hit && <Row k="Hit the block cap" v="yes (8 consecutive)" accent="text-amber-400" />}
         {goal.goal_id && <Row k="Goal id" v={goal.goal_id} />}
       </div>
 
-      <div className="mt-3 text-[10px] text-[var(--tt-fg-dim)]">
-        {goal.state_source === "reported"
-          ? "Status and counts are reported by Codex itself, and read fresh on every load rather than cached."
-          : "Status is inferred from session breadcrumbs, not reported by the agent."}
-        {tokens != null && " These tokens are part of the session total above, not additional to it."}
+      <div className="mt-3 text-[10px] text-[var(--tt-fg-dim)] space-y-1">
+        <div>
+          {goal.state_source === "reported"
+            ? "Status and counts are reported by the agent itself, and read fresh on every load rather than cached."
+            : "Status is inferred from session breadcrumbs. This agent records no completion event, so a goal is never shown as finished."}
+        </div>
+        {basis === "native" && tokens != null &&
+          <div>These tokens are part of the session total above, not additional to it.</div>}
+        {basis === "attributed_turns" &&
+          <div>Counts only the turns that ran because a stop was blocked, so this is additional work the goal caused.</div>}
+        {basis === "session" &&
+          <div>No per-goal boundary exists for this agent, so the session cost is the goal cost. It is not extra spend.</div>}
+        {goal.evidence?.objective_recoverable === false &&
+          <div>This agent records progress updates but not the objective itself, so the latest progress note is shown instead.</div>}
       </div>
     </div>
   );

@@ -2,16 +2,20 @@
   "releases": [
     {
       "tag": "2026-07-26",
-      "title": "See what Codex Goal Mode actually cost",
+      "title": "See what /goal runs actually cost",
       "highlights": [
         {
-          "title": "Goal Mode on the session trace",
-          "description": "Sessions where you ran Codex's /goal now show a Goal Mode card: the objective, Codex's own status (active, paused, complete or blocked), tokens used, time spent in the goal, and any token budget. A long unattended goal is no longer indistinguishable from an ordinary session.",
+          "title": "Goal cards on the session trace",
+          "description": "Sessions where you set a goal now show a Goal Mode card. Codex reports the objective, status, tokens and time itself. Claude Code shows how many times the goal blocked the agent from stopping and the extra tokens those turns cost. Grok shows its progress checkpoints, and Antigravity shows the goal you typed. An unattended overnight run is no longer indistinguishable from an ordinary session.",
           "href": "/sessions"
         },
         {
-          "title": "Goal cost shown as a share, not a second bill",
-          "description": "The card reports a goal's tokens as a percentage of its session total, because Codex counts them inside that total. The numbers come from Codex itself rather than being estimated, and status is re-read on every load so a finished goal never keeps showing as running."
+          "title": "Every goal says where its status came from",
+          "description": "Only Codex records real goal status, so only Codex cards show it as fact. Everything else is marked \"inferred\", and a Claude goal is never shown as finished because Claude writes no completion event. The card would rather say \"unknown\" than guess."
+        },
+        {
+          "title": "Goal cost is never double-counted",
+          "description": "Cost means three different things here, and each card says which. Codex tokens are shown as a share of the session that already contains them, Claude shows only the extra turns a blocked stop caused, and Grok and Antigravity say plainly that the session is the goal."
         }
       ]
     },

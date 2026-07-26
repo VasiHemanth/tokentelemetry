@@ -5,7 +5,9 @@ Companion to the `/loop` support already in `backend/main.py`
 question, different feature: when a user hands an agent an objective and walks
 away, what did that cost and how did it end?
 
-Status: plan. Nothing here is implemented yet.
+Status: **implemented** for all four agents. Where the build deviated from the
+original plan, the reason is recorded inline under "Changed during
+implementation".
 
 ## What `/goal` actually is
 
@@ -184,9 +186,26 @@ Allowed states per agent, enforced in the annotator so a lie is impossible:
 | Agent | States it may emit |
 |---|---|
 | Codex | `active`, `paused`, `complete`, `blocked` (all `reported`) |
-| Grok | `complete` when a checkpoint carries `completed:true`, else `active` (`inferred`) |
+| Grok | `complete` when a checkpoint carries `completed:true`, else `unknown` (`inferred`) |
 | Claude | `armed`, `blocked`, `unknown`. **Never `complete`.** |
 | Antigravity | `unknown` only |
+
+### Changed during implementation
+
+Two things the plan got wrong, both corrected against local data:
+
+1. **Grok falls back to `unknown`, not `active`.** The plan said a Grok goal
+   with no completion flag is "active". That is an assertion the data does not
+   support: these sessions ended long ago, and a goal that never reported
+   completion may have finished, stalled, or been abandoned. `unknown` is the
+   honest reading, and it keeps Grok consistent with Claude.
+2. **Grok's objective is not recoverable at all.** All 25 local sessions that
+   call `update_goal` do so with **no `/goal` user message anywhere**: the tool
+   sits in the toolset and the model drives it from skill instructions. So
+   `objective` stays null and the UI shows the latest progress message under a
+   "Latest progress" label instead. Passing a status line off as the user's
+   objective would have been the easy, wrong thing. Antigravity is the opposite
+   case: its marker *is* the objective, so that one is shown.
 
 ## Detection
 
@@ -211,9 +230,14 @@ Two traps, both hit during research:
   blocks, which is 12% of the naive machine-wide total. Count blocks only from
   `type: "user"` records, and require the session to have armed a goal first.
 
-Block bursts: group block events with gaps under 5 minutes. Local data shows one
-burst of exactly 8 rapid blocks (15:51:06 to 15:53:39) then a stop, which is the
-documented cap firing, and a later burst of 5.
+Block bursts: group block events by gap. The threshold was **calibrated against
+the real spacing rather than guessed**, because it decides whether `cap_hit`
+means anything. In the one local session with a long run, gaps inside a genuine
+run are 42s and below (43, 23, 23, 20, 19, 11, 11) while the nearest true break
+is 169s. A 120s threshold separates them cleanly and yields bursts of
+`[1, 1, 8, 5]`, i.e. a longest run of exactly 8, which is the documented cap
+firing. The originally-planned 300s threshold merges the break and reports 9,
+which would show a cap that had apparently been exceeded.
 
 ### Codex
 
