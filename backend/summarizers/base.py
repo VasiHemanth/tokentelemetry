@@ -11,6 +11,8 @@ text back out. Heavy lifting (condensing, prompting, caching) lives in
 """
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -39,6 +41,28 @@ def _ensure_cwd() -> str:
     return str(SUMMARIZER_CWD)
 
 
+def _looks_like_path(s: str) -> bool:
+    """True when ``s`` is a path (has a separator), not a bare command name."""
+    return os.sep in s or (os.altsep is not None and os.altsep in s)
+
+
+def _binary_override(binary: str) -> str:
+    """Location override for a CLI, via env ``TT_<BINARY>_BIN``. "" when unset.
+
+    Enterprise / locked-down VDI installs often can't put the coding CLI on PATH
+    (redirected profile, per-user install under Documents, an npm shim in a
+    non-PATH dir) even though the binary runs fine when launched by full path.
+    Setting e.g. ``TT_CLAUDE_BIN=C:\\Users\\me\\Documents\\claude.exe`` (or
+    ``TT_OLLAMA_BIN`` / ``TT_CODEX_BIN`` / …, keyed on the adapter's ``binary``)
+    makes both the availability probe and the actual summarize call use that
+    path. A bare name is still PATH-resolved; a full/relative path is used as-is.
+    """
+    if not binary:
+        return ""
+    key = "TT_" + re.sub(r"[^A-Z0-9]+", "_", binary.upper()) + "_BIN"
+    return os.environ.get(key, "").strip()
+
+
 def _resolve_executable(name: str) -> str:
     """Resolve a bare CLI name to its full path on PATH, honouring PATHEXT.
 
@@ -54,7 +78,14 @@ def _resolve_executable(name: str) -> str:
 
     Falls back to the original name when nothing is found, so the existing
     "failed to launch" error still surfaces with the same wording.
+
+    A ``TT_<NAME>_BIN`` override wins over PATH resolution — a full/relative path
+    is launched as-is (CreateProcess runs ``.exe``/``.cmd`` by full path), a bare
+    override name is still PATH-resolved.
     """
+    override = _binary_override(name)
+    if override:
+        return override if _looks_like_path(override) else (shutil.which(override) or override)
     return shutil.which(name) or name
 
 
@@ -114,8 +145,20 @@ class BaseSummarizer(ABC):
     binary: str = ""
 
     def is_available(self) -> bool:
-        """True iff the CLI is installed and on PATH."""
-        return self.binary != "" and shutil.which(self.binary) is not None
+        """True iff the CLI can be launched — on PATH, or via a TT_<BIN>_BIN override.
+
+        The override lets a locked-down install expose a CLI that works but isn't
+        on PATH (see ``_binary_override``); a path override must point at an
+        existing file, a bare-name override must resolve on PATH.
+        """
+        if not self.binary:
+            return False
+        override = _binary_override(self.binary)
+        if override:
+            if _looks_like_path(override):
+                return Path(override).is_file()
+            return shutil.which(override) is not None
+        return shutil.which(self.binary) is not None
 
     @abstractmethod
     def summarize(self, prompt: str, *, timeout: int = 120) -> str:

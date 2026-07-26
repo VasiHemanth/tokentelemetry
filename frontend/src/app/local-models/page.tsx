@@ -1,3 +1,5 @@
+"use client";
+
 import { Cpu } from "lucide-react";
 import { PageHeader, Section } from "@/components/ui";
 import { PowerSettings } from "@/components/settings/PowerSettings";

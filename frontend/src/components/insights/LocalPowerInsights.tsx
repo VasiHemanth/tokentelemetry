@@ -50,8 +50,12 @@ export default function LocalPowerInsights({ forceShow = false }: { forceShow?: 
     return null;
   }
 
-  let totalEnergyWh: number | undefined = analytics?.total?.energy_wh;
-  let savingsUsd: number | undefined = analytics?.total?.savings_usd;
+  // `?? undefined` folds a null (some backend versions send null rather than 0)
+  // into the same path as a missing value: energy falls back to the estimate,
+  // savings hides its card — instead of a `null.toFixed()` crash that would take
+  // the whole page down when the field is null.
+  let totalEnergyWh: number | undefined = analytics?.total?.energy_wh ?? undefined;
+  let savingsUsd: number | undefined = analytics?.total?.savings_usd ?? undefined;
   let isEstimate = false;
 
   if (totalEnergyWh === undefined) {
