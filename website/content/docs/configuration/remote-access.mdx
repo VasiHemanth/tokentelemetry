@@ -78,7 +78,7 @@ If you use a specific IP rather than `0.0.0.0`, you don't need to repeat it in `
 
 With `0.0.0.0` (wildcard), Next.js can't derive a single hostname, so you still need `--allowed-origins`.
 
-## SSH tunnel access (no port changes, VPS)
+## SSH tunnel access (one forwarded port, VPS)
 
 Use this pattern when:
 - Your agents (and their logs) run on a remote VPS or server.
@@ -88,24 +88,20 @@ Use this pattern when:
 **On the remote machine** (where the agent logs live):
 
 ```bash
-NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+./start.sh --single-port
 ```
 
-The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at `localhost:8000` regardless of what address the browser opened the dashboard from.
+`--single-port` keeps FastAPI on its normal local port and streams API requests through the dashboard's same-origin proxy while preserving bearer headers and `?token=` artifact URLs.
 
 **On your laptop:**
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+ssh -N -L 3000:127.0.0.1:3000 user@remote-host
 ```
 
 Then open **http://localhost:3000** on your laptop.
 
-<Callout type="warn">
-Forward **both** ports (`3000` and `8000`). A single-port forward (`-L 3000:...` only) shows a blank dashboard because the frontend tries to reach the backend at `localhost:8000` on your laptop instead of the remote machine.
-</Callout>
-
-This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because both services stay on loopback.
+This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because the tunnel reaches the frontend over loopback; real network callers are marked by the proxy and remain token-gated.
 
 ## Disabling the token (trusted tailnet only)
 

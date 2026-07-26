@@ -39,7 +39,7 @@ function die(msg) {
 // Accepts --port / --api-port (and -p / -a shorthands), in `--flag value` or
 // `--flag=value` form. Anything unknown triggers the help text.
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, dev: false };
+  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, dev: false, singlePort: false };
   const take = (i) => {
     if (i + 1 >= argv.length) die(`expected a value after ${argv[i]}`);
     return argv[i + 1];
@@ -67,6 +67,7 @@ function parseArgs(argv) {
     else if (a === '--auth-token')             { out.authToken = take(i); i++; }
     else if (a.startsWith('--auth-token='))    { out.authToken = a.slice('--auth-token='.length); }
     else if (a === '--insecure-no-auth')       { out.insecureNoAuth = true; }
+    else if (a === '--single-port')            { out.singlePort = true; }
     else if (a === '--dev')                    { out.dev = true; }
     else if (a === '-d' || a === '--data-dir') { setDataDir(take(i)); i++; }
     else if (a.startsWith('--data-dir='))      { setDataDir(a.slice('--data-dir='.length)); }
@@ -111,6 +112,7 @@ function printHelp() {
     '                            random token is generated and printed once.',
     '      --insecure-no-auth    Disable the remote access token entirely. Only safe',
     '                            on a fully trusted private network (e.g. a tailnet).',
+    '      --single-port         Proxy API requests through the frontend origin.',
     '      --dev                 Run the Next.js dev server (HMR) instead of a',
     '                            production build. For developing TokenTelemetry',
     '                            itself; normal use serves a faster compiled build.',
@@ -364,7 +366,7 @@ function ensureFrontendBuild(apiPort) {
 }
 
 async function start() {
-  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir, dev } = parseArgs(process.argv.slice(2));
+  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir, dev, singlePort } = parseArgs(process.argv.slice(2));
 
   // --data-dir is just a friendly front-end for TOKENTELEMETRY_DATA_DIR, which
   // the Python backend reads (tt_paths.data_dir). An explicit flag wins over an
@@ -471,13 +473,15 @@ async function start() {
       NODE_ENV: dev ? 'development' : 'production',
       PORT: String(frontPort),
       NEXT_PUBLIC_API_PORT: String(apiPort),
+      TT_SINGLE_PORT_PROXY: singlePort ? '1' : '',
+      TT_PROXY_API_URL: `http://127.0.0.1:${apiPort}`,
       TT_ALLOWED_ORIGINS: allowed,
     },
   });
 
   const dashUrl = `http://${displayHost}:${frontPort}`;
   console.log(`\nDashboard:  ${dashUrl}`);
-  console.log(`API:        http://${displayHost}:${apiPort}`);
+  console.log(`API:        http://${displayHost}:${apiPort}${singlePort ? ' (also proxied through dashboard)' : ''}`);
 
   try {
     const resolvedDataDir = require('child_process').spawnSync(venvPython, ['-c', 'from tt_paths import data_dir; print(data_dir())'], { cwd: backendDir, encoding: 'utf8', env: backendEnv }).stdout.trim();

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 # Import the fully-assembled app (CORSMiddleware wrapping RemoteAuthMiddleware).
 import main  # noqa: E402
-from main import app, _is_loopback, _presented_token  # noqa: E402
+from main import app, _is_loopback, _presented_token, _is_proxied_request  # noqa: E402
 
 
 async def _request(method, path, *, headers=None, query=b"", client=("203.0.113.7", 5555)):
@@ -129,6 +129,22 @@ def test_loopback_is_exempt_even_with_token_set():
         assert status == 200, (client, status)
 
 
+def test_proxied_loopback_without_token_is_rejected():
+    """A network caller proxied over loopback must not inherit local trust."""
+    _set_token(TOKEN)
+    status, _ = _get(client=LOOPBACK, headers={"X-TT-Proxied": "1"})
+    assert status == 401, status
+
+
+def test_proxied_loopback_accepts_bearer_and_query_tokens():
+    _set_token(TOKEN)
+    marker = {"X-TT-Proxied": "1"}
+    bearer, _ = _get(client=LOOPBACK, headers={**marker, "Authorization": f"Bearer {TOKEN}"})
+    query, _ = _get(client=LOOPBACK, headers=marker, query=f"token={TOKEN}")
+    assert bearer == 200, bearer
+    assert query == 200, query
+
+
 def test_preflight_is_answered_without_token():
     """CORS is outermost: an OPTIONS preflight (no Authorization) must succeed and
     carry the allow-origin header, never get a 401 from the auth layer."""
@@ -184,6 +200,21 @@ def test_remote_access_not_fetchable_remotely():
         os.environ.pop("TT_REMOTE_CONNECT_URL", None)
 
 
+def test_proxied_loopback_cannot_fetch_remote_access_token():
+    _set_token(TOKEN)
+    os.environ["TT_REMOTE_CONNECT_URL"] = "http://192.168.0.6:3000/?token=" + TOKEN
+    try:
+        marker = {"X-TT-Proxied": "1"}
+        no_creds, _ = _remote_access(client=LOOPBACK, headers=marker)
+        valid_token, _ = _remote_access(
+            client=LOOPBACK, headers={**marker, "Authorization": f"Bearer {TOKEN}"}
+        )
+        assert no_creds == 401, no_creds
+        assert valid_token == 403, valid_token
+    finally:
+        os.environ.pop("TT_REMOTE_CONNECT_URL", None)
+
+
 def test_remote_access_disabled_when_no_connect_url():
     _set_token(TOKEN)
     os.environ.pop("TT_REMOTE_CONNECT_URL", None)
@@ -212,6 +243,15 @@ def test_presented_token_helper():
     assert _presented_token(_Req({}, {"token": "xyz"})) == "xyz"
     assert _presented_token(_Req({"Authorization": "Basic abc"}, {})) == ""
     assert _presented_token(_Req({}, {})) == ""
+
+
+def test_proxied_request_helper():
+    class _Req:
+        def __init__(self, marker):
+            self.headers = {"X-TT-Proxied": marker} if marker is not None else {}
+    assert _is_proxied_request(_Req("1"))
+    assert not _is_proxied_request(_Req("0"))
+    assert not _is_proxied_request(_Req(None))
 
 
 if __name__ == "__main__":

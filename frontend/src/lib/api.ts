@@ -8,6 +8,13 @@ import { useEffect, useState } from "react";
 // single build works on localhost, a LAN IP, or a tailnet host without rebaking
 // the URL. Falls back to loopback during SSR, where window is unavailable.
 export const API_BASE = (() => {
+  // TT_SINGLE_PORT_PROXY is deliberately rendered at request time by the root
+  // layout rather than exposed as NEXT_PUBLIC_* (which would freeze it in the
+  // bundle). The proxy prefix is same-origin, so auth headers and token query
+  // params continue through the Next rewrite unchanged.
+  if (typeof window !== "undefined" && window.__TT_SINGLE_PORT_PROXY__ === true) {
+    return "/_tt-api";
+  }
   const explicit = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "");
   if (explicit) return explicit;
   const port = process.env.NEXT_PUBLIC_API_PORT || "8000";
@@ -16,6 +23,12 @@ export const API_BASE = (() => {
   }
   return `http://127.0.0.1:${port}`;
 })();
+
+declare global {
+  interface Window {
+    __TT_SINGLE_PORT_PROXY__?: boolean;
+  }
+}
 
 // --- Remote-access token --------------------------------------------------
 // When the dashboard is opened from another device, the backend requires an
