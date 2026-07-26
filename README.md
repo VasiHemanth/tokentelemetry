@@ -164,7 +164,7 @@ The frontend runs on host port **13000** and the backend on **18000**, bound to 
 
 **Windows:** the container path requires WSL or Git Bash — `${HOME}` is not set in plain `cmd.exe` or PowerShell, which causes the `~/.claude` mount to fail silently.
 
-Pre-built images are published to GitHub Container Registry on every push to main. To run without building locally, use the production overlay:
+Pre-built images are published to GitHub Container Registry when a push to main touches `backend/`, `frontend/`, or `compose.yml`. To run without building locally, use the production overlay:
 
 ```bash
 make up-prod                                   # pull from GHCR and start detached
