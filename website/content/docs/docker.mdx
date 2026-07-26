@@ -128,7 +128,7 @@ Your agent logs are never stored in the volume; they are read live from the host
 
 ## Pre-built images
 
-CI publishes multi-arch images (amd64 + arm64) to GitHub Container Registry on every push to `main`. To run without building anything locally, use the production overlay via `make up-prod`:
+CI publishes multi-arch images (amd64 + arm64) to GitHub Container Registry when a push to `main` touches `backend/`, `frontend/`, or `compose.yml`. Pushes that change only docs or the website don't rebuild them, so `latest` tracks the last code change rather than the newest commit. To run without building anything locally, use the production overlay via `make up-prod`:
 
 ```bash
 make up-prod                          # pull the latest images and start detached
@@ -177,9 +177,13 @@ To reach the dashboard from another device, you need two things:
    TT_AUTH_TOKEN=your-secret-token make up
    ```
 
+   `compose.yml` forwards `TT_AUTH_TOKEN` from your shell into the backend container. Leaving it unset (the default) keeps the auth gate switched off, which is what makes the loopback-only default safe.
+
 <Callout type="warn">
 The token is the security boundary, not the port binding or CORS. Never expose the ports on `0.0.0.0` without `TT_AUTH_TOKEN` set. See [Remote Access](/docs/configuration/remote-access) for how the token works and how remote clients supply it.
 </Callout>
+
+Unlike the native launcher, the container path has no loopback exemption. The backend sees requests arriving from the container network's gateway address rather than `127.0.0.1`, so once you set a token, the dashboard asks you for it on the host machine too, not just from remote devices.
 
 ## Troubleshooting
 

@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-26",
+      "title": "Run TokenTelemetry in Docker or Podman",
+      "highlights": [
+        {
+          "title": "Container support via Docker or Podman",
+          "description": "TokenTelemetry now ships Dockerfiles and a Compose file, so you can run it as a container instead of installing Python and Node on the host. A Makefile handles the rest: `make up` builds and starts, `make down` stops, `make logs` tails output, auto-detecting whether you have Docker or Podman. The dashboard serves on port 13000 and the API on 18000, both loopback-only, and your agent logs are mounted read-only. Thanks to slmingol for building and contributing this (PR #172).",
+          "href": "https://tokentelemetry.com/docs/docker"
+        },
+        {
+          "title": "Pre-built images, no local build",
+          "description": "Multi-arch images (Intel and Apple Silicon) are published to GitHub Container Registry, so `make up-prod` pulls and runs without compiling anything. Pin a specific build with `TT_IMAGE_TAG=sha-abc1234` when you want a known-good version."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-23",
       "title": "Active loops now show their next run",
       "highlights": [
