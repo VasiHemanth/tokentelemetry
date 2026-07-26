@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-07-26",
+      "title": "See what Codex Goal Mode actually cost",
+      "highlights": [
+        {
+          "title": "Goal Mode on the session trace",
+          "description": "Sessions where you ran Codex's /goal now show a Goal Mode card: the objective, Codex's own status (active, paused, complete or blocked), tokens used, time spent in the goal, and any token budget. A long unattended goal is no longer indistinguishable from an ordinary session.",
+          "href": "/sessions"
+        },
+        {
+          "title": "Goal cost shown as a share, not a second bill",
+          "description": "The card reports a goal's tokens as a percentage of its session total, because Codex counts them inside that total. The numbers come from Codex itself rather than being estimated, and status is re-read on every load so a finished goal never keeps showing as running."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-23",
       "title": "Active loops now show their next run",
       "highlights": [

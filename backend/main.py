@@ -23,6 +23,7 @@ from harness_config import (
 import notifications as notif
 from tt_paths import data_dir
 import scan_cache
+import codex_goals
 
 def _aware(dt):
     """Ensure datetime is timezone-aware UTC. Naive inputs are assumed to be UTC."""
@@ -4600,6 +4601,21 @@ def _scan_sessions_sync():
             if kids:
                 s["delegation"] = {"supported": True, "tokens_recorded": False,
                                    "linked_children": len(kids)}
+        # Goal Mode (`/goal`). Attached HERE, after the per-session cache
+        # branch, precisely because a goal's status is live mutable state
+        # (active -> paused -> complete): caching it would freeze the first
+        # status we ever saw, the same trap `_annotate_loop_lifecycle` exists
+        # to avoid. `thread_id` is the session id verbatim, so this is a
+        # straight join. One cheap SQLite read for the whole scan.
+        try:
+            goals_by_thread = codex_goals.read_goals(CODEX_DIR)
+        except Exception:
+            goals_by_thread = {}
+        if goals_by_thread:
+            for s in codex_sessions.values():
+                g = goals_by_thread.get(s["id"])
+                if g:
+                    s["goals"] = g
         sessions.extend(codex_sessions.values())
 
     # 3 & 7. Gemini & Antigravity
