@@ -335,22 +335,38 @@ This pattern is common when your agents (and their logs) run on a remote VPS or 
 **On the remote machine** (where the agent logs live — this is required because TokenTelemetry reads files locally):
 
 ```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+```
+
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is baked into the frontend build, so setting, changing, or clearing it triggers a rebuild on the next `./start.sh`.
+
+**On your laptop:**
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+```
+
+Then open **http://localhost:3000** on your laptop.
+
+Both the UI and all data fetches are forwarded over the single SSH connection. The old single-port example (`-L 3000:...` only) produced a page skeleton with no data because the frontend would try to reach the backend on the laptop's localhost instead of the remote.
+
+This method requires no firewall changes on the remote machine and reuses your existing SSH authentication.
+
+### Single-port SSH tunnel (new)
+
+For a one-port tunnel, start TokenTelemetry with the server-side proxy enabled:
+
+```bash
 ./start.sh --single-port
 ```
 
-`--single-port` keeps FastAPI on its normal local port and streams API requests through the dashboard's same-origin proxy. Bearer headers and `?token=` artifact URLs are forwarded unchanged.
-
-**On your laptop:**
+Then forward only the dashboard port from your laptop:
 
 ```bash
 ssh -N -L 3000:127.0.0.1:3000 user@remote-host
 ```
 
-Then open **http://localhost:3000** on your laptop.
-
-Both the UI and API requests are forwarded over the single SSH connection. Because the tunnel arrives at the frontend over loopback, it retains the normal local exemption; real network callers are marked and remain token-gated.
-
-This method requires no firewall changes on the remote machine and reuses your existing SSH authentication.
+The dashboard proxies `/_tt-api` requests to the local FastAPI service. The proxy streams responses and preserves request methods, bearer authentication, and `?token=` artifact URLs. SSH traffic reaches the dashboard over loopback and keeps the local exemption; non-loopback callers are stamped by the proxy and must authenticate.
 
 ---
 
@@ -404,7 +420,7 @@ A: Not really. Hermes ships its own `/usage` + `/insights` and a bundled Langfus
 A: Yes — run TokenTelemetry on the same host (it reads local files). See the **[Remote Access](#remote-access)** section above for the two supported methods:
 
 - Direct exposure with `--host 0.0.0.0` + token (recommended when the network allows it).
-- SSH tunnel with `--single-port` and one `-L 3000:...` forward.
+- SSH tunnel with the correct dual-port forward (`-L 3000:... -L 8000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote (the previously documented single-port command produced a blank dashboard).
 
 **Q: Is "Hermes Agent" the same as the Hermes-3 LLMs?**  
 A: No. Hermes Agent is the [open-source agent framework](https://github.com/NousResearch/hermes-agent); Hermes-3 is a family of fine-tuned models. TokenTelemetry observes the agent — it can be running any model.
