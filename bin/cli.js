@@ -409,13 +409,18 @@ async function start() {
   const hostIsRemote = host && !['127.0.0.1', 'localhost'].includes(host);
   let authMode = 'off';      // 'off' | 'token' | 'insecure'
   let resolvedToken = '';
-  if (hostIsRemote) {
+  // An explicit --auth-token opts into the gate even when the backend remains
+  // loopback-bound: single-port mode can expose the frontend separately. A
+  // non-loopback backend bind still generates a token by default.
+  if (authToken) {
+    resolvedToken = authToken.trim();
+    authMode = 'token';
+  } else if (hostIsRemote) {
     if (insecureNoAuth) {
       authMode = 'insecure';
     } else {
-      // Honor an explicitly supplied token (flag wins over env, mirroring the
-      // TT_HOST / TT_API_PORT convention); otherwise mint a fresh random one.
-      resolvedToken = (authToken || process.env.TT_AUTH_TOKEN || '').trim()
+      // Honor an environment token for a remote bind; otherwise mint one.
+      resolvedToken = (process.env.TT_AUTH_TOKEN || '').trim()
         || crypto.randomBytes(24).toString('base64url');
       authMode = 'token';
     }
