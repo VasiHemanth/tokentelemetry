@@ -60,12 +60,45 @@ export interface SessionRow {
      backend scan; footprint_* are the loop's own fire-turn tokens, not the
      whole session. See SessionLoop and _lib/loops.ts. */
   loop?: SessionLoop;
+  /** `/goal` runs. A list, not a singleton: a session can arm several. */
+  goals?: SessionGoal[];
   published_artifacts?: PublishedArtifact[];
 }
 
 /* Mirror of backend sess["loop"] (backend/main.py) — raw facts plus the
    per-request lifecycle annotation. All fields optional/loose because the
    shape is owned by the scanner; consumers guard on `is_loop`. */
+/** One `/goal` run. Shapes differ per agent, so most fields are optional and
+ *  `evidence` carries whatever that agent actually recorded. */
+export interface SessionGoal {
+  source: string;
+  goal_id?: string | null;
+  objective?: string | null;
+  objective_truncated?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  state?: string;
+  /** "reported" only when the agent wrote the status down (Codex). */
+  state_source?: string;
+  tokens?: number | null;
+  cost?: number | null;
+  duration_seconds?: number | null;
+  token_budget?: number | null;
+  cost_basis?: string;
+  evidence?: {
+    blocks?: number;
+    block_bursts?: number[];
+    cap_hit?: boolean;
+    checkpoints?: number;
+    completed?: boolean;
+    latest_message?: string | null;
+    objective_recoverable?: boolean;
+    status_raw?: string | null;
+    deferrals?: number | null;
+    marker_only?: boolean;
+  };
+}
+
 export interface SessionLoop {
   is_loop?: boolean;
   mode?: string;                // "fixed_cron" | "dynamic"

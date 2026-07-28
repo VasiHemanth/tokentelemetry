@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Sparkles, Activity, Flame, Clock4, Wrench, GitBranch, Zap, Cpu,
-  Repeat, TrendingUp, DollarSign,
+  Repeat, TrendingUp, DollarSign, Target,
 } from "lucide-react";
 
 import { getAgent } from "@/lib/agents";
@@ -18,6 +18,10 @@ import {
   deriveProjectLoops, loopStateTone, loopInterval, loopRel, loopFmtNum,
   type LoopRow, type LoopSummary,
 } from "../_lib/loops";
+import {
+  deriveProjectGoals, goalStateTone, goalCostLabel,
+  type GoalRow, type GoalSummary,
+} from "../_lib/goals";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -192,6 +196,7 @@ export default function InsightsTab() {
   // but scoped to these sessions. Footprint tokens/cost are the loop's own fire
   // turns, already part of the totals above (an attribution view).
   const loops = useMemo(() => deriveProjectLoops(sessions), [sessions]);
+  const goals = useMemo(() => deriveProjectGoals(sessions), [sessions]);
 
   const totalTokens = insights.agents.reduce((a, [, x]) => a + x.tokens, 0);
   const totalSessions = insights.agents.reduce((a, [, x]) => a + x.count, 0);
@@ -411,6 +416,8 @@ export default function InsightsTab() {
       {/* Recurring loops — this project's /loop automations, broken down by
           state and by the token/cost footprint of their own fire turns. */}
       <RecurringLoopsBreakdown rows={loops.rows} summary={loops.summary} decodedPath={decodedPath} />
+      {/* Goal economics — kept separate from loops because the cost bases differ. */}
+      <GoalRunsBreakdown rows={goals.rows} summary={goals.summary} decodedPath={decodedPath} />
 
       {/* Leaderboard + migration ribbon */}
       <Card padding="lg">
@@ -815,4 +822,131 @@ function fmtNum(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+/* Goals (/goal), scoped to this project.
+ *
+ * The deliberate difference from the loops card above: there is NO single
+ * "goal cost" tile, because goal cost means three unrelated things and adding
+ * them would be a fabricated number. Codex counts a goal's tokens itself and
+ * those tokens are already inside the session total; Claude's are the extra
+ * turns a blocked stop caused, which IS incremental; Grok and Antigravity have
+ * no per-goal boundary at all. So the tiles keep them apart and each figure
+ * carries the basis it was measured on. Self-hides at zero. */
+function GoalRunsBreakdown({
+  rows, summary, decodedPath,
+}: { rows: GoalRow[]; summary: GoalSummary; decodedPath: string }) {
+  if (summary.total === 0) return null;
+  return (
+    <Card padding="lg">
+      <CardHeader>
+        <div>
+          <CardTitle><Target size={14} className="text-[var(--tt-brand)]" /> Goal runs</CardTitle>
+          <p className="text-[11px] text-[var(--tt-fg-dim)] mt-0.5">
+            Sessions handed an objective with /goal. Cost is reported per agent and the bases are not
+            comparable, so they are never added together.
+          </p>
+        </div>
+        <CardEyebrow>{rows.length} goal{rows.length === 1 ? "" : "s"}</CardEyebrow>
+      </CardHeader>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+        <StatTile
+          label="Goals set"
+          value={String(summary.total)}
+          hint={`across ${summary.goalSessions} session${summary.goalSessions === 1 ? "" : "s"}`}
+          icon={<Target size={16} />}
+          accent="var(--tt-brand)"
+        />
+        <StatTile
+          label="Outcome unknown"
+          value={String(summary.outcomeUnknown)}
+          hint={summary.complete > 0 ? `${summary.complete} reported complete` : "no agent recorded an outcome"}
+          icon={<Target size={16} />}
+          accent="var(--tt-fg-dim)"
+        />
+        <StatTile
+          label="Stops blocked"
+          value={summary.totalBlocks.toLocaleString()}
+          hint="times a goal kept the agent working"
+          icon={<TrendingUp size={16} />}
+          accent="var(--tt-warn)"
+        />
+        <StatTile
+          label="Extra token cost"
+          value={loopFmtNum(summary.attributedTokens)}
+          hint={summary.attributedCost > 0
+            ? `$${summary.attributedCost.toFixed(2)} of additional turns`
+            : "turns caused by blocked stops"}
+          icon={<DollarSign size={16} />}
+          accent="var(--tt-danger)"
+        />
+      </div>
+
+      {(summary.nativeTokens > 0 || summary.sessionBasisSessions > 0) && (
+        <p className="text-[10px] text-[var(--tt-fg-faint)] -mt-2 mb-4">
+          Counted separately on purpose:
+          {summary.nativeTokens > 0 &&
+            ` ${loopFmtNum(summary.nativeTokens)} tok inside Codex goals (already part of those sessions)`}
+          {summary.nativeTokens > 0 && summary.sessionBasisSessions > 0 && " ·"}
+          {summary.sessionBasisSessions > 0 &&
+            ` ${summary.sessionBasisSessions} session${summary.sessionBasisSessions === 1 ? "" : "s"} where the goal has no boundary of its own`}
+          .
+        </p>
+      )}
+
+      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+        {rows.map((r) => {
+          const tone = goalStateTone(r.state);
+          const href = `/sessions/${encodeURIComponent(r.sessionId)}?agent=${encodeURIComponent(r.agent)}&back=${encodeURIComponent(`/projects/${encodeURIComponent(decodedPath)}/insights`)}`;
+          const meta = getAgent(r.agent);
+          const text = r.objective || r.latestMessage || "";
+          return (
+            <Link
+              key={r.key}
+              href={href}
+              className="group flex items-center justify-between gap-3 rounded-[var(--tt-radius)] border border-transparent hover:border-[var(--tt-border)] hover:tt-tint-1 px-2 py-1.5 -mx-1 transition-colors"
+            >
+              <span className="min-w-0 flex items-start gap-2">
+                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5", tone.dot)} />
+                <span className="min-w-0 flex flex-col">
+                  <span className="text-[12px] text-[var(--tt-fg)] truncate" title={text}>
+                    {text || "(this agent records no objective)"}
+                  </span>
+                  <span className="text-[10px] text-[var(--tt-fg-dim)] truncate flex items-center gap-1.5">
+                    <span className={cn("uppercase tracking-[0.1em]", tone.label)}>{r.state}</span>
+                    {r.stateSource === "inferred" && <span title="not recorded by the agent">· inferred</span>}
+                    <span className="hidden sm:inline" style={{ color: meta.hex }}>· {meta.label}</span>
+                    {r.blocks > 0 && <span className="hidden md:inline">· {r.blocks} block{r.blocks === 1 ? "" : "s"}</span>}
+                    {r.checkpoints > 0 && <span className="hidden md:inline">· {r.checkpoints} checkpoints</span>}
+                    {r.capHit && <span className="hidden md:inline text-amber-400">· hit the cap</span>}
+                  </span>
+                </span>
+              </span>
+              <span className="text-right shrink-0">
+                {r.tokens != null && r.tokens > 0 ? (
+                  <>
+                    <span className="block tabular font-semibold text-[12px] text-[var(--tt-fg)]"
+                          title={goalCostLabel(r.costBasis)}>
+                      {loopFmtNum(r.tokens)} tok
+                    </span>
+                    <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]">
+                      {r.costBasis === "native"
+                        ? `${r.sessionTokens > 0 ? ((r.tokens / r.sessionTokens) * 100).toFixed(1) : "?"}% of session`
+                        : "extra turns"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="block tabular text-[10px] text-[var(--tt-fg-faint)]"
+                        title={goalCostLabel(r.costBasis)}>
+                    {r.costBasis === "session" ? "whole session" : "no extra cost"}
+                  </span>
+                )}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </Card>
+  );
 }

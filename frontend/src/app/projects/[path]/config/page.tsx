@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Settings2, Folder, Puzzle, Users, BookOpen, Terminal, Wrench, FileText,
-  Globe, Package, Repeat, ChevronRight,
+  Globe, Package, Repeat, ChevronRight, Target,
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/api";
@@ -19,6 +19,10 @@ import {
   deriveProjectLoops, loopStateTone, loopInterval, loopRel, loopFmtNum,
   type LoopRow,
 } from "../_lib/loops";
+import {
+  deriveProjectGoals, goalStateTone, goalStateLabel, goalCostLabel, goalDuration,
+  type GoalRow, type GoalSummary,
+} from "../_lib/goals";
 
 interface ConfigItem { name: string; agent: string; scope: "project" | "user"; description?: string; source?: string; pluginRef?: string; [k: string]: unknown }
 interface SubagentItem extends ConfigItem { model?: string; tools?: string }
@@ -48,6 +52,7 @@ export default function ConfigTab() {
   const { decodedPath, project, sessions } = useProject();
   const projectAgents = project?.agents ?? [];
   const loops = useMemo(() => deriveProjectLoops(sessions), [sessions]);
+  const goals = useMemo(() => deriveProjectGoals(sessions), [sessions]);
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,6 +124,9 @@ export default function ConfigTab() {
           Sits with the rest of the project's configured surface; the Insights
           tab carries the token/cost breakdown. Self-hides when there are none. */}
       <ProjectLoopsInventory rows={loops.rows} decodedPath={decodedPath} />
+      {/* Goals set in this project. Not schedules: each is a run that already
+          happened, apart from a resumable Codex goal. */}
+      <ProjectGoalsInventory rows={goals.rows} summary={goals.summary} decodedPath={decodedPath} />
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -471,6 +479,102 @@ function LoopInventoryCard({ row, decodedPath }: { row: LoopRow; decodedPath: st
           {row.tokens > 0 && <span>{loopFmtNum(row.tokens)} tok · ${row.cost.toFixed(2)} loop turns</span>}
         </div>
       )}
+    </Link>
+  );
+}
+
+/* ─────────────────────── Goals (/goal) — config inventory ─────────────────── */
+
+function ProjectGoalsInventory({ rows, summary, decodedPath }:
+  { rows: GoalRow[]; summary: GoalSummary; decodedPath: string }) {
+  if (rows.length === 0) return null;
+  return (
+    <Section
+      title={<span className="flex items-center gap-2"><Target size={12} className="text-[var(--tt-brand)]" /> Goals</span>}
+      description="Sessions in this project that were handed an objective with /goal. Unlike loops these don't re-fire — each one is a run that already happened, except a Codex goal left active or paused, which is genuinely resumable. Only Codex records real status; everything else is inferred from the transcript."
+      actions={
+        <Badge variant={summary.live > 0 ? "success" : "neutral"} size="sm">
+          {summary.live > 0 ? `${summary.live} live · ` : ""}{rows.length} total
+        </Badge>
+      }
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {rows.map((r) => <GoalInventoryCard key={r.key} row={r} decodedPath={decodedPath} />)}
+      </div>
+    </Section>
+  );
+}
+
+function GoalInventoryCard({ row, decodedPath }: { row: GoalRow; decodedPath: string }) {
+  const tone = goalStateTone(row.state);
+  const href = `/sessions/${encodeURIComponent(row.sessionId)}?agent=${encodeURIComponent(row.agent)}&back=${encodeURIComponent(`/projects/${encodeURIComponent(decodedPath)}/config`)}`;
+  // Grok records progress but not the objective, so fall back to its latest
+  // status note rather than showing an empty card.
+  const text = row.objective || row.latestMessage || "";
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "group block rounded-[var(--tt-radius-lg)] border bg-[var(--tt-panel)] p-4 transition-colors hover:tt-tint-1",
+        tone.ring,
+      )}
+    >
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <Target size={12} className="text-[var(--tt-brand)] shrink-0" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] flex items-center gap-1.5">
+            <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", tone.dot)} />
+            <span className={tone.label}>{row.state}</span>
+          </span>
+          {row.stateSource === "inferred" && (
+            <span className="text-[9px] text-[var(--tt-fg-faint)] normal-case"
+                  title="Derived from the transcript — this agent doesn't record goal status">
+              inferred
+            </span>
+          )}
+        </span>
+        <span className="flex items-center gap-1.5 shrink-0">
+          <AgentBadge agent={row.agent} />
+          <ChevronRight size={13} className="text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-brand)] group-hover:translate-x-0.5 transition-all" />
+        </span>
+      </div>
+
+      {text ? (
+        <p className="text-[12px] text-[var(--tt-fg)] leading-relaxed line-clamp-2 mb-2.5" title={text}>
+          {text}{row.objectiveTruncated ? "…" : ""}
+        </p>
+      ) : (
+        <p className="text-[12px] text-[var(--tt-fg-dim)] italic mb-2.5">(this agent records no objective)</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant="brand" size="xs" className="normal-case">{goalStateLabel(row)}</Badge>
+        {row.blocks > 0 && (
+          <Badge variant="neutral" size="xs" className="normal-case">{row.blocks} stop{row.blocks === 1 ? "" : "s"} blocked</Badge>
+        )}
+        {row.checkpoints > 0 && (
+          <Badge variant="neutral" size="xs" className="normal-case">{row.checkpoints} checkpoint{row.checkpoints === 1 ? "" : "s"}</Badge>
+        )}
+        {row.capHit && <Badge variant="warn" size="xs" className="normal-case">hit the 8-block cap</Badge>}
+        {row.durationSeconds != null && (
+          <Badge variant="neutral" size="xs" className="normal-case">{goalDuration(row.durationSeconds)}</Badge>
+        )}
+      </div>
+
+      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-[var(--tt-fg-dim)] tabular">
+        {row.createdAt && <span>started {loopRel(row.createdAt)}</span>}
+        {/* Always paired with what the number MEANS: a native count is part of
+            the session total, an attributed one is extra work the goal caused. */}
+        {row.tokens != null && row.tokens > 0 && (
+          <span title={goalCostLabel(row.costBasis)}>
+            {loopFmtNum(row.tokens)} tok
+            {row.costBasis === "native" && row.sessionTokens > 0 &&
+              ` · ${((row.tokens / row.sessionTokens) * 100).toFixed(1)}% of session`}
+            {row.costBasis === "attributed_turns" && " · extra turns from blocks"}
+          </span>
+        )}
+        {row.costBasis === "session" && <span>cost = whole session</span>}
+      </div>
     </Link>
   );
 }
