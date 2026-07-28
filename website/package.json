@@ -10,11 +10,12 @@
   },
   "dependencies": {
     "@types/mdx": "^2.0.14",
-    "framer-motion": "^12.42.2",
+    "animejs": "^4.5.0",
     "fumadocs-core": "^16.10.3",
     "fumadocs-mdx": "^15.0.12",
     "fumadocs-ui": "^16.10.3",
     "lucide-react": "^1.8.0",
+    "motion": "^12.43.0",
     "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7"

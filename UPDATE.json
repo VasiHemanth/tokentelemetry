@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-07-29",
+      "title": "tokentelemetry.com landing redesigned",
+      "highlights": [
+        {
+          "title": "The landing page now shows the product working",
+          "description": "tokentelemetry.com opens with the real install boot sequence — agent discovery lines resolving into the live dashboard — plus a replayable session trace and per-agent coverage. Useful when you're pointing a teammate at what TokenTelemetry does before they install.",
+          "href": "https://tokentelemetry.com"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-26",
       "title": "Run TokenTelemetry in Docker or Podman",
       "highlights": [

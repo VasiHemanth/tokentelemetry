@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Lock, BarChart3, FileCode } from "lucide-react";
+import { Reveal, Stagger, StaggerItem } from "@/components/motion";
 
 /**
  * Honest privacy section. The source mockup said "No usage tracking / no
@@ -7,6 +8,11 @@ import { Lock, BarChart3, FileCode } from "lucide-react";
  * anonymous telemetry (see docs/design/product-telemetry.md). This section keeps
  * the strong local-first promise for user DATA while disclosing the telemetry
  * truthfully, so the page can't be diffed against reality.
+ *
+ * Motion: quietest section by design. Header reveal, 24px card rise on an
+ * 80ms stagger, and a static devtools-style network row whose only movement
+ * is the CSS `tt-pulse` on the trailing ellipsis (stilled under
+ * prefers-reduced-motion by the global override).
  */
 const CARDS = [
   {
@@ -49,7 +55,7 @@ export default function Privacy() {
     <section className="relative border-t border-[var(--tt-border)]"
       style={{ background: "radial-gradient(900px 420px at 50% 0%, rgba(16,185,129,0.06), transparent 65%)" }}>
       <div className="max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
-        <div className="text-center max-w-[680px] mx-auto mb-10">
+        <Reveal y={16} className="text-center max-w-[680px] mx-auto mb-10">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#34d399] mb-3">
             Built for people who read the source
           </p>
@@ -64,18 +70,30 @@ export default function Privacy() {
               Read the policy
             </Link>.
           </p>
+        </Reveal>
+        {/* Devtools-style network row: static content, pure CSS. */}
+        <div className="mb-6 flex justify-center">
+          <div className="inline-flex items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-4 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-dim)]">
+            <span>
+              outbound requests: <span className="text-[var(--tt-success)] font-semibold">0</span>
+              <span className="mx-2 text-[var(--tt-fg-faint)]">·</span>
+              listening<span className="tt-pulse">…</span>
+            </span>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
+        <Stagger gap={80} y={24} className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
           {CARDS.map(({ icon: Icon, title, body }) => (
-            <div key={title} className="p-6 rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)]">
-              <div className="w-[38px] h-[38px] rounded-[var(--tt-radius)] grid place-items-center mb-4 bg-[rgba(16,185,129,0.1)] border border-[rgba(16,185,129,0.25)]">
-                <Icon size={18} className="text-[var(--tt-success-fg,#10b981)]" />
+            <StaggerItem key={title}>
+              <div className="h-full p-6 rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)]">
+                <div className="w-[38px] h-[38px] rounded-[var(--tt-radius)] grid place-items-center mb-4 bg-[rgba(16,185,129,0.1)] border border-[rgba(16,185,129,0.25)]">
+                  <Icon size={18} className="text-[var(--tt-success-fg,#10b981)]" />
+                </div>
+                <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-[var(--tt-fg)] mb-2">{title}</h3>
+                <p className="text-[13.5px] text-[var(--tt-fg-muted)] leading-relaxed">{body}</p>
               </div>
-              <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-[var(--tt-fg)] mb-2">{title}</h3>
-              <p className="text-[13.5px] text-[var(--tt-fg-muted)] leading-relaxed">{body}</p>
-            </div>
+            </StaggerItem>
           ))}
-        </div>
+        </Stagger>
       </div>
     </section>
   );

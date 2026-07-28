@@ -175,3 +175,70 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .tt-marquee-track { animation: none; }
 }
+
+/* =========================================================================
+   Motion vocabulary (see src/components/motion/vocab.ts — keep in sync)
+   ========================================================================= */
+:root {
+  /* The one entrance curve. JS twin: EASE in vocab.ts. */
+  --tt-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Lets Chromium animate block-size to `auto` (FAQ answers). No-op elsewhere. */
+  interpolate-size: allow-keywords;
+}
+
+/* One-shot glow ping — agent-colored discovery dots (hero boot script).
+   Set the color per element: style="--tt-glow: var(--agent-claude)". */
+@keyframes tt-glow-ping {
+  0%   { box-shadow: 0 0 0 0 var(--tt-glow, var(--tt-brand)); }
+  100% { box-shadow: 0 0 12px 6px transparent; }
+}
+.tt-glow-ping { animation: tt-glow-ping 300ms var(--tt-ease) 1 both; }
+
+/* Border beam — one 1200ms brand-tinted revolution around a block's border,
+   then static. Triggered by BorderBeam (adds .tt-beam-run in view, removes it
+   on animationend). The wrapper's border-radius shapes the ring. Non-Chromium
+   (no @property interpolation) degrades to a brief static highlight. */
+@property --tt-beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes tt-beam {
+  from { --tt-beam-angle: 0deg; }
+  to   { --tt-beam-angle: 360deg; }
+}
+.tt-border-beam { position: relative; }
+.tt-border-beam::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--tt-beam-angle),
+    transparent 0deg,
+    color-mix(in srgb, var(--tt-brand) 25%, var(--tt-border-strong)) 40deg,
+    var(--tt-brand) 55deg,
+    transparent 80deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+}
+.tt-beam-run::after {
+  opacity: 1;
+  animation: tt-beam 1200ms linear 1;
+}
+
+/* Reduced motion: every CSS loop and one-shot goes still. */
+@media (prefers-reduced-motion: reduce) {
+  .tt-pulse,
+  .tt-glow-ping,
+  .tt-border-beam::after {
+    animation: none !important;
+  }
+  .tt-border-beam::after { opacity: 0 !important; }
+}

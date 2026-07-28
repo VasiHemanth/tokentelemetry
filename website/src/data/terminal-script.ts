@@ -20,3 +20,38 @@ export const TERMINAL_SCRIPT: ScriptLine[] = [
 ];
 
 export const SCRIPT_DURATION_MS = 7000;
+
+/** Hold on the finished script before the replay loops. Loop length = SCRIPT_DURATION_MS + REPLAY_HOLD_MS. */
+export const REPLAY_HOLD_MS = 1500;
+
+/** When the cost line prints, relative to loop start. LiveTrace keys its metric count-ups off this. */
+export const COST_LINE_DELAY_MS = TERMINAL_SCRIPT.find((l) => l.kind === "cost")!.delay;
+
+/* ---- Hero boot sequence -------------------------------------------------- */
+
+export type BootLine = {
+  /** ms from boot start */
+  delay: number;
+  /**
+   * Render prefixes belong to the consumer, keyed off `kind`:
+   * command → "$ " prompt, text typed at BOOT_TYPE_MS_PER_CHAR with a block cursor;
+   * found   → "✓ " check plus a leading dot (colored via `agentVar` when present);
+   * url     → "→ " arrow.
+   */
+  kind: "command" | "found" | "url";
+  text: string;
+  /** Identity-color CSS var for the line's leading dot, e.g. "--agent-claude". Only on per-agent lines. */
+  agentVar?: string;
+};
+
+/** Typing cadence for the hero's one typed command. */
+export const BOOT_TYPE_MS_PER_CHAR = 28;
+
+export const BOOT_SCRIPT: BootLine[] = [
+  { delay: 0,    kind: "command", text: "tokentelemetry" },
+  { delay: 450,  kind: "found",   text: "Claude Code · ~/.claude/projects · 218 sessions", agentVar: "--agent-claude" },
+  { delay: 900,  kind: "found",   text: "Codex · ~/.codex/sessions · 96 sessions", agentVar: "--agent-codex" },
+  { delay: 1350, kind: "found",   text: "11 more agents found" },
+  { delay: 1750, kind: "found",   text: "13 agents · 510 sessions" },
+  { delay: 2100, kind: "url",     text: "http://localhost:3000" },
+];

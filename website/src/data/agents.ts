@@ -3,7 +3,11 @@ export type Agent = {
   vendor: string;
   captures: string[];
   logPath: string;
-  /** Hex color used for chip + accent — matches the app's agent registry. */
+  /**
+   * Hex color used for chip + accent — matches the app's agent registry.
+   * The first nine also exist as `--agent-*` tokens in globals.css (used by
+   * the hero boot script's discovery dots); keep both in sync when editing.
+   */
   hex: string;
 };
 
