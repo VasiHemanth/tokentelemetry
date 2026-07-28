@@ -14,6 +14,7 @@ import { formatCost, formatTokens } from "@/lib/format";
 import { Card, AgentBadge } from "@/components/ui";
 import { type BudgetStatus, budgetTone } from "@/lib/budgets";
 import { ProjectProvider, type ProjectData, type SessionRow } from "./_lib/project-context";
+import { projectBasename } from "@/lib/paths";
 
 const TABS = [
   { key: "activity",  label: "Activity",  icon: Activity,      href: "activity"  },
@@ -49,7 +50,7 @@ export default function ProjectShellLayout({ children }: { children: React.React
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [allSessions, decodedPath]);
 
-  const projectName = decodedPath.split("/").pop() || "Unknown Project";
+  const projectName = projectBasename(decodedPath) || "Unknown Project";
   const totalTokens = sessions.reduce((sum, s) => sum + (s.tokens?.total ?? 0), 0);
   const directCost = sessions.reduce((sum, s) => sum + (s.cost ?? 0), 0);
   const subagents = (project?.configured_subagent_count ?? 0) + (project?.subagent_count ?? 0);
