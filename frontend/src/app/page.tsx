@@ -17,6 +17,7 @@ import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
 import { formatTokens, formatCost } from "@/lib/format";
 import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
+import { projectBasename } from "@/lib/paths";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
@@ -285,7 +286,7 @@ export default function Home() {
                               )}
                             </span>
                           ) : (
-                            s.project.split("/").pop()
+                            projectBasename(s.project)
                           )}
                         </Link>
                       </TD>
