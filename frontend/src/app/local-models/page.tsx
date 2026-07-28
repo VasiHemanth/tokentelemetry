@@ -1,3 +1,9 @@
+"use client";
+
+// Every child here is a Client Component. Declaring the boundary on the
+// page itself keeps the whole subtree on one side of it, so a stale or
+// half-rebuilt module graph can't surface a "createContext only works in
+// Client Components" error from this route.
 import { Cpu } from "lucide-react";
 import { PageHeader, Section } from "@/components/ui";
 import { PowerSettings } from "@/components/settings/PowerSettings";
