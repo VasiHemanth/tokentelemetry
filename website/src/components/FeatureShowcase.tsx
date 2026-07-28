@@ -4,7 +4,8 @@ import { motion, AnimatePresence, useInView, useReducedMotion } from "motion/rea
 import { FEATURES } from "@/data/features";
 import { Check } from "lucide-react";
 import BrowserFrame from "./BrowserFrame";
-import { Reveal, EASE, SPRING } from "@/components/motion";
+import { EASE, SPRING } from "@/components/motion";
+import SectionHead from "@/components/SectionHead";
 
 export default function FeatureShowcase() {
   const [active, setActive] = useState(FEATURES[0].id);
@@ -33,14 +34,16 @@ export default function FeatureShowcase() {
 
   return (
     <section id="features" className="max-w-[1320px] mx-auto px-5 sm:px-8 py-16 sm:py-24">
-      <Reveal y={16} className="text-center mb-8 sm:mb-10">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">
-          What you&apos;ll see
-        </p>
-        <h2 className="text-[28px] sm:text-[44px] leading-[1.1] tracking-[-0.02em] font-semibold text-[var(--tt-fg)] max-w-2xl mx-auto">
-          One dashboard. <span className="text-[var(--tt-brand)]">Every agent.</span>
-        </h2>
-      </Reveal>
+      <SectionHead
+        index="05"
+        label="see"
+        title={
+          <>
+            One dashboard.{" "}
+            <span className="text-[var(--tt-brand)]">Every agent.</span>
+          </>
+        }
+      />
 
       {/* Tabs — horizontally scrollable on mobile, wraps on larger screens */}
       <div className="-mx-5 sm:mx-auto mb-8 sm:mb-10 sm:w-fit overflow-x-auto sm:overflow-visible">

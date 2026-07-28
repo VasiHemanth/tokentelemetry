@@ -54,32 +54,43 @@ export default function Privacy() {
   return (
     <section className="relative border-t border-[var(--tt-border)]"
       style={{ background: "radial-gradient(900px 420px at 50% 0%, rgba(16,185,129,0.06), transparent 65%)" }}>
-      <div className="max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
-        <Reveal y={16} className="text-center max-w-[680px] mx-auto mb-10">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#34d399] mb-3">
-            Built for people who read the source
+      <div className="max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
+        <div className="border-t border-[var(--tt-border)] pt-5 mb-10 sm:mb-14">
+          <p className="font-mono text-[11.5px] tracking-[0.16em] uppercase text-[var(--tt-fg-dim)] mb-6 sm:mb-9">
+            <span className="text-[#34d399]">08</span> · zero
           </p>
-          <h2 className="text-[clamp(26px,3.6vw,42px)] leading-[1.08] tracking-[-0.025em] font-semibold text-[var(--tt-fg)]">
-            Your data stays on{" "}
-            <span className="bg-gradient-to-r from-[#86efac] to-[#34d399] bg-clip-text text-transparent">your machine.</span>
-          </h2>
-          <p className="mt-3.5 text-[15.5px] text-[var(--tt-fg-muted)] leading-relaxed">
-            No cloud, no accounts. Your logs, prompts, and costs never leave your computer — the only things that go
-            out are anonymous, content-free usage stats (one-click off) and an optional update check.{" "}
-            <Link href="/privacy" className="text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)] transition-colors">
-              Read the policy
-            </Link>.
-          </p>
-        </Reveal>
-        {/* Devtools-style network row: static content, pure CSS. */}
-        <div className="mb-6 flex justify-center">
-          <div className="inline-flex items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-4 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-dim)]">
-            <span>
-              outbound requests: <span className="text-[var(--tt-success)] font-semibold">0</span>
-              <span className="mx-2 text-[var(--tt-fg-faint)]">·</span>
-              listening<span className="tt-pulse">…</span>
-            </span>
-          </div>
+          {/* Manifesto: the number IS the headline. */}
+          <Reveal y={16}>
+            <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)] gap-x-12 gap-y-6 items-center">
+              <span
+                aria-hidden
+                className="tabular font-semibold leading-[0.85] tracking-[-0.06em] text-[clamp(120px,22vw,280px)] bg-gradient-to-b from-[#86efac] to-[#34d399] bg-clip-text text-transparent select-none"
+              >
+                0
+              </span>
+              <div>
+                <h2 className="text-[clamp(30px,4.6vw,56px)] leading-[1.0] tracking-[-0.035em] font-semibold text-[var(--tt-fg)] text-balance">
+                  <span className="sr-only">Zero </span>
+                  Logs, prompts, and costs that leave your machine.
+                </h2>
+                <p className="mt-5 text-[clamp(15px,1.7vw,17.5px)] text-[var(--tt-fg-muted)] leading-relaxed max-w-[560px]">
+                  No cloud, no accounts. The only things that go out are anonymous,
+                  content-free usage stats (one-click off) and an optional update
+                  check.{" "}
+                  <Link href="/privacy" className="text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)] transition-colors">
+                    Read the policy
+                  </Link>.
+                </p>
+                <div className="mt-6 inline-flex items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-4 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-dim)]">
+                  <span>
+                    outbound requests: <span className="text-[var(--tt-success)] font-semibold">0</span>
+                    <span className="mx-2 text-[var(--tt-fg-faint)]">·</span>
+                    listening<span className="tt-pulse">…</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Reveal>
         </div>
         <Stagger gap={80} y={24} className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
           {CARDS.map(({ icon: Icon, title, body }) => (

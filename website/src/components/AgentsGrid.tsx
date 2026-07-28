@@ -4,7 +4,8 @@ import { motion, useInView, useReducedMotion } from "motion/react";
 import { animate, stagger } from "animejs";
 import { AGENTS } from "@/data/agents";
 import { track } from "@/lib/track";
-import { Reveal, motionOk } from "@/components/motion";
+import { motionOk } from "@/components/motion";
+import SectionHead from "@/components/SectionHead";
 
 /**
  * Interactive agent cards. The CRO audit (D3) found visitors tapping the old
@@ -66,15 +67,17 @@ export default function AgentsGrid() {
   return (
     <section id="agents" className="border-t border-[var(--tt-border)]">
       <div className="max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
-        <Reveal y={16} className="text-center max-w-[680px] mx-auto mb-10">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">Coverage</p>
-          <h2 className="text-[clamp(26px,3.6vw,42px)] leading-[1.08] tracking-[-0.025em] font-semibold text-[var(--tt-fg)]">
-            13 coding agents, <span className="text-[var(--tt-brand)]">one place.</span>
-          </h2>
-          <p className="mt-3.5 text-[15.5px] text-[var(--tt-fg-muted)] leading-relaxed">
-            Tap any agent to see what TokenTelemetry captures and where it reads from.
-          </p>
-        </Reveal>
+        <SectionHead
+          index="06"
+          label="coverage"
+          title={
+            <>
+              13 coding agents,{" "}
+              <span className="text-[var(--tt-brand)]">one place.</span>
+            </>
+          }
+          sub="Tap any agent to see what TokenTelemetry captures and where it reads from."
+        />
 
         <div ref={gridRef} className="grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-4 gap-2.5 items-start">
           {AGENTS.map((a, i) => {

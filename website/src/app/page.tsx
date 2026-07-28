@@ -1,5 +1,6 @@
 import Hero from "@/components/Hero";
-import ProofStrip from "@/components/ProofStrip";
+import Ledger from "@/components/Ledger";
+import BootShowcase from "@/components/BootShowcase";
 import LiveTrace from "@/components/LiveTrace";
 import HowItWorks from "@/components/HowItWorks";
 import FeatureShowcase from "@/components/FeatureShowcase";
@@ -14,7 +15,8 @@ export default function Page() {
   return (
     <main>
       <Hero />
-      <ProofStrip />
+      <Ledger />
+      <BootShowcase />
       <LiveTrace />
       <HowItWorks />
       <FeatureShowcase />

@@ -68,6 +68,9 @@ export default function HermesSpotlight() {
       className="relative overflow-hidden border-y border-[var(--tt-border)] bg-[radial-gradient(ellipse_at_top,rgba(234,179,8,0.08),transparent_70%)]"
     >
       <div className="max-w-[1320px] mx-auto px-5 sm:px-8 py-16 sm:py-24">
+        <p className="font-mono text-[11.5px] tracking-[0.16em] uppercase text-[var(--tt-fg-dim)] mb-10 sm:mb-14">
+          <span className="text-[#eab308]">07</span> · hermes
+        </p>
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-10 lg:gap-16 items-center">
           {/* Left: copy */}
           <Reveal y={16}>

@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { animate } from "animejs";
 import TerminalReplay from "@/components/TerminalReplay";
+import SectionHead from "@/components/SectionHead";
 import { Reveal, ANIME_EASE, EASE_CSS, motionOk } from "@/components/motion";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -67,19 +68,18 @@ export default function LiveTrace() {
   const onLoop = () => setPhase("waiting");
 
   return (
-    <section className="relative max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
-      <Reveal className="text-center max-w-[680px] mx-auto mb-10">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">
-          Session trace
-        </p>
-        <h2 className="text-[clamp(26px,3.6vw,42px)] leading-[1.08] tracking-[-0.025em] font-semibold text-[var(--tt-fg)]">
-          See what your agent <span className="text-[var(--tt-brand)]">actually did</span>
-        </h2>
-        <p className="mt-3.5 text-[15.5px] text-[var(--tt-fg-muted)] leading-relaxed">
-          Every session becomes a replayable trace: prompts, tool calls,
-          reasoning steps, and the exact token cost.
-        </p>
-      </Reveal>
+    <section className="relative max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
+      <SectionHead
+        index="03"
+        label="trace"
+        title={
+          <>
+            See what your agent{" "}
+            <span className="text-[var(--tt-brand)]">actually did.</span>
+          </>
+        }
+        sub="Every session becomes a replayable trace: prompts, tool calls, reasoning steps, and the exact token cost."
+      />
 
       <Reveal y={24} className="max-w-[820px] mx-auto">
         <TerminalReplay onCostLine={onCostLine} onLoop={onLoop} />

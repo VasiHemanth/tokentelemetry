@@ -7,7 +7,8 @@ import {
   useScroll,
   type Variants,
 } from "motion/react";
-import { CountUp, Reveal, DUR, GAP, RISE, SPRING } from "@/components/motion";
+import { CountUp, DUR, GAP, RISE, SPRING } from "@/components/motion";
+import SectionHead from "@/components/SectionHead";
 
 const STEPS = [
   {
@@ -68,19 +69,23 @@ export default function HowItWorks() {
   };
 
   return (
-    <section ref={sectionRef} className="relative max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
-      <Reveal className="text-center max-w-[680px] mx-auto mb-10">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">
-          From zero to dashboard in one command
-        </p>
-        <h2 className="text-[clamp(26px,3.6vw,42px)] leading-[1.08] tracking-[-0.025em] font-semibold text-[var(--tt-fg)]">
-          No instrumentation. <span className="text-[var(--tt-brand)]">No code changes.</span>
-        </h2>
-        <p className="mt-3.5 text-[15.5px] text-[var(--tt-fg-muted)] leading-relaxed">
-          Your agents already write logs. TokenTelemetry just reads them — so setup is one line, and there&apos;s
-          nothing to wire into your codebase.
-        </p>
-      </Reveal>
+    <section ref={sectionRef} className="relative max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
+      <SectionHead
+        index="04"
+        label="setup"
+        title={
+          <>
+            No instrumentation.{" "}
+            <span className="text-[var(--tt-brand)]">No code changes.</span>
+          </>
+        }
+        sub={
+          <>
+            Your agents already write logs. TokenTelemetry just reads them — so
+            setup is one line, and there&apos;s nothing to wire into your codebase.
+          </>
+        }
+      />
       <div className="relative">
         <motion.div
           className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4"

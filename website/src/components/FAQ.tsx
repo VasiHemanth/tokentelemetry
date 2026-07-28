@@ -26,9 +26,11 @@ export default function FAQ() {
         }
       `}</style>
       <Reveal y={16} className="max-w-3xl mx-auto px-5 sm:px-8 py-14 sm:py-28">
-        <div className="text-center mb-8 sm:mb-10">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">FAQ</p>
-          <h2 className="text-[26px] sm:text-[38px] leading-[1.1] tracking-[-0.02em] font-semibold text-[var(--tt-fg)]">
+        <div className="mb-8 sm:mb-10 border-t border-[var(--tt-border)] pt-5">
+          <p className="font-mono text-[11.5px] tracking-[0.16em] uppercase text-[var(--tt-fg-dim)] mb-6">
+            <span className="text-[var(--tt-brand)]">09</span> · faq
+          </p>
+          <h2 className="text-[clamp(30px,4.6vw,52px)] leading-[1.02] tracking-[-0.035em] font-semibold text-[var(--tt-fg)]">
             Common questions
           </h2>
         </div>

@@ -28,8 +28,8 @@ export default function FinalCTA() {
     <section className="relative overflow-hidden border-t border-[var(--tt-border)] text-center">
       <div aria-hidden className="pointer-events-none absolute inset-0 z-0"
         style={{ background: "radial-gradient(800px 380px at 50% 120%, rgba(96,165,250,0.14), transparent 62%)" }} />
-      <Reveal y={16} amount={0.4} className="relative z-10 max-w-[680px] mx-auto px-5 py-14 sm:py-[72px]">
-        <h2 className="text-[clamp(28px,4vw,46px)] leading-[1.06] tracking-[-0.028em] font-semibold text-[var(--tt-fg)] mb-4">
+      <Reveal y={16} amount={0.4} className="relative z-10 max-w-[840px] mx-auto px-5 py-16 sm:py-28">
+        <h2 className="text-[clamp(34px,6vw,72px)] leading-[0.98] tracking-[-0.04em] font-semibold text-[var(--tt-fg)] mb-5 text-balance">
           Stop guessing what your agents cost.
         </h2>
         <p className="text-[16px] text-[var(--tt-fg-muted)] mb-7">
