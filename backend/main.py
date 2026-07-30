@@ -286,41 +286,64 @@ OLLAMA_DIR = HOME / ".ollama"
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
 HF_DIR = HOME / ".cache/huggingface"
+def _opencode_dbs_in(d: Path) -> List[Path]:
+    """DB files OpenCode may have written inside data dir ``d``, canonical first.
+
+    The filename is NOT fixed either: OpenCode picks it from the *release
+    channel* it was built for. `latest`/`beta` (and builds with
+    `OPENCODE_DISABLE_CHANNEL_DB`) get plain ``opencode.db``; every other
+    channel gets ``opencode-<channel>.db``, e.g. the ``opencode-stable.db``
+    a Nix install produces. Globbing is the only way to cover that — the
+    channel string is arbitrary, so there's no finite list to hardcode.
+    ``opencode*.db`` deliberately does not match the ``-wal``/``-shm``
+    sidecars, which don't end in ``.db``.
+    """
+    canonical = d / "opencode.db"
+    out = [canonical]
+    try:
+        out.extend(sorted(p for p in d.glob("opencode*.db") if p != canonical))
+    except OSError:
+        pass
+    return out
+
+
 def _opencode_db_candidates() -> List[Path]:
     """OpenCode SQLite DB locations to probe, highest-priority first.
 
     OpenCode does NOT use one fixed path: it resolves a data dir honoring
-    ``$OPENCODE_DATA_DIR`` and ``$XDG_DATA_HOME`` with a per-OS default. We used
-    to look only at ``~/.local/share/opencode`` and so silently missed relocated
-    or non-Linux installs — the scan is gated on ``.exists()`` inside a bare
-    ``try/except``, so a wrong path means the whole agent vanishes with no error
-    (discussion #170). Probe every place the agent could have written; the scan
-    uses the first that exists. Extra non-existent candidates are harmless.
+    ``$OPENCODE_DATA_DIR`` and ``$XDG_DATA_HOME`` with a per-OS default, then
+    names the file after its release channel. We used to look only at
+    ``~/.local/share/opencode/opencode.db`` and so silently missed relocated
+    installs, non-Linux installs, and every non-`latest` channel — the scan is
+    gated on ``.exists()`` inside a bare ``try/except``, so a wrong path means
+    the whole agent vanishes with no error (discussion #170). Probe every place
+    the agent could have written. Extra non-existent candidates are harmless.
     """
-    c: List[Path] = []
+    dirs: List[Path] = []
     env = os.environ.get("OPENCODE_DATA_DIR")
     if env:
-        c.append(Path(env).expanduser() / "opencode.db")
+        dirs.append(Path(env).expanduser())
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
-        c.append(Path(xdg).expanduser() / "opencode" / "opencode.db")
+        dirs.append(Path(xdg).expanduser() / "opencode")
     if sys.platform == "win32":
         for var in ("APPDATA", "LOCALAPPDATA"):
             base = os.environ.get(var)
             if base:
-                c.append(Path(base) / "opencode" / "opencode.db")
+                dirs.append(Path(base) / "opencode")
     # Standard XDG data dir — the confirmed default on BOTH Linux and macOS
     # (OpenCode does not use ~/Library/Application Support, verified on 1.15.13).
-    c.append(HOME / ".local/share/opencode/opencode.db")
+    dirs.append(HOME / ".local/share/opencode")
     # macOS env-paths-style location, in case a build ever used it.
     if sys.platform == "darwin":
-        c.append(HOME / "Library/Application Support/opencode/opencode.db")
+        dirs.append(HOME / "Library/Application Support/opencode")
     seen: set = set()
     out: List[Path] = []
-    for p in c:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
+    for d in dirs:
+        for p in _opencode_dbs_in(d):
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
     return out
 
 
@@ -337,6 +360,50 @@ def _opencode_db_path() -> Path:
 
 
 OPENCODE_DB = _opencode_db_path()
+
+
+def _opencode_dbs() -> List[Path]:
+    """Every OpenCode DB to actually read, primary (``OPENCODE_DB``) first.
+
+    A user who has switched release channels ends up with several DBs side by
+    side — e.g. an old ``opencode.db`` plus the live ``opencode-stable.db``.
+    Reading only the first would show stale sessions and hide current ones, so
+    scan them all. Derived from ``OPENCODE_DB.parent`` rather than re-probing
+    every candidate dir, which keeps a monkeypatched ``OPENCODE_DB`` fully in
+    control of what the scan sees.
+    """
+    out: List[Path] = []
+    seen: set = set()
+    for p in [OPENCODE_DB, *_opencode_dbs_in(OPENCODE_DB.parent)]:
+        try:
+            if p in seen or not p.exists():
+                continue
+        except OSError:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def _opencode_db_for_session(session_id: str) -> Optional[Path]:
+    """The channel DB that actually holds ``session_id``, or None.
+
+    Detail endpoints can't assume the primary DB: with several channel DBs
+    present, a session listed from ``opencode-stable.db`` would 404 if we only
+    ever queried ``opencode.db``.
+    """
+    for db in _opencode_dbs():
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db), uri=True, timeout=1.0)
+            try:
+                if conn.execute("SELECT 1 FROM session WHERE id=?",
+                                (session_id,)).fetchone():
+                    return db
+            finally:
+                conn.close()
+        except Exception:
+            continue
+    return None
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -5213,14 +5280,18 @@ def _scan_sessions_sync():
                 })
             except Exception: continue
 
-    # 8. OpenCode (SQLite: session / message / part)
-    if OPENCODE_DB.exists():
+    # 8. OpenCode (SQLite: session / message / part). One DB per release
+    # channel, so a channel-switcher can have several side by side (#170).
+    # Session ids are unique per DB but the same id could in principle appear
+    # in two of them (a copied data dir); keep the count-once invariant.
+    _oc_seen_ids: set = set()
+    for _oc_db in _opencode_dbs():
         try:
             # mode=ro (via _sqlite_ro_uri) so we never take a write lock on the
             # live TUI's DB. It's a WAL database, so a read can still time out if
             # OpenCode is mid-write — that lands in the outer except, which now
             # logs instead of silently dropping the whole agent.
-            uri = _sqlite_ro_uri(OPENCODE_DB)
+            uri = _sqlite_ro_uri(_oc_db)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             try:
@@ -5253,6 +5324,9 @@ def _scan_sessions_sync():
                 rows = conn.execute(f"SELECT id, directory, title, time_created, time_updated{_parent_sel} FROM session").fetchall()
                 for srow in rows:
                     sid = srow["id"]
+                    if sid in _oc_seen_ids:
+                        continue
+                    _oc_seen_ids.add(sid)
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
@@ -5383,7 +5457,7 @@ def _scan_sessions_sync():
             # of invisible (discussion #170).
             import logging
             logging.getLogger("tokentelemetry.opencode").debug(
-                "OpenCode scan skipped (%s): %r", OPENCODE_DB, e)
+                "OpenCode scan skipped (%s): %r", _oc_db, e)
 
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
@@ -6288,8 +6362,9 @@ async def get_session_detail(session_id: str, agent: str):
             if "response" in req: events.append({"type": "assistant", "payload": req["response"], "timestamp": req.get("timestamp"), "normalized_timestamp": norm_ts})
         return events
     elif agent == "opencode":
-        if not OPENCODE_DB.exists(): return {"error": "Not found"}
-        uri = _sqlite_ro_uri(OPENCODE_DB)
+        _oc_db = _opencode_db_for_session(session_id)
+        if _oc_db is None: return {"error": "Not found"}
+        uri = _sqlite_ro_uri(_oc_db)
         conn = sqlite3.connect(uri, uri=True, timeout=1.0)
         conn.row_factory = sqlite3.Row
         try:
@@ -6641,10 +6716,11 @@ async def session_delegation(session_id: str, agent: str):
         return {"error": "Not found"}
 
     if agent == "opencode":
-        if not OPENCODE_DB.exists():
+        _oc_db = _opencode_db_for_session(session_id)
+        if _oc_db is None:
             return {"error": "Not found"}
         try:
-            conn = sqlite3.connect(_sqlite_ro_uri(OPENCODE_DB), uri=True, timeout=1.0)
+            conn = sqlite3.connect(_sqlite_ro_uri(_oc_db), uri=True, timeout=1.0)
             try:
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
                 if "parent_id" not in cols:
