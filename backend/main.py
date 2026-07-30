@@ -23,6 +23,8 @@ from harness_config import (
 import notifications as notif
 from tt_paths import data_dir
 import scan_cache
+import codex_goals
+import hashlib
 
 def _aware(dt):
     """Ensure datetime is timezone-aware UTC. Naive inputs are assumed to be UTC."""
@@ -2590,6 +2592,14 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
             if loop:
                 sess["loop"] = loop
 
+            goal = _grok_goal_detect(
+                sess_id_dir,
+                tools_used if isinstance(tools_used, list) else [],
+                created, updated,
+            )
+            if goal:
+                sess["goals"] = [goal]
+
             if grok_spawns:
                 by_type: Dict[str, Dict[str, Any]] = {}
                 for sp in grok_spawns:
@@ -2615,6 +2625,138 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
             child = grok_by_id.get(cid)
             if child is not None:
                 child["parent_session_id"] = s["id"]
+    return out
+
+
+def _grok_goal_detect(sess_dir: Path, tools_used: List[str],
+                      created: Optional[str], updated: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Detect Grok Build's autonomous goal from `update_goal` tool calls.
+
+    Grok reports progress through an `update_goal` tool rather than a stop
+    condition, so the evidence is a stream of checkpoints, the last of which may
+    carry `completed: true`.
+
+    Two things this refuses to claim, both established from local data:
+
+    - **The objective is not recoverable.** All 25 local sessions using
+      `update_goal` did so with no `/goal` user message anywhere, i.e. the tool
+      was in the toolset and the model drove it from skill instructions. So we
+      surface the latest progress message and leave `objective` null rather than
+      passing a status line off as the user's objective.
+    - **No completion flag does not mean "still running".** A finished session
+      that never reported `completed` is genuinely unknown, so it gets
+      "unknown", not "active".
+
+    Gated on `update_goal` appearing in signals.toolsUsed, so the file read is
+    skipped for the overwhelming majority of sessions.
+    """
+    if "update_goal" not in (tools_used or []):
+        return None
+    path = sess_dir / GROK_CHAT_HISTORY
+    checkpoints: List[str] = []
+    completed = False
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "update_goal" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                for tc in rec.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    name = tc.get("name") or (tc.get("function") or {}).get("name")
+                    if name != "update_goal":
+                        continue
+                    args = tc.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {}
+                    if not isinstance(args, dict):
+                        continue
+                    msg = str(args.get("message") or "").strip()
+                    if msg:
+                        checkpoints.append(msg)
+                    if args.get("completed") is True:
+                        completed = True
+    except OSError:
+        return None
+    if not checkpoints and not completed:
+        return None
+    return {
+        "source": "grok",
+        "goal_id": None,
+        "objective": None,
+        "objective_truncated": False,
+        "created_at": created,
+        "updated_at": updated,
+        "state": "complete" if completed else "unknown",
+        "state_source": "inferred",
+        # Checkpoints carry no timestamps and no token accounting, so there is
+        # no per-goal boundary to cost. The session IS the goal here.
+        "tokens": None,
+        "duration_seconds": None,
+        "token_budget": None,
+        "cost_basis": "session",
+        "evidence": {
+            "checkpoints": len(checkpoints),
+            "completed": completed,
+            "latest_message": checkpoints[-1][:codex_goals.OBJECTIVE_MAX] if checkpoints else None,
+            "objective_recoverable": False,
+        },
+    }
+
+
+def _antigravity_goal_detect(transcript: Path) -> List[Dict[str, Any]]:
+    """Detect Antigravity `/goal` markers.
+
+    Antigravity's `/goal` is a prompt marker, not machinery: the request arrives
+    wrapped as `<USER_REQUEST>/goal <text>/goal</USER_REQUEST>` and the agent's
+    context explains it as work "intended to run for a long time without user
+    input". There is no status and no completion signal, so every one of these
+    is `unknown` by construction — but unlike Grok, the objective IS the marker
+    text, so it can be shown.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    try:
+        with open(transcript, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "/goal" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                blob = json.dumps(rec)
+                for m in _ANTIGRAVITY_GOAL_RE.finditer(blob):
+                    text = m.group(1).replace("\\n", " ").replace('\\"', '"').strip()
+                    text = text.split("/goal")[0].strip()
+                    key = text[:80]
+                    if not text or key in seen:
+                        continue
+                    seen.add(key)
+                    out.append({
+                        "source": "antigravity",
+                        "goal_id": None,
+                        "objective": text[:codex_goals.OBJECTIVE_MAX],
+                        "objective_truncated": len(text) > codex_goals.OBJECTIVE_MAX,
+                        "created_at": rec.get("timestamp") or rec.get("ts"),
+                        "updated_at": None,
+                        "state": "unknown",
+                        "state_source": "inferred",
+                        "tokens": None,
+                        "duration_seconds": None,
+                        "token_budget": None,
+                        "cost_basis": "session",
+                        "evidence": {"marker_only": True},
+                    })
+    except OSError:
+        return []
     return out
 
 
@@ -3373,6 +3515,29 @@ def _antigravity_link_subagents(sessions: List[Dict[str, Any]]) -> None:
                     child["parent_session_id"] = sid
 
 
+def _antigravity_attach_goals(sessions: List[Dict[str, Any]]) -> None:
+    """Attach `/goal` markers to Antigravity sessions.
+
+    `transcript.jsonl` and `transcript_full.jsonl` duplicate each other, so only
+    the former is read; reading both would double every goal.
+    """
+    ag = [s for s in sessions if s.get("agent") == "antigravity"]
+    if not ag:
+        return
+    for sess in ag:
+        for brain_dir in ANTIGRAVITY_BRAIN_DIRS:
+            tpath = brain_dir / sess["id"] / ".system_generated" / "logs" / "transcript.jsonl"
+            try:
+                if not tpath.exists():
+                    continue
+            except OSError:
+                continue
+            goals = _antigravity_goal_detect(tpath)
+            if goals:
+                sess["goals"] = goals
+            break
+
+
 # Brain dirs Antigravity itself manages — NOT user-facing artifacts.
 _ANTIGRAVITY_INTERNAL_DIRS = {".system_generated", ".agents"}
 _ANTIGRAVITY_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -3904,10 +4069,118 @@ def _annotate_loop_lifecycle(sessions: List[Dict[str, Any]], now: datetime) -> N
         lp["next_fire_at"] = nxt.isoformat() if nxt else None
 
 
+# --- /goal detection (Claude Code) -----------------------------------------
+# `/goal` arms a session-scoped Stop hook: each time Claude tries to end its
+# turn an evaluator checks the condition, and an unmet condition BLOCKS the
+# stop so the agent keeps working. Claude persists no goal state anywhere
+# (verified: no files, no DB under ~/.claude), so the transcript is the only
+# evidence and all of it is text.
+#
+# The honesty constraint that shapes this code: there is NO terminal event.
+# Nothing is ever written when a goal is met, cleared, or abandoned. So a
+# Claude goal may only ever be "armed", "blocked" or "unknown" — never
+# "complete". Inferring completion here would be inventing a fact.
+# Antigravity wraps the request as <USER_REQUEST>\n/goal <text>/goal\n</...>.
+# Matched against the json.dumps'd record, so the newline is the two characters
+# \ and n rather than a real newline.
+_ANTIGRAVITY_GOAL_RE = re.compile(r"<USER_REQUEST>(?:\\n|\s)*/goal\s+(.{1,400}?)</USER_REQUEST>", re.S)
+_GOAL_ARM_RE = re.compile(
+    r'session-scoped Stop hook is now active with condition:\s*"?(.{0,400})',
+    re.S)
+_GOAL_BLOCK_PREFIX = "Stop hook feedback"
+# Blocks closer together than this belong to the same burst (the agent being
+# pushed back repeatedly on one stop attempt) rather than to separate turns.
+# Calibrated against real data rather than guessed: inside a genuine run the
+# observed gaps are 42s and below, while the nearest true break is 169s. 120s
+# separates them cleanly and makes the longest burst come out at exactly 8,
+# which is the documented cap firing. A looser 300s merges the break and
+# reports 9, i.e. a cap that appears to have been exceeded.
+_GOAL_BURST_GAP_SEC = 120
+# Claude Code ends the turn with a warning after this many CONSECUTIVE blocks
+# (changelog; overridable in the CLI via CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, and
+# absent from the public hooks docs). Used only to flag a burst that looks like
+# it hit the ceiling, never to age a goal out.
+_GOAL_BLOCK_CAP = 8
+
+
+def _goal_key(ts: Any, condition: str) -> str:
+    """Identity for de-duplication.
+
+    A compacted transcript replays earlier records, so the same arm shows up at
+    two line numbers with an identical timestamp and condition.
+    """
+    return f"{ts}|{hashlib.sha1((condition or '').encode('utf-8', 'replace')).hexdigest()[:12]}"
+
+
+def _claude_build_goals(arms: List[Dict[str, Any]],
+                        blocks: List[Dict[str, Any]],
+                        usage_by_arm: Dict[int, Dict[str, int]],
+                        model: Optional[str]) -> List[Dict[str, Any]]:
+    """Assemble Claude `/goal` records from arm + block breadcrumbs.
+
+    `arms` are already de-duplicated and in file order; each block carries the
+    index of the arm that was live when it fired, so a session that armed
+    several goals attributes each block to the right one.
+    """
+    out: List[Dict[str, Any]] = []
+    for i, arm in enumerate(arms):
+        mine = [b for b in blocks if b.get("arm") == i]
+        stamps = [b["ts"] for b in mine if b.get("ts")]
+        stamps.sort()
+
+        # Group into bursts: a run of blocks against one stop attempt.
+        bursts: List[int] = []
+        prev: Optional[datetime] = None
+        for s in stamps:
+            t = _loop_parse_ts(s)
+            if t is None:
+                continue
+            if prev is not None and (t - prev).total_seconds() <= _GOAL_BURST_GAP_SEC:
+                bursts[-1] += 1
+            else:
+                bursts.append(1)
+            prev = t
+
+        u = usage_by_arm.get(i) or {}
+        tokens = (u.get("input", 0) + u.get("output", 0) + u.get("cached", 0)) or None
+        cond = (arm.get("condition") or "").strip()
+        created = arm.get("ts")
+        out.append({
+            "source": "claude",
+            "goal_id": None,
+            "objective": cond[:codex_goals.OBJECTIVE_MAX],
+            "objective_truncated": len(cond) > codex_goals.OBJECTIVE_MAX,
+            "created_at": created,
+            "updated_at": (stamps[-1] if stamps else created),
+            # Never "complete": Claude emits no terminal event to justify it.
+            "state": ("unknown" if not created else ("blocked" if stamps else "armed")),
+            "state_source": "inferred",
+            "tokens": tokens,
+            "duration_seconds": None,
+            "token_budget": None,
+            # Only the turns that exist BECAUSE a stop was blocked; this is
+            # incremental, unlike Codex's whole-goal native count.
+            "cost_basis": "attributed_turns",
+            "cost": (calculate_cost(model, u.get("input", 0), u.get("output", 0),
+                                    u.get("cached", 0),
+                                    cache_creation_tokens=u.get("cache_creation", 0),
+                                    cache_creation_1h_tokens=u.get("cache_creation_1h", 0))
+                     if tokens else None),
+            "evidence": {
+                "blocks": len(stamps),
+                "first_block": stamps[0] if stamps else None,
+                "last_block": stamps[-1] if stamps else None,
+                "block_bursts": bursts,
+                "cap_hit": bool(bursts and max(bursts) >= _GOAL_BLOCK_CAP),
+            },
+        })
+    return out
+
+
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts",
+    "loop", "published_artifacts", "goals",
 )
 
 
@@ -4144,6 +4417,11 @@ def _scan_sessions_sync():
                                   "cache_creation": 0, "cache_creation_1h": 0}  # loop's OWN footprint
                     artifact_calls: Dict[str, Dict[str, Any]] = {}  # Artifact tool_use_id -> input meta
                     published_arts: Dict[str, Dict[str, Any]] = {}  # hosted url -> published-artifact record
+                    goal_arms: List[Dict[str, Any]] = []     # /goal arms, de-duplicated
+                    goal_arm_keys: set = set()               # (ts, condition) seen — compaction replays them
+                    goal_blocks: List[Dict[str, Any]] = []   # each blocked stop, tagged with its arm
+                    goal_span_arm: Optional[int] = None      # arm index owning the current post-block span
+                    goal_usage_by_arm: Dict[int, Dict[str, int]] = {}  # arm idx -> attributed footprint
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
@@ -4176,6 +4454,18 @@ def _scan_sessions_sync():
                                             loop_usage["cached"] = max(loop_usage["cached"], cr)
                                             loop_usage["cache_creation"] += cc
                                             loop_usage["cache_creation_1h"] += cc_1h
+                                        if goal_span_arm is not None:
+                                            # This turn exists only because a stop was BLOCKED, so
+                                            # it is the goal's incremental cost. Same span technique
+                                            # as the loop footprint above.
+                                            gu = goal_usage_by_arm.setdefault(goal_span_arm, {
+                                                "input": 0, "output": 0, "cached": 0,
+                                                "cache_creation": 0, "cache_creation_1h": 0})
+                                            gu["input"] += usage.get("input_tokens", 0) or 0
+                                            gu["output"] += usage.get("output_tokens", 0) or 0
+                                            gu["cached"] = max(gu["cached"], cr)
+                                            gu["cache_creation"] += cc
+                                            gu["cache_creation_1h"] += cc_1h
                                     sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
                                     sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
                                     for item in msg.get("content", []):
@@ -4232,6 +4522,29 @@ def _scan_sessions_sync():
                                 if data.get("type") == "user":
                                     u_msg = data.get("message", {})
                                     u_content = u_msg.get("content", "")
+                                    # /goal breadcrumbs. Deliberately restricted to STRING content
+                                    # on a user record: tool_result blocks arrive as lists and can
+                                    # quote these markers verbatim (any session that greps its own
+                                    # transcript), and assistant prose discussing the feature would
+                                    # otherwise be counted as a real block.
+                                    _goal_block_now = False
+                                    if isinstance(u_content, str) and "Stop hook" in u_content:
+                                        _gm = _GOAL_ARM_RE.search(u_content)
+                                        if _gm:
+                                            _gcond = _gm.group(1).split('". Briefly acknowledge')[0]
+                                            _gkey = _goal_key(data.get("timestamp"), _gcond)
+                                            if _gkey not in goal_arm_keys:
+                                                goal_arm_keys.add(_gkey)
+                                                goal_arms.append({"ts": data.get("timestamp"),
+                                                                  "condition": _gcond})
+                                            goal_span_arm = None
+                                        elif u_content.lstrip().startswith(_GOAL_BLOCK_PREFIX) and goal_arms:
+                                            # Attribute to the goal that was live at this point; a
+                                            # session can arm several in sequence.
+                                            goal_blocks.append({"ts": data.get("timestamp"),
+                                                                "arm": len(goal_arms) - 1})
+                                            goal_span_arm = len(goal_arms) - 1
+                                            _goal_block_now = True
                                     if "/plan" in str(u_content):
                                         sess["has_plan"] = True
                                     for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
@@ -4305,6 +4618,12 @@ def _scan_sessions_sync():
                                         in_loop_span = True
                                     elif _strip_context_tags(u_text).strip():
                                         in_loop_span = False
+                                    # A real user message ends the goal's attributed span; the
+                                    # block record itself must not close the span it just opened.
+                                    if (not _goal_block_now and goal_span_arm is not None
+                                            and _strip_context_tags(
+                                                u_content if isinstance(u_content, str) else u_text).strip()):
+                                        goal_span_arm = None
                     except Exception: continue
                     if last_real_ts:
                         try:
@@ -4315,6 +4634,12 @@ def _scan_sessions_sync():
                         sess["published_artifacts"] = sorted(
                             published_arts.values(),
                             key=lambda a: str(a.get("timestamp") or ""), reverse=True)
+                    if goal_arms:
+                        # Static once the session is written (no wall-clock aging, unlike
+                        # loops and unlike Codex's mutable goal status), so this is safe
+                        # to cache.
+                        sess["goals"] = _claude_build_goals(
+                            goal_arms, goal_blocks, goal_usage_by_arm, sess.get("model"))
                     if loop_sched:
                         primary = loop_sched[0]
                         job_id = next((sc.get("job_id") for sc in loop_sched if sc.get("job_id")), None)
@@ -4600,6 +4925,21 @@ def _scan_sessions_sync():
             if kids:
                 s["delegation"] = {"supported": True, "tokens_recorded": False,
                                    "linked_children": len(kids)}
+        # Goal Mode (`/goal`). Attached HERE, after the per-session cache
+        # branch, precisely because a goal's status is live mutable state
+        # (active -> paused -> complete): caching it would freeze the first
+        # status we ever saw, the same trap `_annotate_loop_lifecycle` exists
+        # to avoid. `thread_id` is the session id verbatim, so this is a
+        # straight join. One cheap SQLite read for the whole scan.
+        try:
+            goals_by_thread = codex_goals.read_goals(CODEX_DIR)
+        except Exception:
+            goals_by_thread = {}
+        if goals_by_thread:
+            for s in codex_sessions.values():
+                g = goals_by_thread.get(s["id"])
+                if g:
+                    s["goals"] = g
         sessions.extend(codex_sessions.values())
 
     # 3 & 7. Gemini & Antigravity
@@ -5539,6 +5879,7 @@ def _scan_sessions_sync():
 
     # Antigravity subagent linkage (needs the full session list to pair ids).
     _antigravity_link_subagents(sessions)
+    _antigravity_attach_goals(sessions)
 
     # Every session gets an explicit delegation marker: agents whose logs carry
     # no spawn signal report supported=False (an honest "n/a", never a fake 0).

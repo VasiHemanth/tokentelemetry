@@ -1,6 +1,25 @@
 {
   "releases": [
     {
+      "tag": "2026-07-30",
+      "title": "See what /goal runs actually cost",
+      "highlights": [
+        {
+          "title": "Goal cards on the session trace",
+          "description": "Sessions where you set a goal now show a Goal Mode card. Codex reports the objective, status, tokens and time itself. Claude Code shows how many times the goal blocked the agent from stopping and the extra tokens those turns cost. Grok shows its progress checkpoints, and Antigravity shows the goal you typed. An unattended overnight run is no longer indistinguishable from an ordinary session.",
+          "href": "/sessions"
+        },
+        {
+          "title": "Every goal says where its status came from",
+          "description": "Only Codex records real goal status, so only Codex cards show it as fact. Everything else is marked \"inferred\", and a Claude goal is never shown as finished because Claude writes no completion event. The card would rather say \"unknown\" than guess."
+        },
+        {
+          "title": "Goal cost is never double-counted",
+          "description": "Cost means three different things here, and each card says which. Codex tokens are shown as a share of the session that already contains them, Claude shows only the extra turns a blocked stop caused, and Grok and Antigravity say plainly that the session is the goal."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-26",
       "title": "Run TokenTelemetry in Docker or Podman",
       "highlights": [
