@@ -10,6 +10,7 @@ const allowedDevOrigins = (process.env.TT_ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   devIndicators: false,
   // Empty array == default (no extra origins), so this is safe when unset.
   allowedDevOrigins,

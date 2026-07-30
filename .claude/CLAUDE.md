@@ -1,5 +1,57 @@
 # TokenTelemetry — Claude Code project rules
 
+## ⚠️ This repo is PUBLIC — what must never be pushed
+
+Everything below applies to commit messages, PR titles and bodies, PR comments,
+issue comments, code, tests and fixtures. All of it is world-readable and
+**cannot be reliably deleted after the fact** (see "If it leaks anyway").
+
+### Never include a Claude Code session URL
+
+Do **not** put `https://claude.ai/code/session_…` in a commit message, PR body,
+or anywhere else in the repo. Drop the `Claude-Session:` trailer and the
+session link under the "Generated with Claude Code" line.
+
+The `🤖 Generated with [Claude Code]` attribution itself is fine and should
+stay. It's only the session URL that must go.
+
+### Never include machine or account identifiers
+
+Bug reports arrive as screenshots and pasted paths from real machines,
+including work machines. Those paths carry usernames:
+
+```
+C:\Users\<corp-username>\Documents\project     <- the username is an identifier
+/Users/<username>/code/project
+/home/<username>/project
+```
+
+Before writing a path into a commit, PR, test or comment, **replace the user
+segment with a placeholder**: `C:\Users\dev\Documents\my-project`,
+`/Users/dev/code/app`. The same goes for hostnames, corporate domains, internal
+URLs, ticket ids, IPs, and the contents of screenshots.
+
+This is not hypothetical: a Windows bug report was reproduced verbatim in a PR
+body, a commit message and a test fixture, publishing the reporter's corporate
+account name three times. Sanitise at the moment you copy the path, not at
+review time.
+
+### If it leaks anyway
+
+Closing the PR and deleting the branch is **not enough**. GitHub keeps the
+orphaned commit and serves it by SHA (and from the closed PR) until its own
+garbage collection runs. The steps, in order:
+
+1. Edit the PR title/body to remove the value (this *is* effective — bodies are
+   mutable), then close the PR and delete the remote branch.
+2. Rewrite the local history so the value is gone from the message and diff,
+   and push the clean branch under a new name.
+3. For anything genuinely sensitive, **contact GitHub Support** to purge the
+   unreachable objects. Nothing you can do with `git` alone removes a commit
+   that has already been pushed and fetched.
+4. Treat any leaked credential as compromised and rotate it. A username can't
+   be rotated, which is exactly why step 0 is not leaking it.
+
 ## ⚠️ Pre-push policy (enforced by hook)
 
 **Every push to a branch destined for `main` that contains at least one
