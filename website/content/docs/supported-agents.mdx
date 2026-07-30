@@ -61,6 +61,8 @@ Reads Copilot's chat session files from VS Code's `chatSessions/` directory (ins
 
 Reads session data from `~/.local/share/opencode/`. Token counts and traces are captured; OpenCode children sessions are included in the relayed-session count (they are already counted in the parent session's token totals).
 
+The data directory follows `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` when set, and the database filename depends on the release channel the build came from: `latest` and `beta` use `opencode.db`, everything else uses `opencode-<channel>.db` (a Nix install on the `stable` channel writes `opencode-stable.db`). TokenTelemetry reads all of them, so switching channels doesn't hide your older sessions.
+
 ### Cline
 
 TokenTelemetry reads both the Cline CLI SQLite store and the VS Code extension's JSON task history, de-duplicating sessions that appear in both.
