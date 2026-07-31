@@ -98,6 +98,13 @@ marked not applicable rather than inventing a number.
 - **Project → Insights** — active/expired/cancelled counts and the loops' own
   token and cost footprint.
 
+![Recurring loops and goals on a project's Config tab](/screenshots/loops-goals-config.png)
+
+That's the Config tab: recurring loops at the top, goals below them on the same
+page. The loop cards carry the state, cadence, fire count and job id, and the
+"7.5k tok · $0.52 loop turns" figure is the loop's own fire turns rather than
+its session's total.
+
 ## Goals
 
 A goal hands the agent an objective and lets it keep working. Four agents ship a
@@ -203,6 +210,13 @@ Workflow agents appear in the session trace's **Delegated work** card, tagged as
 a dynamic workflow with their run id and phase. They're grouped under the
 `workflow-subagent` type in the delegation breakdown, so you can see the
 workflow's share of a session at a glance.
+
+![Workflow subagents in a session's Delegated work card](/screenshots/trace-workflow-subagents.png)
+
+Worth reading the header numbers on that trace: the session's own output is
+122,832 tokens, while **delegated** is 2.73M. Almost everything that session
+spent went to its workflow agents, and every one of those rows is a file that
+the ordinary subagent scan would have walked straight past.
 
 <Callout type="info">
 Counted once. Workflow agents are files inside the parent session's directory,
