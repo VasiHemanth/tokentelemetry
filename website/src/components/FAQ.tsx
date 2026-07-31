@@ -12,7 +12,7 @@ import { Reveal } from "@/components/motion";
  */
 export default function FAQ() {
   return (
-    <section id="faq" className="border-t border-[var(--tt-border)]">
+    <section id="faq" className="scroll-mt-[82px] border-t border-[var(--tt-border)]">
       <style>{`
         .tt-faq-item::details-content {
           display: block;

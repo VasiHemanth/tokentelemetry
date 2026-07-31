@@ -1,6 +1,6 @@
 "use client";
 /**
- * BootShowcase — 02 · SCAN. The install boot sequence, full width: a typed
+ * BootShowcase — 01 · SCAN. The install boot sequence, full width: a typed
  * `tokentelemetry`, agent discovery lines in identity colors, then the frame
  * resolves into the real dashboard. Replays on demand. SSR / no-JS / reduced
  * motion render the resolved final state; the effect only rewinds it when the
@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useInView, useReducedMotion } from "motion/react";
 import { Lock, TrendingUp } from "lucide-react";
 import { track } from "@/lib/track";
+import { webpSrcSet } from "@/lib/shots";
 import SectionHead from "@/components/SectionHead";
 import { CountUp, useDrawable, motionOk, EASE, DUR, SPRING } from "@/components/motion";
 
@@ -93,10 +94,11 @@ export default function BootShowcase() {
   };
 
   return (
-    <section className="py-16 sm:py-24">
+    // Tight top padding: this frame rides the hero's momentum.
+    <section id="scan" className="scroll-mt-[82px] pt-6 sm:pt-10 pb-16 sm:pb-24">
       <div className="max-w-[1180px] mx-auto px-5">
       <SectionHead
-        index="02"
+        index="01"
         label="scan"
         title={
           <>
@@ -126,14 +128,35 @@ export default function BootShowcase() {
             </div>
             <div className="relative aspect-[16/11] sm:aspect-[16/9] overflow-hidden bg-[var(--tt-sunken)]">
               {/* No `initial` on the screenshot: SSR/no-JS paint it at full
-                  opacity; the boot only dims it after hydration in view. */}
-              <motion.img
-                src="/screenshots/dashboard.png" width={3200} height={3000}
-                alt="TokenTelemetry dashboard showing live token usage across detected agents"
-                className="block w-full h-auto object-cover object-top"
-                loading="lazy" decoding="async"
-                animate={{ opacity: resolved ? 1 : 0.25, scale: resolved ? 1 : 0.985 }}
-                transition={{ type: "spring", stiffness: 260, damping: 32 }}
+                  opacity; the boot only dims it after hydration in view.
+                  First screenshot on the page (section 01): eager + high
+                  priority so it wins the network race; WebP source with the
+                  original PNG as fallback. */}
+              <picture>
+                <source
+                  type="image/webp"
+                  srcSet={webpSrcSet("/screenshots/dashboard.png")}
+                  sizes="(min-width: 1060px) 1000px, calc(100vw - 40px)"
+                />
+                <motion.img
+                  src="/screenshots/dashboard.png" width={3200} height={3000}
+                  alt="TokenTelemetry dashboard showing live token usage across detected agents"
+                  className="block w-full h-auto object-cover object-top"
+                  loading="eager" decoding="async" fetchPriority="high"
+                  animate={{ opacity: resolved ? 1 : 0.25, scale: resolved ? 1 : 0.985 }}
+                  transition={{ type: "spring", stiffness: 260, damping: 32 }}
+                />
+              </picture>
+              {/* Deliberate window crop: the dashboard continues past the
+                  frame, so fade it out into a clear inner bottom edge instead
+                  of cutting a table row mid-pixel. */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-14 border-b border-[var(--tt-border-strong)]"
+                style={{
+                  background:
+                    "linear-gradient(to top, color-mix(in srgb, var(--tt-panel) 92%, transparent), transparent)",
+                }}
               />
               <AnimatePresence>
                 {!resolved && (

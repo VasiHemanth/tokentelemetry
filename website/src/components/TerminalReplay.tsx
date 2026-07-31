@@ -39,14 +39,24 @@ export default function TerminalReplay({ onCostLine, onLoop }: TerminalReplayPro
 
   const [elapsed, setElapsed] = useState(0);
   const [loop, setLoop] = useState(0);
+  const [pageVisible, setPageVisible] = useState(true);
   const elapsedRef = useRef(0);
   const costFiredRef = useRef(false);
   // Keep callbacks in a ref so the timer effect doesn't restart when the parent re-renders.
   const callbacksRef = useRef({ onCostLine, onLoop });
   callbacksRef.current = { onCostLine, onLoop };
 
+  // Pause on a hidden tab, not just off-screen; the elapsed-resume math below
+  // otherwise keeps advancing the replay (and firing callbacks) in background.
   useEffect(() => {
-    if (reduced || !inView) return;
+    const onVis = () => setPageVisible(!document.hidden);
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  useEffect(() => {
+    if (reduced || !inView || !pageVisible) return;
     const cycle = SCRIPT_DURATION_MS + REPLAY_HOLD_MS;
     const start = Date.now() - elapsedRef.current;
     const id = setInterval(() => {
@@ -65,7 +75,7 @@ export default function TerminalReplay({ onCostLine, onLoop }: TerminalReplayPro
       setElapsed(t);
     }, 60);
     return () => clearInterval(id);
-  }, [inView, reduced]);
+  }, [inView, reduced, pageVisible]);
 
   const visible = reduced ? TERMINAL_SCRIPT : TERMINAL_SCRIPT.filter((l) => l.delay <= elapsed);
 

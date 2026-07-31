@@ -4,12 +4,20 @@
  * children. Container owns the trigger + gap; items own the per-child motion.
  * Never stagger more than 8 items individually; group the rest.
  * Reduced motion: items collapse to a 200ms opacity fade, no gap.
+ *
+ * Uses the same visibility safety nets as Reveal (see useRevealed): after an
+ * instant jump (hash link, End key) or 1200ms of unrevealed intersection,
+ * the container snaps to "show" and items render with no transition or gap.
  */
 import { createContext, useContext, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
+import { useRevealed } from "./Reveal";
 import { DUR, SPRING } from "./vocab";
 
-const StaggerCtx = createContext<{ y: number }>({ y: 16 });
+const StaggerCtx = createContext<{ y: number; snapped: boolean }>({
+  y: 16,
+  snapped: false,
+});
 
 export type StaggerProps = {
   children: ReactNode;
@@ -17,7 +25,7 @@ export type StaggerProps = {
   gap?: 40 | 60 | 80;
   /** Rise distance for items (default 16); an Item's own `y` prop overrides. */
   y?: number;
-  /** In-view threshold (default 0.3). */
+  /** In-view threshold (default 0.15). */
   amount?: number;
   /** Delay in seconds before the first child starts. */
   delay?: number;
@@ -28,24 +36,27 @@ function Stagger({
   children,
   gap = 80,
   y = 16,
-  amount = 0.3,
+  amount = 0.15,
   delay = 0,
   className,
 }: StaggerProps) {
   const reduced = useReducedMotion();
+  const { setRef, revealed, snapped } = useRevealed(amount);
   return (
-    <StaggerCtx.Provider value={{ y }}>
+    <StaggerCtx.Provider value={{ y, snapped }}>
       <motion.div
+        ref={setRef}
         initial="hidden"
-        whileInView="show"
-        viewport={{ once: true, amount }}
+        animate={revealed ? "show" : "hidden"}
         variants={{
           hidden: {},
           show: {
-            transition: {
-              staggerChildren: reduced ? 0 : gap / 1000,
-              delayChildren: delay,
-            },
+            transition: snapped
+              ? { staggerChildren: 0, delayChildren: 0 }
+              : {
+                  staggerChildren: reduced ? 0 : gap / 1000,
+                  delayChildren: delay,
+                },
           },
         }}
         className={className}
@@ -71,11 +82,18 @@ function Item({ children, y, className }: StaggerItemProps) {
   const variants = reduced
     ? {
         hidden: { opacity: 0 },
-        show: { opacity: 1, transition: { duration: DUR.fade } },
+        show: {
+          opacity: 1,
+          transition: ctx.snapped ? { duration: 0 } : { duration: DUR.fade },
+        },
       }
     : {
         hidden: { opacity: 0, y: rise },
-        show: { opacity: 1, y: 0, transition: SPRING.reveal },
+        show: {
+          opacity: 1,
+          y: 0,
+          transition: ctx.snapped ? { duration: 0 } : SPRING.reveal,
+        },
       };
 
   return (

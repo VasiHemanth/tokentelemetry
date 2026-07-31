@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "fumadocs-mdx && next build && node ./scripts/post-build.mjs",
+    "build": "node ./scripts/optimize-images.mjs && fumadocs-mdx && next build && node ./scripts/post-build.mjs",
     "start": "next start -p 3001",
     "lint": "eslint"
   },
@@ -26,6 +26,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^26",
+    "sharp": "^0.34.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4",

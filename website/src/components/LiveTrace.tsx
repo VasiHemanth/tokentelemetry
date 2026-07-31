@@ -68,7 +68,7 @@ export default function LiveTrace() {
   const onLoop = () => setPhase("waiting");
 
   return (
-    <section className="relative max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
+    <section id="trace" className="scroll-mt-[82px] relative max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
       <SectionHead
         index="03"
         label="trace"

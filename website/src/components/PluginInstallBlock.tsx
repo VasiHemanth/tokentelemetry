@@ -31,7 +31,7 @@ export default function PluginInstallBlock() {
     navigator.clipboard?.writeText(FULL_COMMAND);
     track("copy_plugin_command", { location: "hermes_spotlight" });
     setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -48,19 +48,20 @@ export default function PluginInstallBlock() {
         </div>
         <button
           onClick={copy}
-          aria-label="Copy full install sequence"
+          aria-label={copied ? "Copied" : "Copy full install sequence"}
           className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:bg-[var(--tt-panel)] transition-colors"
         >
-          {copied ? (
-            <>
-              <Check size={12} className="text-emerald-400" /> Copied all
-            </>
-          ) : (
-            <>
-              <Copy size={12} /> Copy all
-            </>
-          )}
+          {/* Stacked icons crossfade/scale so copy → check reads as a morph. */}
+          <span aria-hidden className="relative w-3 h-3 shrink-0">
+            <Copy size={12} className={`absolute inset-0 transition-[opacity,transform] duration-200 motion-reduce:transition-none ${copied ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
+            <Check size={12} className={`absolute inset-0 text-emerald-400 transition-[opacity,transform] duration-200 motion-reduce:transition-none ${copied ? "opacity-100 scale-100" : "opacity-0 scale-50"}`} />
+          </span>
+          {copied ? "Copied all" : "Copy all"}
         </button>
+        {/* Announce the copy for screen readers without moving focus. */}
+        <span aria-live="polite" className="sr-only">
+          {copied ? "Install commands copied to clipboard" : ""}
+        </span>
       </div>
 
       {/* Two steps */}

@@ -21,7 +21,7 @@ export default function FinalCTA() {
     navigator.clipboard?.writeText(INSTALL);
     setCopied(true);
     track("copy_install_command", { os: "mac", location: "final" });
-    setTimeout(() => setCopied(false), 1500);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -55,8 +55,17 @@ export default function FinalCTA() {
               <button onClick={copy}
                 className="shrink-0 inline-flex items-center gap-1.5 h-[38px] px-3.5 rounded-[var(--tt-radius)] bg-[var(--tt-brand-strong)] hover:bg-[var(--tt-brand)] text-white text-[12.5px] font-semibold shadow-[0_8px_22px_-12px_var(--tt-brand-glow)] transition-colors"
                 aria-label={copied ? "Copied" : "Copy install command"}>
-                {copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copied" : "Copy"}
+                {/* Stacked icons crossfade/scale so copy → check reads as a morph. */}
+                <span aria-hidden className="relative w-3.5 h-3.5 shrink-0">
+                  <Copy size={14} className={`absolute inset-0 transition-[opacity,transform] duration-200 motion-reduce:transition-none ${copied ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
+                  <Check size={14} className={`absolute inset-0 transition-[opacity,transform] duration-200 motion-reduce:transition-none ${copied ? "opacity-100 scale-100" : "opacity-0 scale-50"}`} />
+                </span>
+                {copied ? "Copied" : "Copy"}
               </button>
+              {/* Announce the copy for screen readers without moving focus. */}
+              <span aria-live="polite" className="sr-only">
+                {copied ? "Install command copied to clipboard" : ""}
+              </span>
             </div>
           </BorderBeam>
         </div>

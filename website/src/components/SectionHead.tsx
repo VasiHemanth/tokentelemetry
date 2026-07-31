@@ -21,7 +21,8 @@ export default function SectionHead({
   id?: string;
 }) {
   return (
-    <div id={id} className="scroll-mt-24">
+    // scroll-mt = 58px sticky header + 24px breathing room
+    <div id={id} className="scroll-mt-[82px]">
       <div className="border-t border-[var(--tt-border)] pt-5 mb-10 sm:mb-14">
         <div className="flex items-baseline justify-between gap-4 mb-6 sm:mb-9 font-mono text-[11.5px] tracking-[0.16em] uppercase">
           <span className="text-[var(--tt-fg-dim)]">

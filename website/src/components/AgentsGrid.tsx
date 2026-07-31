@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { motion, useInView, useReducedMotion } from "motion/react";
 import { animate, stagger } from "animejs";
 import { AGENTS } from "@/data/agents";
@@ -65,14 +65,14 @@ export default function AgentsGrid() {
   }, [inView]);
 
   return (
-    <section id="agents" className="border-t border-[var(--tt-border)]">
+    <section id="agents" className="scroll-mt-[82px] border-t border-[var(--tt-border)]">
       <div className="max-w-[1180px] mx-auto px-5 py-12 sm:py-[72px]">
         <SectionHead
           index="06"
           label="coverage"
           title={
             <>
-              13 coding agents,{" "}
+              {AGENTS.length} coding agents,{" "}
               <span className="text-[var(--tt-brand)]">one place.</span>
             </>
           }
@@ -91,10 +91,18 @@ export default function AgentsGrid() {
                   setOpen(isOpen ? null : i);
                   if (!isOpen) track("feature_used", { name: "agent_expand" });
                 }}
-                className="text-left p-4 rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] hover:border-[var(--tt-border-strong)] hover:bg-[var(--tt-raised)] hover:-translate-y-0.5 transition-all relative flex flex-col w-full"
+                style={{ "--agent-accent": `${a.hex}59` } as CSSProperties}
+                className={`group text-left p-4 rounded-[var(--tt-radius-lg)] border bg-[var(--tt-panel)] hover:border-[var(--agent-accent)] hover:bg-[var(--tt-raised)] hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tt-brand)] transition-all relative flex flex-col w-full ${
+                  isOpen ? "border-[var(--agent-accent)]" : "border-[var(--tt-border)]"
+                }`}
               >
-                <span className="absolute top-4 right-4 text-[14px] text-[var(--tt-fg-faint)] transition-transform"
-                  style={{ transform: isOpen ? "rotate(45deg)" : "none" }}>
+                <span
+                  aria-hidden="true"
+                  className={`absolute top-4 right-4 text-[14px] transition-[transform,color] duration-200 motion-reduce:transition-none group-hover:text-[var(--tt-fg)] ${
+                    isOpen ? "text-[var(--tt-fg)]" : "text-[var(--tt-fg-faint)]"
+                  }`}
+                  style={{ transform: isOpen ? "rotate(45deg)" : "none" }}
+                >
                   +
                 </span>
                 <span className="flex items-center gap-2.5 mb-1">

@@ -1,26 +1,31 @@
 "use client";
 /**
- * Ledger — 01 · BURN. Ninety days of one machine's agent spend as oversized
+ * Ledger — 02 · BURN. Ninety days of one machine's agent spend as oversized
  * tabular numerals. The figures match the demo dashboard in the hero
  * screenshot; the zero is the point.
  */
 import CountUp from "@/components/motion/CountUp";
 import Reveal from "@/components/motion/Reveal";
 import SectionHead from "@/components/SectionHead";
+import {
+  DEMO_COST_USD,
+  DEMO_SESSIONS,
+  DEMO_TOKENS_MILLIONS,
+} from "@/data/demo-stats";
 
 const ROWS = [
   {
-    value: <CountUp to={599.85} prefix="$" duration={1100} format={(n) => n.toFixed(2)} />,
+    value: <CountUp to={DEMO_COST_USD} prefix="$" duration={700} format={(n) => n.toFixed(2)} />,
     label: "burned across every agent",
     tone: "text-[var(--tt-warn)]",
   },
   {
-    value: <CountUp to={931.8} suffix="M" duration={1000} format={(n) => n.toFixed(1)} />,
+    value: <CountUp to={DEMO_TOKENS_MILLIONS} suffix="M" duration={700} format={(n) => n.toFixed(1)} />,
     label: "tokens metered, in and out",
     tone: "text-[var(--tt-fg)]",
   },
   {
-    value: <CountUp to={510} duration={900} />,
+    value: <CountUp to={DEMO_SESSIONS} duration={700} />,
     label: "sessions traced end to end",
     tone: "text-[var(--tt-fg)]",
   },
@@ -33,10 +38,15 @@ const ROWS = [
 
 export default function Ledger() {
   return (
-    <section className="py-16 sm:py-24">
+    // Full-bleed band: hairlines + faintly raised bg set the ledger apart
+    // from the sections around it.
+    <section
+      id="burn"
+      className="scroll-mt-[82px] border-y border-[var(--tt-border)] bg-[color-mix(in_srgb,var(--tt-raised)_45%,transparent)] py-14 sm:py-20"
+    >
       <div className="max-w-[1180px] mx-auto px-5">
       <SectionHead
-        index="01"
+        index="02"
         label="burn"
         title={
           <>
@@ -44,7 +54,7 @@ export default function Ledger() {
             <span className="text-[var(--tt-fg-dim)]">Now it&apos;s visible.</span>
           </>
         }
-        sub="Ninety days on one machine, straight off the demo dashboard below. Your numbers will be your own — that's the point."
+        sub="Ninety days on one machine, straight off the demo dashboard above. Your numbers will be your own — that's the point."
       />
         <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           {ROWS.map((r, i) => (

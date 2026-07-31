@@ -65,7 +65,7 @@ export default function HermesSpotlight() {
   return (
     <section
       id="hermes"
-      className="relative overflow-hidden border-y border-[var(--tt-border)] bg-[radial-gradient(ellipse_at_top,rgba(234,179,8,0.08),transparent_70%)]"
+      className="scroll-mt-[82px] relative overflow-hidden border-y border-[var(--tt-border)] bg-[radial-gradient(ellipse_at_top,rgba(234,179,8,0.08),transparent_70%)]"
     >
       <div className="max-w-[1320px] mx-auto px-5 sm:px-8 py-16 sm:py-24">
         <p className="font-mono text-[11.5px] tracking-[0.16em] uppercase text-[var(--tt-fg-dim)] mb-10 sm:mb-14">

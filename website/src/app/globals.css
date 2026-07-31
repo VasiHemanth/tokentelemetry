@@ -126,7 +126,9 @@ body {
 
 ::selection { background: var(--tt-brand-glow); color: var(--tt-fg); }
 
-:where(a, button, [role="button"]):focus-visible {
+/* `summary` covers the FAQ disclosure rows; `[tabindex]` catches any other
+   scriptable focus target. */
+:where(a, button, summary, [role="button"], [tabindex]):focus-visible {
   outline: 2px solid var(--tt-border-focus);
   outline-offset: 2px;
   border-radius: var(--tt-radius-sm);
@@ -241,4 +243,15 @@ body {
     animation: none !important;
   }
   .tt-border-beam::after { opacity: 0 !important; }
+}
+
+/* Smooth in-page anchor scrolling (SectionNav rail, header/hash links).
+   Reduced motion gets instant jumps. */
+html {
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }

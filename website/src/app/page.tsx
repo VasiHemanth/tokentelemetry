@@ -10,13 +10,15 @@ import Privacy from "@/components/Privacy";
 import FAQ from "@/components/FAQ";
 import FinalCTA from "@/components/FinalCTA";
 import Footer from "@/components/Footer";
+import SectionNav from "@/components/SectionNav";
 
 export default function Page() {
   return (
     <main>
+      <SectionNav />
       <Hero />
-      <Ledger />
       <BootShowcase />
+      <Ledger />
       <LiveTrace />
       <HowItWorks />
       <FeatureShowcase />

@@ -69,7 +69,7 @@ export default function HowItWorks() {
   };
 
   return (
-    <section ref={sectionRef} className="relative max-w-[1180px] mx-auto px-5 py-16 sm:py-24">
+    <section id="setup" ref={sectionRef} className="scroll-mt-[82px] relative max-w-[1180px] mx-auto px-5 py-20 sm:py-28">
       <SectionHead
         index="04"
         label="setup"
