@@ -15,9 +15,12 @@
 **TokenTelemetry** is a free, open-source, 100% local observability dashboard that tracks **token usage**, **LLM costs**, **tool calls**, **session traces**, and **reasoning steps** across all your AI coding agents — in one unified place. No signup. No cloud. Your logs never leave your machine.
 
 🌐 **Website & Docs:** [https://tokentelemetry.com](https://tokentelemetry.com)  
+🎥 **Demo:** [3-minute walkthrough](https://youtu.be/AXGdSFFNS_w)  
 🖥️ **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.sh | bash`
 🧰 **Windows:** `irm https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.ps1 | iex`
 🐙 **GitHub:** [github.com/VasiHemanth/tokentelemetry](https://github.com/VasiHemanth/tokentelemetry)
+
+[![Watch the TokenTelemetry demo](https://img.youtube.com/vi/AXGdSFFNS_w/maxresdefault.jpg)](https://youtu.be/AXGdSFFNS_w)
 
 ---
 
