@@ -40,46 +40,12 @@ export const DEFAULT_OPENAI_COMPAT: OpenAICompatConfig = {
   enable_thinking: false,
 };
 
-export type MiniMaxRegion = "global_en" | "cn_zh";
-export type MiniMaxProtocol = "anthropic" | "openai";
-export type MiniMaxThinking = "adaptive" | "disabled";
-
-export interface MiniMaxConfig {
-  region: MiniMaxRegion;
-  protocol: MiniMaxProtocol;
-  api_key: string;
-  max_tokens: number;
-  temperature: number;
-  top_p: number;
-  thinking: MiniMaxThinking;
-}
-
-export const DEFAULT_MINIMAX_MODEL = "MiniMax-M3";
-export const DEFAULT_MINIMAX: MiniMaxConfig = {
-  region: "global_en",
-  protocol: "anthropic",
-  api_key: "",
-  max_tokens: 512,
-  temperature: 0.7,
-  top_p: 0.95,
-  thinking: "adaptive",
-};
-
-export interface MiniMaxOptions {
-  default_model: string;
-  models: { name: string; label: string }[];
-  regions: { name: MiniMaxRegion; label: string }[];
-  protocols: { name: MiniMaxProtocol; label: string }[];
-}
-
 export interface SummarizerConfig {
   enabled: boolean;
   backend: string | null;
   model: string | null;
   /** Present only when the openai_compat backend has been configured. */
   openai_compat?: OpenAICompatConfig;
-  /** Present only when the MiniMax backend has been configured. */
-  minimax?: MiniMaxConfig;
 }
 
 export interface SummaryBrief {
@@ -155,9 +121,6 @@ export interface CodexModel {
 export const listCodexModels = () =>
   api<{ models: CodexModel[] }>("/summarizer/codex/models").then((r) => r.models);
 
-export const getMiniMaxOptions = () =>
-  api<MiniMaxOptions>("/summarizer/minimax/options");
-
 export const putSummarizerConfig = (cfg: SummarizerConfig) =>
   api<SummarizerConfig>("/config/summarizer", {
     method: "PUT",
@@ -179,13 +142,6 @@ export const testOpenAICompat = (model: string | null, openai_compat: OpenAIComp
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, openai_compat }),
-  });
-
-export const testMiniMax = (model: string | null, minimax: MiniMaxConfig) =>
-  api<OpenAICompatTestResult>("/summarizer/minimax/test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, minimax }),
   });
 
 export const getCachedSummary = (sessionId: string) =>

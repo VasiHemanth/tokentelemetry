@@ -9,7 +9,7 @@ import PiIcon from "@/components/icons/PiIcon";
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
-  | "openai_compat" | "minimax" | "cline" | "smallcode" | "pi";
+  | "openai_compat" | "cline" | "smallcode" | "pi";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -32,7 +32,6 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   hermes:      { key: "hermes",      label: "Hermes Agent", hex: "#eab308", icon: HermesIcon },
   grok:        { key: "grok",        label: "Grok Build",  hex: "#d4d4d8", icon: GrokIcon },
   openai_compat: { key: "openai_compat", label: "OpenAI-compatible server", hex: "#14b8a6", icon: Server },
-  minimax:      { key: "minimax",      label: "MiniMax",      hex: "#f43f5e", icon: Sparkles },
   cline:       { key: "cline",       label: "Cline",       hex: "#7c3aed", icon: Bot },
   smallcode:   { key: "smallcode",   label: "SmallCode",   hex: "#0d9488", icon: Boxes },
   pi:          { key: "pi",          label: "Pi",          hex: "#fafafa", icon: PiIcon },

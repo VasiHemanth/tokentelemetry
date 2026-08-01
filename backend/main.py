@@ -9224,35 +9224,6 @@ async def list_codex_models():
     return {"models": SUGGESTED_MODELS}
 
 
-@app.get("/summarizer/minimax/options")
-async def list_minimax_options():
-    from summarizers.minimax import available_options
-
-    return available_options()
-
-
-@app.post("/summarizer/minimax/test")
-async def test_minimax(cfg: dict = Body(...)):
-    from summarizers.minimax import MiniMaxSummarizer
-    from summarizers.errors import classify as _classify_err
-
-    options = cfg.get("minimax") if isinstance(cfg.get("minimax"), dict) else cfg
-    try:
-        sm = MiniMaxSummarizer(model=cfg.get("model"), config=options)
-        sample = sm.summarize("Reply with the single word: ok", timeout=30)
-        return {
-            "ok": True,
-            "sample": sample[:200],
-            "endpoint": sm.endpoint,
-        }
-    except SummarizerError as e:
-        return {
-            "ok": False,
-            "error": str(e),
-            "error_info": _classify_err(str(e), backend_name="minimax"),
-        }
-
-
 @app.post("/summarizer/openai-compat/test")
 async def test_openai_compat(cfg: dict = Body(...)):
     """Ping the configured OpenAI-compatible endpoint with a trivial prompt so
@@ -9302,20 +9273,15 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
     narrative = None
     gen_error = None
     if cfg.get("enabled") and backend_name:
-        try:
-            backend_options = cfg.get(backend_name)
-            sm = get_summarizer(
-                backend_name,
-                cfg.get("model"),
-                backend_options if isinstance(backend_options, dict) else None,
-            )
-            if sm and sm.is_available():
+        sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+        if sm and sm.is_available():
+            try:
                 raw = sm.summarize(_summaries.build_prompt(brief))
                 narrative = _summaries.parse_narrative(raw)
-            else:
-                gen_error = f"summarizer '{backend_name}' is not available"
-        except SummarizerError as e:
-            gen_error = str(e)
+            except SummarizerError as e:
+                gen_error = str(e)
+        else:
+            gen_error = f"summarizer '{backend_name}' is not available"
 
     if narrative is None and cached and cached.get("narrative"):
         narrative = cached["narrative"]

@@ -14,7 +14,6 @@ from .gemini import GeminiSummarizer
 from .antigravity import AntigravitySummarizer
 from .ollama import OllamaSummarizer
 from .openai_compat import OpenAICompatSummarizer
-from .minimax import MiniMaxSummarizer
 from .qwen import QwenSummarizer
 
 # Only adapters whose CLI is installed are offered to the frontend.
@@ -28,7 +27,6 @@ _ALL: List[BaseSummarizer] = [
     QwenSummarizer(),
     OllamaSummarizer(),
     OpenAICompatSummarizer(),
-    MiniMaxSummarizer(),
 ]
 
 _BY_NAME: Dict[str, BaseSummarizer] = {s.name: s for s in _ALL}
@@ -54,8 +52,6 @@ def get_summarizer(
         return CodexSummarizer(model=model)
     if name == "openai_compat":
         return OpenAICompatSummarizer(model=model, config=options or {})
-    if name == "minimax":
-        return MiniMaxSummarizer(model=model, config=options or {})
     return _BY_NAME.get(name)
 
 

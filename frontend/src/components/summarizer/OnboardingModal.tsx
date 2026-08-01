@@ -10,16 +10,13 @@ import {
   putSummarizerConfig,
   isConfigUnset,
   ONBOARDING_FLAG,
-  DEFAULT_MINIMAX,
-  DEFAULT_MINIMAX_MODEL,
   DEFAULT_OPENAI_COMPAT,
   type SummarizerBackend,
-  type MiniMaxConfig,
   type OpenAICompatConfig,
 } from "@/lib/summarizer";
 
 // Backends that carry a per-backend model selection.
-const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat", "minimax"]);
+const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat"]);
 
 /**
  * First-run onboarding. On app load it reads /config/summarizer; if the config
@@ -34,7 +31,6 @@ export default function OnboardingModal() {
   const [model, setModel] = useState<string | null>(null);
   // Only meaningful when selected === "openai_compat".
   const [openaiCompat, setOpenaiCompat] = useState<OpenAICompatConfig>(DEFAULT_OPENAI_COMPAT);
-  const [minimax, setMiniMax] = useState<MiniMaxConfig>(DEFAULT_MINIMAX);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,11 +67,8 @@ export default function OnboardingModal() {
       await putSummarizerConfig({
         enabled: selected !== null,
         backend: selected,
-        model: selected === "minimax"
-          ? model ?? DEFAULT_MINIMAX_MODEL
-          : selected && MODEL_BACKENDS.has(selected) ? model : null,
+        model: selected && MODEL_BACKENDS.has(selected) ? model : null,
         ...(selected === "openai_compat" ? { openai_compat: openaiCompat } : {}),
-        ...(selected === "minimax" ? { minimax } : {}),
       });
       dismiss();
     } catch (e) {
@@ -140,8 +133,6 @@ export default function OnboardingModal() {
             onModelChange={setModel}
             openaiCompat={openaiCompat}
             onOpenAICompatChange={setOpenaiCompat}
-            minimax={minimax}
-            onMiniMaxChange={setMiniMax}
           />
 
           {error && (
