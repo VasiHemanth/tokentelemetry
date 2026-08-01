@@ -6,7 +6,7 @@ import { getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import {
   listCodexModels, listOllamaModels, testOpenAICompat,
-  DEFAULT_OPENAI_COMPAT,
+  DEFAULT_OPENAI_COMPAT, ENDPOINT_PRESETS,
   type CodexModel, type OllamaModel, type SummarizerBackend,
   type OpenAICompatConfig,
 } from "@/lib/summarizer";
@@ -301,7 +301,29 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
   return (
     <div className="mt-2 ml-11 mr-1 space-y-3">
       <div>
-        <label className={LABEL_CLS}>Endpoint</label>
+        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+          <label className={cn(LABEL_CLS, "mb-0")}>Endpoint</label>
+          <div className="flex items-center gap-1.5">
+            {ENDPOINT_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => {
+                  onChange?.({ ...config, endpoint: p.endpoint });
+                  if (p.model) onModelChange?.(p.model);
+                }}
+                className={cn(
+                  "h-6 px-2 rounded border text-[10.5px] font-medium transition-colors",
+                  config.endpoint === p.endpoint
+                    ? "border-[var(--tt-border-focus)] text-[var(--tt-fg)]"
+                    : "border-[var(--tt-border-strong)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]",
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <input
           type="text"
           spellCheck={false}
@@ -311,8 +333,8 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
           className={FIELD_CLS}
         />
         <p className="text-[10.5px] text-[var(--tt-fg-dim)] mt-1.5">
-          Base URL of any OpenAI-compatible server (llama.cpp, vLLM, LM Studio, LocalAI…).
-          We POST to <code className="font-mono">/chat/completions</code> under it.
+          Base URL of any OpenAI-compatible server (llama.cpp, vLLM, LM Studio, LocalAI…)
+          or hosted gateway. We POST to <code className="font-mono">/chat/completions</code> under it.
         </p>
       </div>
 

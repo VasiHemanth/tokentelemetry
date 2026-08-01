@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-01",
+      "title": "One-click endpoints for hosted summarizers",
+      "highlights": [
+        {
+          "title": "Endpoint presets in the OpenAI-compatible backend",
+          "description": "The summarizer's OpenAI-compatible backend now has preset buttons that fill in the endpoint and a starting model for you. MiniMax (global and China) and a local llama.cpp server are there; paste your API key and hit Test connection. Hosted providers that speak the OpenAI API work through this backend, so there's no separate setup per vendor.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-30",
       "title": "See what /goal runs actually cost",
       "highlights": [
