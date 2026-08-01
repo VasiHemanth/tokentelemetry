@@ -60,6 +60,67 @@ def test_local_collision_not_priced_as_cloud(tmp_path, monkeypatch):
     assert local > 0
 
 
+# --- an UNPRICED cloud model must not be mistaken for a local one ----------
+# Regression: with local power enabled, any model missing from the pricing
+# tables fell through to the electricity branch. Every newly-released cloud
+# flagship is unpriced until pricing_data.json is refreshed, so its traffic
+# silently booked at ~$0 instead of vendor rates.
+def _enable_local_power(tmp_path, monkeypatch):
+    # Pin TOKENTELEMETRY_DATA_DIR, not TOKENTELEMETRY_HOME: DATA_DIR has higher
+    # precedence in tt_paths.data_dir(), and other modules in the suite set it
+    # via raw os.environ (so it can still be set when this test runs). Setting
+    # the winning variable makes these cases order-independent.
+    data = tmp_path / ".tokentelemetry"
+    data.mkdir()
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(data))
+    monkeypatch.setenv("TOKENTELEMETRY_HOME", str(tmp_path))
+    (data / "power.json").write_text('{"loadWatts": 65, "costPerKwh": 0.20}')
+    assert pc.local_power_enabled() is True
+
+
+@pytest.mark.parametrize("model", [
+    "claude-opus-99", "claude-sonnet-99", "gpt-99",
+    "gemini-99-ultra", "grok-99", "codex-next",
+])
+def test_unpriced_cloud_model_not_priced_by_electricity(model, tmp_path, monkeypatch):
+    _enable_local_power(tmp_path, monkeypatch)
+    # 1M output tokens. Electricity for 1M tokens is cents; any real per-token
+    # rate (_default is $10/MTok out, or a fuzzy table match) is dollars.
+    assert pricing.calculate_cost(model, 0, 1_000_000) >= 1.0
+
+
+@pytest.mark.parametrize("model", [
+    "gemma4:12b-mlx", "llama-4-70b", "mistral-nemo", "deepseek-v4", "phi-5",
+])
+def test_unpriced_open_weight_still_uses_electricity(model, tmp_path, monkeypatch):
+    """Open-weight families really can run locally — they keep the fallback."""
+    _enable_local_power(tmp_path, monkeypatch)
+    assert pricing.calculate_cost(model, 0, 1_000_000) < 1.0
+
+
+def test_confirmed_local_beats_cloud_name_guard(tmp_path, monkeypatch):
+    """The guard only gates the *guess*; an explicitly-local session still wins.
+
+    Someone serving a Claude-named model through Ollama is still local, and
+    is_local_session() claims it before the pricing lookup runs.
+    """
+    _enable_local_power(tmp_path, monkeypatch)
+    assert pricing.calculate_cost("claude-opus-5", 0, 1_000_000, provider="ollama") < 1.0
+
+
+# --- Claude 5 family is priced at all -------------------------------------
+@pytest.mark.parametrize("model,in_rate,out_rate", [
+    ("claude-opus-5", 5.00, 25.00),
+    ("claude-mythos-5", 10.00, 50.00),
+    ("claude-fable-5", 10.00, 50.00),
+    ("claude-opus-4-8", 5.00, 25.00),
+])
+def test_claude_5_family_priced(model, in_rate, out_rate, tmp_path, monkeypatch):
+    _enable_local_power(tmp_path, monkeypatch)
+    assert pricing.calculate_cost(model, 1_000_000, 0) == in_rate
+    assert pricing.calculate_cost(model, 0, 1_000_000) == out_rate
+
+
 def test_measured_rate_beats_default(tmp_path, monkeypatch):
     monkeypatch.setenv("TOKENTELEMETRY_HOME", str(tmp_path))
     (tmp_path / ".tokentelemetry").mkdir()

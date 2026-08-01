@@ -37,6 +37,11 @@ _PROVIDER_SEP = "\x00"
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
     # --- Anthropic (Claude) ---
+    # Claude 5 family. These post-date the models.dev snapshot in
+    # pricing_data.json, so without inline entries they fall through the whole
+    # lookup and get costed at $0 (see the local-model guard in calculate_cost).
+    "claude-opus-5":     {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    "claude-mythos-5":   {"in": 10.00, "out": 50.00, "cached_read": 1.00},
     "claude-opus-4-7":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-6":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-5":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
@@ -282,6 +287,42 @@ def _normalize_model_id(model: str) -> str:
     return m
 
 
+# Model families that are only ever served over a vendor API. A model whose id
+# names one of these is never a local model, however unfamiliar it looks — a
+# newly-released flagship is simply missing from the pricing tables until they
+# are refreshed. Open-weight families (llama, qwen, gemma, mistral, deepseek,
+# phi, …) are deliberately absent: those genuinely do run locally, so they keep
+# the electricity fallback.
+_CLOUD_ONLY_MARKERS = (
+    "claude", "opus", "sonnet", "haiku", "fable", "mythos",   # Anthropic
+    "gpt", "chatgpt", "codex",                                # OpenAI
+    "gemini", "antigravity",                                  # Google
+    "grok",                                                   # xAI
+)
+# OpenAI reasoning models are bare "o1"/"o3"/"o4" prefixes; matched as prefixes
+# rather than substrings so they don't collide with arbitrary version suffixes.
+_CLOUD_ONLY_PREFIXES = ("o1", "o3", "o4")
+
+
+def _is_cloud_only_model(model_name: Optional[str]) -> bool:
+    """True when the model id names a vendor-hosted-only family.
+
+    Used to stop an *unpriced* model from being mistaken for a local one. Being
+    absent from the pricing tables means "we don't know the rate yet", not
+    "it runs on this machine" — and pricing a cloud flagship by electricity
+    under-reports its cost by ~4 orders of magnitude.
+    """
+    if not model_name:
+        return False
+    m = _normalize_model_id(str(model_name))
+    if any(marker in m for marker in _CLOUD_ONLY_MARKERS):
+        return True
+    return any(
+        m == p or m.startswith(p + "-") or m.startswith(p + ".")
+        for p in _CLOUD_ONLY_PREFIXES
+    )
+
+
 def calculate_cost(
     model_name: Optional[str],
     input_tokens: int,
@@ -371,12 +412,19 @@ def calculate_cost(
             # No known API rate for this model. If the user has opted in via
             # ~/.tokentelemetry/power.json, treat it as a local model and price
             # it by electricity instead of the (wrong) _default per-token rate.
+            #
+            # Only for models that could plausibly BE local. "Unpriced" is not a
+            # synonym for "local": every newly-released cloud flagship is
+            # unpriced between its launch and the next pricing_data.json
+            # refresh, and billing one of those by electricity silently reports
+            # ~$0 against real spend. Confirmed-local sessions never reach here
+            # — is_local_session() above already claimed them.
             try:
                 from power_config import (
                     local_power_enabled, load_power_config, electricity_cost,
                     default_tok_per_sec_for_model,
                 )
-                if local_power_enabled():
+                if local_power_enabled() and not _is_cloud_only_model(model_name):
                     pc = load_power_config()
                     return electricity_cost(
                         output_tokens,
