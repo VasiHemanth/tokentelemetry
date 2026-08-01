@@ -257,7 +257,7 @@
         {
           "title": "Agent brands are easier to scan",
           "description": "Connected agents, settings, project badges, trace headers, and the website now use each agent's own mark and color so mixed-agent work is easier to recognize at a glance.",
-          "href": "/settings"
+          "href": "/"
         }
       ]
     },
@@ -300,6 +300,17 @@
           "title": "Tool reliability",
           "description": "Tool failures were already parsed out of the Hermes log and then discarded. The Hermes page now shows which tools are used most and which fail most, counting only tools with at least three calls so a single failed call does not read as a 100% failure rate.",
           "href": "/hermes"
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-01",
+      "title": "One-click endpoints for hosted summarizers",
+      "highlights": [
+        {
+          "title": "Endpoint presets in the OpenAI-compatible backend",
+          "description": "The summarizer's OpenAI-compatible backend now has preset buttons that fill in the endpoint and a starting model for you. MiniMax (global and China) and a local llama.cpp server are there; paste your API key and hit Test connection. Hosted providers that speak the OpenAI API work through this backend, so there's no separate setup per vendor.",
+          "href": "/settings"
         }
       ]
     },
