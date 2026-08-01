@@ -11,6 +11,12 @@ description: TokenTelemetry is a free, local-first observability dashboard for A
 
 ![Dashboard](/screenshots/dashboard.png)
 
+## Watch the demo
+
+A three-minute walkthrough of the product, if you'd rather see it than read about it.
+
+<VideoEmbed id="AXGdSFFNS_w" title="TokenTelemetry product demo" />
+
 ## The local-first promise
 
 All your agent data stays in `~/.tokentelemetry/` on your machine — TokenTelemetry reads the log files agents already write and never modifies them. Two narrow outbound features exist, both content-free and both optional: an hourly update-check to GitHub (just a version request) and anonymous product telemetry (which features are used — never your code, prompts, paths, or costs). Both are on by default and can be turned off independently in Settings → *Updates & privacy*, or with `DO_NOT_TRACK=1`. See [Update Check & Privacy](/docs/configuration/privacy).

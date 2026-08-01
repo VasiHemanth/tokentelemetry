@@ -36,7 +36,7 @@ export default function VideoEmbed({ id, title = "Video walkthrough" }: VideoEmb
     >
       {playing ? (
         <iframe
-          src={`https://www.youtube.com/embed/${id}?autoplay=1`}
+          src={`https://www.youtube-nocookie.com/embed/${id}?autoplay=1`}
           title={title}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen

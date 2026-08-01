@@ -1,5 +1,6 @@
 import Hero from "@/components/Hero";
 import ProofStrip from "@/components/ProofStrip";
+import DemoVideo from "@/components/DemoVideo";
 import HowItWorks from "@/components/HowItWorks";
 import FeatureShowcase from "@/components/FeatureShowcase";
 import HermesSpotlight from "@/components/HermesSpotlight";
@@ -14,6 +15,7 @@ export default function Page() {
     <main>
       <Hero />
       <ProofStrip />
+      <DemoVideo />
       <HowItWorks />
       <FeatureShowcase />
       <HermesSpotlight />
