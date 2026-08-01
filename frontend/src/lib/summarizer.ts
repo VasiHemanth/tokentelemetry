@@ -40,6 +40,23 @@ export const DEFAULT_OPENAI_COMPAT: OpenAICompatConfig = {
   enable_thinking: false,
 };
 
+/**
+ * One-click prefill for a hosted OpenAI-compatible gateway. Only the endpoint
+ * and a starting model id — the key, sampling knobs and everything else stay
+ * the user's to fill in. Adding a provider is one entry here, not a new adapter.
+ */
+export interface EndpointPreset {
+  label: string;
+  endpoint: string;
+  model: string;
+}
+
+export const ENDPOINT_PRESETS: EndpointPreset[] = [
+  { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
+  { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
+  { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: "" },
+];
+
 export interface SummarizerConfig {
   enabled: boolean;
   backend: string | null;
