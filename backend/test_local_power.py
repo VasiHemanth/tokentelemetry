@@ -79,23 +79,37 @@ def _enable_local_power(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("model", [
-    "claude-opus-99", "claude-sonnet-99", "gpt-99",
-    "gemini-99-ultra", "grok-99", "codex-next",
+    "claude-opus-99", "claude-sonnet-99", "gpt-99", "grok-99", "codex-next",
 ])
-def test_unpriced_cloud_model_not_priced_by_electricity(model, tmp_path, monkeypatch):
+def test_unpriced_cloud_model_is_unknown_not_electricity(model, tmp_path, monkeypatch):
+    """Unpriced cloud model: reported unknown, never priced by electricity."""
     _enable_local_power(tmp_path, monkeypatch)
-    # 1M output tokens. Electricity for 1M tokens is cents; any real per-token
-    # rate (_default is $10/MTok out, or a fuzzy table match) is dollars.
-    assert pricing.calculate_cost(model, 0, 1_000_000) >= 1.0
+    assert pricing.is_pricing_unknown(model) is True
+    # UNKNOWN_COST is a placeholder, not an electricity estimate.
+    assert pricing.calculate_cost(model, 0, 1_000_000) == pricing.UNKNOWN_COST
 
 
-@pytest.mark.parametrize("model", [
-    "gemma4:12b-mlx", "llama-4-70b", "mistral-nemo", "deepseek-v4", "phi-5",
-])
+@pytest.mark.parametrize("model", ["llama-4-70b", "deepseek-v4", "phi-5"])
 def test_unpriced_open_weight_still_uses_electricity(model, tmp_path, monkeypatch):
-    """Open-weight families really can run locally — they keep the fallback."""
+    """Open-weight families really can run locally — they keep the fallback.
+
+    These three have no entry in either pricing table, so they reach the
+    electricity branch. (Open-weight models that DO carry a published rate —
+    gemma4 at $0, mistral-nemo at $0.15 — are priced, not unknown, and are
+    covered by test_priced_open_weight_is_not_unknown below.)
+    """
     _enable_local_power(tmp_path, monkeypatch)
-    assert pricing.calculate_cost(model, 0, 1_000_000) < 1.0
+    assert pricing._lookup_rate(model) is None      # precondition
+    assert pricing.is_pricing_unknown(model) is False
+    assert 0 < pricing.calculate_cost(model, 0, 1_000_000) < 1.0
+
+
+@pytest.mark.parametrize("model", ["gemma4:12b-mlx", "mistral-nemo"])
+def test_priced_open_weight_is_not_unknown(model, tmp_path, monkeypatch):
+    """A published rate of $0 means 'free', which is a real answer, not unknown."""
+    _enable_local_power(tmp_path, monkeypatch)
+    assert pricing._lookup_rate(model) is not None
+    assert pricing.is_pricing_unknown(model) is False
 
 
 def test_confirmed_local_beats_cloud_name_guard(tmp_path, monkeypatch):
@@ -105,20 +119,38 @@ def test_confirmed_local_beats_cloud_name_guard(tmp_path, monkeypatch):
     is_local_session() claims it before the pricing lookup runs.
     """
     _enable_local_power(tmp_path, monkeypatch)
-    assert pricing.calculate_cost("claude-opus-5", 0, 1_000_000, provider="ollama") < 1.0
+    unknown_model = "claude-opus-99"
+    assert pricing.is_pricing_unknown(unknown_model, provider="ollama") is False
+    assert pricing.calculate_cost(unknown_model, 0, 1_000_000, provider="ollama") > 0
 
 
-# --- Claude 5 family is priced at all -------------------------------------
-@pytest.mark.parametrize("model,in_rate,out_rate", [
-    ("claude-opus-5", 5.00, 25.00),
-    ("claude-mythos-5", 10.00, 50.00),
-    ("claude-fable-5", 10.00, 50.00),
-    ("claude-opus-4-8", 5.00, 25.00),
+# --- known-priced models are never reported unknown -----------------------
+@pytest.mark.parametrize("model", [
+    "claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-haiku-4-5",
 ])
-def test_claude_5_family_priced(model, in_rate, out_rate, tmp_path, monkeypatch):
+def test_priced_models_not_unknown(model, tmp_path, monkeypatch):
     _enable_local_power(tmp_path, monkeypatch)
-    assert pricing.calculate_cost(model, 1_000_000, 0) == in_rate
-    assert pricing.calculate_cost(model, 0, 1_000_000) == out_rate
+    assert pricing.is_pricing_unknown(model) is False
+    assert pricing.calculate_cost(model, 1_000_000, 0) > 0
+
+
+def test_unknown_is_distinguishable_from_free(tmp_path, monkeypatch):
+    """The point of the flag: $0 alone can't tell 'free' from 'no idea'.
+
+    A subscription-billed call really does cost 0 per call; an unpriced model
+    costs 0 only because we have nothing to multiply by.
+    """
+    _enable_local_power(tmp_path, monkeypatch)
+    (tmp_path / ".tokentelemetry" / "power.json").write_text(
+        '{"loadWatts": 65, "costPerKwh": 0.20,'
+        ' "subscriptionEndpoints": ["https://sub.example.com"]}')
+    sub = pricing.calculate_cost("claude-opus-4-8", 0, 1_000_000,
+                                 endpoint="https://sub.example.com/v1")
+    unk = pricing.calculate_cost("claude-opus-99", 0, 1_000_000)
+    assert sub == 0.0 and unk == 0.0                      # same number...
+    assert pricing.is_pricing_unknown(
+        "claude-opus-4-8", endpoint="https://sub.example.com/v1") is False
+    assert pricing.is_pricing_unknown("claude-opus-99") is True   # ...different meaning
 
 
 def test_measured_rate_beats_default(tmp_path, monkeypatch):

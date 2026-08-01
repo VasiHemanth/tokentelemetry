@@ -37,11 +37,10 @@ _PROVIDER_SEP = "\x00"
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
     # --- Anthropic (Claude) ---
-    # Claude 5 family. These post-date the models.dev snapshot in
-    # pricing_data.json, so without inline entries they fall through the whole
-    # lookup and get costed at $0 (see the local-model guard in calculate_cost).
-    "claude-opus-5":     {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
-    "claude-mythos-5":   {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    # New models are NOT added here by hand. pricing_data.json (refreshed from
+    # models.dev by .github/workflows/pricing-sync.yml) is the source for the
+    # long tail; a model missing from both is reported as unknown rather than
+    # guessed at. See is_pricing_unknown().
     "claude-opus-4-7":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-6":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-5":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
@@ -304,6 +303,36 @@ _CLOUD_ONLY_MARKERS = (
 _CLOUD_ONLY_PREFIXES = ("o1", "o3", "o4")
 
 
+# What calculate_cost returns for a model it has no rate for. It is 0.0 so the
+# value stays summable, but a 0.0 here does NOT mean "free" — pair every cost
+# with is_pricing_unknown() and render unknown as "unknown", never "$0.00".
+UNKNOWN_COST = 0.0
+
+
+def _lookup_rate(model_name: Optional[str], provider: Optional[str] = None):
+    """Resolve a model to its {in, out, cached_read} rates, or None if unknown.
+
+    Order: (provider, model) exact → flat exact → fuzzy substring (longest key
+    first). Shared by calculate_cost and is_pricing_unknown so the two can never
+    disagree about whether a model is priced.
+    """
+    if not model_name:
+        return None
+    m_norm = _normalize_model_id(str(model_name))
+    if provider:
+        config = PRICING_BY_PROVIDER.get((provider.lower(), m_norm))
+        if config:
+            return config
+    config = PRICING.get(m_norm)
+    if config:
+        return config
+    # Fuzzy prefix match against the flat table (longer keys first)
+    for k in sorted([k for k in PRICING.keys() if k != "_default"], key=len, reverse=True):
+        if k in m_norm:
+            return PRICING[k]
+    return None
+
+
 def _is_cloud_only_model(model_name: Optional[str]) -> bool:
     """True when the model id names a vendor-hosted-only family.
 
@@ -321,6 +350,56 @@ def _is_cloud_only_model(model_name: Optional[str]) -> bool:
         m == p or m.startswith(p + "-") or m.startswith(p + ".")
         for p in _CLOUD_ONLY_PREFIXES
     )
+
+
+def is_pricing_unknown(
+    model_name: Optional[str],
+    provider: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    billing_mode: Optional[str] = None,
+) -> bool:
+    """True when we have no basis to cost this model at all.
+
+    The cost calculate_cost() returns for such a model is UNKNOWN_COST (0.0),
+    which is a placeholder, not a measurement. Callers surface it as "unknown"
+    so an unpriced model is visibly distinct from a genuinely free one.
+
+    False for everything we *can* cost, including the zero-cost cases:
+    subscription-billed calls (flat monthly, per-call cost really is 0) and
+    local models (priced by electricity). Mirrors calculate_cost()'s branches in
+    the same order, so the two never disagree.
+    """
+    # Subscription — billed monthly, so a per-call cost of 0 is a real answer.
+    try:
+        from power_config import is_subscription_endpoint, is_subscription_model
+        if endpoint and is_subscription_endpoint(endpoint):
+            return False
+        if is_subscription_model(model_name):
+            return False
+    except Exception:
+        pass
+    # Confirmed local — priced by electricity.
+    try:
+        from power_config import is_local_session
+        if is_local_session(model_name, endpoint, provider, billing_mode):
+            return False
+    except Exception:
+        pass
+    if not model_name:
+        return False  # falls back to _default; not a per-model unknown
+    if _lookup_rate(model_name, provider):
+        return False
+    # Unpriced. Open-weight names still get the electricity fallback when the
+    # user opted into power tracking; cloud-only names have nothing to fall
+    # back on and are genuinely unknown.
+    if not _is_cloud_only_model(model_name):
+        try:
+            from power_config import local_power_enabled
+            if local_power_enabled():
+                return False
+        except Exception:
+            pass
+    return True
 
 
 def calculate_cost(
@@ -395,23 +474,11 @@ def calculate_cost(
     if not model_name:
         config = PRICING["_default"]
     else:
-        m_norm = _normalize_model_id(str(model_name))
-        config = None
-        if provider:
-            config = PRICING_BY_PROVIDER.get((provider.lower(), m_norm))
-        if not config:
-            config = PRICING.get(m_norm)
-        if not config:
-            # Fuzzy prefix match against the flat table (longer keys first)
-            sorted_keys = sorted([k for k in PRICING.keys() if k != "_default"], key=len, reverse=True)
-            for k in sorted_keys:
-                if k in m_norm:
-                    config = PRICING[k]
-                    break
+        config = _lookup_rate(model_name, provider)
         if not config:
             # No known API rate for this model. If the user has opted in via
             # ~/.tokentelemetry/power.json, treat it as a local model and price
-            # it by electricity instead of the (wrong) _default per-token rate.
+            # it by electricity instead of inventing a per-token rate.
             #
             # Only for models that could plausibly BE local. "Unpriced" is not a
             # synonym for "local": every newly-released cloud flagship is
@@ -433,7 +500,12 @@ def calculate_cost(
                     )
             except Exception:
                 pass
-            config = PRICING["_default"]
+            # Genuinely unknown: no published rate, and not local. Return 0.0
+            # rather than a made-up _default estimate — a fabricated number is
+            # indistinguishable from a real one once it lands in a total.
+            # Callers pair this with is_pricing_unknown() and render the cost as
+            # "unknown", not "$0.00". See UNKNOWN_COST.
+            return UNKNOWN_COST
 
     in_rate = config["in"] or 0
     out_rate = config["out"] or 0
