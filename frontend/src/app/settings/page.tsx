@@ -12,13 +12,13 @@ import UsagePrivacySettings from "@/components/settings/UsagePrivacySettings";
 import { ConnectDevice } from "@/components/ConnectDevice";
 import {
   getSummarizerConfig, getAvailableBackends, putSummarizerConfig,
-  DEFAULT_OPENAI_COMPAT,
-  type SummarizerConfig, type SummarizerBackend, type OpenAICompatConfig,
+  DEFAULT_MINIMAX, DEFAULT_MINIMAX_MODEL, DEFAULT_OPENAI_COMPAT,
+  type SummarizerConfig, type SummarizerBackend, type MiniMaxConfig, type OpenAICompatConfig,
 } from "@/lib/summarizer";
 import { getUpdateCheck, setUpdateCheck, type UpdateCheckState } from "@/lib/version";
 
 // Backends that carry a per-backend model selection.
-const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat"]);
+const MODEL_BACKENDS = new Set(["ollama", "codex", "openai_compat", "minimax"]);
 
 function DashboardPreferencesToggle() {
   const [enabled, setEnabled] = useState(false);
@@ -54,6 +54,7 @@ export default function SettingsPage() {
   const [model, setModel] = useState<string | null>(null);
   // Only meaningful when selected === "openai_compat".
   const [openaiCompat, setOpenaiCompat] = useState<OpenAICompatConfig>(DEFAULT_OPENAI_COMPAT);
+  const [minimax, setMiniMax] = useState<MiniMaxConfig>(DEFAULT_MINIMAX);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -94,6 +95,7 @@ export default function SettingsPage() {
         setSelected(cfg.enabled ? cfg.backend : null);
         setModel(cfg.model);
         if (cfg.openai_compat) setOpenaiCompat(cfg.openai_compat);
+        if (cfg.minimax) setMiniMax(cfg.minimax);
         setLoading(false);
       })
       .catch((e) => {
@@ -114,14 +116,18 @@ export default function SettingsPage() {
         backend: selected,
         // Model field is meaningful for backends that support per-backend
         // model selection (ollama + codex + openai_compat); null otherwise.
-        model: selected && MODEL_BACKENDS.has(selected) ? model : null,
+        model: selected === "minimax"
+          ? model ?? DEFAULT_MINIMAX_MODEL
+          : selected && MODEL_BACKENDS.has(selected) ? model : null,
         // Persist endpoint/tuning whenever openai_compat is the active backend.
         ...(selected === "openai_compat" ? { openai_compat: openaiCompat } : {}),
+        ...(selected === "minimax" ? { minimax } : {}),
       });
       setConfig(next);
       setSelected(next.enabled ? next.backend : null);
       setModel(next.model);
       if (next.openai_compat) setOpenaiCompat(next.openai_compat);
+      if (next.minimax) setMiniMax(next.minimax);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
@@ -136,6 +142,8 @@ export default function SettingsPage() {
         || (!!selected && MODEL_BACKENDS.has(selected) && model !== config.model)
         || (selected === "openai_compat"
             && JSON.stringify(openaiCompat) !== JSON.stringify(config.openai_compat ?? DEFAULT_OPENAI_COMPAT))
+        || (selected === "minimax"
+            && JSON.stringify(minimax) !== JSON.stringify(config.minimax ?? DEFAULT_MINIMAX))
     : false;
 
   return (
@@ -188,6 +196,8 @@ export default function SettingsPage() {
                 onModelChange={setModel}
                 openaiCompat={openaiCompat}
                 onOpenAICompatChange={setOpenaiCompat}
+                minimax={minimax}
+                onMiniMaxChange={setMiniMax}
               />
 
               {error && <p className="text-[12px] text-[var(--tt-danger-fg)]">{error}</p>}

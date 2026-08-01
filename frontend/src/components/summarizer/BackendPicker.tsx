@@ -5,10 +5,10 @@ import { Check, Ban, Loader2, Plug, AlertCircle } from "lucide-react";
 import { getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import {
-  listCodexModels, listOllamaModels, testOpenAICompat,
-  DEFAULT_OPENAI_COMPAT,
+  getMiniMaxOptions, listCodexModels, listOllamaModels, testMiniMax, testOpenAICompat,
+  DEFAULT_MINIMAX, DEFAULT_MINIMAX_MODEL, DEFAULT_OPENAI_COMPAT,
   type CodexModel, type OllamaModel, type SummarizerBackend,
-  type OpenAICompatConfig,
+  type MiniMaxConfig, type MiniMaxOptions, type OpenAICompatConfig,
 } from "@/lib/summarizer";
 
 interface BackendPickerProps {
@@ -26,6 +26,10 @@ interface BackendPickerProps {
   openaiCompat?: OpenAICompatConfig;
   /** Notified when any openai_compat field changes. */
   onOpenAICompatChange?: (cfg: OpenAICompatConfig) => void;
+  /** MiniMax regional/protocol configuration. */
+  minimax?: MiniMaxConfig;
+  /** Notified when any MiniMax field changes. */
+  onMiniMaxChange?: (cfg: MiniMaxConfig) => void;
 }
 
 /**
@@ -41,6 +45,7 @@ export function BackendPicker({
   backends, selected, onSelect, allowSkip = true,
   model = null, onModelChange,
   openaiCompat, onOpenAICompatChange,
+  minimax, onMiniMaxChange,
 }: BackendPickerProps) {
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[] | null>(null);
   const [ollamaErr, setOllamaErr] = useState<string | null>(null);
@@ -49,6 +54,9 @@ export function BackendPicker({
   const [codexModels, setCodexModels] = useState<CodexModel[] | null>(null);
   const [codexErr, setCodexErr] = useState<string | null>(null);
   const [codexLoading, setCodexLoading] = useState(false);
+  const [miniMaxOptions, setMiniMaxOptions] = useState<MiniMaxOptions | null>(null);
+  const [miniMaxErr, setMiniMaxErr] = useState<string | null>(null);
+  const [miniMaxLoading, setMiniMaxLoading] = useState(false);
 
   // Lazy-load the model list for whichever backend the user picks.
   useEffect(() => {
@@ -66,7 +74,20 @@ export function BackendPicker({
         .catch((e) => setCodexErr(e instanceof Error ? e.message : String(e)))
         .finally(() => setCodexLoading(false));
     }
-  }, [selected, ollamaModels, ollamaLoading, codexModels, codexLoading]);
+    if (
+      selected === "minimax" && miniMaxOptions === null
+      && miniMaxErr === null && !miniMaxLoading
+    ) {
+      setMiniMaxLoading(true);
+      getMiniMaxOptions()
+        .then(setMiniMaxOptions)
+        .catch((e) => setMiniMaxErr(e instanceof Error ? e.message : String(e)))
+        .finally(() => setMiniMaxLoading(false));
+    }
+  }, [
+    selected, ollamaModels, ollamaLoading, codexModels, codexLoading,
+    miniMaxOptions, miniMaxErr, miniMaxLoading,
+  ]);
 
   return (
     <div className="space-y-3">
@@ -98,6 +119,8 @@ export function BackendPicker({
                   <div className="text-[11px] text-[var(--tt-fg-dim)] truncate">
                     {b.name === "openai_compat"
                       ? "POST traces to any OpenAI-compatible server you run."
+                      : b.name === "minimax"
+                        ? "Use MiniMax through a regional compatible API."
                       : `Summaries generated locally via ${b.display_name}.`}
                   </div>
                 </div>
@@ -153,6 +176,18 @@ export function BackendPicker({
                   onModelChange={onModelChange}
                   config={openaiCompat ?? DEFAULT_OPENAI_COMPAT}
                   onChange={onOpenAICompatChange}
+                />
+              )}
+
+              {active && b.name === "minimax" && (
+                <MiniMaxForm
+                  model={model}
+                  onModelChange={onModelChange}
+                  config={minimax ?? DEFAULT_MINIMAX}
+                  onChange={onMiniMaxChange}
+                  options={miniMaxOptions}
+                  loading={miniMaxLoading}
+                  error={miniMaxErr}
                 />
               )}
             </div>
@@ -214,7 +249,7 @@ function ModelDropdown({
       <label className="block text-[10.5px] font-medium uppercase tracking-[0.1em] text-[var(--tt-fg-muted)] mb-1.5">
         {label}
       </label>
-      {loading ? (
+      {loading || (!options && !error) ? (
         <div className="text-[12px] text-[var(--tt-fg-dim)] italic">Loading…</div>
       ) : error ? (
         <div className="text-[12px] text-[var(--tt-danger-fg)]">{error}</div>
@@ -393,6 +428,166 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
               result.ok ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-danger-fg)]",
             )}
           >
+            {result.ok ? <Check size={12} /> : <AlertCircle size={12} />}
+            {result.msg}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface MiniMaxFormProps {
+  model: string | null;
+  onModelChange?: (model: string | null) => void;
+  config: MiniMaxConfig;
+  onChange?: (cfg: MiniMaxConfig) => void;
+  options: MiniMaxOptions | null;
+  loading: boolean;
+  error: string | null;
+}
+
+function MiniMaxForm({
+  model, onModelChange, config, onChange, options, loading, error,
+}: MiniMaxFormProps) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const defaultModel = options?.default_model ?? DEFAULT_MINIMAX_MODEL;
+  const effectiveModel = model && options?.models.some((item) => item.name === model)
+    ? model
+    : defaultModel;
+
+  useEffect(() => {
+    if (options && model !== effectiveModel) onModelChange?.(effectiveModel);
+  }, [effectiveModel, model, onModelChange, options]);
+
+  const set = <K extends keyof MiniMaxConfig>(key: K, value: MiniMaxConfig[K]) =>
+    onChange?.({ ...config, [key]: value });
+
+  const runTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await testMiniMax(effectiveModel, config);
+      setResult(
+        r.ok
+          ? { ok: true, msg: `Connected — MiniMax replied "${(r.sample || "").trim().slice(0, 60)}"` }
+          : { ok: false, msg: r.error_info?.hint || r.error_info?.message || r.error || "Connection failed." },
+      );
+    } catch (e) {
+      setResult({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 ml-11 mr-1 space-y-3">
+      {loading ? (
+        <div className="text-[12px] text-[var(--tt-fg-dim)] italic">Loading MiniMax options…</div>
+      ) : error ? (
+        <div className="text-[12px] text-[var(--tt-danger-fg)]">{error}</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={LABEL_CLS}>Region</label>
+              <select
+                value={config.region}
+                onChange={(e) => set("region", e.target.value as MiniMaxConfig["region"])}
+                className={FIELD_CLS}
+              >
+                {(options?.regions || []).map((item) => (
+                  <option key={item.name} value={item.name}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={LABEL_CLS}>Protocol</label>
+              <select
+                value={config.protocol}
+                onChange={(e) => set("protocol", e.target.value as MiniMaxConfig["protocol"])}
+                className={FIELD_CLS}
+              >
+                {(options?.protocols || []).map((item) => (
+                  <option key={item.name} value={item.name}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={LABEL_CLS}>Model</label>
+              <select
+                value={effectiveModel}
+                onChange={(e) => onModelChange?.(e.target.value)}
+                className={FIELD_CLS}
+              >
+                {(options?.models || []).map((item) => (
+                  <option key={item.name} value={item.name}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={LABEL_CLS}>API key</label>
+              <input
+                type="password"
+                autoComplete="off"
+                placeholder="MiniMax API key"
+                value={config.api_key}
+                onChange={(e) => set("api_key", e.target.value)}
+                className={FIELD_CLS}
+              />
+            </div>
+          </div>
+
+          {effectiveModel === DEFAULT_MINIMAX_MODEL && (
+            <div>
+              <label className={LABEL_CLS}>Thinking</label>
+              <select
+                value={config.thinking}
+                onChange={(e) => set("thinking", e.target.value as MiniMaxConfig["thinking"])}
+                className={FIELD_CLS}
+              >
+                <option value="adaptive">Adaptive</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className={LABEL_CLS}>Max tokens</label>
+              <input type="number" value={config.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} className={FIELD_CLS} />
+            </div>
+            <div>
+              <label className={LABEL_CLS}>Temperature</label>
+              <input type="number" step="0.05" value={config.temperature} onChange={(e) => set("temperature", Number(e.target.value))} className={FIELD_CLS} />
+            </div>
+            <div>
+              <label className={LABEL_CLS}>Top P</label>
+              <input type="number" step="0.05" value={config.top_p} onChange={(e) => set("top_p", Number(e.target.value))} className={FIELD_CLS} />
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="flex items-center gap-3 pt-0.5">
+        <button
+          type="button"
+          onClick={runTest}
+          disabled={testing || loading || !!error || !options}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-[12px] font-medium text-[var(--tt-fg)] hover:bg-[var(--tt-sunken)] disabled:opacity-50 transition-colors"
+        >
+          {testing ? <Loader2 size={12} className="animate-spin" /> : <Plug size={12} />}
+          Test connection
+        </button>
+        {result && (
+          <span className={cn(
+            "inline-flex items-center gap-1.5 text-[11.5px]",
+            result.ok ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-danger-fg)]",
+          )}>
             {result.ok ? <Check size={12} /> : <AlertCircle size={12} />}
             {result.msg}
           </span>

@@ -400,6 +400,12 @@ def _coerce_openai_compat(raw: Any) -> Dict[str, Any]:
     return merged
 
 
+def _coerce_minimax(raw: Any) -> Dict[str, Any]:
+    from summarizers.minimax import coerce_config
+
+    return coerce_config(raw)
+
+
 def load_config() -> Dict[str, Any]:
     try:
         return json.loads(_CONFIG_PATH.read_text())
@@ -414,10 +420,17 @@ def save_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "backend": cfg.get("backend") or None,
         "model": cfg.get("model") or None,
     }
+    if out["backend"] == "minimax":
+        from summarizers.minimax import DEFAULT_MODEL, SUPPORTED_MODELS
+
+        if out["model"] not in SUPPORTED_MODELS:
+            out["model"] = DEFAULT_MODEL
     # Persist the openai_compat sub-config whenever it's supplied — keeping it
     # around even when another backend is active means the user's endpoint /
     # tuning survives a backend switch.
     if cfg.get("openai_compat") is not None or out["backend"] == "openai_compat":
         out["openai_compat"] = _coerce_openai_compat(cfg.get("openai_compat"))
+    if cfg.get("minimax") is not None or out["backend"] == "minimax":
+        out["minimax"] = _coerce_minimax(cfg.get("minimax"))
     _CONFIG_PATH.write_text(json.dumps(out, indent=2))
     return out
