@@ -352,7 +352,8 @@ export default function SessionDetailPage() {
         .then((res) => res.json())
         .then((data) => {
           const evts = normalizeTraceEvents(agent, data);
-          setRawEvents(Array.isArray(data) ? data : []);
+          const rawList = Array.isArray(data) ? data : (data?.messages || []);
+          setRawEvents(rawList);
           setEvents(evts);
           setPlaybackIndex(evts.length);
           setLoading(false)
