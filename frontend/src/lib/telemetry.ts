@@ -64,6 +64,25 @@ export function trackEvent(event: ClientEvent, props?: Record<string, string>): 
   }
 }
 
+/** Hermes sub-pages that get their own route enum. Anything under /hermes that
+ *  is not listed here reports as plain "hermes" rather than inventing a value
+ *  the backend would collapse to "other" — an unknown sub-page is still a
+ *  Hermes visit, and losing it entirely would understate the section. Keep in
+ *  sync with the `route` enum in backend/telemetry.py. */
+const HERMES_SUBROUTES = [
+  "skills", "tools", "profiles", "soul",
+  "memory", "gateway", "kanban", "schedules",
+] as const;
+
+function hermesRoute(p: string): string {
+  const rest = p.slice("/hermes".length).replace(/^\/+/, "");
+  if (!rest) return "hermes";
+  const head = rest.split("/")[0];
+  return (HERMES_SUBROUTES as readonly string[]).includes(head)
+    ? `hermes-${head}`
+    : "hermes";
+}
+
 /** Map a Next.js pathname to one of the backend's allowlisted route enums. */
 export function routeOf(pathname: string): string {
   const p = pathname.replace(/\/+$/, "") || "/";
@@ -72,7 +91,7 @@ export function routeOf(pathname: string): string {
   if (p.startsWith("/local-models")) return "local-models";
   if (p.startsWith("/sessions")) return "traces";
   if (p.startsWith("/projects")) return p === "/projects" ? "projects" : "project-detail";
-  if (p.startsWith("/hermes")) return "hermes";
+  if (p.startsWith("/hermes")) return hermesRoute(p);
   if (p.startsWith("/settings")) return "settings";
   return "other";
 }

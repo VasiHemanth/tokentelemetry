@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, DollarSign, Cpu, Power, AlertTriangle, Clock, CheckCircle2,
   BookOpen, Brain, ArrowRight, Sparkles, Users, Wrench, Signal, Timer,
@@ -192,7 +192,12 @@ export default function HermesPage() {
             return (
               <button
                 key={name}
-                onClick={() => setProfileScope(name)}
+                onClick={() => {
+                  setProfileScope(name);
+                  // Only the act of switching is recorded, never which profile:
+                  // profile names are user-chosen and would be identifying.
+                  if (!selected) trackEvent("feature.used", { name: "hermes-profile-switch" });
+                }}
                 className={`inline-flex items-center gap-1.5 font-mono text-[11px] px-2.5 h-7 rounded-full border transition-colors ${
                   selected
                     ? "border-[var(--tt-border-strong)] bg-[var(--tt-sunken)] text-[var(--tt-fg)]"
@@ -499,7 +504,15 @@ export default function HermesPage() {
                 .slice()
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .map((s) => (
-                  <TR key={s.id} interactive>
+                  <TR
+                    key={s.id}
+                    interactive
+                    // One handler on the row rather than on each of the five
+                    // cell links: clicks bubble, so this counts a session open
+                    // once regardless of which column was clicked. No session
+                    // id, model, or project is sent, only that it happened.
+                    onClick={() => trackEvent("feature.used", { name: "hermes-session-open" })}
+                  >
                     <TD className="pl-5">
                       <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
                         <span className="inline-flex items-center gap-1.5">
@@ -579,6 +592,16 @@ export default function HermesPage() {
 function TelemetrySection() {
   const res = useResource<HermesTelemetry>("/hermes/telemetry", { pollMs: 60_000 });
   const t = res.data;
+  // Counted once per mount, and only when the section actually renders with
+  // data. Firing on mount regardless would count users who have no Hermes
+  // install as having "used" this. The 60s poll re-renders, hence the guard.
+  const available = Boolean(t?.available);
+  const counted = useRef(false);
+  useEffect(() => {
+    if (!available || counted.current) return;
+    counted.current = true;
+    trackEvent("feature.used", { name: "hermes-telemetry" });
+  }, [available]);
   if (!t || !t.available) return null;
 
   const { outcomes, cost, latency, tools, log_coverage } = t;

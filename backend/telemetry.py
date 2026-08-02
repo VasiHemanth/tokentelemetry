@@ -131,6 +131,13 @@ _ENUMS: Dict[str, set] = {
     "route": {
         "dashboard", "analytics", "traces", "projects", "project-detail",
         "hermes", "artifacts", "local-models", "settings", "sessions", "other",
+        # Hermes sub-surfaces. "hermes" alone meant the dashboard AND all eight
+        # sub-pages, so the one question worth asking of this data — which
+        # surface people actually come for — was unanswerable. These are route
+        # names, not content: a page either exists in this set or reports
+        # "other".
+        "hermes-skills", "hermes-tools", "hermes-profiles", "hermes-soul",
+        "hermes-memory", "hermes-gateway", "hermes-kanban", "hermes-schedules",
     },
     "dimension": {"agent", "model", "local-only", "day", "other"},
     "outcome": {"ok", "error", "empty", "unavailable", "other"},
@@ -140,6 +147,19 @@ _ENUMS: Dict[str, set] = {
         "plan-library", "project-insights", "delegation-view", "power-cost",
         "billing-mode", "search", "artifact-viewer", "share-stats",
         "hermes-dashboard",
+        # Hermes in-page actions. Route counts say where people landed; these
+        # say whether they did anything once there, which is the difference
+        # between a bounce and real use. Each is a bare label — no skill name,
+        # profile name, or session id ever rides along.
+        #
+        # Only four, because only four interactions exist. The tools and
+        # schedules pages are pure read-only displays with nothing to click,
+        # and the skills page's sole control is its filter box. Adding
+        # detail-view labels for those would ship enum values that can never
+        # fire, which reads in the data as "nobody uses this" rather than
+        # "there is nothing here to use". Route counts cover those pages.
+        "hermes-telemetry", "hermes-profile-switch",
+        "hermes-session-open", "hermes-skill-filter",
         # Budgets & alerts: "budgets" = opened the editor (adoption),
         # "budget-set" = saved a budget (the configuring action). No limit
         # value/cost ever rides along — only these two enum labels.

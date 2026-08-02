@@ -94,6 +94,51 @@ def test_budget_feature_labels_survive_but_values_cannot():
     assert "150" not in _blob(payload)
 
 
+def test_hermes_subroutes_survive_but_profile_names_cannot():
+    """Each Hermes surface is countable on its own, which is the whole point of
+    splitting the old single "hermes" bucket. What must NOT become countable is
+    anything the user named themselves."""
+    for route in ("hermes", "hermes-skills", "hermes-tools", "hermes-profiles",
+                  "hermes-soul", "hermes-memory", "hermes-gateway",
+                  "hermes-kanban", "hermes-schedules"):
+        assert telemetry._sanitize_props("page.viewed", {"route": route}) == {"route": route}
+    # A profile name is user-chosen and identifying. Even shaped like a real
+    # sub-route it collapses, because it is not in the enum.
+    assert telemetry._sanitize_props(
+        "page.viewed", {"route": "hermes-my-startup"}) == {"route": "other"}
+    # A path smuggled in as a route never survives either.
+    payload = telemetry.build_event("page.viewed", {"route": "/hermes/profiles/acme-corp"})
+    assert payload["props"]["route"] == "other"
+    assert "acme-corp" not in _blob(payload)
+
+
+def test_hermes_action_labels_are_bare_and_have_no_passengers():
+    for label in ("hermes-telemetry", "hermes-profile-switch",
+                  "hermes-session-open", "hermes-skill-filter"):
+        assert telemetry._sanitize_props("feature.used", {"name": label}) == {"name": label}
+    # The things these actions are ABOUT are exactly what must not ride along:
+    # a session id, a filter query, a profile name. None are allowlisted keys
+    # for feature.used, so all are dropped rather than sanitized.
+    out = telemetry._sanitize_props("feature.used", {
+        "name": "hermes-session-open",
+        "session_id": "20260625_232833_46a941",
+        "query": "deploy secrets",
+        "profile": "founder",
+    })
+    assert out == {"name": "hermes-session-open"}
+    payload = telemetry.build_event("feature.used", {
+        "name": "hermes-skill-filter", "query": "my-private-repo-name"})
+    assert "my-private-repo-name" not in _blob(payload)
+
+
+def test_unimplemented_hermes_labels_are_not_allowlisted():
+    """Guards against re-adding detail-view labels for pages that have no detail
+    view. An enum value that can never fire reads in the data as "nobody uses
+    this" rather than "there is nothing here to use"."""
+    for label in ("hermes-tool-detail", "hermes-cron-detail", "hermes-skill-detail"):
+        assert telemetry._sanitize_props("feature.used", {"name": label}) == {"name": "other"}
+
+
 def test_unknown_event_name_is_bucketed():
     payload = telemetry.build_event("evil.exfiltrate", {"x": "/etc/passwd"})
     assert payload["eventName"] == "other"

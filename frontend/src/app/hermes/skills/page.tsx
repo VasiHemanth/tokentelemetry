@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowLeft, BookOpen, Search } from "lucide-react";
 import { useResource } from "@/lib/api";
+import { trackEvent } from "@/lib/telemetry";
 import {
   PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Badge,
 } from "@/components/ui";
@@ -73,7 +74,16 @@ export default function HermesSkillsPage() {
           type="text"
           placeholder="Filter skills…"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setFilter(next);
+            // Counted once per filtering session (empty -> non-empty), never
+            // per keystroke, and the query itself is never sent: skill names
+            // are user content. This is the only interaction this page has.
+            if (!filter.trim() && next.trim()) {
+              trackEvent("feature.used", { name: "hermes-skill-filter" });
+            }
+          }}
           className="w-full pl-9 pr-3 py-2 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] text-[13px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-dim)] focus:outline-none focus:border-[var(--tt-border-strong)]"
         />
       </div>
