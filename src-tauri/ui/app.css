@@ -111,7 +111,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   word-break: break-word;
 }
 
+.caption { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
 footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+footer #quit { margin-right: auto; }
 .msg { color: var(--muted); font-size: 12px; }
 .msg.err { color: var(--bad); }
 .msg.ok { color: var(--ok); }

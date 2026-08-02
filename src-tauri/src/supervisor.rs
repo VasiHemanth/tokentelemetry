@@ -9,7 +9,7 @@
 use crate::config::{RuntimeRecord, TrayConfig};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -23,6 +23,11 @@ pub const LOG_CAPACITY: usize = 200;
 /// first-route compile on a cold `.next` — only for dependency installs. A cold
 /// first run does both, so the tray is more patient than the CLI.
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Upper bound on how long a stop may block its caller. Quit runs on the UI
+/// thread, so this is a visible freeze; keep it short and escalate rather than
+/// waiting politely.
+const STOP_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", content = "detail")]
@@ -78,16 +83,38 @@ impl Supervisor {
         let Some(rec) = RuntimeRecord::load() else {
             return;
         };
-        if pid_alive(rec.cli_pid) {
+
+        // Nothing of ours is listening, so there is nothing to reap and the
+        // record is just stale. Killing on the strength of a PID alone here is
+        // how you SIGTERM an unrelated process that inherited the number.
+        if port_free(rec.api_port) && port_free(rec.front_port) {
+            RuntimeRecord::clear();
+            return;
+        }
+
+        // A PID is not an identity. PIDs are recycled aggressively on Windows
+        // and wrap at pid_max (often 32768) on Linux, and this record routinely
+        // survives a reboot — so confirm the process really is our supervisor
+        // before signalling it.
+        if !pid_alive(rec.cli_pid) || !pid_is_our_supervisor(rec.cli_pid) {
             self.log(format!(
-                "reaping supervisor pid {} left by a previous run",
+                "ignoring recorded pid {} — it is not our supervisor any more",
                 rec.cli_pid
             ));
-            terminate(rec.cli_pid);
-            // cli.js's SIGTERM handler tears down both children, but it calls
-            // process.exit() straight after signalling them with no grace
-            // period, so wait on the ports rather than on the pid.
-            wait_ports_free(&[rec.api_port, rec.front_port], Duration::from_secs(8));
+            RuntimeRecord::clear();
+            return;
+        }
+
+        self.log(format!(
+            "reaping supervisor pid {} left by a previous run",
+            rec.cli_pid
+        ));
+        terminate(rec.cli_pid);
+        // cli.js's SIGTERM handler tears down both children, but it calls
+        // process.exit() straight after signalling them with no grace period,
+        // so wait on the ports rather than on the pid.
+        if !wait_ports_free(&[rec.api_port, rec.front_port], Duration::from_secs(8)) {
+            self.log("previous services are still holding their ports".to_string());
         }
         RuntimeRecord::clear();
     }
@@ -147,6 +174,19 @@ impl Supervisor {
             cmd.env("PATH", path);
         }
 
+        // A GUI process started at login does not inherit shell exports, so a
+        // user who put TOKENTELEMETRY_DATA_DIR in their rc file would silently
+        // get a second, empty data store. These are read back from a login
+        // shell during detection and forwarded explicitly.
+        for (key, value) in [
+            ("TOKENTELEMETRY_DATA_DIR", &cfg.data_dir_override),
+            ("TOKENTELEMETRY_HOME", &cfg.home_override),
+        ] {
+            if let Some(v) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                cmd.env(key, v);
+            }
+        }
+
         configure_process_group(&mut cmd);
 
         let mut child = cmd
@@ -198,9 +238,9 @@ impl Supervisor {
             return;
         };
         let pid = child.id();
-        let ports = RuntimeRecord::load()
-            .map(|r| [r.api_port, r.front_port])
-            .unwrap_or([0, 0]);
+        let ports: Vec<u16> = RuntimeRecord::load()
+            .map(|r| vec![r.api_port, r.front_port])
+            .unwrap_or_default();
 
         self.log(format!("stopping supervisor pid {pid}"));
         // Signal cli.js's own pid, not its process group: it spawns both
@@ -208,14 +248,15 @@ impl Supervisor {
         // the only thing that knows how to reap them.
         terminate(pid);
 
-        let live: Vec<u16> = ports.into_iter().filter(|p| *p != 0).collect();
-        if !live.is_empty() && !wait_ports_free(&live, Duration::from_secs(8)) {
+        if !ports.is_empty() && !wait_ports_free(&ports, STOP_BUDGET) {
             // cli.js exits immediately after signalling, with no SIGKILL
             // escalation, so anything ignoring SIGTERM is orphaned right here.
             self.log("services did not exit in time; escalating".to_string());
             kill_hard(pid);
         }
-        let _ = child.wait();
+        // Bounded: reap the zombie without risking an unbounded block on the
+        // caller, which for Quit is the UI thread.
+        wait_briefly(&mut child, Duration::from_secs(2));
         RuntimeRecord::clear();
         self.status = Status::Stopped;
     }
@@ -248,6 +289,16 @@ fn push_log(logs: &Arc<Mutex<VecDeque<String>>>, line: String) {
             l.pop_front();
         }
         l.push_back(line);
+    }
+}
+
+fn wait_briefly(child: &mut Child, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+        }
     }
 }
 
@@ -287,11 +338,21 @@ fn configure_process_group(cmd: &mut Command) {
 
 #[cfg(windows)]
 fn configure_process_group(cmd: &mut Command) {
+    no_window(cmd);
+}
+
+/// Suppress the console window every helper spawn would otherwise flash.
+/// The release binary is built with `windows_subsystem = "windows"`, so it has
+/// no console to inherit and each child would allocate a visible one.
+#[cfg(windows)]
+pub fn no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // Without this the user gets a stray console window every login.
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
+
+#[cfg(not(windows))]
+pub fn no_window(_cmd: &mut Command) {}
 
 #[cfg(unix)]
 pub fn pid_alive(pid: u32) -> bool {
@@ -301,11 +362,57 @@ pub fn pid_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 pub fn pid_alive(pid: u32) -> bool {
-    Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+    tasklist_row(pid).is_some()
+}
+
+/// Is this PID still the `node bin/cli.js` we recorded?
+///
+/// Guards `reap_stale()` against PID reuse. Deliberately conservative: when the
+/// answer cannot be established, report false and decline to kill.
+#[cfg(unix)]
+fn pid_is_our_supervisor(pid: u32) -> bool {
+    let mut cmd = Command::new("/bin/ps");
+    cmd.args(["-p", &pid.to_string(), "-o", "args="]);
+    let Ok(out) = cmd.output() else {
+        return false;
+    };
+    let args = String::from_utf8_lossy(&out.stdout);
+    args.contains("cli.js")
+}
+
+#[cfg(windows)]
+fn pid_is_our_supervisor(pid: u32) -> bool {
+    // tasklist gives the image name only, so this confirms "some node.exe" and
+    // not "our node.exe". Combined with the port check in reap_stale() that is
+    // enough to keep us from killing an unrelated process outright.
+    tasklist_row(pid)
+        .map(|image| image.to_ascii_lowercase().starts_with("node"))
         .unwrap_or(false)
+}
+
+/// Returns the image name for an exact PID match, or None.
+///
+/// Parses the CSV form rather than substring-matching the table: a bare
+/// `output.contains("123")` also matches a memory column reading "1,123 K".
+#[cfg(windows)]
+fn tasklist_row(pid: u32) -> Option<String> {
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split("\",\"").collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        let image = fields[0].trim_start_matches('"').to_string();
+        let found: u32 = fields[1].trim_matches('"').trim().parse().ok()?;
+        if found == pid {
+            return Some(image);
+        }
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -317,11 +424,12 @@ fn terminate(pid: u32) {
 
 #[cfg(windows)]
 fn terminate(pid: u32) {
-    // Windows has no SIGTERM. /T walks the tree, matching what cli.js's own
-    // shutdown() does on this platform.
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T"])
-        .output();
+    // Windows has no SIGTERM, and a graceful `taskkill /T` (no /F) only posts
+    // WM_CLOSE to windows — a CREATE_NO_WINDOW node process has none, so the
+    // polite form can never succeed and would just burn the whole stop budget
+    // before escalating. Go straight to the tree kill, which is exactly what
+    // bin/cli.js's own shutdown() does on this platform.
+    kill_hard(pid);
 }
 
 #[cfg(unix)]
@@ -333,19 +441,24 @@ fn kill_hard(pid: u32) {
 
 #[cfg(windows)]
 fn kill_hard(pid: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .output();
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    no_window(&mut cmd);
+    let _ = cmd.output();
 }
 
 /// True when nothing is listening. Probes both loopback stacks because a
-/// v4-only bind probe misses cross-stack conflicts on macOS — the same reason
+/// v4-only probe misses cross-stack conflicts on macOS — the same reason
 /// `bin/cli.js` uses a connect probe rather than a bind probe.
 pub fn port_free(port: u16) -> bool {
-    for host in ["127.0.0.1", "::1"] {
-        let Ok(addr) = format!("{host}:{port}").parse::<SocketAddr>() else {
-            continue;
-        };
+    // Built from IpAddr rather than parsed from a string: "::1:8000" is not a
+    // valid SocketAddr (it needs brackets), so a string-parsed v6 probe fails
+    // to parse and silently never runs.
+    let addrs = [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port),
+    ];
+    for addr in addrs {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
             return false;
         }
@@ -355,15 +468,46 @@ pub fn port_free(port: u16) -> bool {
 
 fn wait_ports_free(ports: &[u16], budget: Duration) -> bool {
     let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
+    loop {
         if ports.iter().all(|p| port_free(*p)) {
             return true;
         }
+        if Instant::now() >= deadline {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(200));
     }
-    ports.iter().all(|p| port_free(*p))
 }
 
 pub fn ready_timeout() -> Duration {
     READY_TIMEOUT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this guards: `"::1:8000".parse::<SocketAddr>()` is an error
+    /// (v6 literals need brackets), so building the probe address from a
+    /// formatted string meant the IPv6 half never ran.
+    #[test]
+    fn ipv6_loopback_probe_address_is_well_formed() {
+        let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8000);
+        assert_eq!(v6.to_string(), "[::1]:8000");
+        assert!("::1:8000".parse::<SocketAddr>().is_err());
+        assert!(v6.is_ipv6());
+    }
+
+    #[test]
+    fn an_unused_high_port_reads_as_free() {
+        // 47813 is not in the registered range and nothing in this repo binds it.
+        assert!(port_free(47813));
+    }
+
+    #[test]
+    fn a_bound_port_reads_as_busy_on_both_stacks() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!port_free(port));
+    }
 }

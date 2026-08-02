@@ -19,6 +19,10 @@ pub struct Interpreters {
     pub node: Option<String>,
     pub npm: Option<String>,
     pub python: Option<String>,
+    /// Read from the same login shell, for the same reason: a value the user
+    /// exported in their rc file is invisible to a process started at login.
+    pub data_dir: Option<String>,
+    pub home: Option<String>,
 }
 
 impl Interpreters {
@@ -43,6 +47,14 @@ impl Interpreters {
         cfg.npm_path = self.npm.clone();
         cfg.python_path = self.python.clone();
         cfg.extra_path_dirs = self.path_dirs();
+        // Only overwrite when the shell actually told us something, so a value
+        // typed into Preferences is not wiped by a later re-detect.
+        if self.data_dir.is_some() {
+            cfg.data_dir_override = self.data_dir.clone();
+        }
+        if self.home.is_some() {
+            cfg.home_override = self.home.clone();
+        }
     }
 }
 
@@ -51,7 +63,36 @@ pub fn detect() -> Interpreters {
         node: which("node"),
         npm: which("npm"),
         python: which("python3").or_else(|| which("python")),
+        data_dir: login_env("TOKENTELEMETRY_DATA_DIR"),
+        home: login_env("TOKENTELEMETRY_HOME"),
     }
+}
+
+/// Read one environment variable as the user's login shell sees it.
+#[cfg(unix)]
+fn login_env(name: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(name) {
+        if !v.trim().is_empty() {
+            return Some(v);
+        }
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let script = format!("printenv {name}");
+    for args in [vec!["-lic", script.as_str()], vec!["-lc", script.as_str()]] {
+        if let Some(out) = run_capture(&shell, &args) {
+            let value = out.lines().map(str::trim).find(|l| !l.is_empty());
+            if let Some(v) = value {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn login_env(name: &str) -> Option<String> {
+    // Windows does not strip the environment for login-started apps.
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// Resolve a command the way the user's terminal would.
@@ -74,7 +115,18 @@ fn which(cmd: &str) -> Option<String> {
             return Some(found);
         }
     }
-    first_existing_line(run_capture("/usr/bin/which", &[cmd]))
+    // $SHELL is not necessarily POSIX. csh/tcsh reject `-lic` outright and have
+    // no `command -v`, so every attempt above returns nothing for those users.
+    // /bin/sh always understands this.
+    if let Some(found) = first_existing_line(run_capture("/bin/sh", &["-lc", script.as_str()])) {
+        return Some(found);
+    }
+    for probe in ["/usr/bin/which", "/bin/which"] {
+        if let Some(found) = first_existing_line(run_capture(probe, &[cmd])) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -94,13 +146,14 @@ fn first_existing_line(out: Option<String>) -> Option<String> {
 }
 
 fn run_capture(program: &str, args: &[&str]) -> Option<String> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    // No console flash: the release build has no console to inherit.
+    crate::supervisor::no_window(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
 
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {

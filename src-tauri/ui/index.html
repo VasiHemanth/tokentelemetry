@@ -14,6 +14,10 @@
 
     <section class="card status" id="statusCard">
       <div class="spend" id="spend">—</div>
+      <!-- The menu bar says "API-equiv" for a reason: for subscription agents
+           this is notional cost, not money charged. The window must not drop
+           that qualification and imply a bill. -->
+      <div class="caption">spent today &middot; API-equivalent</div>
       <div class="status-line"><span class="dot" id="dot"></span><span id="statusText">Loading…</span></div>
       <div class="row actions">
         <button id="openDash" class="primary">Open dashboard</button>
@@ -70,6 +74,10 @@
     </section>
 
     <footer>
+      <!-- Reachable quit: on a desktop with no system tray (stock GNOME without
+           an AppIndicator extension) the menu does not exist, and closing this
+           window only hides it. -->
+      <button id="quit">Quit</button>
       <span id="saveMsg" class="msg"></span>
       <button id="save" class="primary">Save settings</button>
     </footer>

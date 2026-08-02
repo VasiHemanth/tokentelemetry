@@ -72,6 +72,14 @@ pub struct TrayConfig {
     /// Directories prepended to the child's PATH so `bin/cli.js` can find `npm`
     /// and `python3` (its frontend spawn uses `shell: true`).
     pub extra_path_dirs: Vec<String>,
+    /// `TOKENTELEMETRY_DATA_DIR` / `TOKENTELEMETRY_HOME` as the user's login
+    /// shell sees them, forwarded to the backend explicitly.
+    ///
+    /// A GUI process started at login inherits no shell exports, so a user who
+    /// set either in their rc file would otherwise get a second, empty data
+    /// store the moment the tray started the server instead of `start.sh`.
+    pub data_dir_override: Option<String>,
+    pub home_override: Option<String>,
     /// Spawn the services as soon as the tray starts. Separate from the OS-level
     /// "launch this app at login" toggle handled by tauri-plugin-autostart.
     pub start_on_launch: bool,
@@ -88,6 +96,8 @@ impl Default for TrayConfig {
             npm_path: None,
             python_path: None,
             extra_path_dirs: Vec::new(),
+            data_dir_override: None,
+            home_override: None,
             start_on_launch: true,
         }
     }

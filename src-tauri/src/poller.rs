@@ -83,8 +83,16 @@ pub async fn frontend_alive(port: u16) -> bool {
 /// today's in-flight sessions with a raw *lexicographic string* compare against
 /// its own local date. Any other format silently drops live sessions and
 /// reports no error.
-pub async fn today_spend(port: u16) -> Result<f64, String> {
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+pub fn local_today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// Returns `(local date the figure is for, cost)`. The date comes back with the
+/// value so a caller can tell "today's total" from "the total for a day that
+/// has since ended" — the request is built before the round trip and can land
+/// on the other side of midnight.
+pub async fn today_spend(port: u16) -> Result<(String, f64), String> {
+    let today = local_today();
     let url = format!("http://127.0.0.1:{port}/analytics");
 
     let resp = client(ANALYTICS_TIMEOUT)?
@@ -109,7 +117,7 @@ pub async fn today_spend(port: u16) -> Result<f64, String> {
 
     // `total.cost` is 0.0 on a quiet day. `by_day` would be an empty array
     // there, so indexing into it is a crash waiting for a slow morning.
-    Ok(parsed.total.map(|t| t.cost).unwrap_or(0.0))
+    Ok((today, parsed.total.map(|t| t.cost).unwrap_or(0.0)))
 }
 
 /// Menu-bar form: short, because a long macOS title eats the menu bar.
@@ -192,8 +200,12 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             assert!(api_alive(port).await, "no TokenTelemetry backend on {port}");
-            let cost = today_spend(port).await.expect("spend request failed");
-            println!("today_spend({port}) = {cost} -> {}", format_long(cost));
+            let (day, cost) = today_spend(port).await.expect("spend request failed");
+            println!(
+                "today_spend({port}) = {day} {cost} -> {}",
+                format_long(cost)
+            );
+            assert_eq!(day, local_today());
             assert!(cost >= 0.0);
         });
     }

@@ -36,7 +36,13 @@ function render(s) {
     $("startOnLaunch").checked = s.start_on_launch;
   }
   $("autostart").checked = s.autostart;
-  $("restart").disabled = !s.repo_path;
+  // Restarting a server we did not start would stop nothing and then fail the
+  // port check, so do not offer it.
+  const attached = s.status.kind === "Attached";
+  $("restart").disabled = !s.repo_path || attached;
+  $("restart").title = attached
+    ? "This server was started outside the app"
+    : "";
 
   const rows = [
     ["node", s.node_path, true],
@@ -123,9 +129,16 @@ $("redetect").addEventListener("click", async () => {
 
 $("restart").addEventListener("click", async () => {
   message("Restarting…", null);
-  await invoke("restart_services");
-  await refresh();
+  try {
+    await invoke("restart_services");
+    await refresh();
+    message("Restarted.", "ok");
+  } catch (e) {
+    message(String(e), "err");
+  }
 });
+
+$("quit").addEventListener("click", () => invoke("quit_app"));
 
 $("openDash").addEventListener("click", () => invoke("open_dashboard"));
 

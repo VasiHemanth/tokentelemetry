@@ -30,7 +30,13 @@ struct MenuHandles {
 struct AppState {
     cfg: Mutex<TrayConfig>,
     sup: Mutex<Supervisor>,
-    spend: Mutex<Option<f64>>,
+    /// Today's cost together with the local date it was measured for.
+    ///
+    /// The date is not decoration. Without it the last figure of the day
+    /// survives midnight and keeps being shown as "Today" until the next
+    /// successful poll — and if the backend is down or erroring at that moment,
+    /// yesterday's total can sit there labelled as today's indefinitely.
+    spend: Mutex<Option<(String, f64)>>,
     /// The API answers well before `next dev` has compiled its first route.
     /// Without this the menu says "Running" and "Open dashboard" lands the user
     /// on a connection-refused page.
@@ -74,6 +80,21 @@ struct UiState {
     front_ready: bool,
 }
 
+/// The cached figure, but only if it is still for today's local date.
+///
+/// Reading through this everywhere is what stops a stale total being relabelled
+/// "Today" after midnight.
+fn spend_for_today(state: &AppState) -> Option<f64> {
+    let today = poller::local_today();
+    state
+        .spend
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(day, _)| *day == today)
+        .map(|(_, cost)| *cost)
+}
+
 fn status_label(s: &Status, front_ready: bool) -> String {
     match s {
         Status::NeedsSetup(m) => format!("Setup needed: {m}"),
@@ -98,7 +119,7 @@ fn snapshot(app: &AppHandle) -> UiState {
     let cfg = state.cfg.lock().unwrap().clone();
     let status = state.sup.lock().unwrap().status.clone();
     let owns_child = state.sup.lock().unwrap().owns_child();
-    let spend = *state.spend.lock().unwrap();
+    let spend = spend_for_today(&state);
     let front_ready = *state.front_ready.lock().unwrap();
 
     UiState {
@@ -126,7 +147,7 @@ fn snapshot(app: &AppHandle) -> UiState {
 fn refresh_tray(app: &AppHandle) {
     let state = app.state::<AppState>();
     let status = state.sup.lock().unwrap().status.clone();
-    let spend = *state.spend.lock().unwrap();
+    let spend = spend_for_today(&state);
     let owns = state.sup.lock().unwrap().owns_child();
     let front_ready = *state.front_ready.lock().unwrap();
 
@@ -134,19 +155,33 @@ fn refresh_tray(app: &AppHandle) {
         .map(poller::format_long)
         .unwrap_or_else(|| "Today: —".to_string());
 
-    if let Some(menu) = state.menu.lock().unwrap().as_ref() {
-        let _ = menu.spend.set_text(&spend_text);
-        let _ = menu.status.set_text(status_label(&status, front_ready));
-        let _ = menu.toggle.set_text(if owns {
+    // Clone the handles out and DROP the guard before touching them.
+    //
+    // set_text/set_enabled dispatch to the main thread and block on a reply.
+    // Holding the mutex across that call deadlocks the moment the main thread
+    // is itself inside refresh_tray (a menu click) waiting for this same lock:
+    // the poll thread waits on the event loop, the event loop waits on the
+    // mutex, and neither times out. MenuItem is an Arc newtype, so cloning is
+    // cheap and the handles stay valid.
+    let handles = state
+        .menu
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| (m.spend.clone(), m.status.clone(), m.toggle.clone()));
+
+    if let Some((spend_item, status_item, toggle_item)) = handles {
+        let _ = spend_item.set_text(&spend_text);
+        let _ = status_item.set_text(status_label(&status, front_ready));
+        let _ = toggle_item.set_text(if owns {
             "Stop services"
         } else {
             "Start services"
         });
         // Never offer to stop a server we did not start — it belongs to
         // whoever launched it.
-        let _ = menu
-            .toggle
-            .set_enabled(!matches!(status, Status::Attached | Status::NeedsSetup(_)));
+        let _ =
+            toggle_item.set_enabled(!matches!(status, Status::Attached | Status::NeedsSetup(_)));
     }
 
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -251,6 +286,13 @@ fn save_settings(
         None => None,
     };
 
+    // Clearing the checkout while we own a running child would strand it:
+    // start/stop both need the path, so the services would keep running with no
+    // way to reach them from the tray.
+    if repo.is_none() && app.state::<AppState>().sup.lock().unwrap().owns_child() {
+        return Err("stop the services before clearing the checkout folder".into());
+    }
+
     {
         let state = app.state::<AppState>();
         let mut cfg = state.cfg.lock().unwrap();
@@ -294,9 +336,29 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn restart_services(app: AppHandle) {
+fn restart_services(app: AppHandle) -> Result<(), String> {
+    // Restarting an attached server would stop nothing and then fail the port
+    // pre-check, so say why instead of showing a confusing "port in use".
+    if matches!(
+        app.state::<AppState>().sup.lock().unwrap().status,
+        Status::Attached
+    ) {
+        return Err("this server was started outside the app; stop it where you started it".into());
+    }
     stop_services(&app);
     start_services(&app);
+    Ok(())
+}
+
+/// Quit from the Preferences window.
+///
+/// Without this there is no way out on a desktop with no system tray — stock
+/// GNOME without an AppIndicator extension shows no icon at all, and closing
+/// the window only hides it.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    stop_services(&app);
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -354,7 +416,7 @@ async fn poll_once(app: AppHandle) {
         let front = poller::frontend_alive(cfg.front_port).await;
         *app.state::<AppState>().front_ready.lock().unwrap() = front;
         match poller::today_spend(cfg.api_port).await {
-            Ok(cost) => *app.state::<AppState>().spend.lock().unwrap() = Some(cost),
+            Ok((day, cost)) => *app.state::<AppState>().spend.lock().unwrap() = Some((day, cost)),
             Err(e) => {
                 app.state::<AppState>().sup.lock().unwrap().log(e);
             }
@@ -373,6 +435,12 @@ fn main() {
     let cfg = TrayConfig::load();
 
     tauri::Builder::default()
+        // Must be registered first. Two tray processes would fight over the
+        // ports, and the second one's reap_stale() would tear down the first
+        // one's perfectly healthy services.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_prefs(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -389,6 +457,7 @@ fn main() {
             set_autostart,
             restart_services,
             open_dashboard,
+            quit_app,
         ])
         .setup(|app| {
             // No Dock icon and no app-switcher entry: this is a menu bar app.
@@ -398,21 +467,15 @@ fn main() {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
 
-            // Resolve interpreters once if we have never done it, or if the
-            // recorded node path has since disappeared (a Homebrew upgrade, an
-            // nvm version switch).
-            {
-                let mut cfg = state.cfg.lock().unwrap();
-                let stale = cfg
-                    .node_path
+            // Does the recorded node path still exist? A Homebrew upgrade or an
+            // nvm version switch invalidates it.
+            let needs_detect = {
+                let cfg = state.cfg.lock().unwrap();
+                cfg.node_path
                     .as_ref()
                     .map(|p| !std::path::Path::new(p).is_file())
-                    .unwrap_or(true);
-                if stale {
-                    detect::detect().apply_to(&mut cfg);
-                    let _ = cfg.save();
-                }
-            }
+                    .unwrap_or(true)
+            };
 
             // Clean up after a previous tray process before touching the ports.
             state.sup.lock().unwrap().reap_stale();
@@ -455,10 +518,19 @@ fn main() {
                 toggle: toggle_item,
             });
 
+            // macOS template images are pure black plus alpha and get inverted
+            // by the system to suit the menu bar. Windows and Linux ignore the
+            // template flag entirely, so shipping the same asset there would
+            // put a black glyph on a dark taskbar — invisible. Use the full
+            // colour icon off macOS.
+            #[cfg(target_os = "macos")]
             let icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
+            #[cfg(not(target_os = "macos"))]
+            let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+
             let tray_result = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(icon)
-                .icon_as_template(true)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("TokenTelemetry")
                 .menu(&menu)
                 .on_menu_event(|app, event| {
@@ -506,34 +578,49 @@ fn main() {
                     Some(p) => TrayConfig::validate_repo(p).err(),
                 }
             };
-            if let Some(reason) = needs_setup {
-                state.sup.lock().unwrap().status = Status::NeedsSetup(reason);
+            if let Some(reason) = &needs_setup {
+                state.sup.lock().unwrap().status = Status::NeedsSetup(reason.clone());
                 show_prefs(&handle);
-            } else {
-                let (start_on_launch, api_port) = {
-                    let cfg = state.cfg.lock().unwrap();
-                    (cfg.start_on_launch, cfg.api_port)
-                };
-                if start_on_launch {
-                    let h = handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        // Attach rather than spawn if the user already has a
-                        // server up (a manual ./start.sh, or a survivor we could
-                        // not reap). Starting a second one just fails on the port.
-                        if poller::api_alive(api_port).await {
-                            let st = h.state::<AppState>();
-                            st.sup.lock().unwrap().status = Status::Attached;
-                            st.sup
-                                .lock()
-                                .unwrap()
-                                .log("attached to a server that was already running".to_string());
-                            refresh_tray(&h);
-                        } else {
-                            start_services(&h);
-                        }
-                    });
-                }
             }
+
+            let should_start = needs_setup.is_none() && state.cfg.lock().unwrap().start_on_launch;
+            let api_port = state.cfg.lock().unwrap().api_port;
+
+            // Everything slow happens here, off the startup path, so the tray
+            // icon appears immediately at login.
+            let h = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Probing interpreters runs the user's login shell, up to four
+                // times per command with a 6s ceiling each. Blocking setup() on
+                // that would leave the menu bar empty for seconds. It runs even
+                // when setup is incomplete, so the paths are ready by the time
+                // the user picks a folder and hits Start.
+                if needs_detect {
+                    if let Ok(found) = tauri::async_runtime::spawn_blocking(detect::detect).await {
+                        let st = h.state::<AppState>();
+                        let mut cfg = st.cfg.lock().unwrap();
+                        found.apply_to(&mut cfg);
+                        let _ = cfg.save();
+                    }
+                }
+                if !should_start {
+                    return;
+                }
+                // Attach rather than spawn if the user already has a server up
+                // (a manual ./start.sh, or a survivor we could not reap).
+                // Starting a second one just fails on the port.
+                if poller::api_alive(api_port).await {
+                    let st = h.state::<AppState>();
+                    st.sup.lock().unwrap().status = Status::Attached;
+                    st.sup
+                        .lock()
+                        .unwrap()
+                        .log("attached to a server that was already running".to_string());
+                    refresh_tray(&h);
+                } else {
+                    start_services(&h);
+                }
+            });
 
             let h = handle.clone();
             tauri::async_runtime::spawn(async move {

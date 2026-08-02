@@ -11,13 +11,15 @@ on:
     paths:
       - "src-tauri/**"
       - ".github/workflows/tray-build.yml"
-  push:
-    branches: [main]
-    paths:
-      - "src-tauri/**"
   # Tags named tray-v* produce installers. Nothing else in this repo is
   # tag-driven, so the prefix keeps the namespace free for future use.
-  create:
+  #
+  # No `branches`/`paths` filter alongside `tags`: a path filter applies to tag
+  # pushes as well, and a tag push reports no changed paths, so adding one would
+  # mean tag builds never fire.
+  push:
+    tags:
+      - "tray-v*"
   workflow_dispatch:
 
 permissions:
