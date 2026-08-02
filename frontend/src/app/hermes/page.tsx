@@ -11,9 +11,13 @@ import {
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import {
-  PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState,
+  PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Section,
   Table, THead, TBody, TR, TH, TD, Badge,
 } from "@/components/ui";
+import {
+  HermesTelemetry, CostStatus, COST_STATUS_ORDER, COST_STATUS_HINTS,
+  COST_STATUS_LABELS, outcomeBucketLabel, outcomeBucketSplit,
+} from "@/lib/hermesTelemetry";
 import SourceBadge from "@/components/SourceBadge";
 import HermesIcon from "@/components/icons/HermesIcon";
 import { formatTokens, formatCost } from "@/lib/format";
@@ -80,7 +84,9 @@ export default function HermesPage() {
   const profilesRes = useResource<{ profiles: { name: string }[] }>("/hermes/profiles", { pollMs: 60_000 });
   const gateway = overviewRes.data?.gateway;
   const cronJobs = overviewRes.data?.cron_jobs ?? [];
-  // "all" | "default" | profile name — scopes every number and list below.
+  // "all" | "default" | profile name. Scopes the summary tiles, the sources and
+  // models cards, and the grouped session tables. The Telemetry section is not
+  // profile-scoped: its endpoint always covers every profile.
   const [profileScope, setProfileScope] = useState<string>("all");
   const allHermesSessions = useMemo(
     () => (sessionsRes.data ?? []).filter((s) => s.agent === "hermes"),
@@ -384,6 +390,9 @@ export default function HermesPage() {
         </div>
       )}
 
+      {/* Telemetry: outcomes, cost provenance, latency, tool reliability */}
+      <TelemetrySection />
+
       {/* Cron jobs */}
       {cronJobs.length > 0 && (
         <Card>
@@ -559,6 +568,364 @@ export default function HermesPage() {
           </Table>
         </Card>
       ))}
+    </div>
+  );
+}
+
+/** Telemetry from /hermes/telemetry. The endpoint is not profile-scoped, so
+ *  this section always covers every profile regardless of the pill selection.
+ *  Renders nothing while loading, on error (older backend without the route),
+ *  or when Hermes isn't installed. The page's own empty state covers that. */
+function TelemetrySection() {
+  const res = useResource<HermesTelemetry>("/hermes/telemetry", { pollMs: 60_000 });
+  const t = res.data;
+  if (!t || !t.available) return null;
+
+  const { outcomes, cost, latency, tools, log_coverage } = t;
+  const latencySessions = latency.captured_sessions + latency.uncaptured_sessions;
+  // Sessions in the unknown bucket split two ways: ones whose raw end_reason
+  // has no mapping yet (listed by name) and ones where Hermes recorded no
+  // end_reason at all (no raw string to list, so they need saying separately).
+  const unknownTotal = outcomes.buckets.find((b) => b.outcome === "unknown")?.count ?? 0;
+  const unknownNamed = outcomes.unknown_raw.reduce((acc, u) => acc + u.count, 0);
+  const unknownBlank = Math.max(0, unknownTotal - unknownNamed);
+  // Statuses that carry a real API-equivalent figure. `zero-marginal` and
+  // `unpriced` both sit at $0 for different reasons and neither belongs here.
+  const PRICED: CostStatus[] = ["provider-reported", "provider-estimated", "tt-computed"];
+  const pricedSessions = PRICED.reduce((acc, k) => acc + (cost.confidence[k] ?? 0), 0);
+  const zeroMarginalSessions = cost.confidence["zero-marginal"] ?? 0;
+  // Nothing could be priced: total_usd is 0 because there was nothing to price,
+  // not because the sessions cost nothing.
+  const nothingPriced = pricedSessions === 0 && zeroMarginalSessions === 0;
+  // Everything priceable priced out at $0 because the models are local or
+  // subscription-covered. total_usd is 0 and that IS the answer, but it is an
+  // answer about marginal cost, not about what the tokens would cost at API
+  // rates. Printing "API equiv. $0.00" here would be the false claim.
+  const allZeroMarginal = pricedSessions === 0 && zeroMarginalSessions > 0;
+  // Slice of total_usd covered by a flat subscription. Older backends don't send
+  // the field, so treat a missing value as 0 and drop the line rather than
+  // rendering "$NaN". The share is only meaningful against a non-zero total.
+  const includedUsd = cost.subscription_included_usd ?? 0;
+  const includedPct = cost.total_usd > 0 ? (includedUsd / cost.total_usd) * 100 : null;
+  // Same reason as subscription_included_usd above: a dev running this build
+  // against an older backend gets no breakdowns, and an undefined .length here
+  // would white-screen the page instead of dropping two panels.
+  const bySource = outcomes.by_source ?? [];
+  const byModel = outcomes.by_model ?? [];
+  // by_model is capped at the 10 largest, so it can sum to less than
+  // session_count. Say so rather than letting the numbers quietly not add up.
+  const modelsTotal = outcomes.models_total ?? byModel.length;
+  const modelsHidden = Math.max(0, modelsTotal - byModel.length);
+  const latencyStats = [
+    ["avg", latency.avg_s],
+    ["p50", latency.p50_s],
+    ["p95", latency.p95_s],
+  ] as const;
+
+  return (
+    <Section
+      title="Telemetry"
+      description="Outcomes, cost provenance, latency and tool reliability across every Hermes profile."
+    >
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Outcomes */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Session outcomes</CardTitle>
+            <div className="ml-auto text-[11px] tabular text-[var(--tt-fg-muted)]">
+              {(outcomes.completion_rate * 100).toFixed(1)}% completed · {t.session_count} sessions
+            </div>
+          </CardHeader>
+          <div className="px-5 pb-5 space-y-2">
+            {outcomes.buckets.map((b) => (
+              <div key={b.outcome} className="flex items-center justify-between text-[12px]">
+                <span className="text-[var(--tt-fg)]">{outcomeBucketLabel(b.outcome)}</span>
+                <span className="tabular text-[var(--tt-fg-muted)]">
+                  {b.count} · {b.pct.toFixed(1)}%
+                </span>
+              </div>
+            ))}
+            {outcomes.buckets.some((b) => b.outcome === "continued") && (
+              <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+                Continued means the session handed off to a child through compression, a branch, or
+                a resume. That is neither a completion nor a failure, so it is left out of the
+                completed share above.
+              </p>
+            )}
+            {(outcomes.unknown_raw.length > 0 || unknownBlank > 0) && (
+              <div className="pt-2 space-y-1 border-t border-[var(--tt-border)]">
+                {outcomes.unknown_raw.map((u) => (
+                  <div key={u.raw} className="flex items-center justify-between text-[11px]">
+                    <span className="font-mono text-[var(--tt-fg-muted)] truncate max-w-[70%]" title={u.raw}>
+                      unknown: {u.raw}
+                    </span>
+                    <span className="tabular text-[var(--tt-fg-dim)]">({u.count})</span>
+                  </div>
+                ))}
+                {unknownBlank > 0 && (
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-[var(--tt-fg-muted)]">no end_reason recorded</span>
+                    <span className="tabular text-[var(--tt-fg-dim)]">({unknownBlank})</span>
+                  </div>
+                )}
+                <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+                  {outcomes.unknown_raw.length > 0
+                    ? "Values Hermes reports that TokenTelemetry has no mapping for. They stay unknown instead of counting as completed."
+                    : "Hermes left these sessions without an end_reason, so there is nothing to classify. They stay unknown instead of counting as completed."}
+                </p>
+              </div>
+            )}
+            {bySource.length > 0 && (
+              <OutcomeBreakdown
+                title="By source"
+                rows={bySource.map((r) => ({ key: r.source, total: r.total, buckets: r.buckets }))}
+              />
+            )}
+            {byModel.length > 0 && (
+              <OutcomeBreakdown
+                title="By model"
+                rows={byModel.map((r) => ({ key: r.model, total: r.total, buckets: r.buckets }))}
+                note={
+                  modelsHidden > 0
+                    ? `Top ${byModel.length} of ${modelsTotal} models. ${modelsHidden} smaller model${modelsHidden === 1 ? "" : "s"} not shown, so these rows sum to less than ${t.session_count}.`
+                    : undefined
+                }
+              />
+            )}
+          </div>
+        </Card>
+
+        {/* Cost provenance */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Cost confidence</CardTitle>
+            <div className="ml-auto flex items-center gap-1.5 text-[11px] tabular text-[var(--tt-fg-muted)]">
+              {/* Same labels the session pill uses. "API equiv." is what the
+                  tokens would cost at API rates, which is not what the user was
+                  billed for subscription-included sessions. When every priced
+                  session is zero-marginal the total is a statement about
+                  marginal cost instead, so the label says that. */}
+              <span
+                className="text-[10px] font-medium text-[var(--tt-fg-dim)] uppercase tracking-[0.14em]"
+                title={allZeroMarginal ? COST_STATUS_HINTS["zero-marginal"] : undefined}
+              >
+                {allZeroMarginal ? "Marginal cost" : "API equiv."}
+              </span>
+              {/* formatCost renders 0 as "$0.00", which reads as "these sessions
+                  were free". When nothing could be priced there is no total to
+                  show, so say that instead of printing a zero. */}
+              {nothingPriced ? (
+                <span className="text-[var(--tt-fg-dim)]">not captured</span>
+              ) : allZeroMarginal ? (
+                formatCost(0)
+              ) : (
+                formatCost(cost.total_usd)
+              )}
+            </div>
+          </CardHeader>
+          <div className="px-5 pb-5 space-y-2">
+            {COST_STATUS_ORDER.map((k) => {
+              const n = cost.confidence[k] ?? 0;
+              const usd = cost.usd_by_confidence[k] ?? 0;
+              return (
+                <div key={k} className="flex items-center justify-between text-[12px]">
+                  {/* Readable label, not the wire key: a `title` tooltip does
+                      not exist on touch devices, so the jargon must not be the
+                      only discoverable text. */}
+                  <span className="text-[11px] text-[var(--tt-fg)]" title={COST_STATUS_HINTS[k]}>
+                    {COST_STATUS_LABELS[k]}
+                  </span>
+                  <span className="tabular text-[var(--tt-fg-muted)]">
+                    {n} session{n === 1 ? "" : "s"} ·{" "}
+                    {k === "unpriced" ? (
+                      <span className="text-[var(--tt-fg-dim)]">not captured</span>
+                    ) : (
+                      formatCost(usd)
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            {/* Session-count gate, not a dollar gate. Zero-marginal sessions
+                contribute $0 to every total on this card, so gating their
+                explanation on dollars suppressed it exactly when the zeros
+                needed explaining. */}
+            {zeroMarginalSessions > 0 && (
+              <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+                {zeroMarginalSessions} session{zeroMarginalSessions === 1 ? "" : "s"} ran on a local
+                model or a model covered by a subscription you already pay for. Their marginal cost
+                is {formatCost(0)}, which is an answer, not a missing number. What the same tokens
+                would cost at API rates is not counted in the total above.
+              </p>
+            )}
+            {/* Prose, not another row: this is a slice of the total above, and
+                another justify-between row would read as a bucket that sums
+                with the rest. Kept on its own dollar gate because it describes
+                a share of a non-zero total, unlike the line above. */}
+            {includedUsd > 0 && (
+              <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+                Of that total, {formatCost(includedUsd)}
+                {includedPct == null ? "" : ` (${includedPct.toFixed(1)}%)`} came from sessions
+                Hermes marked subscription-included, so it carries no marginal cost.
+              </p>
+            )}
+            <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+              Reported by Hermes means Hermes returned the number itself; priced by TokenTelemetry
+              means the tokens were priced locally from public rates.
+            </p>
+          </div>
+        </Card>
+
+        {/* Latency */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Latency</CardTitle>
+            <div className="ml-auto text-[11px] tabular text-[var(--tt-fg-muted)]">
+              {latency.api_calls.toLocaleString()} API call{latency.api_calls === 1 ? "" : "s"}
+            </div>
+          </CardHeader>
+          <div className="px-5 pb-5 space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              {latencyStats.map(([label, v]) => (
+                <div
+                  key={label}
+                  className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-3 py-2"
+                >
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">{label}</div>
+                  {v == null ? (
+                    <div className="text-[11px] text-[var(--tt-fg-dim)]">not captured</div>
+                  ) : (
+                    <div className="text-[14px] font-mono tabular text-[var(--tt-fg)]">{v}s</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="text-[11px] text-[var(--tt-fg-muted)]">
+              Captured for {latency.captured_sessions} of {latencySessions} session
+              {latencySessions === 1 ? "" : "s"}. Hermes only writes API-call timings to its
+              rotating log, so older sessions lose them.
+            </div>
+            {latency.by_model.length > 0 && (
+              <div className="space-y-1 pt-1 border-t border-[var(--tt-border)]">
+                {latency.by_model.slice(0, 4).map((m) => (
+                  <div key={m.model} className="flex items-center justify-between text-[11px] pt-1">
+                    <span className="font-mono text-[var(--tt-fg-muted)] truncate max-w-[50%]" title={m.model}>
+                      {m.model}
+                    </span>
+                    <span className="tabular text-[var(--tt-fg-dim)]">
+                      {m.calls} · avg {m.avg_s == null ? "not captured" : `${m.avg_s}s`}
+                      {m.p95_s == null ? "" : ` · p95 ${m.p95_s}s`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Tools */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Tools</CardTitle>
+          </CardHeader>
+          <div className="px-5 pb-5 space-y-3">
+            {!tools.captured ? (
+              <div className="text-[12px] text-[var(--tt-fg-dim)]">
+                Tool calls not captured. No tool lines were found in the Hermes logs.
+              </div>
+            ) : (
+              <>
+                {tools.top_by_calls.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+                      Most used
+                    </div>
+                    {tools.top_by_calls.map((row) => (
+                      <div key={row.tool} className="flex items-center justify-between text-[12px]">
+                        <span className="font-mono text-[var(--tt-fg)] truncate max-w-[50%]" title={row.tool}>
+                          {row.tool}
+                        </span>
+                        <span className="tabular text-[var(--tt-fg-muted)]">
+                          {row.calls} call{row.calls === 1 ? "" : "s"} ·{" "}
+                          {row.avg_duration_s == null ? "duration not captured" : `${row.avg_duration_s}s avg`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* The backend only lists tools that actually failed, so an empty
+                    list means no failures were found, not that failures went
+                    unread. Say which, or the panel disappears without a word. */}
+                <div className="space-y-1 pt-2 border-t border-[var(--tt-border)]">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+                    Highest failure rate
+                  </div>
+                  {tools.top_by_failure_rate.length === 0 ? (
+                    <div className="text-[12px] text-[var(--tt-fg-muted)]">
+                      No failures recorded for tools with at least 3 calls.
+                    </div>
+                  ) : (
+                    <>
+                      {tools.top_by_failure_rate.map((row) => (
+                        <div key={row.tool} className="flex items-center justify-between text-[12px]">
+                          <span className="font-mono text-[var(--tt-fg)] truncate max-w-[50%]" title={row.tool}>
+                            {row.tool}
+                          </span>
+                          <span className="tabular text-[var(--tt-fg-muted)]">
+                            {(row.failure_rate * 100).toFixed(1)}% of {row.calls} call
+                            {row.calls === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      ))}
+                      <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">
+                        Tools with at least 3 calls only.
+                      </p>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      <div className="text-[10px] text-[var(--tt-fg-dim)] px-0.5 leading-snug">
+        {log_coverage.files_read.length > 0
+          ? `Read from ${log_coverage.files_read.join(", ")}.`
+          : "No Hermes log files were readable."}{" "}
+        {log_coverage.sessions_with_log} of {log_coverage.sessions_total} sessions have log lines.
+      </div>
+    </Section>
+  );
+}
+
+/** Outcome split for one dimension (source or model). Rows carry the total plus
+ *  the bucket breakdown, so a source that never completes is visible instead of
+ *  being averaged into the page-wide completion rate. Unknown buckets are shown
+ *  like any other; the raw end_reason strings stay in the list above. */
+function OutcomeBreakdown({
+  title, rows, note,
+}: {
+  title: string;
+  rows: { key: string; total: number; buckets: Record<string, number> }[];
+  note?: string;
+}) {
+  return (
+    <div className="pt-2 space-y-1 border-t border-[var(--tt-border)]">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+        {title}
+      </div>
+      {rows.map((r) => (
+        <div key={r.key} className="flex items-baseline justify-between gap-3 text-[11px]">
+          <span className="font-mono text-[var(--tt-fg-muted)] truncate max-w-[45%]" title={r.key}>
+            {r.key}
+          </span>
+          <span className="tabular text-[var(--tt-fg-dim)] text-right">
+            {r.total} · {outcomeBucketSplit(r.buckets)}
+          </span>
+        </div>
+      ))}
+      {note && <p className="text-[10px] text-[var(--tt-fg-dim)] pt-1 leading-snug">{note}</p>}
     </div>
   );
 }

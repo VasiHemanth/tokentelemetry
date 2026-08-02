@@ -24,6 +24,7 @@ import notifications as notif
 from tt_paths import data_dir
 import scan_cache
 import codex_goals
+import hermes_telemetry as _ht
 import hashlib
 
 def _aware(dt):
@@ -1101,120 +1102,66 @@ def _hermes_home(profile: Optional[str]) -> Path:
 
 _HERMES_CWD_RE = re.compile(r"\[(\d{8}_\d{6}_[a-f0-9]+)\][^\n]*cwd=([^\s,)]+)")
 
-# Structured agent.log lines we parse (per HERMES_INTERNALS.md §2.3)
-_HERMES_LOG_TS = r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+"
-_HERMES_SID = r"\[(\d{8}_\d{6}_[a-f0-9]+)\]"
-_HERMES_API_CALL_RE = re.compile(
-    _HERMES_LOG_TS + r"[^\n]*?" + _HERMES_SID + r"[^\n]*?"
-    r"API call #(\d+): model=(\S+) provider=(\S+) in=(\d+) out=(\d+) total=(\d+) "
-    r"latency=([\d.]+)s(?: cache=(\d+)/(\d+) \((\d+)%\))?"
-)
-_HERMES_TOOL_DONE_RE = re.compile(
-    _HERMES_LOG_TS + r"[^\n]*?" + _HERMES_SID + r"[^\n]*?"
-    r"tool (\S+) completed \(([\d.]+)s, (\d+) chars\)"
-)
-_HERMES_TOOL_FAIL_RE = re.compile(
-    _HERMES_LOG_TS + r"[^\n]*?" + _HERMES_SID + r"[^\n]*?"
-    r"tool (\S+) failed \(([\d.]+)s\): (.+?)$"
-)
-
-
-def _parse_hermes_log_ts(s: str) -> Optional[datetime]:
-    try:
-        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
+# Structured agent.log lines we parse (per HERMES_INTERNALS.md §2.3) now live in
+# hermes_telemetry.py, which owns the cached whole-log index. Kept as aliases so
+# nothing that reached for these names breaks.
+_HERMES_API_CALL_RE = _ht.API_CALL_RE
+_HERMES_TOOL_DONE_RE = _ht.TOOL_DONE_RE
+_HERMES_TOOL_FAIL_RE = _ht.TOOL_FAIL_RE
+_parse_hermes_log_ts = _ht.parse_log_ts
 
 
 def _hermes_log_summary(session_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
-    """Parse the owning home's logs/agent.log for one session.
+    """Per-session view of the owning home's logs/agent.log*.
 
     Each profile writes its own agent.log, so sessions recorded in a
     profile's state.db never appear in the root log — pass the profile
     or the overlay comes back empty.
 
+    Reads from hermes_telemetry's cached index (every rotated log parsed once,
+    oldest suffix first) rather than rescanning the file per session.
+
     Returns:
       api_calls: list of {ts, n, model, provider, in, out, total, latency_s, cache_hit_pct?, cache_read?}
       tool_calls: list of {ts, tool, duration_s, chars?, status, error?}
       model_journey: distinct models in temporal order
-      summary: {api_call_count, total_latency_s, avg_latency_s, cache_hit_pct, models_used}
+      summary: {api_call_count, total_latency_s, avg_latency_s, cache_hit_pct, models_used, log_coverage} | None
+      log_coverage: "captured" when the logs carry API calls for this session
     """
-    log_path = _hermes_home(profile) / "logs" / "agent.log"
-    if not log_path.exists():
-        return {"api_calls": [], "tool_calls": [], "model_journey": [], "summary": None}
-    api_calls: List[Dict[str, Any]] = []
-    tool_calls: List[Dict[str, Any]] = []
     try:
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                if session_id not in line:
-                    continue
-                m = _HERMES_API_CALL_RE.search(line)
-                if m:
-                    ts = _parse_hermes_log_ts(m.group(1))
-                    api_calls.append({
-                        "ts": ts.isoformat() if ts else None,
-                        "n": int(m.group(3)),
-                        "model": m.group(4),
-                        "provider": m.group(5),
-                        "input": int(m.group(6)),
-                        "output": int(m.group(7)),
-                        "total": int(m.group(8)),
-                        "latency_s": float(m.group(9)),
-                        "cache_read": int(m.group(10)) if m.group(10) else None,
-                        "cache_prompt": int(m.group(11)) if m.group(11) else None,
-                        "cache_hit_pct": int(m.group(12)) if m.group(12) else None,
-                    })
-                    continue
-                m = _HERMES_TOOL_DONE_RE.search(line)
-                if m:
-                    ts = _parse_hermes_log_ts(m.group(1))
-                    tool_calls.append({
-                        "ts": ts.isoformat() if ts else None,
-                        "tool": m.group(3),
-                        "duration_s": float(m.group(4)),
-                        "chars": int(m.group(5)),
-                        "status": "ok",
-                    })
-                    continue
-                m = _HERMES_TOOL_FAIL_RE.search(line)
-                if m:
-                    ts = _parse_hermes_log_ts(m.group(1))
-                    tool_calls.append({
-                        "ts": ts.isoformat() if ts else None,
-                        "tool": m.group(3),
-                        "duration_s": float(m.group(4)),
-                        "status": "error",
-                        "error": m.group(5)[:200],
-                    })
+        index, _files = _ht.get_log_index(_hermes_home(profile))
+        entry = index.get(session_id) or _ht.EMPTY_ENTRY
     except Exception:
-        pass
-
-    # Model journey — distinct models in temporal order
-    journey: List[str] = []
-    for c in api_calls:
-        if not journey or journey[-1] != c["model"]:
-            journey.append(c["model"])
-
-    if api_calls:
-        total_lat = sum(c["latency_s"] for c in api_calls)
-        cache_pcts = [c["cache_hit_pct"] for c in api_calls if c.get("cache_hit_pct") is not None]
-        summary = {
-            "api_call_count": len(api_calls),
-            "total_latency_s": round(total_lat, 2),
-            "avg_latency_s": round(total_lat / len(api_calls), 2),
-            "cache_hit_pct": round(sum(cache_pcts) / len(cache_pcts)) if cache_pcts else None,
-            "models_used": sorted({c["model"] for c in api_calls}),
-            "providers_used": sorted({c["provider"] for c in api_calls}),
-        }
-    else:
-        summary = None
+        entry = _ht.EMPTY_ENTRY
+    api_calls = entry.get("api_calls") or []
+    tool_calls = entry.get("tool_calls") or []
     return {
         "api_calls": api_calls,
         "tool_calls": tool_calls,
-        "model_journey": journey,
-        "summary": summary,
+        "model_journey": _ht.model_journey(api_calls),
+        "summary": _ht.summarize(api_calls),
+        "log_coverage": "captured" if api_calls else "not_captured",
     }
+
+
+def _hermes_log_index_all() -> Tuple[Dict[str, Any], List[str]]:
+    """Merged log index across the root home and every profile home."""
+    homes = []
+    seen = set()
+    for _db, profile in _hermes_dbs_with_profiles():
+        home = _hermes_home(profile)
+        if str(home) in seen:
+            continue
+        seen.add(str(home))
+        homes.append((profile, home))
+    parts = []
+    for profile, home in homes:
+        try:
+            index, files = _ht.get_log_index(home)
+        except Exception:
+            continue
+        parts.append((profile, index, files))
+    return _ht.merge_indexes(parts)
 
 
 def _hermes_memory_io(session_id: str) -> Dict[str, Any]:
@@ -1781,6 +1728,10 @@ async def hermes_session_overlay(session_id: str):
     return {
         "session_id": session_id,
         "profile": profile,
+        # "not_captured" is not the same as zero: Hermes rotates agent.log, and a
+        # session whose lines have aged out (or that predates log capture) has NO
+        # latency data — reporting 0s would invent a number.
+        "log_coverage": log["log_coverage"],
         "performance": log["summary"],
         "api_calls": log["api_calls"],
         "tool_calls": log["tool_calls"],
@@ -2168,6 +2119,23 @@ async def hermes_overview():
         "gateway": _hermes_gateway_state(),
         "cron_jobs": _hermes_cron_jobs(),
     }
+
+
+@app.get("/hermes/telemetry")
+async def hermes_telemetry():
+    """Aggregate Hermes outcome / cost / latency / tool-reliability rollup.
+
+    Every number is honest about its own provenance: cost carries the
+    confidence bucket the dollar figure came from, latency separates sessions
+    whose log lines still exist from those that rotated away, and an
+    end_reason we don't recognise lands in `unknown` with its raw string
+    intact rather than being counted as a completion.
+    """
+    if not _hermes_dbs():
+        return {"available": False}
+    sessions = [s for s in await get_sessions_cached() if s.get("agent") == "hermes"]
+    index, files_read = _hermes_log_index_all()
+    return _ht.build_telemetry(sessions, index, files_read)
 
 
 # --------------------------------------------------------------------------- #
@@ -6069,6 +6037,15 @@ def _scan_sessions_sync():
                     model = srow["model"]
                     # Prefer Hermes's own cost (it knows exotic models we may not price)
                     cost = srow["actual_cost_usd"] if srow["actual_cost_usd"] is not None else srow["estimated_cost_usd"]
+                    # Where the dollar figure we end up REPORTING came from. Set
+                    # by whichever branch below produces the final number — a
+                    # Hermes estimate we throw away (issue #176) is not
+                    # "provider-estimated", it's tt-computed.
+                    _cost_status = None
+                    if srow["actual_cost_usd"] is not None:
+                        _cost_status = "provider-reported"
+                    elif cost is not None:
+                        _cost_status = "provider-estimated"
                     # Hermes stores estimated_cost_usd=0.0 (not NULL) with cost_status='unknown'
                     # / cost_source='none' when it couldn't price the session itself (proxied or
                     # unrecognized endpoint, subscription-included model). Don't take that 0.0 at
@@ -6077,9 +6054,11 @@ def _scan_sessions_sync():
                     # decide the framing. Only override the *estimate*; a real actual_cost_usd wins.
                     if srow["actual_cost_usd"] is None and (srow["cost_status"] == "unknown" or srow["cost_source"] == "none"):
                         cost = None
+                        _cost_status = None
                     # Bind before the branch: it's referenced unconditionally in the
                     # session dict below, but only computed when cost must be derived.
                     _measured_tps = None
+                    _is_local = False
                     if cost is None:
                         # Only when TT has to compute the cost itself AND the session
                         # is local do we parse the agent log for a MEASURED tok/s
@@ -6087,7 +6066,8 @@ def _scan_sessions_sync():
                         # most Hermes sessions carry their own cost and skip this.
                         try:
                             from power_config import is_local_session
-                            if is_local_session(model, srow["billing_base_url"], srow["billing_provider"]):
+                            _is_local = bool(is_local_session(model, srow["billing_base_url"], srow["billing_provider"]))
+                            if _is_local:
                                 _summ = _hermes_log_summary(sid, h_profile).get("summary")
                                 if _summ and _summ.get("total_latency_s", 0) > 0 and out_t > 0:
                                     _measured_tps = out_t / _summ["total_latency_s"]
@@ -6100,6 +6080,46 @@ def _scan_sessions_sync():
                             endpoint=srow["billing_base_url"],
                             tok_per_sec=_measured_tps,
                         )
+                        # A zero from calculate_cost is only meaningful when
+                        # something DELIBERATELY prices at zero — a flat
+                        # subscription (billed monthly) or a local model whose
+                        # electricity draw rounds away. Otherwise a 0.0 means we
+                        # couldn't price the session at all; keep cost None so the
+                        # UI says "not captured" instead of a confident "$0.00".
+                        if cost is None:
+                            _cost_status = "unpriced"
+                        elif cost > 0:
+                            _cost_status = "tt-computed"
+                        else:
+                            # No tokens recorded means there was nothing to
+                            # price in the first place. "Local model, so $0
+                            # marginal" is a positive finding and would be a
+                            # lie here — we measured nothing. Unpriced wins
+                            # over deliberate-zero whenever the session is empty.
+                            _nothing_to_price = tokens["total"] == 0
+                            _deliberate_zero = _is_local and not _nothing_to_price
+                            if not _deliberate_zero and not _nothing_to_price:
+                                try:
+                                    from power_config import is_subscription_endpoint, is_subscription_model
+                                    _deliberate_zero = bool(
+                                        (srow["billing_base_url"] and is_subscription_endpoint(srow["billing_base_url"]))
+                                        or is_subscription_model(model)
+                                    )
+                                except Exception:
+                                    _deliberate_zero = False
+                            if _deliberate_zero:
+                                # Priced successfully, and the answer is a real
+                                # zero: local model, or a model/endpoint the
+                                # user already pays a flat fee for. Keep the
+                                # 0.0 (it IS the marginal cost, and aggregates
+                                # sum it), but do NOT call it "tt-computed":
+                                # that reads as "we priced these tokens and
+                                # they cost $0.00", which is false. The API
+                                # equivalent isn't zero; the MARGINAL cost is.
+                                _cost_status = "zero-marginal"
+                            else:
+                                cost = None
+                                _cost_status = "unpriced"
                     tokens["cost"] = cost
                     # First user message → display fallback when title is empty
                     first_user = ""
@@ -6129,6 +6149,20 @@ def _scan_sessions_sync():
                         "cost_anomaly": cost_anomaly,
                         "parent_session_id": srow["parent_session_id"],
                         "end_reason": srow["end_reason"],
+                        # end_reason is an OPEN set (Hermes's own API lets a
+                        # caller PATCH an arbitrary string). Anything we don't
+                        # recognise buckets as "unknown" with the raw value
+                        # preserved — never silently as a completion.
+                        "outcome": _ht.classify_end_reason(srow["end_reason"]),
+                        "outcome_raw": _ht.normalize_end_reason_raw(srow["end_reason"]),
+                        "cost_status": _cost_status or "unpriced",
+                        # Hermes's OWN cost_status column, verbatim and
+                        # unmapped. Distinct from `cost_status` above (which
+                        # describes where TT's dollar figure came from):
+                        # 'included' means the session was billed under a flat
+                        # plan, so the dollar figure we compute is an API
+                        # equivalent, not money the user spent at the margin.
+                        "_hermes_cost_status": srow["cost_status"],
                         "provider": srow["billing_provider"],
                         "endpoint": srow["billing_base_url"],
                         "tok_per_sec": _measured_tps,
@@ -7521,7 +7555,10 @@ async def get_projects(include_hidden: bool = False):
         projects[proj]["subagent_count"] += len(s.get("subagents", []))
         st = s.get("tokens", {})
         for k in ["input", "output", "cached", "total"]: projects[proj]["tokens"][k] += st.get(k, 0)
-        projects[proj]["tokens"]["cost"] += s.get("cost", 0.0)
+        # `cost` is None for an unpriced session (the key EXISTS, so a dict
+        # default never fires). An unpriced session contributes 0 to a SUM
+        # while still rendering individually as "not captured".
+        projects[proj]["tokens"]["cost"] += s.get("cost") or 0.0
         projects[proj]["plans"].extend(s.get("plans", []))
         projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
     for p in projects.values():
@@ -7612,7 +7649,7 @@ async def get_projects(include_hidden: bool = False):
             agg["configured_subagent_count"] += m.get("configured_subagent_count", 0) or 0
             for k in ("input", "output", "cached", "total"):
                 agg["tokens"][k] += m.get("tokens", {}).get(k, 0)
-            agg["tokens"]["cost"] += m.get("tokens", {}).get("cost", 0.0)
+            agg["tokens"]["cost"] += m.get("tokens", {}).get("cost") or 0.0
             agg["agents"].update(m.get("agents", []))
             agg["mcp_tools"].update(m.get("mcp_tools", []))
             if m.get("is_worktree"):
@@ -8554,7 +8591,9 @@ async def get_analytics(
             by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "cache_reads": 0, "total": 0, "cost": 0.0,
                                "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0, "session_count": 0}
         st = s.get("tokens", {})
-        scost = s.get("cost", 0.0)
+        # None for an unpriced session; feeds three aggregates plus
+        # savings_vs_cloud() below, all of which need a number.
+        scost = s.get("cost") or 0.0
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
         if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
