@@ -1,6 +1,32 @@
 {
   "releases": [
     {
+      "tag": "2026-08-02",
+      "title": "Hermes telemetry that says what it doesn't know",
+      "highlights": [
+        {
+          "title": "Latency recovered from rotated logs",
+          "description": "TokenTelemetry only ever read ~/.hermes/logs/agent.log, so once Hermes rotated that file, per-call latency silently disappeared. On a real install that meant none of 22 sessions showed any timing, while 14 sessions' worth sat unread in agent.log.1. Rotated logs are now parsed too, oldest first, and sessions with no timing anywhere say \"not captured\" instead of showing zero.",
+          "href": "/hermes"
+        },
+        {
+          "title": "Every cost says where the number came from",
+          "description": "A Hermes dollar figure can come from four places: reported by Hermes, estimated by Hermes, priced by TokenTelemetry, or not priced at all. They used to render identically. Each figure now carries its source, sessions that could not be priced read \"not captured\" rather than $0.00, and a local or subscription-covered run is labelled \"no marginal cost\" instead of being shown as a $0.00 price.",
+          "href": "/hermes"
+        },
+        {
+          "title": "Completion and failure rates by source and model",
+          "description": "Hermes records why each session ended, but only three of its end reasons were ever displayed, so on a real install 9 of 22 sessions showed no outcome at all. Every end reason now maps to one of seven outcomes, broken down per source and per model. An end reason TokenTelemetry does not recognise appears by name as unknown rather than being counted as a completion.",
+          "href": "/hermes"
+        },
+        {
+          "title": "Tool reliability",
+          "description": "Tool failures were already parsed out of the Hermes log and then discarded. The Hermes page now shows which tools are used most and which fail most, counting only tools with at least three calls so a single failed call does not read as a 100% failure rate.",
+          "href": "/hermes"
+        }
+      ]
+    },
+    {
       "tag": "2026-07-30",
       "title": "See what /goal runs actually cost",
       "highlights": [

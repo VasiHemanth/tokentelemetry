@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat, Globe, ExternalLink, Target } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -16,6 +16,7 @@ import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { resolveSessionBackTarget } from "@/lib/navigation";
+import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
 import { coerceReasoningText } from "@/lib/reasoning";
 
 interface Artifact {
@@ -67,6 +68,12 @@ interface Session {
   hermes_profile?: string;
   parent_session_id?: string | null;
   end_reason?: string | null;
+  /** Hermes-only: how the cost figure was arrived at (absent on other agents). */
+  cost_status?: CostStatus;
+  /** Hermes-only: canonical outcome bucket for end_reason. */
+  outcome?: string | null;
+  /** Hermes-only: the raw end_reason behind `outcome`, null when there was none. */
+  outcome_raw?: string | null;
   /** TRACE loop metadata; present only on loop sessions (see backend /sessions) */
   loop?: any;
   /** Goal Mode (`/goal`); a session can set several, so this is a list */
@@ -732,6 +739,18 @@ export default function SessionDetailPage() {
                     </Badge>
                   );
                 })()}
+                {/* Hermes: how the session ended, and how its cost was arrived at.
+                    Lives in this always-visible row rather than the chain banner,
+                    which only mounts for chained (compression) sessions. */}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesOutcomeBadge outcome={sessionInfo.outcome} raw={sessionInfo.outcome_raw} />
+                )}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesCostPill
+                    cost={sessionInfo.tokens?.cost ?? sessionInfo.cost}
+                    status={sessionInfo.cost_status}
+                  />
+                )}
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
@@ -1210,6 +1229,63 @@ function StatPill({ icon, label, value, tone }: { icon: React.ReactNode; label: 
       <span className="text-[var(--tt-fg-faint)]">{icon}</span>
       <span className="text-[10px] font-medium text-[var(--tt-fg-dim)] uppercase tracking-[0.14em]">{label}</span>
       <span className={`text-[12px] font-semibold tabular ${toneCls}`}>{value}</span>
+    </div>
+  );
+}
+
+/** How this Hermes session ended. An outcome the backend couldn't map renders
+ *  as `unknown: <raw>` so a value nobody has classified yet stays visible
+ *  instead of being folded into a bucket it doesn't belong to. */
+function HermesOutcomeBadge({ outcome, raw }: { outcome?: string | null; raw?: string | null }) {
+  const label = outcomeLabel(outcome, raw);
+  if (!label) return null;
+  const unknown = label.startsWith("unknown");
+  return (
+    <Badge
+      variant={unknown ? "outline" : "neutral"}
+      size="sm"
+      className="normal-case font-mono"
+      title={raw ? `Hermes end_reason: ${raw}` : "Hermes recorded no end_reason for this session"}
+    >
+      {label}
+    </Badge>
+  );
+}
+
+/** Session cost plus where the number came from. Three shapes, because $0.00
+ *  under an "API equiv." label makes two different false claims:
+ *   - `unpriced`: nothing to price, so show "not captured" instead of a figure.
+ *   - `zero-marginal`: priced, and the answer really is $0 because the model is
+ *     local or subscription-covered. The API equivalent of those tokens is NOT
+ *     zero, so the label switches to "Marginal cost" rather than printing a
+ *     zero under a claim about API rates.
+ *   - anything else: the API-equivalent figure plus its provenance. */
+function HermesCostPill({ cost, status }: { cost?: number; status?: CostStatus }) {
+  const zeroMarginal = status === "zero-marginal";
+  const unpriced = !zeroMarginal && (status === "unpriced" || cost == null);
+  return (
+    <div className="inline-flex items-center gap-1.5 bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded-md px-2 h-7">
+      <span className="text-[var(--tt-fg-faint)]"><DollarSign size={11} /></span>
+      <span
+        className="text-[10px] font-medium text-[var(--tt-fg-dim)] uppercase tracking-[0.14em]"
+        title={zeroMarginal ? COST_STATUS_HINTS["zero-marginal"] : undefined}
+      >
+        {zeroMarginal ? "Marginal cost" : "API equiv."}
+      </span>
+      <span className={`text-[12px] font-semibold tabular ${unpriced ? "text-[var(--tt-fg-dim)]" : "text-[var(--tt-fg)]"}`}>
+        {zeroMarginal ? formatCost(0) : unpriced ? "not captured" : formatCost(cost)}
+      </span>
+      {/* No provenance tail for zero-marginal: the "Marginal cost" label above
+          already carries the claim, and repeating "no marginal cost" beside a
+          $0.00 is noise. */}
+      {status && !unpriced && !zeroMarginal && (
+        <span
+          className="text-[9px] text-[var(--tt-fg-dim)] border-l border-[var(--tt-border)] pl-1.5"
+          title={COST_STATUS_HINTS[status]}
+        >
+          {COST_STATUS_LABELS[status]}
+        </span>
+      )}
     </div>
   );
 }
@@ -2726,7 +2802,11 @@ function HermesOverlayCard({ overlay }: { overlay: any }) {
   const journey: string[] = overlay?.model_journey || [];
   const mem = overlay?.memory_io;
   const apiCalls = overlay?.api_calls || [];
-  if (!perf && journey.length === 0 && (!mem || mem.total === 0)) return null;
+  // "not_captured" = no API-call lines survive for this session (Hermes rotates
+  // agent.log). Worth saying out loud rather than rendering nothing.
+  const notCaptured =
+    (perf?.log_coverage ?? overlay?.log_coverage) === "not_captured";
+  if (!perf && journey.length === 0 && (!mem || mem.total === 0) && !notCaptured) return null;
   return (
     <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[#eab308]/30 rounded-[var(--tt-radius-lg)] p-5 group">
       <div className="flex items-center justify-between mb-3">
@@ -2750,6 +2830,12 @@ function HermesOverlayCard({ overlay }: { overlay: any }) {
           <Stat label="Total latency" value={`${perf.total_latency_s}s`} />
           <Stat label="Avg latency" value={`${perf.avg_latency_s}s`} />
           <Stat label="Cache hit" value={perf.cache_hit_pct != null ? `${perf.cache_hit_pct}%` : "—"} />
+        </div>
+      )}
+      {notCaptured && (
+        <div className="text-[11px] text-[var(--tt-fg-dim)] mb-3 leading-snug">
+          Per-call latency not captured for this session. Hermes writes API-call timings
+          to a rotating log, so older sessions no longer have them.
         </div>
       )}
       {mem && mem.total > 0 && (
@@ -2988,11 +3074,18 @@ function HermesChainBanner({ current, all, from }: { current: Session; all: Sess
     : null;
   const children = all.filter((s) => s.parent_session_id === current.id);
   if (!parent && children.length === 0) return null;
-  const reasonLabel = (r?: string | null) =>
-    r === "compression" ? "compression continuation" :
-    r === "orphaned_compression" ? "orphaned compression" :
-    r === "branched" ? "branched" : null;
-  const cur = reasonLabel(current.end_reason);
+  // Chain-specific phrasing where the raw reason has one, otherwise the
+  // canonical outcome label (which renders `unknown: <raw>` for anything the
+  // backend has no mapping for, rather than dropping it).
+  const chainRaw = (s: Session) => s.outcome_raw ?? s.end_reason ?? null;
+  const chainLabel = (s: Session) => {
+    const raw = chainRaw(s);
+    if (raw === "compression") return "compression continuation";
+    if (raw === "orphaned_compression") return "orphaned compression";
+    if (raw === "branched") return "branched";
+    return outcomeLabel(s.outcome, raw);
+  };
+  const cur = chainLabel(current);
   return (
     <div className="mb-6 bg-violet-500/5 border border-violet-500/20 rounded-[var(--tt-radius-lg)] p-3">
       <div className="text-[9px] font-black uppercase tracking-[0.2em] text-violet-300 mb-2 flex items-center gap-2">
@@ -3018,7 +3111,7 @@ function HermesChainBanner({ current, all, from }: { current: Session; all: Sess
           >
             <span className="truncate max-w-[200px]">{c.display || c.id}</span>
             <ChevronRight size={11} />
-            {reasonLabel(c.end_reason) === "branched" && (
+            {chainRaw(c) === "branched" && (
               <span className="text-[9px] text-violet-300 ml-0.5">branched</span>
             )}
           </Link>
