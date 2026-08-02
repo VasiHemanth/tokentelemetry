@@ -670,14 +670,14 @@ _AG_STEP_REASONING = 15       # assistant reasoning narrative + a tool call
 _AG_STEP_TOOL_OUTPUT = 21     # result of a tool call
 _AG_STEP_SKIP = {90, 98, 23}  # system EPHEMERAL prompt, internal id, bare file ref
 _AG_TOOLNAME_RE = re.compile(rb'\x12.([a-z_]{3,40})\x1a')
-_AG_TEXT_RE = re.compile(rb'[\x09\x0a\x20-\x7e]{16,}')
+_AG_TEXT_RE = re.compile(rb'(?:[\x09\x0a\x20-\x7e]|[\xc2-\xf4][\x80-\xbf]+){10,}')
 _AG_ARGJSON_RE = re.compile(rb'\{(?:[^{}\\]|\\.|\{(?:[^{}\\]|\\.)*\})*\}')
 
 
 def _ag_best_text(payload: bytes) -> str:
     """Longest readable text run in a step blob, excluding JSON arg objects."""
     runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload or b"")]
-    runs = [r for r in runs if not r.lstrip().startswith("{")]
+    runs = [r for r in runs if not r.lstrip().startswith("{") and not re.match(r"^[a-f0-9\$-]{20,}$", r.strip(), re.IGNORECASE)]
     if not runs:
         return ""
     # Trim a leading 1-2 char protobuf framing token ("k\nicheck…" → "icheck…").
@@ -713,10 +713,57 @@ def _ag_event(role: str, content: list, sid: str, idx: int, order: int) -> Dict[
 
 
 def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
-    """Build a Claude-format per-step trace from an agy session's SQLite steps.
+    """Build a Claude-format per-step trace from an agy session's transcript log or SQLite steps."""
+    # First, check if structured transcript.jsonl log exists in brain/
+    for brain_root in [ANTIGRAVITY_BRAIN_DIR] + list(ANTIGRAVITY_BRAIN_DIRS):
+        b_dir = brain_root / session_id / ".system_generated" / "logs"
+        for tname in ["transcript.jsonl", "transcript_full.jsonl"]:
+            tfile = b_dir / tname
+            if tfile.exists():
+                msgs: List[Dict[str, Any]] = []
+                order = 0
+                try:
+                    with open(tfile, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            if not line.strip(): continue
+                            try: entry = json.loads(line)
+                            except Exception: continue
+                            stype = entry.get("type")
+                            content = entry.get("content", "")
+                            if stype == "USER_INPUT" and content:
+                                clean = re.sub(r"<USER_REQUEST>\s*", "", str(content))
+                                clean = re.sub(r"\s*</USER_REQUEST>.*", "", clean, flags=re.DOTALL).strip()
+                                if clean:
+                                    order += 1
+                                    msgs.append(_ag_event("user", [{"type": "text", "text": clean}], session_id, order, order))
+                            elif stype == "PLANNER_RESPONSE" or stype == "MODEL_RESPONSE":
+                                if isinstance(content, str) and content.strip():
+                                    order += 1
+                                    msgs.append(_ag_event("assistant", [{"type": "text", "text": content.strip()}], session_id, order, order))
+                                tool_calls = entry.get("tool_calls") or []
+                                for tc in tool_calls:
+                                    if isinstance(tc, dict) and tc.get("name"):
+                                        order += 1
+                                        msgs.append(_ag_event("assistant", [{
+                                            "type": "tool_use",
+                                            "id": tc.get("id", f"call-{order}"),
+                                            "name": tc.get("name"),
+                                            "input": tc.get("args") or tc.get("arguments") or {}
+                                        }], session_id, order, order))
+                            elif stype == "TOOL_RESULT":
+                                res = entry.get("output") or content or ""
+                                order += 1
+                                msgs.append(_ag_event("user", [{
+                                    "type": "tool_result",
+                                    "tool_use_id": entry.get("tool_call_id", f"call-{order}"),
+                                    "content": str(res)[:6000]
+                                }], session_id, order, order))
+                    if msgs:
+                        return msgs
+                except Exception:
+                    pass
 
-    Returns events the existing viewer renders (user / reasoning / tool / tool
-    output), or [] when nothing usable is found (caller falls back to brain)."""
+    # Fallback to SQLite steps parsing
     try:
         con = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True)
     except sqlite3.Error:
@@ -748,9 +795,6 @@ def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any
             msgs.append(_ag_event("user", [{"type": "tool_result", "content": text[:6000]}], session_id, idx, order))
         else:
             tool, args = _ag_tool_call(payload)
-            # Reasoning narrative and the tool call are split into separate steps
-            # so both are counted and render distinctly (thinking → reasoning, the
-            # call → tool).
             if stype == _AG_STEP_REASONING and text and not text.lstrip().startswith(("{", "<")):
                 order += 1
                 msgs.append(_ag_event("assistant", [{"type": "thinking", "text": text}], session_id, idx, order))
@@ -761,6 +805,46 @@ def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any
                 order += 1
                 msgs.append(_ag_event("assistant", [{"type": "text", "text": text}], session_id, idx, order))
     return msgs
+
+
+def _antigravity_first_prompt(sid: str, fallback_text: str = "") -> str:
+    """Extract the first user prompt for an Antigravity session to use as display intent."""
+    for brain_root in [ANTIGRAVITY_BRAIN_DIR] + list(ANTIGRAVITY_BRAIN_DIRS):
+        b_dir = brain_root / sid / ".system_generated" / "logs"
+        for tname in ["transcript.jsonl", "transcript_full.jsonl"]:
+            tfile = b_dir / tname
+            if tfile.exists():
+                try:
+                    with open(tfile, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            if not line.strip(): continue
+                            entry = json.loads(line)
+                            if entry.get("type") == "USER_INPUT":
+                                content = str(entry.get("content", ""))
+                                clean = re.sub(r"<USER_REQUEST>\s*", "", content)
+                                clean = re.sub(r"\s*</USER_REQUEST>.*", "", clean, flags=re.DOTALL).strip()
+                                if clean:
+                                    return clean[:100]
+                except Exception: pass
+
+    cli_db = ANTIGRAVITY_CLI_DIR / "conversations" / f"{sid}.db"
+    if cli_db.exists():
+        try:
+            con = sqlite3.connect(_sqlite_ro_uri(cli_db), uri=True)
+            rows = con.execute("SELECT step_payload FROM steps WHERE step_type = 14 LIMIT 5").fetchall()
+            con.close()
+            for (payload,) in rows:
+                if payload:
+                    runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload)]
+                    runs = [r for r in runs if not r.lstrip().startswith("{") and not re.match(r"^[a-f0-9\$-]{20,}$", r.strip(), re.IGNORECASE)]
+                    if runs:
+                        txt = max(runs, key=len).strip()
+                        txt = re.sub(r"^[a-zA-Z]{1,2}\n", "", txt).strip()
+                        if txt and not txt.startswith("command(") and not txt.startswith("./Users"):
+                            return txt[:100]
+        except Exception: pass
+
+    return (fallback_text or "Antigravity session")[:100]
 
 
 def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict[str, Any]]:
@@ -5291,7 +5375,7 @@ def _scan_sessions_sync():
                 _cli = _ag_cli_meta.get(sid, {})
                 project = apply_alias(_cli.get("project") or _antigravity_infer_project((task or "") + "\n" + (plan or "")))
                 first_line = next((ln.strip() for ln in (task or plan or walkthrough).splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
-                display = (first_line or "Antigravity session")[:100]
+                display = _antigravity_first_prompt(sid, first_line)
                 plans: List[dict] = []
                 if plan:
                     plans.append({"session_id": sid, "agent": "antigravity", "timestamp": latest_ts or _now(), "content": plan})
