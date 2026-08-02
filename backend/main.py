@@ -674,10 +674,26 @@ _AG_TEXT_RE = re.compile(rb'(?:[\x09\x0a\x20-\x7e]|[\xc2-\xf4][\x80-\xbf]+){10,}
 _AG_ARGJSON_RE = re.compile(rb'\{(?:[^{}\\]|\\.|\{(?:[^{}\\]|\\.)*\})*\}')
 
 
+def _ag_log_warn(msg: str, *args: Any) -> None:
+    """Lazy logger for Antigravity parsing paths (avoids import-order coupling)."""
+    import logging
+    logging.getLogger("tokentelemetry.antigravity").warning(msg, *args)
+
+
+def _ag_text_runs(payload: bytes) -> List[str]:
+    """Decoded readable text runs from a step blob, excluding JSON arg objects
+    and long bare token / hex-id strings (e.g. session UUIDs)."""
+    runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload or b"")]
+    return [
+        r for r in runs
+        if not r.lstrip().startswith("{")
+        and not re.match(r"^[a-f0-9\$-]{20,}$", r.strip(), re.IGNORECASE)
+    ]
+
+
 def _ag_best_text(payload: bytes) -> str:
     """Longest readable text run in a step blob, excluding JSON arg objects."""
-    runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload or b"")]
-    runs = [r for r in runs if not r.lstrip().startswith("{") and not re.match(r"^[a-f0-9\$-]{20,}$", r.strip(), re.IGNORECASE)]
+    runs = _ag_text_runs(payload)
     if not runs:
         return ""
     # Trim a leading 1-2 char protobuf framing token ("k\nicheck…" → "icheck…").
@@ -722,6 +738,7 @@ def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any
             if tfile.exists():
                 msgs: List[Dict[str, Any]] = []
                 order = 0
+                pending_tool_ids: List[str] = []
                 try:
                     with open(tfile, "r", encoding="utf-8", errors="ignore") as f:
                         for line in f:
@@ -744,24 +761,37 @@ def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any
                                 for tc in tool_calls:
                                     if isinstance(tc, dict) and tc.get("name"):
                                         order += 1
+                                        tool_id = tc.get("id") or tc.get("tool_call_id") or f"call-{order}"
+                                        pending_tool_ids.append(tool_id)
                                         msgs.append(_ag_event("assistant", [{
                                             "type": "tool_use",
-                                            "id": tc.get("id", f"call-{order}"),
+                                            "id": tool_id,
                                             "name": tc.get("name"),
                                             "input": tc.get("args") or tc.get("arguments") or {}
                                         }], session_id, order, order))
                             elif stype == "TOOL_RESULT":
                                 res = entry.get("output") or content or ""
+                                tool_id = entry.get("tool_call_id") or entry.get("toolUseId")
+                                if tool_id:
+                                    try:
+                                        pending_tool_ids.remove(tool_id)
+                                    except ValueError:
+                                        pass
+                                elif pending_tool_ids:
+                                    # Some transcript versions omit the result's
+                                    # tool_call_id. Reuse the oldest pending call ID
+                                    # so the UI can still pair the result with its call.
+                                    tool_id = pending_tool_ids.pop(0)
                                 order += 1
                                 msgs.append(_ag_event("user", [{
                                     "type": "tool_result",
-                                    "tool_use_id": entry.get("tool_call_id", f"call-{order}"),
+                                    "tool_use_id": tool_id or f"call-{order}",
                                     "content": str(res)[:6000]
                                 }], session_id, order, order))
                     if msgs:
                         return msgs
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _ag_log_warn("transcript parse failed for %s: %s", tfile, exc)
 
     # Fallback to SQLite steps parsing
     try:
@@ -825,24 +855,25 @@ def _antigravity_first_prompt(sid: str, fallback_text: str = "") -> str:
                                 clean = re.sub(r"\s*</USER_REQUEST>.*", "", clean, flags=re.DOTALL).strip()
                                 if clean:
                                     return clean[:100]
-                except Exception: pass
+                except Exception as exc:
+                    _ag_log_warn("first-prompt transcript read failed for %s: %s", tfile, exc)
 
     cli_db = ANTIGRAVITY_CLI_DIR / "conversations" / f"{sid}.db"
     if cli_db.exists():
         try:
             con = sqlite3.connect(_sqlite_ro_uri(cli_db), uri=True)
-            rows = con.execute("SELECT step_payload FROM steps WHERE step_type = 14 LIMIT 5").fetchall()
+            rows = con.execute("SELECT step_payload FROM steps WHERE step_type = 14 ORDER BY idx ASC LIMIT 5").fetchall()
             con.close()
             for (payload,) in rows:
                 if payload:
-                    runs = [t.decode("utf-8", "ignore") for t in _AG_TEXT_RE.findall(payload)]
-                    runs = [r for r in runs if not r.lstrip().startswith("{") and not re.match(r"^[a-f0-9\$-]{20,}$", r.strip(), re.IGNORECASE)]
+                    runs = _ag_text_runs(payload)
                     if runs:
                         txt = max(runs, key=len).strip()
                         txt = re.sub(r"^[a-zA-Z]{1,2}\n", "", txt).strip()
                         if txt and not txt.startswith("command(") and not txt.startswith("./Users"):
                             return txt[:100]
-        except Exception: pass
+        except Exception as exc:
+            _ag_log_warn("first-prompt sqlite read failed for %s: %s", cli_db, exc)
 
     return (fallback_text or "Antigravity session")[:100]
 

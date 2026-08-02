@@ -106,6 +106,108 @@ def test_db_meta_regex_and_error_handling():
         assert main._antigravity_cli_meta(Path(d) / "does-not-exist") == {}
 
 
+def test_transcript_trace_pairs_missing_tool_result_ids_and_extracts_prompt():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        sid = "sid-trace"
+        logs = root / "brain" / sid / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript.jsonl").write_text(
+            "\n".join([
+                json.dumps({"type": "USER_INPUT", "content": "<USER_REQUEST>한글 요청</USER_REQUEST>"}),
+                json.dumps({"type": "MODEL_RESPONSE", "content": "진행합니다", "tool_calls": [
+                    {"name": "read_file", "args": {"path": "x"}},
+                ]}),
+                json.dumps({"type": "TOOL_RESULT", "output": "ok"}),
+            ]),
+            encoding="utf-8",
+        )
+        db = root / "session.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE steps (idx integer, step_type integer, step_payload blob)")
+        con.commit()
+        con.close()
+
+        originals = (
+            main.ANTIGRAVITY_BRAIN_DIR,
+            main.ANTIGRAVITY_BRAIN_DIRS,
+            main.ANTIGRAVITY_CLI_DIR,
+        )
+        main.ANTIGRAVITY_BRAIN_DIR = root / "brain"
+        main.ANTIGRAVITY_BRAIN_DIRS = [root / "brain"]
+        main.ANTIGRAVITY_CLI_DIR = root
+        try:
+            events = main._antigravity_cli_trace(db, sid)
+            tool = next(e for e in events if e["message"]["content"][0]["type"] == "tool_use")
+            result = next(e for e in events if e["message"]["content"][0]["type"] == "tool_result")
+            assert tool["message"]["content"][0]["id"] == "call-3"
+            assert result["message"]["content"][0]["tool_use_id"] == "call-3"
+            assert main._antigravity_first_prompt(sid) == "한글 요청"
+        finally:
+            (
+                main.ANTIGRAVITY_BRAIN_DIR,
+                main.ANTIGRAVITY_BRAIN_DIRS,
+                main.ANTIGRAVITY_CLI_DIR,
+            ) = originals
+
+
+def test_first_prompt_sqlite_fallback_is_ordered_by_step_index():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        cli = root / "conversations"
+        cli.mkdir()
+        db = cli / "sid-order.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE steps (idx integer, step_type integer, step_payload blob)")
+        con.executemany(
+            "INSERT INTO steps VALUES (?, ?, ?)",
+            [
+                (20, 14, b"later prompt text"),
+                (10, 14, b"first prompt text"),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        originals = (
+            main.ANTIGRAVITY_BRAIN_DIR,
+            main.ANTIGRAVITY_BRAIN_DIRS,
+            main.ANTIGRAVITY_CLI_DIR,
+        )
+        main.ANTIGRAVITY_BRAIN_DIR = root / "missing-brain"
+        main.ANTIGRAVITY_BRAIN_DIRS = [root / "missing-brain"]
+        main.ANTIGRAVITY_CLI_DIR = root
+        try:
+            assert main._antigravity_first_prompt("sid-order") == "first prompt text"
+        finally:
+            (
+                main.ANTIGRAVITY_BRAIN_DIR,
+                main.ANTIGRAVITY_BRAIN_DIRS,
+                main.ANTIGRAVITY_CLI_DIR,
+            ) = originals
+
+
+def test_text_runs_rejects_hex_uuids_and_json_but_keeps_unicode():
+    # (review #3/#2) `_ag_best_text` must not turn JSON arg objects, bare hex
+    # token/UUID strings, or unframed protobuf numbers into "the best text",
+    # while still surfacing real (incl. multibyte) content.
+    uuidlike = "a" * 32
+    hexid = "9f2c7b4d1e0a4632b5c8d6f7a1e3b4c5d6f7"
+    jsonobj = b'{"path": "/x/y", "mode": "write", "count": 12}'
+    korean = "한글 요청대로 파일을 수정했습니다"
+    # A payload of only hex/UUID + JSON must yield nothing usable.
+    assert main._ag_best_text(uuidlike.encode()) == ""
+    assert main._ag_best_text(hexid.encode()) == ""
+    assert main._ag_best_text(jsonobj) == ""
+    # A hex run embedded next to real text must not hijack the best-text pick.
+    mixed = f"{uuidlike} 실제 작업 내용\n{hexid}".encode()
+    best = main._ag_best_text(mixed)
+    assert best != uuidlike and best != hexid
+    assert "실제 작업 내용" in best
+    # Multibyte Korean is preserved (the reason the regex was widened).
+    assert main._ag_best_text(korean.encode()) == korean
+
+
 def test_projects_excludes_unassigned_sentinel():
     # The Antigravity "unassigned" bucket must never render as a project card,
     # while real workspaces still do. Sessions themselves remain in /sessions.
