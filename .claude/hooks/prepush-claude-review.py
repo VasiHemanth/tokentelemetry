@@ -66,6 +66,7 @@ _SIB = _load_sibling()
 _CODE_SUFFIXES = (
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
     ".json", ".sh", ".bash", ".zsh", ".yml", ".yaml", ".toml",
+    ".rs",
 )
 # Manifests are always interesting (this is how #91's vuln deps slipped in).
 _ALWAYS_REVIEW = ("package.json", "requirements.txt", "pyproject.toml")

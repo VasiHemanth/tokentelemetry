@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TokenTelemetry</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header>
+      <h1>TokenTelemetry</h1>
+      <p class="sub">Menu bar companion</p>
+    </header>
+
+    <section class="card status" id="statusCard">
+      <div class="spend" id="spend">—</div>
+      <div class="status-line"><span class="dot" id="dot"></span><span id="statusText">Loading…</span></div>
+      <div class="row actions">
+        <button id="openDash" class="primary">Open dashboard</button>
+        <button id="restart">Restart services</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>TokenTelemetry checkout</h2>
+      <p class="hint">
+        The folder you cloned the repo into. It must contain
+        <code>bin/cli.js</code>, <code>backend/main.py</code> and
+        <code>frontend/package.json</code>.
+      </p>
+      <div class="row">
+        <input type="text" id="repoPath" placeholder="No folder selected" spellcheck="false" />
+        <button id="pick">Choose…</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Ports</h2>
+      <div class="row grid3">
+        <label>Dashboard<input type="number" id="frontPort" min="1" max="65535" /></label>
+        <label>API<input type="number" id="apiPort" min="1" max="65535" /></label>
+        <label>Refresh (sec)<input type="number" id="pollSecs" min="10" max="3600" /></label>
+      </div>
+      <p class="hint">
+        Today's figure is refreshed on this interval. Each refresh rescans your
+        agent logs, so short intervals cost real work.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Startup</h2>
+      <label class="check"><input type="checkbox" id="autostart" /> Launch TokenTelemetry at login</label>
+      <label class="check"><input type="checkbox" id="startOnLaunch" /> Start the server when this app opens</label>
+    </section>
+
+    <section class="card">
+      <h2>Runtime</h2>
+      <ul class="kv" id="runtime"></ul>
+      <p class="hint">
+        Apps launched at login do not inherit your terminal's PATH, so these are
+        resolved once through a login shell and remembered. Re-detect after
+        changing Node versions.
+      </p>
+      <button id="redetect">Re-detect</button>
+    </section>
+
+    <section class="card">
+      <h2>Server log</h2>
+      <pre id="logs" class="logs">No output yet.</pre>
+    </section>
+
+    <footer>
+      <span id="saveMsg" class="msg"></span>
+      <button id="save" class="primary">Save settings</button>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

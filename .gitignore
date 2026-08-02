@@ -12,6 +12,12 @@ node_modules/
 out/
 *.tsbuildinfo
 
+# --- Rust / tray app ---
+# target/ is gigabytes. Cargo.lock IS committed: this is a binary, not a
+# library, so a reproducible dependency set is the point.
+src-tauri/target/
+src-tauri/gen/
+
 # --- Python / backend ---
 backend/venv/
 # also match a symlinked venv (the dir pattern above doesn't)

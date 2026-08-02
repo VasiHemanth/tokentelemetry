@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the generated Info.plist for macOS bundles.
+
+  LSUIElement marks this an agent app: no Dock icon, no app-switcher entry.
+  The same thing is set at runtime via ActivationPolicy::Accessory, but doing it
+  here as well avoids a Dock icon flashing during launch, which is exactly when
+  a login-launched app is least welcome on screen.
+-->
+<plist version="1.0">
+  <dict>
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>
