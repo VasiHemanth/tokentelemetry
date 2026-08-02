@@ -84,10 +84,11 @@ impl Supervisor {
             return;
         };
 
-        // Nothing of ours is listening, so there is nothing to reap and the
-        // record is just stale. Killing on the strength of a PID alone here is
-        // how you SIGTERM an unrelated process that inherited the number.
-        if port_free(rec.api_port) && port_free(rec.front_port) {
+        // Nothing to signal. Note this is deliberately keyed on the PID and NOT
+        // on "are the ports free": a previous supervisor may have died during
+        // its install phase, before either server bound anything, and it will
+        // happily bind them seconds from now. Free ports do not mean no orphan.
+        if !pid_alive(rec.cli_pid) {
             RuntimeRecord::clear();
             return;
         }
@@ -96,7 +97,7 @@ impl Supervisor {
         // and wrap at pid_max (often 32768) on Linux, and this record routinely
         // survives a reboot — so confirm the process really is our supervisor
         // before signalling it.
-        if !pid_alive(rec.cli_pid) || !pid_is_our_supervisor(rec.cli_pid) {
+        if !pid_is_our_supervisor(rec.cli_pid) {
             self.log(format!(
                 "ignoring recorded pid {} — it is not our supervisor any more",
                 rec.cli_pid
@@ -382,9 +383,24 @@ fn pid_is_our_supervisor(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn pid_is_our_supervisor(pid: u32) -> bool {
-    // tasklist gives the image name only, so this confirms "some node.exe" and
-    // not "our node.exe". Combined with the port check in reap_stale() that is
-    // enough to keep us from killing an unrelated process outright.
+    // Prefer the real command line, which gives the same strength of check as
+    // the Unix path. tasklist alone reports only the image name, so it cannot
+    // tell our node from any other node the user happens to be running.
+    let mut ps = Command::new("powershell");
+    ps.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"),
+    ]);
+    no_window(&mut ps);
+    if let Ok(out) = ps.output() {
+        let line = String::from_utf8_lossy(&out.stdout);
+        if !line.trim().is_empty() {
+            return line.contains("cli.js");
+        }
+    }
+    // PowerShell unavailable or blocked by policy: fall back to the image name.
     tasklist_row(pid)
         .map(|image| image.to_ascii_lowercase().starts_with("node"))
         .unwrap_or(false)
@@ -407,7 +423,11 @@ fn tasklist_row(pid: u32) -> Option<String> {
             continue;
         }
         let image = fields[0].trim_start_matches('"').to_string();
-        let found: u32 = fields[1].trim_matches('"').trim().parse().ok()?;
+        // `continue`, not `?`: a row we cannot parse must not abandon the whole
+        // lookup and report the process missing.
+        let Ok(found) = fields[1].trim_matches('"').trim().parse::<u32>() else {
+            continue;
+        };
         if found == pid {
             return Some(image);
         }

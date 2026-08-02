@@ -480,6 +480,27 @@ fn main() {
             // Clean up after a previous tray process before touching the ports.
             state.sup.lock().unwrap().reap_stale();
 
+            // Re-point the login item at wherever this binary now lives.
+            //
+            // All three platforms record an ABSOLUTE path when autostart is
+            // enabled. Drag the .app from the build folder to /Applications and
+            // the recorded path is dangling — but is_enabled() still reports
+            // true, so Preferences would claim "launch at login: on" while
+            // login silently does nothing. Re-assert on every start.
+            {
+                let al = handle.autolaunch();
+                if al.is_enabled().unwrap_or(false) {
+                    let _ = al.disable();
+                    if let Err(e) = al.enable() {
+                        state
+                            .sup
+                            .lock()
+                            .unwrap()
+                            .log(format!("could not refresh launch-at-login: {e}"));
+                    }
+                }
+            }
+
             let spend_item = MenuItemBuilder::with_id("spend", "Today: —")
                 .enabled(false)
                 .build(app)?;
