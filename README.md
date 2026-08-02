@@ -214,8 +214,9 @@ Per-platform notes:
 | Windows | no | yes | Spend shows in the menu. SmartScreen warns on an unsigned build. |
 | Linux | no | no | Spend shows in the menu. Needs `libayatana-appindicator3-1` and `libwebkit2gtk-4.1-0`; GNOME also needs an AppIndicator extension for any tray icon to appear. |
 
-Only macOS is tested on real hardware today. Windows and Linux are built and
-type-checked in CI but not yet run by a human — bug reports welcome.
+Only macOS is tested on real hardware today. Windows and Linux compile, lint and
+build installers in CI, but nobody has run them on those platforms yet — bug
+reports welcome.
 
 ---
 
