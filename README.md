@@ -177,6 +177,47 @@ TT_IMAGE_TAG=sha-abc1234 make up-prod
 
 `make up` (dev) builds images locally. `make up-prod` pulls pre-built GHCR images and is the faster path on machines where you don't have the source. Because the GHCR images have `TT_API_PORT` baked in, do not override `TT_API_PORT` with `make up-prod`.
 
+### Option 4: Menu bar / system tray app
+
+A small desktop companion that starts the local server for you and keeps today's
+spend in your menu bar. It does not replace the dashboard — clicking through
+opens the same web UI, because the trace view and analytics need real screen
+space. It is a launcher, not a second copy of the app.
+
+It drives the same `bin/cli.js` everything else uses, so it needs a checkout
+already on disk (any of the options above) plus a
+[Rust toolchain](https://rustup.rs) to build:
+
+```bash
+cd tokentelemetry
+npx @tauri-apps/cli@2 build --config src-tauri/tauri.conf.json
+```
+
+The bundle lands in `src-tauri/target/release/bundle/`. On first launch, point it
+at your checkout and tick **Launch TokenTelemetry at login**.
+
+What it gives you:
+
+- **Starts the server on login**, with no terminal window to keep open.
+- **Today's spend in the menu bar** (macOS) and in the menu on every platform.
+  The figure is API-equivalent cost, the same number the dashboard reports, so
+  for subscription agents it is notional rather than money charged.
+- **Direct links** to the dashboard, analytics, local models, and settings.
+- **Attaches instead of colliding.** If you already have a server running from
+  `./start.sh`, it uses that one and leaves it alone when you quit.
+
+Per-platform notes:
+
+| | Menu bar text | Tooltip | Notes |
+|---|---|---|---|
+| macOS | yes | yes | Unsigned build: right-click → Open the first time to get past Gatekeeper. |
+| Windows | no | yes | Spend shows in the menu. SmartScreen warns on an unsigned build. |
+| Linux | no | no | Spend shows in the menu. Needs `libayatana-appindicator3-1` and `libwebkit2gtk-4.1-0`; GNOME also needs an AppIndicator extension for any tray icon to appear. |
+
+Only macOS is tested on real hardware today. Windows and Linux compile, lint and
+build installers in CI, but nobody has run them on those platforms yet — bug
+reports welcome.
+
 ---
 
 ## Updating

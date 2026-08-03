@@ -1,0 +1,116 @@
+name: Tray app
+
+# The tray companion (src-tauri/) is the only compiled artifact in this repo,
+# and its riskiest code is per-platform: process-group teardown, tray title
+# support, autostart. That code cannot be exercised on a single developer
+# machine, so every PR type-checks it on all three targets and a tag builds
+# real installers.
+
+on:
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/tray-build.yml"
+  # Tags named tray-v* produce installers. Nothing else in this repo is
+  # tag-driven, so the prefix keeps the namespace free for future use.
+  #
+  # No `branches`/`paths` filter alongside `tags`: a path filter applies to tag
+  # pushes as well, and a tag push reports no changed paths, so adding one would
+  # mean tag builds never fire.
+  push:
+    tags:
+      - "tray-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            build-essential \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        # The live-backend test is #[ignore]d; CI has no TokenTelemetry server.
+        run: cargo test
+
+  bundle:
+    name: Bundle (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/tray-v') || github.event_name == 'workflow_dispatch'
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            build-essential \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Driven through npx so no @tauri-apps/cli entry is added to the root
+      # package.json — that file is a path trigger for security-audit.yml,
+      # whose `npm ci` would fail against the current zero-dependency lock.
+      - name: Bundle
+        run: npx --yes @tauri-apps/cli@2 build --config src-tauri/tauri.conf.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tray-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.AppImage

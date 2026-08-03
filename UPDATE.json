@@ -1,6 +1,25 @@
 {
   "releases": [
     {
+      "tag": "2026-08-02",
+      "title": "Menu bar app: no terminal to keep open",
+      "highlights": [
+        {
+          "title": "Start TokenTelemetry from your menu bar",
+          "description": "A small desktop companion starts the local server when you log in, so there is no terminal window to leave running. Clicking through opens the same dashboard in your browser — it is a launcher, not a second copy of the app, because the trace view and analytics need real screen space. Build it from your existing checkout with a Rust toolchain; see the README's Quick Start."
+        },
+        {
+          "title": "Today's spend without opening anything",
+          "description": "The menu bar shows what today has cost so far, refreshed every 30 seconds. It is the same API-equivalent figure the dashboard reports, so for subscription agents it is notional rather than money charged. macOS shows it in the bar itself; on Windows and Linux it is the first item in the menu.",
+          "href": "/analytics"
+        },
+        {
+          "title": "It will not fight your existing server",
+          "description": "If a TokenTelemetry server is already running — because you started one with ./start.sh — the app attaches to it instead of starting a second one, and leaves it running when you quit. It also cleans up a server left behind by a previous run rather than silently refusing to start on a busy port."
+        }
+      ]
+    },
+    {
       "tag": "2026-07-30",
       "title": "See what /goal runs actually cost",
       "highlights": [
