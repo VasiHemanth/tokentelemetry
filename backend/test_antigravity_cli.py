@@ -151,6 +151,59 @@ def test_transcript_trace_pairs_missing_tool_result_ids_and_extracts_prompt():
             ) = originals
 
 
+def test_cli_trace_prefers_sqlite_and_falls_back_to_transcript():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        sid = "sid-fallback"
+        # 1. Setup valid SQLite DB with step events
+        db = root / "session.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE steps (idx integer, step_type integer, step_payload blob)")
+        con.executemany(
+            "INSERT INTO steps VALUES (?, ?, ?)",
+            [
+                (1, 14, b"sqlite prompt text"),
+                (2, 21, b"sqlite tool output"),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        # 2. Setup transcript log
+        logs = root / "brain" / sid / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript.jsonl").write_text(
+            json.dumps({"type": "USER_INPUT", "content": "<USER_REQUEST>transcript prompt</USER_REQUEST>"}) + "\n",
+            encoding="utf-8",
+        )
+
+        originals = (
+            main.ANTIGRAVITY_BRAIN_DIR,
+            main.ANTIGRAVITY_BRAIN_DIRS,
+            main.ANTIGRAVITY_CLI_DIR,
+        )
+        main.ANTIGRAVITY_BRAIN_DIR = root / "brain"
+        main.ANTIGRAVITY_BRAIN_DIRS = [root / "brain"]
+        main.ANTIGRAVITY_CLI_DIR = root
+        try:
+            # SQLite DB is valid -> returns SQLite steps (SQLite first)
+            events = main._antigravity_cli_trace(db, sid)
+            assert len(events) == 2
+            assert events[0]["message"]["content"][0]["text"] == "sqlite prompt text"
+
+            # Missing/empty SQLite DB -> falls back to transcript
+            missing_db = root / "nonexistent.db"
+            events_fb = main._antigravity_cli_trace(missing_db, sid)
+            assert len(events_fb) == 1
+            assert events_fb[0]["message"]["content"][0]["text"] == "transcript prompt"
+        finally:
+            (
+                main.ANTIGRAVITY_BRAIN_DIR,
+                main.ANTIGRAVITY_BRAIN_DIRS,
+                main.ANTIGRAVITY_CLI_DIR,
+            ) = originals
+
+
 def test_first_prompt_sqlite_fallback_is_ordered_by_step_index():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
@@ -206,6 +259,26 @@ def test_text_runs_rejects_hex_uuids_and_json_but_keeps_unicode():
     assert "실제 작업 내용" in best
     # Multibyte Korean is preserved (the reason the regex was widened).
     assert main._ag_best_text(korean.encode()) == korean
+
+
+def test_parse_gemini_chat_file_supports_jsonl():
+    with tempfile.TemporaryDirectory() as d:
+        cf = Path(d) / "session-123.jsonl"
+        cf.write_text(
+            "\n".join([
+                json.dumps({"sessionId": "sid-jsonl", "kind": "main", "projectHash": "abc"}),
+                json.dumps({"id": "m1", "type": "user", "content": [{"text": "hello"}]}),
+                json.dumps({"id": "m2", "type": "gemini", "content": "world", "thoughts": [{"subject": "t1"}]}),
+            ]),
+            encoding="utf-8",
+        )
+        parsed = main._parse_gemini_chat_file(cf)
+        assert parsed is not None
+        assert parsed["sessionId"] == "sid-jsonl"
+        assert len(parsed["messages"]) == 2
+        assert parsed["messages"][0]["type"] == "user"
+        assert parsed["messages"][1]["type"] == "gemini"
+        assert parsed["messages"][1]["content"] == "world"
 
 
 def test_projects_excludes_unassigned_sentinel():

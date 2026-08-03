@@ -547,9 +547,9 @@ def _antigravity_infer_project(text: str) -> str:
 def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     import logging
     tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
-    tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
+    tf = sess_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
     if not tf.exists():
-        tf = sess_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+        tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
     if not tf.exists():
         return tkns
         
@@ -718,6 +718,79 @@ def _ag_tool_call(payload: bytes):
     return name, args
 
 
+def _parse_gemini_chat_file(cf: Path) -> Optional[Dict[str, Any]]:
+    """Parse a Gemini/Antigravity chat log file (.json or .jsonl) into a normalized session dict."""
+    try:
+        with open(cf, "r", encoding="utf-8", errors="replace") as f:
+            raw = f.read().strip()
+        if not raw:
+            return None
+        # Try reading as single JSON object first
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and "sessionId" in data:
+                return data
+        except Exception:
+            pass
+
+        # Read as JSON Lines (.jsonl)
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        header: Dict[str, Any] = {}
+        messages: List[Dict[str, Any]] = []
+        for i, line in enumerate(lines):
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if "$set" in entry:
+                if isinstance(entry.get("$set"), dict) and "lastUpdated" in entry["$set"] and header:
+                    header["lastUpdated"] = entry["$set"]["lastUpdated"]
+                continue
+            if "sessionId" in entry and ("kind" in entry or "projectHash" in entry):
+                header = entry
+                continue
+
+            msg_type = entry.get("type", "unknown")
+            role = "user" if msg_type in ("user", "human") else ("gemini" if msg_type in ("gemini", "assistant", "model") else msg_type)
+            ts_str = entry.get("timestamp")
+
+            sid_str = header.get("sessionId", "msg")
+            msg: Dict[str, Any] = {
+                "id": entry.get("id", f"{sid_str}-{i}"),
+                "type": role,
+                "role": role,
+                "content": entry.get("content", ""),
+            }
+            if ts_str:
+                msg["timestamp"] = ts_str
+            if "thoughts" in entry:
+                msg["thoughts"] = entry["thoughts"]
+            if "toolCalls" in entry:
+                msg["toolCalls"] = entry["toolCalls"]
+            if "model" in entry:
+                msg["model"] = entry["model"]
+            if "tokens" in entry:
+                msg["tokens"] = entry["tokens"]
+            messages.append(msg)
+
+        if not header and not messages:
+            return None
+
+        return {
+            "sessionId": header.get("sessionId", ""),
+            "projectHash": header.get("projectHash", ""),
+            "startTime": header.get("startTime"),
+            "lastUpdated": header.get("lastUpdated"),
+            "kind": header.get("kind", "main"),
+            "messages": messages,
+        }
+    except Exception as exc:
+        _ag_log_warn("failed to parse gemini chat file %s: %s", cf, exc)
+        return None
+
+
 def _ag_event(role: str, content: list, sid: str, idx: int, order: int) -> Dict[str, Any]:
     return {
         "id": f"{sid}-step-{idx}",
@@ -729,11 +802,55 @@ def _ag_event(role: str, content: list, sid: str, idx: int, order: int) -> Dict[
 
 
 def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
-    """Build a Claude-format per-step trace from an agy session's transcript log or SQLite steps."""
-    # First, check if structured transcript.jsonl log exists in brain/
-    for brain_root in [ANTIGRAVITY_BRAIN_DIR] + list(ANTIGRAVITY_BRAIN_DIRS):
+    """Build a Claude-format per-step trace from an agy session's SQLite steps or transcript log."""
+    # Try SQLite steps parsing first
+    if db_path and db_path.exists():
+        try:
+            con = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True)
+            rows = con.execute(
+                "SELECT idx, step_type, step_payload FROM steps ORDER BY idx"
+            ).fetchall()
+            con.close()
+
+            msgs: List[Dict[str, Any]] = []
+            order = 0
+            for idx, stype, payload in rows:
+                if stype in _AG_STEP_SKIP or not payload:
+                    continue
+                text = _ag_best_text(payload)
+                if stype == _AG_STEP_USER:
+                    if not text:
+                        continue
+                    order += 1
+                    msgs.append(_ag_event("user", [{"type": "text", "text": text}], session_id, idx, order))
+                elif stype == _AG_STEP_TOOL_OUTPUT:
+                    if not text:
+                        continue
+                    order += 1
+                    msgs.append(_ag_event("user", [{"type": "tool_result", "content": text[:6000]}], session_id, idx, order))
+                else:
+                    tool, args = _ag_tool_call(payload)
+                    # Reasoning narrative and the tool call are split into separate steps
+                    # so both are counted and render distinctly (thinking → reasoning, the
+                    # call → tool).
+                    if stype == _AG_STEP_REASONING and text and not text.lstrip().startswith(("{", "<")):
+                        order += 1
+                        msgs.append(_ag_event("assistant", [{"type": "thinking", "text": text}], session_id, idx, order))
+                    if tool:
+                        order += 1
+                        msgs.append(_ag_event("assistant", [{"type": "tool_use", "name": tool, "input": args or {"preview": text[:600]}}], session_id, idx, order))
+                    elif stype != _AG_STEP_REASONING and text:
+                        order += 1
+                        msgs.append(_ag_event("assistant", [{"type": "text", "text": text}], session_id, idx, order))
+            if msgs:
+                return msgs
+        except Exception as exc:
+            _ag_log_warn("sqlite trace parse failed for %s: %s", db_path, exc)
+
+    # Fallback to structured transcript.jsonl log in brain/
+    for brain_root in ANTIGRAVITY_BRAIN_DIRS:
         b_dir = brain_root / session_id / ".system_generated" / "logs"
-        for tname in ["transcript.jsonl", "transcript_full.jsonl"]:
+        for tname in ["transcript_full.jsonl", "transcript.jsonl"]:
             tfile = b_dir / tname
             if tfile.exists():
                 msgs: List[Dict[str, Any]] = []
@@ -793,55 +910,14 @@ def _antigravity_cli_trace(db_path: Path, session_id: str) -> List[Dict[str, Any
                 except Exception as exc:
                     _ag_log_warn("transcript parse failed for %s: %s", tfile, exc)
 
-    # Fallback to SQLite steps parsing
-    try:
-        con = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True)
-    except sqlite3.Error:
-        return []
-    try:
-        rows = con.execute(
-            "SELECT idx, step_type, step_payload FROM steps ORDER BY idx"
-        ).fetchall()
-    except sqlite3.Error:
-        return []
-    finally:
-        con.close()
-
-    msgs: List[Dict[str, Any]] = []
-    order = 0
-    for idx, stype, payload in rows:
-        if stype in _AG_STEP_SKIP or not payload:
-            continue
-        text = _ag_best_text(payload)
-        if stype == _AG_STEP_USER:
-            if not text:
-                continue
-            order += 1
-            msgs.append(_ag_event("user", [{"type": "text", "text": text}], session_id, idx, order))
-        elif stype == _AG_STEP_TOOL_OUTPUT:
-            if not text:
-                continue
-            order += 1
-            msgs.append(_ag_event("user", [{"type": "tool_result", "content": text[:6000]}], session_id, idx, order))
-        else:
-            tool, args = _ag_tool_call(payload)
-            if stype == _AG_STEP_REASONING and text and not text.lstrip().startswith(("{", "<")):
-                order += 1
-                msgs.append(_ag_event("assistant", [{"type": "thinking", "text": text}], session_id, idx, order))
-            if tool:
-                order += 1
-                msgs.append(_ag_event("assistant", [{"type": "tool_use", "name": tool, "input": args or {"preview": text[:600]}}], session_id, idx, order))
-            elif stype != _AG_STEP_REASONING and text:
-                order += 1
-                msgs.append(_ag_event("assistant", [{"type": "text", "text": text}], session_id, idx, order))
-    return msgs
+    return []
 
 
 def _antigravity_first_prompt(sid: str, fallback_text: str = "") -> str:
     """Extract the first user prompt for an Antigravity session to use as display intent."""
-    for brain_root in [ANTIGRAVITY_BRAIN_DIR] + list(ANTIGRAVITY_BRAIN_DIRS):
+    for brain_root in ANTIGRAVITY_BRAIN_DIRS:
         b_dir = brain_root / sid / ".system_generated" / "logs"
-        for tname in ["transcript.jsonl", "transcript_full.jsonl"]:
+        for tname in ["transcript_full.jsonl", "transcript.jsonl"]:
             tfile = b_dir / tname
             if tfile.exists():
                 try:
@@ -862,7 +938,10 @@ def _antigravity_first_prompt(sid: str, fallback_text: str = "") -> str:
     if cli_db.exists():
         try:
             con = sqlite3.connect(_sqlite_ro_uri(cli_db), uri=True)
-            rows = con.execute("SELECT step_payload FROM steps WHERE step_type = 14 ORDER BY idx ASC LIMIT 5").fetchall()
+            rows = con.execute(
+                "SELECT step_payload FROM steps WHERE step_type = ? ORDER BY idx ASC LIMIT 5",
+                (_AG_STEP_USER,),
+            ).fetchall()
             con.close()
             for (payload,) in rows:
                 if payload:
@@ -3657,7 +3736,9 @@ def _antigravity_subagent_children(sid: str) -> List[str]:
     INVOKE_SUBAGENT steps in its brain transcript. Empty when none/no transcript."""
     kids: List[str] = []
     for brain_dir in ANTIGRAVITY_BRAIN_DIRS:
-        tpath = brain_dir / sid / ".system_generated" / "logs" / "transcript.jsonl"
+        tpath = brain_dir / sid / ".system_generated" / "logs" / "transcript_full.jsonl"
+        if not tpath.exists():
+            tpath = brain_dir / sid / ".system_generated" / "logs" / "transcript.jsonl"
         try:
             if not tpath.exists():
                 continue
@@ -5155,9 +5236,11 @@ def _scan_sessions_sync():
             for _td in (GEMINI_DIR / "tmp").glob("*"):
                 _cd = _td / "chats"
                 if _cd.is_dir():
-                    for _cf in _cd.glob("*.json"):
+                    for _cf in list(_cd.glob("*.json")) + list(_cd.glob("*.jsonl")):
                         try:
-                            _all_chat_sids.add(json.loads(_cf.read_text(encoding="utf-8", errors="replace")).get("sessionId") or "")
+                            _d = _parse_gemini_chat_file(_cf)
+                            if _d and _d.get("sessionId"):
+                                _all_chat_sids.add(_d["sessionId"])
                         except Exception: pass
             _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
             _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
@@ -5175,79 +5258,77 @@ def _scan_sessions_sync():
                     project_path = apply_alias(gemini_slug_to_path.get(slug, f"System / {slug[:8]}"))
                 chat_dir = tmp_dir / "chats"
                 if chat_dir.exists():
-                    for cf in chat_dir.glob("*.json"):
+                    for cf in list(chat_dir.glob("*.json")) + list(chat_dir.glob("*.jsonl")):
                         try:
-                            with open(cf, "r", encoding="utf-8", errors="replace") as f:
-                                data = json.load(f); sid = data.get("sessionId")
-                                if not sid: continue
-                                # kind="main" means Gemini CLI; absent/other means Antigravity
-                                session_kind = data.get("kind")
-                                effective_agent = agent_type if session_kind == "main" else "antigravity"
-                                ts = _aware(datetime.fromisoformat(data.get("lastUpdated").replace('Z', '+00:00'))) if data.get("lastUpdated") else _file_mtime_utc(cf)
-                                tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-                                mcp_tools = []; has_plan = False; first_msg = ""; plans = []
-                                tool_counts: Dict[str, int] = {}
-                                skill_counts: Dict[str, int] = {}
-                                has_user = False
-                                for msg in data.get("messages", []):
-                                    if msg.get("type") == "user":
-                                        has_user = True
-                                        txt = msg.get("content")[0].get("text", "") if isinstance(msg.get("content"), list) else str(msg.get("content"))
-                                        if not first_msg: first_msg = txt
-                                        if "/plan" in txt: has_plan = True
-                                    if msg.get("type") == "gemini":
-                                        mt = msg.get("tokens", {})
-                                        tokens["input"] += mt.get("input", 0); tokens["output"] += mt.get("output", 0)
-                                        tokens["cached"] += mt.get("cached", 0); tokens["total"] += mt.get("total", 0)
-                                    if "toolCalls" in msg:
-                                        for tc in msg["toolCalls"]:
-                                            if tc.get("name") not in mcp_tools: mcp_tools.append(tc.get("name"))
-                                            _count_tool(tool_counts, tc.get("name"))
-                                            # Gemini's structured skill signal.
-                                            if tc.get("name") == "activate_skill":
-                                                _sk = (tc.get("args") or {}).get("name")
-                                                if _sk:
-                                                    skill_counts[_sk] = skill_counts.get(_sk, 0) + 1
-                                            if tc.get("name") == "exit_plan_mode":
-                                                plan_text = ""
-                                                pp = (tc.get("args") or {}).get("plan_path")
-                                                if pp:
-                                                    try: 
-                                                        with open(pp, "r", encoding="utf-8", errors="replace") as pf:
-                                                            plan_text = pf.read()
-                                                    except Exception: plan_text = f"(plan stored at {pp})"
-                                                if not plan_text:
-                                                    plan_text = (tc.get("args") or {}).get("plan") or tc.get("resultDisplay") or ""
-                                                if plan_text:
-                                                    has_plan = True
-                                                    plans.append({"session_id": sid, "agent": effective_agent, "timestamp": ts, "content": plan_text})
+                            data = _parse_gemini_chat_file(cf)
+                            if not data: continue
+                            sid = data.get("sessionId")
+                            # kind="main" means Gemini CLI; absent/other means Antigravity
+                            session_kind = data.get("kind")
+                            effective_agent = agent_type if session_kind == "main" else "antigravity"
+                            ts = _aware(datetime.fromisoformat(data.get("lastUpdated").replace('Z', '+00:00'))) if data.get("lastUpdated") else _file_mtime_utc(cf)
+                            tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+                            mcp_tools = []; has_plan = False; first_msg = ""; plans = []
+                            tool_counts: Dict[str, int] = {}
+                            skill_counts: Dict[str, int] = {}
+                            for msg in data.get("messages", []):
+                                if msg.get("type") == "user":
+                                    has_user = True
+                                    txt = msg.get("content")[0].get("text", "") if isinstance(msg.get("content"), list) else str(msg.get("content"))
+                                    if not first_msg: first_msg = txt
+                                    if "/plan" in txt: has_plan = True
+                                if msg.get("type") == "gemini":
+                                    mt = msg.get("tokens", {})
+                                    tokens["input"] += mt.get("input", 0); tokens["output"] += mt.get("output", 0)
+                                    tokens["cached"] += mt.get("cached", 0); tokens["total"] += mt.get("total", 0)
+                                if "toolCalls" in msg:
+                                    for tc in msg["toolCalls"]:
+                                        if tc.get("name") not in mcp_tools: mcp_tools.append(tc.get("name"))
+                                        _count_tool(tool_counts, tc.get("name"))
+                                        # Gemini's structured skill signal.
+                                        if tc.get("name") == "activate_skill":
+                                            _sk = (tc.get("args") or {}).get("name")
+                                            if _sk:
+                                                skill_counts[_sk] = skill_counts.get(_sk, 0) + 1
+                                        if tc.get("name") == "exit_plan_mode":
+                                            plan_text = ""
+                                            pp = (tc.get("args") or {}).get("plan_path")
+                                            if pp:
+                                                try: 
+                                                    with open(pp, "r", encoding="utf-8", errors="replace") as pf:
+                                                        plan_text = pf.read()
+                                                except Exception: plan_text = f"(plan stored at {pp})"
+                                            if not plan_text:
+                                                plan_text = (tc.get("args") or {}).get("plan") or tc.get("resultDisplay") or ""
+                                            if plan_text:
+                                                has_plan = True
+                                                plans.append({"session_id": sid, "agent": effective_agent, "timestamp": ts, "content": plan_text})
 
-                                # Skip "ghost" sessions
-                                if not has_user and tokens["total"] == 0 and not mcp_tools:
-                                    continue
+                            # Skip "ghost" sessions
+                            if not has_user and tokens["total"] == 0 and not mcp_tools:
+                                continue
 
-                                model = None
-                                for msg in data.get("messages", []):
-                                    if msg.get("model"): model = msg.get("model"); break
-                                    if msg.get("modelVersion"): model = msg.get("modelVersion"); break
+                            model = None
+                            for msg in data.get("messages", []):
+                                if msg.get("model"): model = msg.get("model"); break
+                                if msg.get("modelVersion"): model = msg.get("modelVersion"); break
 
-                                # Discover Antigravity chat-level media artifacts
-                                artifacts = []
-                                try:
-                                    art_dir = chat_dir.parent / "artifacts"
-                                    if art_dir.exists():
-                                        for af in art_dir.iterdir():
-                                            if af.suffix.lower() in (".mp4", ".mov"): artifacts.append({"name": af.name, "path": str(af), "type": "video"})
-                                            elif af.suffix.lower() in (".png", ".webp", ".jpg", ".jpeg"): artifacts.append({"name": af.name, "path": str(af), "type": "image"})
-                                except Exception: pass
+                            # Discover Antigravity chat-level media artifacts
+                            artifacts = []
+                            try:
+                                art_dir = chat_dir.parent / "artifacts"
+                                if art_dir.exists():
+                                    for af in art_dir.iterdir():
+                                        if af.suffix.lower() in (".mp4", ".mov"): artifacts.append({"name": af.name, "path": str(af), "type": "video"})
+                                        elif af.suffix.lower() in (".png", ".webp", ".jpg", ".jpeg"): artifacts.append({"name": af.name, "path": str(af), "type": "image"})
+                            except Exception: pass
 
-                                # Antigravity/Gemini token records expose no cache-write field; nothing to pass.
-                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
-                                if sid in _seen_antigravity: continue
-                                _seen_antigravity.add(sid)
-                                _g_sess = {"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "antigravity_source": _ag_surface.get(sid), "cost": tokens["cost"]}
-                                _attach_tool_usage(_g_sess, tool_counts, skill_counts)
-                                sessions.append(_g_sess)
+                            # Antigravity/Gemini token records expose no cache-write field; nothing to pass.
+                            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                            if sid in _seen_antigravity: continue
+                            _g_sess = {"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "antigravity_source": _ag_surface.get(sid), "cost": tokens["cost"]}
+                            _attach_tool_usage(_g_sess, tool_counts, skill_counts)
+                            sessions.append(_g_sess)
                         except Exception: continue
                 # Scan logs.json for Antigravity sessions that have no chat JSON file
                 _logs_file = tmp_dir / "logs.json"
@@ -6639,21 +6720,24 @@ async def get_session_detail(session_id: str, agent: str):
                 "kind": "antigravity_brain",
                 "messages": messages,
             }
-        files = list((GEMINI_DIR / "tmp").glob(f"**/chats/session-*{session_id[:8]}*.json")) or list((GEMINI_DIR / "tmp").glob(f"**/chats/*{session_id}*.json"))
+        files = (
+            list((GEMINI_DIR / "tmp").glob(f"**/chats/session-*{session_id[:8]}*.json*"))
+            or list((GEMINI_DIR / "tmp").glob(f"**/chats/*{session_id}*.json*"))
+        )
         if files:
-            with open(files[0], "r", encoding="utf-8", errors="replace") as f:
-                data = json.load(f)
+            data = _parse_gemini_chat_file(files[0])
+            if data:
                 # Add normalized_timestamp to messages
                 for msg in data.get("messages", []):
-                    if msg.get("timestamp"):
+                    if msg.get("timestamp") and "normalized_timestamp" not in msg:
                         try:
                             ts = _aware(datetime.fromisoformat(msg["timestamp"].replace('Z', '+00:00')))
                             msg["normalized_timestamp"] = ts.timestamp() * 1000
                         except Exception: pass
                 return data
-        # Antigravity log-only sessions: synthesize messages from the per-tmp-dir
+        # Antigravity / Gemini log-only sessions: synthesize messages from the per-tmp-dir
         # logs.json that records every user/assistant turn with its sessionId.
-        if agent == "antigravity":
+        if agent in ("antigravity", "gemini"):
             log_messages = []
             log_base_ts = None
             for log_file in (GEMINI_DIR / "tmp").glob("*/logs.json"):
