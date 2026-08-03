@@ -1,0 +1,220 @@
+/* Panel styling.
+ *
+ * Colour decisions worth keeping:
+ * - Every bar in this panel is ONE hue. Identity is carried by the text label
+ *   next to each bar, never by hue, so there is no categorical palette to get
+ *   wrong and nothing here can fail a colour-vision check. Today's bar is a
+ *   darker step of the same hue plus a label, so it reads as emphasis rather
+ *   than as a second category.
+ * - Numbers and labels wear ink tokens, never the mark colour.
+ * - Dark mode uses selected steps against the dark surface, not an auto-flip.
+ */
+
+:root {
+  --surface: #ffffff;
+  --raised: #f8fafc;
+  --ink: #0f172a;
+  --ink-2: #475569;
+  --muted: #78849a;
+  --line: #e6e9ef;
+  --accent: #2563eb;
+  --bar: #b9cffb;
+  --bar-today: #2563eb;
+  --good: #15803d;
+  --warn: #b45309;
+  --bad: #dc2626;
+  --shadow: 0 12px 34px rgba(15, 23, 42, .18), 0 2px 6px rgba(15, 23, 42, .10);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #171a21;
+    --raised: #1d222b;
+    --ink: #e8eaee;
+    --ink-2: #b6bdc9;
+    --muted: #94a0b3;
+    --line: #2a3140;
+    --accent: #60a5fa;
+    --bar: #2f4674;
+    --bar-today: #60a5fa;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --shadow: 0 14px 40px rgba(0, 0, 0, .55);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: transparent;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sheet {
+  margin: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: -.01em; }
+.mark { width: 16px; height: 16px; color: var(--accent); flex: none; }
+.state { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.running { background: var(--good); }
+.dot.starting { background: var(--warn); }
+.dot.error { background: var(--bad); }
+
+/* ------------------------------------------------------------------ hero */
+
+/* A single headline number is a stat tile, not a chart. Tabular figures stop
+   the amount jittering horizontally as it ticks up. */
+.hero { padding: 16px 14px 12px; text-align: center; }
+.amount {
+  font-size: 34px;
+  font-weight: 650;
+  letter-spacing: -.025em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+}
+.sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+/* -------------------------------------------------------------- sparkline */
+
+.spark { padding: 4px 14px 12px; }
+.spark-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--ink-2); margin-bottom: 8px;
+}
+.muted { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* Bars sit on a shared baseline with a 2px surface gap between them. */
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  /* padding-top reserves room for today's direct label so it cannot collide
+     with the section header above (box-sizing keeps the plot area at 54px). */
+  height: 70px;
+  padding-top: 16px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--line);
+}
+.bar-col {
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  cursor: default;
+  position: relative;
+}
+.bar {
+  width: 100%;
+  background: var(--bar);
+  /* Rounded data-end only; the baseline end stays square so the bar is
+     visually anchored to the axis. */
+  border-radius: 4px 4px 0 0;
+  min-height: 2px;
+  transition: background .12s ease;
+}
+.bar-col.today .bar { background: var(--bar-today); }
+.bar-col:hover .bar { background: var(--accent); }
+
+/* Direct label on today only. Labelling all seven turns the chart into a table. */
+.bar-tag {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.spark-axis {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--muted); margin-top: 5px;
+}
+
+/* ----------------------------------------------------------------- tiles */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.tile { background: var(--surface); padding: 9px 10px; text-align: center; }
+.tile-k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.tile-v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tile-n { font-size: 10px; color: var(--muted); }
+
+/* ------------------------------------------------------------------ list */
+
+.list { padding: 11px 14px 4px; }
+.list-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--ink-2); margin-bottom: 7px;
+}
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 3px 0; }
+.row-name { font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-val { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+/* The track makes each row's share readable against the leader without a second
+   axis or a percentage label on every line. */
+.track { grid-column: 1 / -1; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.track > i { display: block; height: 100%; background: var(--bar-today); border-radius: 2px; }
+.empty { color: var(--muted); font-size: 12px; padding: 2px 0 6px; }
+
+/* ----------------------------------------------------------------- chips */
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 14px 10px; }
+.chip {
+  font-size: 10.5px; color: var(--ink-2);
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 8px;
+}
+
+/* ----------------------------------------------------------------- footer */
+
+.foot {
+  display: flex; gap: 6px; padding: 9px 14px 12px;
+  border-top: 1px solid var(--line);
+}
+.foot button {
+  flex: 1;
+  font: inherit; font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  color: var(--ink);
+  cursor: pointer;
+}
+.foot button:hover { border-color: var(--muted); }
+.foot button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.foot button.primary:hover { opacity: .92; }
+.foot button#prefs { flex: 0 0 34px; }
+
+.err { padding: 22px 16px; text-align: center; color: var(--muted); font-size: 12px; }

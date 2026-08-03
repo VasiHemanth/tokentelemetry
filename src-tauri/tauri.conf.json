@@ -8,7 +8,22 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
+      {
+        "label": "panel",
+        "url": "panel.html",
+        "title": "TokenTelemetry",
+        "width": 380,
+        "height": 560,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true
+      },
       {
         "label": "prefs",
         "title": "TokenTelemetry",

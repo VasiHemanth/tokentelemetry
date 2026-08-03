@@ -12,7 +12,7 @@ rust-version = "1.77"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2.5"

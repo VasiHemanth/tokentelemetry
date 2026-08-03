@@ -3,6 +3,7 @@
 
 mod config;
 mod detect;
+mod panel;
 mod poller;
 mod supervisor;
 
@@ -350,6 +351,60 @@ fn restart_services(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Everything the dropdown panel renders.
+///
+/// Two `/analytics` calls, issued only when the panel is actually opened, so
+/// the 30s background poll stays exactly as cheap as it was.
+#[tauri::command]
+async fn panel_data(app: AppHandle) -> Result<panel::PanelData, String> {
+    let (api_port, status) = {
+        let state = app.state::<AppState>();
+        let cfg = state.cfg.lock().unwrap();
+        let sup = state.sup.lock().unwrap();
+        (cfg.api_port, sup.status.clone())
+    };
+    if !matches!(status, Status::Running | Status::Attached) {
+        return Err(format!(
+            "no server to read from ({})",
+            status_label(&status, false)
+        ));
+    }
+
+    let today_local = chrono::Local::now().date_naive();
+    let today = today_local.format("%Y-%m-%d").to_string();
+    let from = panel::window_start(today_local);
+
+    let today_json = poller::analytics_window(api_port, &today, &today).await?;
+    let week_json = poller::analytics_window(api_port, &from, &today).await?;
+    Ok(panel::build(&today_json, &week_json, &today))
+}
+
+/// Show the panel anchored under the tray icon.
+///
+/// `rect` is where the OS actually drew the icon, which is the only reliable
+/// anchor: the menu bar reflows as other apps come and go.
+fn toggle_panel(app: &AppHandle, anchor: Option<(f64, f64, f64)>) {
+    let Some(win) = app.get_webview_window("panel") else {
+        return;
+    };
+    if win.is_visible().unwrap_or(false) {
+        let _ = win.hide();
+        return;
+    }
+    if let Some((x, y, w)) = anchor {
+        if let Ok(size) = win.outer_size() {
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let width = size.width as f64 / scale;
+            // Centre under the icon, then nudge back on-screen if the icon sits
+            // near the right edge of the display.
+            let left = x + w / 2.0 - width / 2.0;
+            let _ = win.set_position(tauri::LogicalPosition::new(left.max(8.0), y + 6.0));
+        }
+    }
+    let _ = win.show();
+    let _ = win.set_focus();
+}
+
 /// Quit from the Preferences window.
 ///
 /// Without this there is no way out on a desktop with no system tray — stock
@@ -364,6 +419,36 @@ fn quit_app(app: AppHandle) {
 #[tauri::command]
 fn open_dashboard(app: AppHandle) {
     open_route(&app, "/");
+}
+
+/// Open a dashboard route from the panel.
+///
+/// The route is matched against a fixed allow-list rather than interpolated, so
+/// nothing the webview sends can steer the browser somewhere unintended.
+#[tauri::command]
+fn open_route_cmd(app: AppHandle, route: String) {
+    const ALLOWED: [&str; 5] = ["/", "/analytics", "/local-models", "/settings", "/projects"];
+    if let Some(r) = ALLOWED.iter().find(|r| **r == route) {
+        open_route(&app, r);
+    }
+    if let Some(w) = app.get_webview_window("panel") {
+        let _ = w.hide();
+    }
+}
+
+#[tauri::command]
+fn show_prefs_cmd(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("panel") {
+        let _ = w.hide();
+    }
+    show_prefs(&app);
+}
+
+#[tauri::command]
+fn hide_panel(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("panel") {
+        let _ = w.hide();
+    }
 }
 
 // ------------------------------------------------------------------- poll
@@ -458,6 +543,10 @@ fn main() {
             restart_services,
             open_dashboard,
             quit_app,
+            panel_data,
+            open_route_cmd,
+            show_prefs_cmd,
+            hide_panel,
         ])
         .setup(|app| {
             // No Dock icon and no app-switcher entry: this is a menu bar app.
@@ -554,6 +643,26 @@ fn main() {
                 .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("TokenTelemetry")
                 .menu(&menu)
+                // Left click opens the panel; the menu moves to right click.
+                // Without this the menu swallows the click and the panel can
+                // never be reached.
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        rect,
+                        ..
+                    } = event
+                    {
+                        let pos = rect.position.to_logical::<f64>(1.0);
+                        let size = rect.size.to_logical::<f64>(1.0);
+                        toggle_panel(
+                            tray.app_handle(),
+                            Some((pos.x, pos.y + size.height, size.width)),
+                        );
+                    }
+                })
                 .on_menu_event(|app, event| {
                     let app = app.clone();
                     match event.id().as_ref() {

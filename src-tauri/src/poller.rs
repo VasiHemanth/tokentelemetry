@@ -120,6 +120,31 @@ pub async fn today_spend(port: u16) -> Result<(String, f64), String> {
     Ok((today, parsed.total.map(|t| t.cost).unwrap_or(0.0)))
 }
 
+/// Fetch a whole analytics window as raw JSON, for the richer panel view.
+///
+/// Always one request per window. Never N single-day requests: a cache entry
+/// built while a day was still "today" (and so carried the live-scan merge)
+/// keeps being served for that day afterwards, which measured 22x high on a
+/// historical day. A single multi-day response is internally consistent.
+pub async fn analytics_window(
+    port: u16,
+    from: &str,
+    to: &str,
+) -> Result<serde_json::Value, String> {
+    let resp = client(ANALYTICS_TIMEOUT)?
+        .get(format!("http://127.0.0.1:{port}/analytics"))
+        .query(&[("from", from), ("to", to), ("granularity", "day")])
+        .send()
+        .await
+        .map_err(|e| format!("analytics request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("analytics returned {}", resp.status().as_u16()));
+    }
+    resp.json()
+        .await
+        .map_err(|e| format!("analytics response was not readable: {e}"))
+}
+
 /// Menu-bar form: short, because a long macOS title eats the menu bar.
 pub fn format_short(cost: f64) -> String {
     if cost >= 1000.0 {

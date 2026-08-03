@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TokenTelemetry</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <div class="sheet">
+      <header class="head">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path
+              d="M27 16h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L14.24 6.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 9 16H7"
+              fill="none" stroke="currentColor" stroke-width="2.4"
+              stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>TokenTelemetry</span>
+        </div>
+        <span class="state" id="state"><i class="dot" id="dot"></i><span id="stateText">—</span></span>
+      </header>
+
+      <section class="hero">
+        <div class="amount" id="amount">—</div>
+        <div class="sub">spent today &middot; API-equivalent</div>
+      </section>
+
+      <section class="spark">
+        <div class="spark-head">
+          <span>Last 7 days</span>
+          <span id="weekTotal" class="muted">—</span>
+        </div>
+        <div class="bars" id="bars"></div>
+        <div class="spark-axis"><span id="axisFrom"></span><span id="axisTo">today</span></div>
+      </section>
+
+      <section class="tiles">
+        <div class="tile">
+          <div class="tile-k">Tokens</div>
+          <div class="tile-v" id="tokens">—</div>
+          <div class="tile-n" id="tokensSub">&nbsp;</div>
+        </div>
+        <div class="tile">
+          <div class="tile-k">Cache hit</div>
+          <div class="tile-v" id="cache">—</div>
+          <div class="tile-n" id="cacheSub">&nbsp;</div>
+        </div>
+        <div class="tile">
+          <div class="tile-k">Agents</div>
+          <div class="tile-v" id="agentCount">—</div>
+          <div class="tile-n" id="agentSub">&nbsp;</div>
+        </div>
+      </section>
+
+      <section class="list" id="agentsSection">
+        <div class="list-head">By agent<span class="muted">today</span></div>
+        <ul class="rows" id="agents"></ul>
+      </section>
+
+      <section class="list" id="modelsSection">
+        <div class="list-head">By model<span class="muted">today</span></div>
+        <ul class="rows" id="models"></ul>
+      </section>
+
+      <div class="chips" id="chips"></div>
+
+      <footer class="foot">
+        <button data-route="/" class="primary">Dashboard</button>
+        <button data-route="/analytics">Analytics</button>
+        <button id="prefs" title="Preferences">&#9881;</button>
+      </footer>
+    </div>
+    <script src="panel.js"></script>
+  </body>
+</html>
