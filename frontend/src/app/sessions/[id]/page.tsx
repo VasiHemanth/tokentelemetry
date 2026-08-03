@@ -331,6 +331,7 @@ export default function SessionDetailPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [projectConfig, setProjectConfig] = useState<any>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   useEffect(() => {
     if (id && agent) {
@@ -628,6 +629,21 @@ export default function SessionDetailPage() {
     });
   };
 
+  // Sync active step and inspector on dialogue card click
+  const handleStepCardClick = (e: React.MouseEvent, idx: number) => {
+    if ((e.target as HTMLElement).closest("button, a, summary, input, textarea, select, [role='button']")) {
+      return;
+    }
+    const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    if (selection && selection.toString().trim().length > 0) {
+      return;
+    }
+    setActiveStep(idx);
+    requestAnimationFrame(() => {
+      stepIndexRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
+
   // Waterfall Logic
   const waterfallData = useMemo(() => {
      const tools: any[] = [];
@@ -857,7 +873,9 @@ export default function SessionDetailPage() {
              </div>
              <div className="py-1">
                 {steps.map((s) => (
-                   <StepRow key={s.idx} step={s} active={activeStep === s.idx} beyond={s.idx >= playbackIndex} onClick={() => jumpTo(s.idx)} />
+                   <div key={s.idx} ref={(el) => { stepIndexRefs.current[s.idx] = el; }}>
+                      <StepRow step={s} active={activeStep === s.idx} beyond={s.idx >= playbackIndex} onClick={() => jumpTo(s.idx)} />
+                   </div>
                 ))}
              </div>
           </aside>
@@ -908,7 +926,7 @@ export default function SessionDetailPage() {
                       const kind = eventKind(event);
 
                       return (
-                         <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
+                         <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
                             <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} tokens={stepTokens[idx]} reasoningEffort={stepReasoningEffort[idx]} />
                          </div>
                       );
@@ -926,7 +944,7 @@ export default function SessionDetailPage() {
                          if (!isReasoning && !isTool && !hasThinkingPart) return null;
                          const kind = eventKind(event);
                          return (
-                            <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
+                            <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
                                <EventCard event={event} mode="brain" agent={agent} />
                             </div>
                          );
