@@ -5263,12 +5263,17 @@ def _scan_sessions_sync():
                             data = _parse_gemini_chat_file(cf)
                             if not data: continue
                             sid = data.get("sessionId")
+                            if not sid: continue
                             # kind="main" means Gemini CLI; absent/other means Antigravity
                             session_kind = data.get("kind")
                             effective_agent = agent_type if session_kind == "main" else "antigravity"
                             ts = _aware(datetime.fromisoformat(data.get("lastUpdated").replace('Z', '+00:00'))) if data.get("lastUpdated") else _file_mtime_utc(cf)
                             tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                             mcp_tools = []; has_plan = False; first_msg = ""; plans = []
+                            # Must reset per file: this is a plain function-scope local, so a
+                            # stale True from an earlier chat file would disable the ghost
+                            # filter below for every remaining file in the scan.
+                            has_user = False
                             tool_counts: Dict[str, int] = {}
                             skill_counts: Dict[str, int] = {}
                             for msg in data.get("messages", []):
@@ -5326,6 +5331,7 @@ def _scan_sessions_sync():
                             # Antigravity/Gemini token records expose no cache-write field; nothing to pass.
                             tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
                             if sid in _seen_antigravity: continue
+                            _seen_antigravity.add(sid)
                             _g_sess = {"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "antigravity_source": _ag_surface.get(sid), "cost": tokens["cost"]}
                             _attach_tool_usage(_g_sess, tool_counts, skill_counts)
                             sessions.append(_g_sess)

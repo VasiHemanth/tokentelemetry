@@ -343,6 +343,73 @@ def test_artifacts_serves_legit_under_allowlist():
                 pass
 
 
+def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
+    """The chat branch must add every emitted sid to `_seen_antigravity` and reset
+    `has_user` per file.
+
+    Both are easy to lose when the loop body is re-indented. Without the `.add()`
+    the same session is re-emitted by the logs.json and brain branches (token
+    totals and cost inflate); without the per-file reset, `has_user` is a plain
+    function-scope local, so one chat file with a user turn disables the ghost
+    filter for every file scanned after it.
+    """
+    def chat(dirpath, name, sid, msgs):
+        (dirpath / name).write_text(json.dumps({
+            "sessionId": sid, "kind": "main", "projectHash": "proj-slug",
+            "lastUpdated": "2026-08-01T10:00:00Z", "messages": msgs,
+        }), encoding="utf-8")
+
+    user_msgs = [
+        {"type": "user", "content": "real prompt", "timestamp": "2026-08-01T10:00:00Z"},
+        {"type": "gemini", "content": "ok", "model": "gemini-2.5-pro",
+         "tokens": {"input": 100, "output": 50, "cached": 0, "total": 150}},
+    ]
+    ghost_msgs = [{"type": "gemini", "content": "",
+                   "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}}]
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        gem = root / "gemini"
+        chats = gem / "tmp" / "proj-slug" / "chats"
+        chats.mkdir(parents=True)
+        (gem / "projects.json").write_text(json.dumps({"projects": {"/tmp/demo": "proj-slug"}}))
+        chat(chats, "a-ghost.json", "ghost-1", ghost_msgs)
+        chat(chats, "b-real.json", "real-1", user_msgs)
+        chat(chats, "c-ghost.json", "ghost-2", ghost_msgs)
+        # Same sessionId in two files — the intra-tmp dupe `_seen_antigravity` kills.
+        chat(chats, "d-dup1.json", "dup-1", user_msgs)
+        chat(chats, "e-dup2.json", "dup-1", user_msgs)
+
+        # Point every other scanner at an empty dir so this stays hermetic and fast.
+        nowhere = root / "nowhere"
+        saved = {}
+        for attr in dir(main):
+            if not (attr.endswith(("_DIR", "_DIRS", "_BASE", "_STORAGE")) and attr.isupper()):
+                continue
+            val = getattr(main, attr)
+            if isinstance(val, Path):
+                saved[attr] = val
+                setattr(main, attr, nowhere)
+            elif isinstance(val, list) and val and all(isinstance(v, Path) for v in val):
+                saved[attr] = val
+                setattr(main, attr, [nowhere])
+        saved["GEMINI_DIR"] = saved.get("GEMINI_DIR", main.GEMINI_DIR)
+        main.GEMINI_DIR = gem
+        try:
+            found = main._scan_sessions_sync()
+        finally:
+            for attr, val in saved.items():
+                setattr(main, attr, val)
+
+        rows = [s for s in found if s["id"] in ("ghost-1", "ghost-2", "real-1", "dup-1")]
+        ids = [s["id"] for s in rows]
+        assert ids.count("dup-1") == 1, f"sid emitted twice: {ids}"
+        assert "ghost-1" not in ids and "ghost-2" not in ids, f"ghost session leaked: {ids}"
+        assert sorted(ids) == ["dup-1", "real-1"], ids
+        # 150 tokens each for real-1 and dup-1; a duplicate would read 450.
+        assert sum(s["tokens"]["total"] for s in rows) == 300
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
