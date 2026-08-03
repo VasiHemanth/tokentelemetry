@@ -6677,17 +6677,21 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
         # conversations/<id>.db — far richer than the brain markdown. Prefer it.
+        # Newer agy builds write no .db at all and keep the trajectory only in
+        # brain/<sid>/.system_generated/logs/transcript*.jsonl, so hand the path
+        # over unconditionally: _antigravity_cli_trace checks db_path.exists()
+        # itself and falls back to the transcript. Gating on the .db here would
+        # skip exactly the sessions that only have a transcript.
         if agent == "antigravity":
             cli_db = ANTIGRAVITY_CLI_DIR / "conversations" / f"{session_id}.db"
-            if cli_db.exists():
-                cli_msgs = _antigravity_cli_trace(cli_db, session_id)
-                if cli_msgs:
-                    return {
-                        "sessionId": session_id,
-                        "projectHash": "",
-                        "kind": "antigravity_cli",
-                        "messages": cli_msgs,
-                    }
+            cli_msgs = _antigravity_cli_trace(cli_db, session_id)
+            if cli_msgs:
+                return {
+                    "sessionId": session_id,
+                    "projectHash": "",
+                    "kind": "antigravity_cli",
+                    "messages": cli_msgs,
+                }
         # Antigravity brain-based session (has no .json file; synthesize from markdown artifacts)
         brain_dir = ANTIGRAVITY_BRAIN_DIR / session_id
         for _bd in ANTIGRAVITY_BRAIN_DIRS:
