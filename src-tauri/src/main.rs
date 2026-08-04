@@ -416,35 +416,59 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
         //
         // Scaling the anchor by the *panel's* current scale factor is what put
         // the panel 190pt to the left of an icon sitting on the 1x monitor.
-        let ax = rect.position.to_physical::<f64>(1.0);
-        let asz = rect.size.to_physical::<f64>(1.0);
+        let raw = rect.position.to_physical::<f64>(1.0);
+        let raw_size = rect.size.to_physical::<f64>(1.0);
 
-        let mut left = ax.x + asz.width / 2.0 - PANEL_W / 2.0;
-        let top = ax.y + asz.height + 6.0;
+        // The anchor arrives as points multiplied by the scale of the monitor
+        // the icon sits on, and with mixed-DPI displays the monitors' ranges
+        // OVERLAP in that space (measured on this machine: main 0..2940 @2x,
+        // external 1470..4030 @1x), so x alone cannot say which display it is.
+        //
+        // The icon HEIGHT disambiguates: a menu-bar item is ~22-40pt tall on
+        // every Mac, so only the correct scale yields a plausible height. Both
+        // cases measured on the same machine: (1784,0) 176x66 is 88x33pt at 2x
+        // on the main display; (3462,0) 76x30 is 76x30pt at 1x on the external.
+        let plausible_menubar_pt = 18.0..=48.0;
 
-        // Keep the panel on the display the icon is actually on.
-        let monitor = app
-            .monitor_from_point(ax.x, ax.y)
-            .ok()
-            .flatten()
-            .or_else(|| app.primary_monitor().ok().flatten());
-        if let Some(m) = monitor {
-            let mp = m.position();
-            // size() is physical; points = physical / scale.
-            let width_pts = m.size().width as f64 / m.scale_factor();
-            let min_x = mp.x as f64 + 8.0;
-            let max_x = mp.x as f64 + width_pts - PANEL_W - 8.0;
+        let monitors = app.available_monitors().unwrap_or_default();
+        let chosen = monitors.iter().find(|m| {
+            let s = m.scale_factor();
+            if s <= 0.0 || !plausible_menubar_pt.contains(&(raw_size.height / s)) {
+                return false;
+            }
+            let mx = m.position().x as f64 / s;
+            let mw = m.size().width as f64 / s;
+            let x = raw.x / s;
+            x >= mx && x < mx + mw
+        });
+
+        let scale = chosen.map(|m| m.scale_factor()).unwrap_or(1.0);
+        let ax = raw.x / scale;
+        let ay = raw.y / scale;
+        let aw = raw_size.width / scale;
+        let ah = raw_size.height / scale;
+
+        let mut left = ax + aw / 2.0 - PANEL_W / 2.0;
+        let top = ay + ah + 6.0;
+
+        // Clamp to the chosen monitor, in points.
+        if let Some(m) = chosen {
+            let s = m.scale_factor();
+            let mx = m.position().x as f64 / s;
+            let mw = m.size().width as f64 / s;
+            let min_x = mx + 8.0;
+            let max_x = mx + mw - PANEL_W - 8.0;
             if max_x > min_x {
                 left = left.clamp(min_x, max_x);
             }
         }
 
         eprintln!(
-            "tray: anchor pts=({:.0},{:.0}) -> panel at ({left:.0},{top:.0})",
-            ax.x, ax.y
+            "tray: raw=({:.0},{:.0}) {:.0}x{:.0} scale={scale} pts=({ax:.0},{ay:.0}) \
+             {aw:.0}x{ah:.0} -> panel at ({left:.0},{top:.0})",
+            raw.x, raw.y, raw_size.width, raw_size.height
         );
         // Logical == points on macOS, which is the space every value above is in.
-        let _ = win.set_position(tauri::LogicalPosition::new(left, top));
     }
 
     let _ = win.show();
