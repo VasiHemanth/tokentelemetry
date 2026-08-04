@@ -1,9 +1,8 @@
 """Antigravity CLI summarizer adapter.
 
 Google's Antigravity CLI (the Go-based `agy`, which replaced Gemini CLI in
-May 2026) runs a single prompt headlessly with `agy -p`. We pass
-`--dangerously-skip-permissions` so unattended runs never block on a tool
-permission prompt, and cap it with the binary's own `--print-timeout`.
+May 2026) runs a single prompt headlessly with `agy -p`. We cap it with the
+binary's own `--print-timeout`.
 
 `agy` shares the Antigravity agent harness and logs its conversation under
 ~/.gemini/antigravity; running from SUMMARIZER_CWD lets the ingest layer skip
@@ -28,7 +27,6 @@ class AntigravitySummarizer(BaseSummarizer):
         out = run_cli(
             [
                 self.binary,
-                "--dangerously-skip-permissions",
                 "--print-timeout", f"{timeout}s",
             ],
             stdin=prompt,
