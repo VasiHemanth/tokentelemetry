@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -336,6 +336,7 @@ export default function SessionDetailPage() {
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [copiedId, setCopiedId] = useState(false);
   const [projectConfig, setProjectConfig] = useState<any>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -714,11 +715,18 @@ export default function SessionDetailPage() {
                     </Badge>
                   )}
                   <button
-                    onClick={() => navigator.clipboard?.writeText(id)}
+                    onClick={() => {navigator.clipboard?.writeText(id)
+                        .then(() => { setCopiedId(true); setTimeout(() => setCopiedId(false), 1500); })
+                        .catch(() => {});
+                    }}
                     title="Copy session id"
-                    className="inline-flex items-center gap-1.5 font-mono text-[11px] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] bg-[var(--tt-sunken)] border border-[var(--tt-border)] px-2 h-6 rounded-md transition-colors"
+                    className={`inline-flex items-center gap-1.5 font-mono text-[11px] px-2 h-6 rounded-md transition-colors ${
+                      copiedId
+                        ? "text-[var(--tt-success-fg)] border border-[color:var(--tt-success)]/50 bg-[var(--tt-sunken)]"
+                        : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] bg-[var(--tt-sunken)] border border-[var(--tt-border)]"
+                    }`}
                   >
-                    {id.slice(0, 12)}…<Copy size={10} className="opacity-60" />
+                    {copiedId ? <>Copied <Check size={10} strokeWidth={3} className="text-[var(--tt-success-fg)]" /></> : <>{id.slice(0, 12)}… <Copy size={10} className="opacity-60" /></>}
                   </button>
                   {modelsUsed.slice(0, 3).map((m) => (
                     <Badge key={m} variant="success" size="xs" className="font-mono normal-case max-w-[260px] truncate" title={m}>
