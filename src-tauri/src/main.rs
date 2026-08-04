@@ -388,13 +388,15 @@ async fn panel_data(app: AppHandle) -> Result<panel::PanelData, String> {
 
 /// A monitor reduced to the three numbers anchor placement needs.
 ///
-/// Both fields are stored exactly as Tauri reports them, scale included, so
-/// that [`panel_origin`] does the same conversion the live code path does.
+/// Both coordinates are stored exactly as Tauri reports them, scale included,
+/// so that [`panel_origin`] does the same conversion the live code path does.
+/// On macOS each is points times THIS monitor's scale, so dividing by `scale`
+/// is what puts monitors of different DPI into one comparable point space.
 #[derive(Debug, Clone, Copy)]
 struct MonitorBox {
-    /// `Monitor::position().x` verbatim: points times this monitor's scale.
+    /// `Monitor::position().x` verbatim.
     raw_x: f64,
-    /// `Monitor::size().width` verbatim: physical pixels.
+    /// `Monitor::size().width` verbatim.
     raw_w: f64,
     scale: f64,
 }
@@ -557,21 +559,21 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
     let mut placed: Option<(f64, f64)> = None;
 
     if let Some(rect) = anchor {
-        // Everything here is in POINTS (macOS's global screen space), not
-        // physical pixels.
+        // Everything macOS reports here — the tray rect, `Monitor::position()`
+        // and `Monitor::size()` — is points multiplied by the scale factor of
+        // the monitor it describes, despite the `Physical` type name. See
+        // tao's platform_impl/macos/monitor.rs, where both position and size
+        // are built with `from_logical(.., scale_factor())`.
         //
-        // Two traps, both confirmed against a real dual-monitor setup
-        // (main 2940x1912 @2x at (0,0), external 2560x1440 @1x at (1470,0)):
+        // So each value is consistent within its own monitor but NOT comparable
+        // across monitors of different scale: divide each by ITS OWN monitor's
+        // scale and everything lands in one point space. Confirmed against a
+        // real dual-monitor setup (main 2940x1912 @2x at (0,0), external
+        // 2560x1440 @1x at (1470,0)), which tiles to 0..1470 and 1470..4030.
         //
-        //   1. The tray rect is tagged `Physical` but its numbers are already
-        //      points. Converting it with a scale factor moves the panel to a
-        //      different screen.
-        //   2. `Monitor::position()` is in points while `Monitor::size()` is in
-        //      physical pixels. Comparing them directly makes a 2x display look
-        //      twice as wide as it is.
-        //
-        // Scaling the anchor by the *panel's* current scale factor is what put
-        // the panel 190pt to the left of an icon sitting on the 1x monitor.
+        // Scaling the anchor by the *panel's* current scale factor instead is
+        // what put the panel 190pt left of an icon on the 1x monitor: the panel
+        // carries the scale of whichever display it happens to be sitting on.
         let raw = rect.position.to_physical::<f64>(1.0);
         let raw_size = rect.size.to_physical::<f64>(1.0);
 
@@ -1104,6 +1106,47 @@ mod tests {
         // Straight from a session log: raw=(3409,0) 92x30 on the external.
         let (left, top) = panel_origin(&desktop(), Some(MAIN), (3409.0, 0.0), (92.0, 30.0), 380.0);
         assert_eq!((left, top), (3265.0, 36.0));
+    }
+
+    /// The mirror of `desktop()`: a 1x external as primary with the Retina to
+    /// its RIGHT. Values follow tao's macOS rule (points x that monitor's own
+    /// scale), so the Retina's origin of 2560pt is reported as 5120.
+    ///
+    /// Worth its own case because this is where a wrong reading of
+    /// `Monitor::position()` would show up: treating raw_x as plain points
+    /// would place the Retina at 5120..6590 and put every anchor on it out of
+    /// range, falling through to the primary and clamping to the wrong screen.
+    fn retina_on_the_right() -> Vec<MonitorBox> {
+        vec![
+            MonitorBox {
+                raw_x: 0.0,
+                raw_w: 2560.0,
+                scale: 1.0,
+            },
+            MonitorBox {
+                raw_x: 5120.0,
+                raw_w: 2940.0,
+                scale: 2.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_retina_to_the_right_of_a_1x_primary_tiles_correctly() {
+        let d = retina_on_the_right();
+        let primary = Some(d[0]);
+
+        // Icon at 3000pt on the Retina: 88x33pt, so raw is doubled.
+        let (left, top) = panel_origin(&d, primary, (6000.0, 0.0), (176.0, 66.0), 380.0);
+        assert_eq!((left, top), (2854.0, 39.0));
+
+        // Icon at 1200pt on the 1x external.
+        let (left, top) = panel_origin(&d, primary, (1200.0, 0.0), (76.0, 30.0), 380.0);
+        assert_eq!((left, top), (1048.0, 36.0));
+
+        // Right-hand edge of the Retina still clamps onto the Retina.
+        let (left, _) = panel_origin(&d, primary, (8000.0, 0.0), (60.0, 66.0), 380.0);
+        assert_eq!(left, 2560.0 + 1470.0 - 380.0 - 8.0);
     }
 
     #[test]
