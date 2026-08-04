@@ -10,14 +10,14 @@
   },
   "dependencies": {
     "@types/mdx": "^2.0.14",
-    "framer-motion": "^12.42.2",
-    "fumadocs-core": "^16.10.3",
-    "fumadocs-mdx": "^15.0.12",
-    "fumadocs-ui": "^16.10.3",
+    "framer-motion": "^12.43.0",
+    "fumadocs-core": "^16.14.0",
+    "fumadocs-mdx": "^15.2.1",
+    "fumadocs-ui": "^16.14.0",
     "lucide-react": "^1.8.0",
-    "next": "16.2.10",
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "next": "16.2.12",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "overrides": {
     "postcss": "^8.5.10"
