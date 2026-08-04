@@ -413,11 +413,17 @@ struct MonitorBox {
 /// yields a plausible height.
 ///
 /// The heuristic is not airtight: a raw height in the mid-40s is plausible at
-/// both 1x and 2x, and then the first matching monitor wins. That is why the
-/// result is clamped to the chosen monitor — a wrong guess still lands the
-/// panel on screen, and the tray menu's "Show panel" ignores anchors entirely.
+/// both 1x and 2x, and then the first matching monitor wins. A wrong guess is
+/// survivable because the result is always clamped to a real display.
+///
+/// When nothing matches at all — macOS reports a zero-size or full-menu-bar
+/// rect while the status item is still being drawn — `primary` is the fallback
+/// for BOTH the scale and the clamp. Falling back to 1x unclamped is what put
+/// the panel off the right-hand edge of a 2x-only Mac and made it look as
+/// though clicking the icon did nothing.
 fn panel_origin(
     monitors: &[MonitorBox],
+    primary: Option<MonitorBox>,
     raw: (f64, f64),
     raw_size: (f64, f64),
     panel_w: f64,
@@ -426,15 +432,20 @@ fn panel_origin(
     let (raw_w, raw_h) = raw_size;
 
     let plausible_menubar_pt = 18.0..=48.0;
-    let chosen = monitors.iter().find(|m| {
-        if m.scale <= 0.0 || !plausible_menubar_pt.contains(&(raw_h / m.scale)) {
-            return false;
-        }
-        let mx = m.raw_x / m.scale;
-        let mw = m.raw_w / m.scale;
-        let x = raw_x / m.scale;
-        x >= mx && x < mx + mw
-    });
+    let chosen = monitors
+        .iter()
+        .copied()
+        .find(|m| {
+            if m.scale <= 0.0 || !plausible_menubar_pt.contains(&(raw_h / m.scale)) {
+                return false;
+            }
+            let mx = m.raw_x / m.scale;
+            let mw = m.raw_w / m.scale;
+            let x = raw_x / m.scale;
+            x >= mx && x < mx + mw
+        })
+        // A usable primary is still better than no reference frame at all.
+        .or_else(|| primary.filter(|m| m.scale > 0.0));
 
     let scale = chosen.map(|m| m.scale).unwrap_or(1.0);
     let ax = raw_x / scale;
@@ -445,7 +456,7 @@ fn panel_origin(
     let mut left = ax + aw / 2.0 - panel_w / 2.0;
     let top = ay + ah + 6.0;
 
-    // Clamp to the chosen monitor, in points.
+    // Clamp to whichever display we settled on, in points.
     if let Some(m) = chosen {
         let mx = m.raw_x / m.scale;
         let mw = m.raw_w / m.scale;
@@ -457,6 +468,15 @@ fn panel_origin(
     }
 
     (left, top)
+}
+
+/// Whether to print anchor placement diagnostics.
+///
+/// Placement depends on the user's monitor arrangement, which cannot be covered
+/// by tests or reproduced locally, so a "the panel opens in the wrong place"
+/// report needs a way to capture the raw numbers from the machine that saw it.
+fn tray_debug() -> bool {
+    std::env::var_os("TT_TRAY_DEBUG").is_some()
 }
 
 /// Show the panel anchored under the tray icon.
@@ -472,6 +492,8 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
         let _ = win.hide();
         return;
     }
+
+    let mut placed: Option<(f64, f64)> = None;
 
     if let Some(rect) = anchor {
         // Everything here is in POINTS (macOS's global screen space), not
@@ -503,8 +525,15 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
             })
             .collect();
 
+        let primary = app.primary_monitor().ok().flatten().map(|m| MonitorBox {
+            raw_x: m.position().x as f64,
+            raw_w: m.size().width as f64,
+            scale: m.scale_factor(),
+        });
+
         let (left, top) = panel_origin(
             &boxes,
+            primary,
             (raw.x, raw.y),
             (raw_size.width, raw_size.height),
             PANEL_W,
@@ -512,10 +541,44 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
 
         // Logical == points on macOS, which is the space `panel_origin` works in.
         let _ = win.set_position(tauri::LogicalPosition::new(left, top));
+        placed = Some((left, top));
+
+        if tray_debug() {
+            eprintln!(
+                "tray: anchor raw=({:.0},{:.0}) {:.0}x{:.0} monitors={:?} \
+                 -> computed ({left:.0},{top:.0})",
+                raw.x, raw.y, raw_size.width, raw_size.height, boxes
+            );
+        }
     }
 
     let _ = win.show();
     let _ = win.set_focus();
+
+    // Read the position back from the OS after showing. This is the only check
+    // that is independent of the maths above: it catches a set_position that
+    // was dropped, ignored on a hidden window, or interpreted at the wrong
+    // scale. Computed and applied must agree.
+    if tray_debug() {
+        let applied = win
+            .outer_position()
+            .ok()
+            .and_then(|p| win.scale_factor().ok().map(|s| p.to_logical::<f64>(s)));
+        match (placed, applied) {
+            (Some((l, t)), Some(p)) => eprintln!(
+                "tray: applied ({:.0},{:.0}) vs computed ({l:.0},{t:.0}) — {}",
+                p.x,
+                p.y,
+                if (p.x - l).abs() < 2.0 && (p.y - t).abs() < 2.0 {
+                    "MATCH"
+                } else {
+                    "MISMATCH"
+                }
+            ),
+            (_, Some(p)) => eprintln!("tray: shown at ({:.0},{:.0}), no anchor", p.x, p.y),
+            _ => eprintln!("tray: could not read back the panel position"),
+        }
+    }
     // Tells the page to refresh and to start its auto-hide grace period, so a
     // reopened panel never shows stale numbers and never dismisses itself on
     // the spurious blur macOS delivers right after a status-item click.
@@ -918,6 +981,13 @@ mod tests {
     /// and a 1x external to its right. Their x ranges overlap in the space the
     /// tray anchor is reported in, which is the whole reason `panel_origin`
     /// looks at the icon height at all.
+    /// The 2x built-in display, which is also the primary on this desktop.
+    const MAIN: MonitorBox = MonitorBox {
+        raw_x: 0.0,
+        raw_w: 2940.0,
+        scale: 2.0,
+    };
+
     fn desktop() -> Vec<MonitorBox> {
         vec![
             MonitorBox {
@@ -937,21 +1007,21 @@ mod tests {
     fn anchor_on_the_2x_display_resolves_at_2x() {
         // Measured: (1784,0) 176x66 is the icon on the built-in display.
         // 176x66 / 2 = 88x33pt, centred under => 892 + 44 - 190 = 746.
-        let (left, top) = panel_origin(&desktop(), (1784.0, 0.0), (176.0, 66.0), 380.0);
+        let (left, top) = panel_origin(&desktop(), Some(MAIN), (1784.0, 0.0), (176.0, 66.0), 380.0);
         assert_eq!((left, top), (746.0, 39.0));
     }
 
     #[test]
     fn anchor_on_the_1x_display_resolves_at_1x() {
         // Measured: (3462,0) 76x30 is the same icon dragged to the external.
-        let (left, top) = panel_origin(&desktop(), (3462.0, 0.0), (76.0, 30.0), 380.0);
+        let (left, top) = panel_origin(&desktop(), Some(MAIN), (3462.0, 0.0), (76.0, 30.0), 380.0);
         assert_eq!((left, top), (3310.0, 36.0));
     }
 
     #[test]
     fn a_real_logged_click_lands_under_its_icon() {
         // Straight from a session log: raw=(3409,0) 92x30 on the external.
-        let (left, top) = panel_origin(&desktop(), (3409.0, 0.0), (92.0, 30.0), 380.0);
+        let (left, top) = panel_origin(&desktop(), Some(MAIN), (3409.0, 0.0), (92.0, 30.0), 380.0);
         assert_eq!((left, top), (3265.0, 36.0));
     }
 
@@ -962,37 +1032,62 @@ mod tests {
         let mut reversed = desktop();
         reversed.reverse();
         assert_eq!(
-            panel_origin(&reversed, (1784.0, 0.0), (176.0, 66.0), 380.0),
-            panel_origin(&desktop(), (1784.0, 0.0), (176.0, 66.0), 380.0),
+            panel_origin(&reversed, Some(MAIN), (1784.0, 0.0), (176.0, 66.0), 380.0),
+            panel_origin(&desktop(), Some(MAIN), (1784.0, 0.0), (176.0, 66.0), 380.0),
         );
         assert_eq!(
-            panel_origin(&reversed, (3462.0, 0.0), (76.0, 30.0), 380.0),
-            panel_origin(&desktop(), (3462.0, 0.0), (76.0, 30.0), 380.0),
+            panel_origin(&reversed, Some(MAIN), (3462.0, 0.0), (76.0, 30.0), 380.0),
+            panel_origin(&desktop(), Some(MAIN), (3462.0, 0.0), (76.0, 30.0), 380.0),
         );
     }
 
     #[test]
     fn an_icon_near_the_right_edge_is_pulled_back_on_screen() {
         // Centring alone would put the panel's right edge past 4030pt.
-        let (left, _) = panel_origin(&desktop(), (4010.0, 0.0), (30.0, 30.0), 380.0);
+        let (left, _) = panel_origin(&desktop(), Some(MAIN), (4010.0, 0.0), (30.0, 30.0), 380.0);
         assert_eq!(left, 1470.0 + 2560.0 - 380.0 - 8.0);
     }
 
     #[test]
     fn an_icon_near_the_left_edge_is_pushed_back_on_screen() {
-        let (left, _) = panel_origin(&desktop(), (8.0, 0.0), (60.0, 66.0), 380.0);
+        let (left, _) = panel_origin(&desktop(), Some(MAIN), (8.0, 0.0), (60.0, 66.0), 380.0);
         assert_eq!(left, 8.0);
     }
 
     #[test]
-    fn an_unmatched_anchor_still_produces_a_usable_origin() {
-        // No monitors reported, or an implausible icon height: fall back to 1x
-        // and skip clamping rather than dropping the anchor on the floor.
-        let (left, top) = panel_origin(&[], (500.0, 0.0), (60.0, 24.0), 380.0);
-        assert_eq!((left, top), (340.0, 30.0));
+    fn an_unmatched_anchor_falls_back_to_the_primary_display() {
+        // macOS reports a zero-size or full-height rect while the status item
+        // is still being drawn, so no monitor matches on height.
+        let only_main = vec![MAIN];
 
-        let (left, _) = panel_origin(&desktop(), (500.0, 0.0), (60.0, 900.0), 380.0);
-        assert_eq!(left, 340.0);
+        // Right-hand edge of a 2x-only Mac: 2800 raw reads as 1400pt, and
+        // centring alone would put the panel's right edge past the 1470pt
+        // screen. Unclamped at 1x this is the original "nothing appeared" bug.
+        let (left, _) = panel_origin(&only_main, Some(MAIN), (2800.0, 0.0), (60.0, 900.0), 380.0);
+        assert_eq!(left, 1470.0 - 380.0 - 8.0);
+
+        // A zero-size rect must not throw the panel off the left edge either.
+        let (left, _) = panel_origin(&only_main, Some(MAIN), (0.0, 0.0), (0.0, 0.0), 380.0);
+        assert_eq!(left, 8.0);
+    }
+
+    #[test]
+    fn with_no_displays_at_all_the_anchor_is_still_honoured() {
+        // Nothing to clamp against: place under the icon at 1x rather than
+        // dropping the anchor on the floor.
+        let (left, top) = panel_origin(&[], None, (500.0, 0.0), (60.0, 24.0), 380.0);
+        assert_eq!((left, top), (340.0, 30.0));
+    }
+
+    #[test]
+    fn a_primary_with_a_bogus_scale_is_not_used_as_a_fallback() {
+        let bad = MonitorBox {
+            raw_x: 0.0,
+            raw_w: 1000.0,
+            scale: 0.0,
+        };
+        let (left, top) = panel_origin(&[], Some(bad), (500.0, 0.0), (60.0, 24.0), 380.0);
+        assert_eq!((left, top), (340.0, 30.0));
     }
 
     #[test]
@@ -1010,7 +1105,7 @@ mod tests {
                 scale: 2.0,
             },
         ];
-        let (left, top) = panel_origin(&monitors, (1784.0, 0.0), (176.0, 66.0), 380.0);
+        let (left, top) = panel_origin(&monitors, Some(MAIN), (1784.0, 0.0), (176.0, 66.0), 380.0);
         assert_eq!((left, top), (746.0, 39.0));
     }
 }
