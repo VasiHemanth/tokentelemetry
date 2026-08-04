@@ -479,6 +479,67 @@ fn tray_debug() -> bool {
     std::env::var_os("TT_TRAY_DEBUG").is_some()
 }
 
+/// Replay synthetic tray anchors through the real placement path and report
+/// what the OS did with each.
+///
+/// `TT_TRAY_SELFTEST="x,y,w,h;x,y,w,h"` — one anchor per group, exactly as the
+/// tray reports them. Placement depends on the live monitor arrangement, so it
+/// cannot be covered by unit tests, and driving it by hand means one click per
+/// display per attempt. This turns that into a loop that runs unattended.
+///
+/// Debug-only in every sense: it needs `TT_TRAY_DEBUG` for the read-back to be
+/// printed, and it never runs unless the variable is set.
+fn run_placement_selftest(app: &AppHandle) {
+    let Some(spec) = std::env::var("TT_TRAY_SELFTEST")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let anchors: Vec<tauri::Rect> = spec
+        .split(';')
+        .filter_map(|group| {
+            let n: Vec<f64> = group
+                .split(',')
+                .filter_map(|v| v.trim().parse::<f64>().ok())
+                .collect();
+            match n[..] {
+                [x, y, w, h] => Some(tauri::Rect {
+                    position: tauri::Position::Physical(tauri::PhysicalPosition {
+                        x: x as i32,
+                        y: y as i32,
+                    }),
+                    size: tauri::Size::Physical(tauri::PhysicalSize {
+                        width: w as u32,
+                        height: h as u32,
+                    }),
+                }),
+                _ => None,
+            }
+        })
+        .collect();
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Let the window server finish bringing the app up first.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        for (i, rect) in anchors.into_iter().enumerate() {
+            eprintln!("selftest[{i}]: ---");
+            let (a, inner) = (app.clone(), app.clone());
+            let _ = a.run_on_main_thread(move || toggle_panel(&inner, Some(rect)));
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let (a, inner) = (app.clone(), app.clone());
+            let _ = a.run_on_main_thread(move || {
+                if let Some(w) = inner.get_webview_window("panel") {
+                    let _ = w.hide();
+                }
+            });
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        eprintln!("selftest: done");
+    });
+}
+
 /// Show the panel anchored under the tray icon.
 ///
 /// `rect` is where the OS actually drew the icon, which is the only reliable
@@ -539,7 +600,8 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
             PANEL_W,
         );
 
-        // Logical == points on macOS, which is the space `panel_origin` works in.
+        // Position it before showing so it does not visibly jump, but this
+        // alone is not enough — see the second call below.
         let _ = win.set_position(tauri::LogicalPosition::new(left, top));
         placed = Some((left, top));
 
@@ -555,28 +617,46 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
     let _ = win.show();
     let _ = win.set_focus();
 
-    // Read the position back from the OS after showing. This is the only check
-    // that is independent of the maths above: it catches a set_position that
-    // was dropped, ignored on a hidden window, or interpreted at the wrong
-    // scale. Computed and applied must agree.
-    if tray_debug() {
-        let applied = win
-            .outer_position()
-            .ok()
-            .and_then(|p| win.scale_factor().ok().map(|s| p.to_logical::<f64>(s)));
-        match (placed, applied) {
-            (Some((l, t)), Some(p)) => eprintln!(
-                "tray: applied ({:.0},{:.0}) vs computed ({l:.0},{t:.0}) — {}",
-                p.x,
-                p.y,
-                if (p.x - l).abs() < 2.0 && (p.y - t).abs() < 2.0 {
-                    "MATCH"
-                } else {
-                    "MISMATCH"
-                }
-            ),
-            (_, Some(p)) => eprintln!("tray: shown at ({:.0},{:.0}), no anchor", p.x, p.y),
-            _ => eprintln!("tray: could not read back the panel position"),
+    // Position it AGAIN now that it is on screen.
+    //
+    // Position it again now that it is on screen.
+    //
+    // The move is applied asynchronously — reading the position straight back
+    // returns the value from the PREVIOUS show — and the window only adopts the
+    // scale factor of the display it landed on once it is ordered in, which is
+    // what LogicalPosition is interpreted against. Repeating the call after
+    // show() costs nothing and removes both orderings as a variable.
+    if let Some((left, top)) = placed {
+        let _ = win.set_position(tauri::LogicalPosition::new(left, top));
+
+        if tray_debug() {
+            let (w, inner) = (win.clone(), win.clone());
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                let _ = w.run_on_main_thread(move || {
+                    let w = inner;
+                    // Read the position back from the OS once it has settled.
+                    // This is the only check independent of the maths above: it
+                    // catches a set_position that was dropped, ignored while the
+                    // window was hidden, or interpreted at the wrong scale.
+                    let Ok(phys) = w.outer_position() else {
+                        eprintln!("tray: could not read back the panel position");
+                        return;
+                    };
+                    let s = w.scale_factor().unwrap_or(1.0);
+                    let p = phys.to_logical::<f64>(s);
+                    let ok = (p.x - left).abs() < 2.0 && (p.y - top).abs() < 2.0;
+                    eprintln!(
+                        "tray: settled at ({:.0},{:.0}) [phys ({},{}) @{s}] vs computed \
+                         ({left:.0},{top:.0}) — {}",
+                        p.x,
+                        p.y,
+                        phys.x,
+                        phys.y,
+                        if ok { "MATCH" } else { "MISMATCH" }
+                    );
+                });
+            });
         }
     }
     // Tells the page to refresh and to start its auto-hide grace period, so a
@@ -953,6 +1033,7 @@ fn main() {
             });
 
             refresh_tray(&handle);
+            run_placement_selftest(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {
