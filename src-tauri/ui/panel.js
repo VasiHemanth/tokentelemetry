@@ -212,6 +212,10 @@ if (tauri) {
 }
 
 load();
+// Only while the panel is actually open and focused, and not often: each load
+// makes the backend rescan every session, which is expensive on a large
+// history. The panel reloads on every open anyway, so this only matters if you
+// leave it sitting on screen.
 setInterval(() => {
   if (!window.__PREVIEW_DATA__ && document.hasFocus()) load();
-}, 30000);
+}, 120000);

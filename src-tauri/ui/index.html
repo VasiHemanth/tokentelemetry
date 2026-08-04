@@ -43,11 +43,14 @@
       <div class="row grid3">
         <label>Dashboard<input type="number" id="frontPort" min="1" max="65535" /></label>
         <label>API<input type="number" id="apiPort" min="1" max="65535" /></label>
-        <label>Refresh (sec)<input type="number" id="pollSecs" min="10" max="3600" /></label>
+        <label>Refresh (sec)<input type="number" id="pollSecs" min="60" max="86400" /></label>
       </div>
       <p class="hint">
-        Today's figure is refreshed on this interval. Each refresh rescans your
-        agent logs, so short intervals cost real work.
+        Today's figure is refreshed on this interval. Each refresh rescans every
+        session across every agent, which on a large history costs tens of
+        seconds of CPU — an interval of a few minutes keeps your machine cool.
+        Opening the panel always refreshes immediately, so this only governs how
+        current the menu bar number is while you are not looking at it.
       </p>
     </section>
 

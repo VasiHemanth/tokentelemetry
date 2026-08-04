@@ -307,7 +307,7 @@ fn save_settings(
         cfg.repo_path = repo;
         cfg.api_port = api_port;
         cfg.front_port = front_port;
-        cfg.poll_secs = poll_secs.clamp(10, 3600);
+        cfg.poll_secs = config::sanitize_poll_secs(poll_secs);
         cfg.start_on_launch = start_on_launch;
         cfg.save()?;
 
@@ -1023,13 +1023,8 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     poll_once(h.clone()).await;
-                    let secs = h
-                        .state::<AppState>()
-                        .cfg
-                        .lock()
-                        .unwrap()
-                        .poll_secs
-                        .clamp(10, 3600);
+                    let secs = h.state::<AppState>().cfg.lock().unwrap().poll_secs;
+                    let secs = config::sanitize_poll_secs(secs);
                     tokio::time::sleep(Duration::from_secs(secs)).await;
                 }
             });

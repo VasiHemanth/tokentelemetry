@@ -10,7 +10,57 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_API_PORT: u16 = 8000;
 pub const DEFAULT_FRONT_PORT: u16 = 3000;
-pub const DEFAULT_POLL_SECS: u64 = 30;
+
+/// How often to refresh the menu bar figure, in seconds.
+///
+/// A poll is NOT cheap. `/analytics` is served from the backend's session
+/// cache, whose TTL is 30s, so any interval at or above that misses the cache
+/// every single time and forces a full rescan of every session across every
+/// harness, plus a history write. Measured on a laptop with ~1,200 sessions,
+/// one scan costs on the order of 25 CPU-seconds — so the original 30s default
+/// asked for a scan more often than a scan could finish, and the backend sat
+/// permanently busy. It cost 39 CPU-seconds per 45s of wall clock, about 86% of
+/// a core, forever, and the machine ran hot.
+///
+/// Five minutes is the compromise: spend accumulates slowly enough that the
+/// number in the menu bar is still honest, and opening the panel always
+/// refreshes on the spot, so the interval only governs the idle case.
+pub const DEFAULT_POLL_SECS: u64 = 300;
+
+/// Never poll faster than this, whatever the config says.
+///
+/// A user who types 10 into Preferences is not asking to pin a core; they are
+/// asking for a fresher number and cannot see what it costs.
+pub const MIN_POLL_SECS: u64 = 60;
+
+/// Bring a configured interval into the supported range.
+///
+/// Anything under the floor falls back to the DEFAULT rather than to the floor
+/// itself. A sub-minimum value is not a considered choice — it is either an old
+/// config written when 30s was the default, or a number typed without knowing
+/// what a poll costs — so snapping it to 60s would still leave the backend
+/// rescanning for a large part of every minute.
+pub fn sanitize_poll_secs(secs: u64) -> u64 {
+    if secs < MIN_POLL_SECS {
+        return DEFAULT_POLL_SECS;
+    }
+    secs.min(86_400)
+}
+
+// Enforced at compile time rather than in a test, because the failure mode is
+// silent: nothing breaks, the machine just runs hot. The backend's session
+// cache TTL is 30s, so an interval anywhere near it misses on every tick and
+// forces a full rescan.
+const _: () = assert!(
+    DEFAULT_POLL_SECS >= 120,
+    "default poll interval is close enough to the backend's 30s cache TTL to \
+     force a full session rescan on every tick"
+);
+const _: () = assert!(
+    MIN_POLL_SECS >= 60,
+    "poll floor is too low to protect the backend from constant rescanning"
+);
+const _: () = assert!(DEFAULT_POLL_SECS >= MIN_POLL_SECS);
 
 fn expand_user(raw: &str) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("~/") {
@@ -109,13 +159,19 @@ impl TrayConfig {
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        serde_json::from_str(&raw).unwrap_or_else(|e| {
+        let mut cfg: Self = serde_json::from_str(&raw).unwrap_or_else(|e| {
             eprintln!(
                 "tray: {} is unreadable ({e}); using defaults",
                 path.display()
             );
             Self::default()
-        })
+        });
+        // Sanitize on the way in, not just when Preferences writes it. Configs
+        // written by earlier builds carry the old 30s interval, which pinned
+        // most of a core on the backend indefinitely — see DEFAULT_POLL_SECS.
+        // Without this, upgrading would silently keep the pathological value.
+        cfg.poll_secs = sanitize_poll_secs(cfg.poll_secs);
+        cfg
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -231,5 +287,22 @@ mod tests {
         assert_eq!(cfg.api_port, 9001);
         assert_eq!(cfg.front_port, DEFAULT_FRONT_PORT);
         assert_eq!(cfg.poll_secs, DEFAULT_POLL_SECS);
+    }
+
+    #[test]
+    fn a_config_written_by_an_older_build_is_repaired_on_load() {
+        // Raising the default alone would leave every existing install on the
+        // old value forever, because the interval is persisted.
+        // 30 was the old default and is the value every existing install has
+        // on disk; it must land on the new default, not merely on the floor.
+        assert_eq!(sanitize_poll_secs(30), DEFAULT_POLL_SECS);
+        assert_eq!(sanitize_poll_secs(10), DEFAULT_POLL_SECS);
+        assert_eq!(sanitize_poll_secs(0), DEFAULT_POLL_SECS);
+        // An explicit choice at or above the floor is respected exactly.
+        assert_eq!(sanitize_poll_secs(MIN_POLL_SECS), MIN_POLL_SECS);
+        // A deliberate, sane choice is left alone.
+        assert_eq!(sanitize_poll_secs(600), 600);
+        // And an absurd one is still bounded.
+        assert_eq!(sanitize_poll_secs(u64::MAX), 86_400);
     }
 }
