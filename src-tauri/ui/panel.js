@@ -174,6 +174,13 @@ async function load() {
   }
 }
 
+/* When the panel was last put on screen. Auto-hide is suppressed briefly after
+   that, because macOS keeps focus on the status item when you click it and
+   delivers a blur to the popover the moment it appears. Acting on that blur
+   hides the panel instantly, which is indistinguishable from it never having
+   opened. */
+let shownAt = 0;
+
 if (tauri) {
   document.querySelectorAll("[data-route]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -181,8 +188,27 @@ if (tauri) {
     }),
   );
   $("prefs").addEventListener("click", () => tauri.core.invoke("show_prefs_cmd"));
-  // Close when focus goes elsewhere, the way a menu bar popover should.
-  window.addEventListener("blur", () => tauri.core.invoke("hide_panel"));
+
+  // Rust tells us each time the window is shown: reset the grace period and
+  // refresh, so a reopened panel is never showing stale numbers.
+  if (tauri.event && tauri.event.listen) {
+    tauri.event.listen("panel-shown", () => {
+      shownAt = Date.now();
+      load();
+    });
+  }
+
+  // Close when focus genuinely goes elsewhere, the way a popover should.
+  window.addEventListener("blur", () => {
+    if (Date.now() - shownAt < 800) return;
+    // Re-check after the focus dust settles; a transient blur is not a dismiss.
+    setTimeout(() => {
+      if (!document.hasFocus()) tauri.core.invoke("hide_panel");
+    }, 150);
+  });
+  window.addEventListener("focus", () => {
+    if (!shownAt) shownAt = Date.now();
+  });
 }
 
 load();

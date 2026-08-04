@@ -15,12 +15,19 @@ use supervisor::{Status, Supervisor};
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 const TRAY_ID: &str = "tt-main";
+
+/// Panel width in points. Must match the `panel` window in tauri.conf.json.
+///
+/// Read from the config rather than the live window on purpose: the window's
+/// own scale factor is that of whichever monitor it currently sits on, which is
+/// not necessarily the monitor holding the tray icon.
+const PANEL_W: f64 = 380.0;
 
 struct MenuHandles {
     spend: MenuItem<Wry>,
@@ -383,26 +390,69 @@ async fn panel_data(app: AppHandle) -> Result<panel::PanelData, String> {
 ///
 /// `rect` is where the OS actually drew the icon, which is the only reliable
 /// anchor: the menu bar reflows as other apps come and go.
-fn toggle_panel(app: &AppHandle, anchor: Option<(f64, f64, f64)>) {
+fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
     let Some(win) = app.get_webview_window("panel") else {
+        eprintln!("tray: no panel window to show");
         return;
     };
     if win.is_visible().unwrap_or(false) {
         let _ = win.hide();
         return;
     }
-    if let Some((x, y, w)) = anchor {
-        if let Ok(size) = win.outer_size() {
-            let scale = win.scale_factor().unwrap_or(1.0);
-            let width = size.width as f64 / scale;
-            // Centre under the icon, then nudge back on-screen if the icon sits
-            // near the right edge of the display.
-            let left = x + w / 2.0 - width / 2.0;
-            let _ = win.set_position(tauri::LogicalPosition::new(left.max(8.0), y + 6.0));
+
+    if let Some(rect) = anchor {
+        // Everything here is in POINTS (macOS's global screen space), not
+        // physical pixels.
+        //
+        // Two traps, both confirmed against a real dual-monitor setup
+        // (main 2940x1912 @2x at (0,0), external 2560x1440 @1x at (1470,0)):
+        //
+        //   1. The tray rect is tagged `Physical` but its numbers are already
+        //      points. Converting it with a scale factor moves the panel to a
+        //      different screen.
+        //   2. `Monitor::position()` is in points while `Monitor::size()` is in
+        //      physical pixels. Comparing them directly makes a 2x display look
+        //      twice as wide as it is.
+        //
+        // Scaling the anchor by the *panel's* current scale factor is what put
+        // the panel 190pt to the left of an icon sitting on the 1x monitor.
+        let ax = rect.position.to_physical::<f64>(1.0);
+        let asz = rect.size.to_physical::<f64>(1.0);
+
+        let mut left = ax.x + asz.width / 2.0 - PANEL_W / 2.0;
+        let top = ax.y + asz.height + 6.0;
+
+        // Keep the panel on the display the icon is actually on.
+        let monitor = app
+            .monitor_from_point(ax.x, ax.y)
+            .ok()
+            .flatten()
+            .or_else(|| app.primary_monitor().ok().flatten());
+        if let Some(m) = monitor {
+            let mp = m.position();
+            // size() is physical; points = physical / scale.
+            let width_pts = m.size().width as f64 / m.scale_factor();
+            let min_x = mp.x as f64 + 8.0;
+            let max_x = mp.x as f64 + width_pts - PANEL_W - 8.0;
+            if max_x > min_x {
+                left = left.clamp(min_x, max_x);
+            }
         }
+
+        eprintln!(
+            "tray: anchor pts=({:.0},{:.0}) -> panel at ({left:.0},{top:.0})",
+            ax.x, ax.y
+        );
+        // Logical == points on macOS, which is the space every value above is in.
+        let _ = win.set_position(tauri::LogicalPosition::new(left, top));
     }
+
     let _ = win.show();
     let _ = win.set_focus();
+    // Tells the page to refresh and to start its auto-hide grace period, so a
+    // reopened panel never shows stale numbers and never dismisses itself on
+    // the spurious blur macOS delivers right after a status-item click.
+    let _ = win.emit("panel-shown", ());
 }
 
 /// Quit from the Preferences window.
@@ -602,6 +652,11 @@ fn main() {
             let local = MenuItemBuilder::with_id("open_local", "Local models").build(app)?;
             let settings =
                 MenuItemBuilder::with_id("open_settings", "Dashboard settings").build(app)?;
+            // A menu route to the panel, so it is reachable even where the tray
+            // click event does not behave as expected (it is not deliverable on
+            // every desktop, and on Linux a left click often just opens the
+            // menu regardless of what we ask for).
+            let show_panel = MenuItemBuilder::with_id("show_panel", "Show panel").build(app)?;
             let prefs = MenuItemBuilder::with_id("prefs", "Preferences…").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit TokenTelemetry").build(app)?;
 
@@ -615,6 +670,7 @@ fn main() {
                     &local,
                     &settings,
                     &PredefinedMenuItem::separator(app)?,
+                    &show_panel,
                     &toggle_item,
                     &prefs,
                     &PredefinedMenuItem::separator(app)?,
@@ -655,12 +711,7 @@ fn main() {
                         ..
                     } = event
                     {
-                        let pos = rect.position.to_logical::<f64>(1.0);
-                        let size = rect.size.to_logical::<f64>(1.0);
-                        toggle_panel(
-                            tray.app_handle(),
-                            Some((pos.x, pos.y + size.height, size.width)),
-                        );
+                        toggle_panel(tray.app_handle(), Some(rect));
                     }
                 })
                 .on_menu_event(|app, event| {
@@ -670,6 +721,10 @@ fn main() {
                         "open_analytics" => open_route(&app, "/analytics"),
                         "open_local" => open_route(&app, "/local-models"),
                         "open_settings" => open_route(&app, "/settings"),
+                        // No anchor rect from a menu click, so the panel falls
+                        // back to wherever it was last placed (centred on first
+                        // run), which is always on-screen.
+                        "show_panel" => toggle_panel(&app, None),
                         "prefs" => show_prefs(&app),
                         "toggle" => {
                             let owns = app.state::<AppState>().sup.lock().unwrap().owns_child();

@@ -15,7 +15,7 @@
         "url": "panel.html",
         "title": "TokenTelemetry",
         "width": 380,
-        "height": 560,
+        "height": 620,
         "resizable": false,
         "decorations": false,
         "transparent": true,

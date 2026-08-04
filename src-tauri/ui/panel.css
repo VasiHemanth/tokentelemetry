@@ -49,20 +49,49 @@
 
 html, body {
   margin: 0;
+  height: 100%;
   background: transparent;
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  /* The window is fixed-size. Letting the document itself scroll produced
+     macOS rubber-banding on the whole sheet, which drags the rounded card
+     away from the edge of its own window. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .sheet {
   margin: 6px;
+  height: calc(100% - 12px);
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: var(--shadow);
   overflow: hidden;
 }
+
+/* Only the breakdown lists scroll; the headline, chart, tiles and footer stay
+   put, so the numbers you opened the panel for never scroll out of view. */
+.scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+  border: 2px solid var(--surface);
+}
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* Header, hero, chart, tiles and footer must not be squeezed by the flex
+   layout when the lists are long. */
+.head, .hero, .spark, .tiles, .foot { flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------- header */
 
