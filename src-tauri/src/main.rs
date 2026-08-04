@@ -386,6 +386,79 @@ async fn panel_data(app: AppHandle) -> Result<panel::PanelData, String> {
     Ok(panel::build(&today_json, &week_json, &today))
 }
 
+/// A monitor reduced to the three numbers anchor placement needs.
+///
+/// Both fields are stored exactly as Tauri reports them, scale included, so
+/// that [`panel_origin`] does the same conversion the live code path does.
+#[derive(Debug, Clone, Copy)]
+struct MonitorBox {
+    /// `Monitor::position().x` verbatim: points times this monitor's scale.
+    raw_x: f64,
+    /// `Monitor::size().width` verbatim: physical pixels.
+    raw_w: f64,
+    scale: f64,
+}
+
+/// Resolve a tray anchor rect to the panel's top-left corner, in points.
+///
+/// Split out of [`toggle_panel`] so the coordinate maths is unit-testable
+/// against measurements from a real mixed-DPI desktop, rather than only being
+/// verifiable by clicking the icon and looking.
+///
+/// The anchor arrives as points multiplied by the scale of the monitor the icon
+/// sits on, and with mixed-DPI displays the monitors' ranges OVERLAP in that
+/// space (measured: main 0..2940 @2x, external 1470..4030 @1x), so x alone
+/// cannot say which display it is. The icon HEIGHT disambiguates, because a
+/// menu-bar item is ~22-40pt tall on every Mac and only the correct scale
+/// yields a plausible height.
+///
+/// The heuristic is not airtight: a raw height in the mid-40s is plausible at
+/// both 1x and 2x, and then the first matching monitor wins. That is why the
+/// result is clamped to the chosen monitor — a wrong guess still lands the
+/// panel on screen, and the tray menu's "Show panel" ignores anchors entirely.
+fn panel_origin(
+    monitors: &[MonitorBox],
+    raw: (f64, f64),
+    raw_size: (f64, f64),
+    panel_w: f64,
+) -> (f64, f64) {
+    let (raw_x, raw_y) = raw;
+    let (raw_w, raw_h) = raw_size;
+
+    let plausible_menubar_pt = 18.0..=48.0;
+    let chosen = monitors.iter().find(|m| {
+        if m.scale <= 0.0 || !plausible_menubar_pt.contains(&(raw_h / m.scale)) {
+            return false;
+        }
+        let mx = m.raw_x / m.scale;
+        let mw = m.raw_w / m.scale;
+        let x = raw_x / m.scale;
+        x >= mx && x < mx + mw
+    });
+
+    let scale = chosen.map(|m| m.scale).unwrap_or(1.0);
+    let ax = raw_x / scale;
+    let ay = raw_y / scale;
+    let aw = raw_w / scale;
+    let ah = raw_h / scale;
+
+    let mut left = ax + aw / 2.0 - panel_w / 2.0;
+    let top = ay + ah + 6.0;
+
+    // Clamp to the chosen monitor, in points.
+    if let Some(m) = chosen {
+        let mx = m.raw_x / m.scale;
+        let mw = m.raw_w / m.scale;
+        let min_x = mx + 8.0;
+        let max_x = mx + mw - panel_w - 8.0;
+        if max_x > min_x {
+            left = left.clamp(min_x, max_x);
+        }
+    }
+
+    (left, top)
+}
+
 /// Show the panel anchored under the tray icon.
 ///
 /// `rect` is where the OS actually drew the icon, which is the only reliable
@@ -419,56 +492,26 @@ fn toggle_panel(app: &AppHandle, anchor: Option<tauri::Rect>) {
         let raw = rect.position.to_physical::<f64>(1.0);
         let raw_size = rect.size.to_physical::<f64>(1.0);
 
-        // The anchor arrives as points multiplied by the scale of the monitor
-        // the icon sits on, and with mixed-DPI displays the monitors' ranges
-        // OVERLAP in that space (measured on this machine: main 0..2940 @2x,
-        // external 1470..4030 @1x), so x alone cannot say which display it is.
-        //
-        // The icon HEIGHT disambiguates: a menu-bar item is ~22-40pt tall on
-        // every Mac, so only the correct scale yields a plausible height. Both
-        // cases measured on the same machine: (1784,0) 176x66 is 88x33pt at 2x
-        // on the main display; (3462,0) 76x30 is 76x30pt at 1x on the external.
-        let plausible_menubar_pt = 18.0..=48.0;
+        let boxes: Vec<MonitorBox> = app
+            .available_monitors()
+            .unwrap_or_default()
+            .iter()
+            .map(|m| MonitorBox {
+                raw_x: m.position().x as f64,
+                raw_w: m.size().width as f64,
+                scale: m.scale_factor(),
+            })
+            .collect();
 
-        let monitors = app.available_monitors().unwrap_or_default();
-        let chosen = monitors.iter().find(|m| {
-            let s = m.scale_factor();
-            if s <= 0.0 || !plausible_menubar_pt.contains(&(raw_size.height / s)) {
-                return false;
-            }
-            let mx = m.position().x as f64 / s;
-            let mw = m.size().width as f64 / s;
-            let x = raw.x / s;
-            x >= mx && x < mx + mw
-        });
-
-        let scale = chosen.map(|m| m.scale_factor()).unwrap_or(1.0);
-        let ax = raw.x / scale;
-        let ay = raw.y / scale;
-        let aw = raw_size.width / scale;
-        let ah = raw_size.height / scale;
-
-        let mut left = ax + aw / 2.0 - PANEL_W / 2.0;
-        let top = ay + ah + 6.0;
-
-        // Clamp to the chosen monitor, in points.
-        if let Some(m) = chosen {
-            let s = m.scale_factor();
-            let mx = m.position().x as f64 / s;
-            let mw = m.size().width as f64 / s;
-            let min_x = mx + 8.0;
-            let max_x = mx + mw - PANEL_W - 8.0;
-            if max_x > min_x {
-                left = left.clamp(min_x, max_x);
-            }
-        }
-
-        eprintln!(
-            "tray: raw=({:.0},{:.0}) {:.0}x{:.0} scale={scale} pts=({ax:.0},{ay:.0}) \
-             {aw:.0}x{ah:.0} -> panel at ({left:.0},{top:.0})",
-            raw.x, raw.y, raw_size.width, raw_size.height
+        let (left, top) = panel_origin(
+            &boxes,
+            (raw.x, raw.y),
+            (raw_size.width, raw_size.height),
+            PANEL_W,
         );
-        // Logical == points on macOS, which is the space every value above is in.
+
+        // Logical == points on macOS, which is the space `panel_origin` works in.
+        let _ = win.set_position(tauri::LogicalPosition::new(left, top));
     }
 
     let _ = win.show();
@@ -865,4 +908,109 @@ fn main() {
                 app.state::<AppState>().sup.lock().unwrap().stop();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The desktop these numbers came from: a 2x built-in display at the origin
+    /// and a 1x external to its right. Their x ranges overlap in the space the
+    /// tray anchor is reported in, which is the whole reason `panel_origin`
+    /// looks at the icon height at all.
+    fn desktop() -> Vec<MonitorBox> {
+        vec![
+            MonitorBox {
+                raw_x: 0.0,
+                raw_w: 2940.0,
+                scale: 2.0,
+            },
+            MonitorBox {
+                raw_x: 1470.0,
+                raw_w: 2560.0,
+                scale: 1.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn anchor_on_the_2x_display_resolves_at_2x() {
+        // Measured: (1784,0) 176x66 is the icon on the built-in display.
+        // 176x66 / 2 = 88x33pt, centred under => 892 + 44 - 190 = 746.
+        let (left, top) = panel_origin(&desktop(), (1784.0, 0.0), (176.0, 66.0), 380.0);
+        assert_eq!((left, top), (746.0, 39.0));
+    }
+
+    #[test]
+    fn anchor_on_the_1x_display_resolves_at_1x() {
+        // Measured: (3462,0) 76x30 is the same icon dragged to the external.
+        let (left, top) = panel_origin(&desktop(), (3462.0, 0.0), (76.0, 30.0), 380.0);
+        assert_eq!((left, top), (3310.0, 36.0));
+    }
+
+    #[test]
+    fn a_real_logged_click_lands_under_its_icon() {
+        // Straight from a session log: raw=(3409,0) 92x30 on the external.
+        let (left, top) = panel_origin(&desktop(), (3409.0, 0.0), (92.0, 30.0), 380.0);
+        assert_eq!((left, top), (3265.0, 36.0));
+    }
+
+    #[test]
+    fn monitor_order_does_not_change_the_answer() {
+        // `find` takes the first match, so a reordered monitor list must not
+        // flip which display an anchor resolves to.
+        let mut reversed = desktop();
+        reversed.reverse();
+        assert_eq!(
+            panel_origin(&reversed, (1784.0, 0.0), (176.0, 66.0), 380.0),
+            panel_origin(&desktop(), (1784.0, 0.0), (176.0, 66.0), 380.0),
+        );
+        assert_eq!(
+            panel_origin(&reversed, (3462.0, 0.0), (76.0, 30.0), 380.0),
+            panel_origin(&desktop(), (3462.0, 0.0), (76.0, 30.0), 380.0),
+        );
+    }
+
+    #[test]
+    fn an_icon_near_the_right_edge_is_pulled_back_on_screen() {
+        // Centring alone would put the panel's right edge past 4030pt.
+        let (left, _) = panel_origin(&desktop(), (4010.0, 0.0), (30.0, 30.0), 380.0);
+        assert_eq!(left, 1470.0 + 2560.0 - 380.0 - 8.0);
+    }
+
+    #[test]
+    fn an_icon_near_the_left_edge_is_pushed_back_on_screen() {
+        let (left, _) = panel_origin(&desktop(), (8.0, 0.0), (60.0, 66.0), 380.0);
+        assert_eq!(left, 8.0);
+    }
+
+    #[test]
+    fn an_unmatched_anchor_still_produces_a_usable_origin() {
+        // No monitors reported, or an implausible icon height: fall back to 1x
+        // and skip clamping rather than dropping the anchor on the floor.
+        let (left, top) = panel_origin(&[], (500.0, 0.0), (60.0, 24.0), 380.0);
+        assert_eq!((left, top), (340.0, 30.0));
+
+        let (left, _) = panel_origin(&desktop(), (500.0, 0.0), (60.0, 900.0), 380.0);
+        assert_eq!(left, 340.0);
+    }
+
+    #[test]
+    fn a_zero_scale_monitor_is_never_chosen() {
+        // Guards a division by zero if a display reports a bogus scale.
+        let monitors = vec![
+            MonitorBox {
+                raw_x: 0.0,
+                raw_w: 1000.0,
+                scale: 0.0,
+            },
+            MonitorBox {
+                raw_x: 0.0,
+                raw_w: 2940.0,
+                scale: 2.0,
+            },
+        ];
+        let (left, top) = panel_origin(&monitors, (1784.0, 0.0), (176.0, 66.0), 380.0);
+        assert_eq!((left, top), (746.0, 39.0));
+    }
 }
