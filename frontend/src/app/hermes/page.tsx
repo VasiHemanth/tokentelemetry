@@ -10,6 +10,8 @@ import {
   Kanban,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
+import { useSessionState } from "@/lib/useSessionState";
 import {
   PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Section,
   Table, THead, TBody, TR, TH, TD, Badge,
@@ -87,7 +89,15 @@ export default function HermesPage() {
   // "all" | "default" | profile name. Scopes the summary tiles, the sources and
   // models cards, and the grouped session tables. The Telemetry section is not
   // profile-scoped: its endpoint always covers every profile.
-  const [profileScope, setProfileScope] = useState<string>("all");
+  const [pageState, setPageState] = useSessionState("hermes_page", {
+    profileScope: "all" as string,
+  });
+  const { profileScope } = pageState;
+  const loading = sessionsRes.loading;
+
+  // Restore scroll position when data fetch is complete
+  useScrollState("key_hermes_page", !loading);
+  
   const allHermesSessions = useMemo(
     () => (sessionsRes.data ?? []).filter((s) => s.agent === "hermes"),
     [sessionsRes.data]
@@ -164,8 +174,6 @@ export default function HermesPage() {
     });
   }, [hermesSessions]);
 
-  const loading = !sessionsRes.data;
-
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
       <PageHeader
@@ -192,7 +200,7 @@ export default function HermesPage() {
             return (
               <button
                 key={name}
-                onClick={() => setProfileScope(name)}
+                onClick={() => setPageState({ profileScope: name })}
                 className={`inline-flex items-center gap-1.5 font-mono text-[11px] px-2.5 h-7 rounded-full border transition-colors ${
                   selected
                     ? "border-[var(--tt-border-strong)] bg-[var(--tt-sunken)] text-[var(--tt-fg)]"
