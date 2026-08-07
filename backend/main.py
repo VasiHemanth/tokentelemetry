@@ -2138,6 +2138,141 @@ async def hermes_telemetry():
     return _ht.build_telemetry(sessions, index, files_read)
 
 
+_HERMES_SESSION_SORTS = {
+    "newest", "oldest", "cost_desc", "cost_asc",
+    "tokens_desc", "tokens_asc", "project", "model",
+}
+
+
+def _hermes_session_source(session: Dict[str, Any]) -> str:
+    """Return the stable source label used by the Hermes explorer contract."""
+    source = session.get("source_subtype") or session.get("source")
+    return str(source or "unknown")
+
+
+def _hermes_session_timestamp(session: Dict[str, Any]) -> datetime:
+    timestamp = session.get("timestamp")
+    if isinstance(timestamp, datetime):
+        return _aware(timestamp)
+    if isinstance(timestamp, str):
+        try:
+            return _aware(datetime.fromisoformat(timestamp.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _hermes_session_number(session: Dict[str, Any], field: str) -> float:
+    value = session.get(field)
+    if field == "tokens":
+        value = (session.get("tokens") or {}).get("total", 0)
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _hermes_session_matches(
+    session: Dict[str, Any],
+    *,
+    search: Optional[str],
+    project: Optional[str],
+    source: Optional[str],
+    model: Optional[str],
+) -> bool:
+    source_value = _hermes_session_source(session)
+    searchable = " ".join(
+        str(session.get(field) or "")
+        for field in ("id", "display", "project", "model", "provider")
+    ) + " " + source_value
+    if search and search.casefold() not in searchable.casefold():
+        return False
+    for requested, actual in (
+        (project, session.get("project")),
+        (source, source_value),
+        (model, session.get("model")),
+    ):
+        if requested and requested.casefold() not in str(actual or "").casefold():
+            return False
+    return True
+
+
+def _hermes_session_sort_key(session: Dict[str, Any], sort: str):
+    if sort in {"newest", "oldest"}:
+        return (_hermes_session_timestamp(session), str(session.get("id") or ""))
+    if sort in {"cost_desc", "cost_asc"}:
+        return (_hermes_session_number(session, "cost"), str(session.get("id") or ""))
+    if sort in {"tokens_desc", "tokens_asc"}:
+        return (_hermes_session_number(session, "tokens"), str(session.get("id") or ""))
+    if sort == "project":
+        return (str(session.get("project") or "").casefold(), str(session.get("id") or ""))
+    return (str(session.get("model") or "").casefold(), str(session.get("id") or ""))
+
+
+@app.get("/hermes/sessions")
+async def hermes_sessions(
+    page: int = 1,
+    page_size: int = 50,
+    search: Optional[str] = None,
+    project: Optional[str] = None,
+    source: Optional[str] = None,
+    model: Optional[str] = None,
+    sort: str = "newest",
+    fresh: bool = False,
+):
+    """Return a paginated, filterable Hermes session list.
+
+    The endpoint deliberately reuses the canonical session scan, keeping its
+    fields and timestamp/cost semantics aligned with ``/sessions``. Results
+    are sorted deterministically, including the session id as a tie-breaker.
+    """
+    if page < 1:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="page must be at least 1")
+    if page_size < 1 or page_size > 200:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="page_size must be between 1 and 200")
+    if sort not in _HERMES_SESSION_SORTS:
+        allowed = ", ".join(sorted(_HERMES_SESSION_SORTS))
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail=f"sort must be one of: {allowed}")
+
+    sessions = await get_sessions_cached(fresh=fresh)
+    filtered = [
+        session for session in sessions
+        if session.get("agent") == "hermes"
+        and _hermes_session_matches(
+            session,
+            search=search,
+            project=project,
+            source=source,
+            model=model,
+        )
+    ]
+    reverse = sort in {"newest", "cost_desc", "tokens_desc"}
+    filtered.sort(key=lambda session: _hermes_session_sort_key(session, sort), reverse=reverse)
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    page_sessions = filtered[start:start + page_size]
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    public_sessions = []
+    for session in page_sessions:
+        public = _session_public_view(session)
+        public.setdefault("source", _hermes_session_source(session))
+        public_sessions.append(public)
+
+    return {
+        "sessions": public_sessions,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Update checker — compares local git HEAD to remote main, pulls curated
 # highlights from UPDATE.json at the repo root. The "What's new" banner in
