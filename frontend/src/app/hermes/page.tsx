@@ -22,6 +22,7 @@ import {
 import SourceBadge from "@/components/SourceBadge";
 import HermesIcon from "@/components/icons/HermesIcon";
 import { formatCost } from "@/lib/format";
+import { profileColor, profileTint } from "@/lib/profileColor";
 import { trackEvent } from "@/lib/telemetry";
 
 interface GatewayState {

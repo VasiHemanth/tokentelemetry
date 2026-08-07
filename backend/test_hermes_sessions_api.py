@@ -32,6 +32,7 @@ def _session(
         "model": model,
         "tokens": {"input": tokens, "output": 0, "cached": 0, "total": tokens},
         "cost": cost,
+        "artifacts": [{"name": "state.db", "path": "/private/hermes/state.db", "type": "document"}],
     }
 
 
@@ -83,6 +84,7 @@ def test_hermes_sessions_paginates_and_reports_metadata(hermes_sessions):
     result = _run(main.hermes_sessions(page=2, page_size=2, sort="newest"))
 
     assert [session["id"] for session in result["sessions"]] == ["h-old"]
+    assert "artifacts" not in result["sessions"][0]
     assert result["pagination"] == {
         "page": 2,
         "page_size": 2,

@@ -2143,6 +2143,16 @@ _HERMES_SESSION_SORTS = {
     "tokens_desc", "tokens_asc", "project", "model",
 }
 
+_HERMES_SESSION_PUBLIC_FIELDS = (
+    "id", "agent", "project", "timestamp", "display", "text", "source_subtype",
+    "model", "tokens", "cost", "cost_anomaly", "hermes_profile",
+)
+
+
+def _hermes_session_public_view(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the session-list fields consumed by the Hermes explorer."""
+    return {field: session[field] for field in _HERMES_SESSION_PUBLIC_FIELDS if field in session}
+
 
 def _hermes_session_source(session: Dict[str, Any]) -> str:
     """Return the stable source label used by the Hermes explorer contract."""
@@ -2258,7 +2268,7 @@ async def hermes_sessions(
     total_pages = (total + page_size - 1) // page_size if total else 0
     public_sessions = []
     for session in page_sessions:
-        public = _session_public_view(session)
+        public = _hermes_session_public_view(session)
         public.setdefault("source", _hermes_session_source(session))
         public_sessions.append(public)
 

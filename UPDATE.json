@@ -1,6 +1,22 @@
 {
   "releases": [
     {
+      "tag": "2026-08-08",
+      "title": "Find any Hermes session without loading them all",
+      "highlights": [
+        {
+          "title": "Hermes session explorer",
+          "description": "The Hermes dashboard now keeps the overview compact and links to a dedicated session explorer. Search, filter by project, source, or model, sort by time, cost, or tokens, and move through the history 50 sessions at a time.",
+          "href": "/hermes/sessions"
+        },
+        {
+          "title": "Cleaner Codex trace timelines",
+          "description": "Codex traces now collapse mirrored messages and repeated reasoning snapshots, so the Step Index and conversation show each visible turn once instead of replaying the rollout's internal projections.",
+          "href": "/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-02",
       "title": "Hermes telemetry that says what it doesn't know",
       "highlights": [
