@@ -370,6 +370,44 @@ def test_scan_cursor_spawn_count_only(scan_env):
     assert "delegated_input" not in s["tokens"]
 
 
+def test_qwen_and_cursor_price_cumulative_cache_reads(scan_env, monkeypatch):
+    """Cache reads are per-turn usage, while the display bucket stays HWM."""
+    model = "claude-sonnet-4-6"
+    usages = [
+        {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 100,
+         "cache_creation_input_tokens": 5},
+        {"input_tokens": 200, "output_tokens": 30, "cache_read_input_tokens": 300,
+         "cache_creation_input_tokens": 7},
+    ]
+
+    qwen_dir = scan_env / ".qwen"
+    monkeypatch.setattr(main, "QWEN_DIR", qwen_dir)
+    qwen_chat = qwen_dir / "projects" / "proj" / "chats" / "qwen-cache.jsonl"
+    qwen_chat.parent.mkdir(parents=True)
+    qwen_chat.write_text("".join(
+        _jl(type="assistant", message={"model": model, "usage": usage, "content": []})
+        for usage in usages
+    ), encoding="utf-8")
+
+    cursor_sid = "cursor-cache"
+    cursor_chat = (scan_env / ".cursor" / "projects" / "proj" / "agent-transcripts"
+                   / cursor_sid / f"{cursor_sid}.jsonl")
+    cursor_chat.parent.mkdir(parents=True)
+    cursor_chat.write_text("".join(
+        _jl(role="assistant", message={"model": model, "usage": usage, "content": []})
+        for usage in usages
+    ), encoding="utf-8")
+
+    sessions = main._scan_sessions_sync()
+    expected_cost = main.calculate_cost(model, 300, 50, 400, cache_creation_tokens=12)
+    for agent, sid in (("qwen", "qwen-cache"), ("cursor", cursor_sid)):
+        session = next(s for s in sessions if s["agent"] == agent and s["id"] == sid)
+        assert session["tokens"]["cached"] == 300
+        assert session["tokens"]["_cached_sum"] == 400
+        assert session["tokens"]["cache_creation"] == 12
+        assert session["cost"] == pytest.approx(expected_cost)
+
+
 def _make_opencode_db(path: Path):
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE session (id TEXT, project_id TEXT, parent_id TEXT, "
