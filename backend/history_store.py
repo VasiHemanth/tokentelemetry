@@ -36,7 +36,7 @@ from tt_paths import data_dir
 
 _log = logging.getLogger("tokentelemetry.history")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Sub-dicts folded into ``ecosystem_json`` and expanded back out on read. These
 # are the keys the analytics aggregation + delegation views consume beyond the
@@ -133,6 +133,26 @@ def _migrate(con: sqlite3.Connection) -> None:
             pass
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.commit()
+    if ver < 3:
+        # v3 adds delegated_* columns: Claude subagent/workflow spend that
+        # exists NOWHERE else. Without persisting it, /analytics's fold-in
+        # (by_agent/by_day/by_model/total) is a no-op for every day served
+        # from this store — which is EVERY day except "today" — silently
+        # undercounting historical totals even after the scanner itself was
+        # fixed to compute delegated_cost correctly (issue: cost undercount).
+        for stmt in (
+            "ALTER TABLE sessions ADD COLUMN delegated_cost REAL DEFAULT 0.0",
+            "ALTER TABLE sessions ADD COLUMN delegated_input INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN delegated_output INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN delegated_cached INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN delegated_by_model_json TEXT",
+        ):
+            try:
+                con.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.commit()
 
 
 # ── serialization helpers ────────────────────────────────────────────────────
@@ -187,6 +207,17 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 # value equals today's. Explicit membership, not `or`, so a
                 # legitimately-zero `_cached_sum` is never masked by `cached`.
                 cache_reads = tok["_cached_sum"] if "_cached_sum" in tok else tok.get("cached", 0)
+                # Delegated (Claude subagent/workflow) spend — exists NOWHERE
+                # else, so it must round-trip through the store or every
+                # historical /analytics query (i.e. every day but "today")
+                # silently loses it even though the live scanner computes it
+                # correctly.
+                deleg_cost = float(r.get("delegated_cost", 0.0) or 0.0)
+                deleg_input = int(tok.get("delegated_input", 0) or 0)
+                deleg_output = int(tok.get("delegated_output", 0) or 0)
+                deleg_cached = int(tok.get("delegated_cached", 0) or 0)
+                deleg_by_model = r.get("delegated_by_model")
+                deleg_by_model_json = json.dumps(deleg_by_model) if deleg_by_model else None
                 # A stub row is a session we discovered on disk but did NOT fully
                 # parse this scan (e.g. its sidecar cache was cold and we chose
                 # not to reparse, or it's brand-new and unseen). Its zero-value
@@ -219,7 +250,12 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             tok_per_sec=excluded.tok_per_sec,
                             ecosystem_json=excluded.ecosystem_json,
                             last_seen_at=excluded.last_seen_at,
-                            source_present=1
+                            source_present=1,
+                            delegated_cost=excluded.delegated_cost,
+                            delegated_input=excluded.delegated_input,
+                            delegated_output=excluded.delegated_output,
+                            delegated_cached=excluded.delegated_cached,
+                            delegated_by_model_json=excluded.delegated_by_model_json
                     """
                 con.execute(
                     f"""
@@ -227,8 +263,9 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         agent, id, project, model, provider, endpoint, billing_mode,
                         first_ts, last_ts, input, output, cached, cache_reads, total, cost,
                         tok_per_sec, ecosystem_json, first_seen_at, last_seen_at,
-                        source_present
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                        source_present, delegated_cost, delegated_input, delegated_output,
+                        delegated_cached, delegated_by_model_json
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)
                     {conflict_clause}
                     """,
                     (
@@ -241,6 +278,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         float(r.get("cost", 0.0) or 0.0),
                         r.get("tok_per_sec"),
                         _ecosystem_blob(r), now, now,
+                        deleg_cost, deleg_input, deleg_output, deleg_cached, deleg_by_model_json,
                     ),
                 )
                 written += 1
@@ -301,14 +339,27 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
             "input": r["input"], "output": r["output"],
             "cached": r["cached"], "total": r["total"],
             "_cached_sum": cache_reads,
+            # Delegated (Claude subagent/workflow) spend (v3+) — round-tripped
+            # so /analytics's fold-in isn't a no-op for every non-"today" query,
+            # which is served from this store rather than a live rescan.
+            "delegated_input": r["delegated_input"] if "delegated_input" in r.keys() else 0,
+            "delegated_output": r["delegated_output"] if "delegated_output" in r.keys() else 0,
+            "delegated_cached": r["delegated_cached"] if "delegated_cached" in r.keys() else 0,
         },
         "cost": r["cost"],
+        "delegated_cost": (r["delegated_cost"] if "delegated_cost" in r.keys() else 0.0) or 0.0,
         "tok_per_sec": r["tok_per_sec"],
         "source_present": bool(r["source_present"]),
         "transcript_archived": bool(r["transcript_archived"]),
         "summary_present": bool(r["summary_present"]),
         "from_history": True,
     }
+    deleg_by_model_json = r["delegated_by_model_json"] if "delegated_by_model_json" in r.keys() else None
+    if deleg_by_model_json:
+        try:
+            out["delegated_by_model"] = json.loads(deleg_by_model_json)
+        except (ValueError, TypeError):
+            pass
     if r["ecosystem_json"]:
         try:
             eco = json.loads(r["ecosystem_json"])
