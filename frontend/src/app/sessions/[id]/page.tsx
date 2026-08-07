@@ -78,6 +78,8 @@ interface Session {
   loop?: any;
   /** Goal Mode (`/goal`); a session can set several, so this is a list */
   goals?: any[];
+  /** Claude Code records that lack local usage and therefore cannot be priced. */
+  untracked_background?: { recaps: number; titles: number; compactions: number; total: number };
 }
 
 interface Event {
@@ -792,6 +794,8 @@ export default function SessionDetailPage() {
      return tools;
   }, [events, toolResultByUseId]);
 
+  const untrackedBackground = agent === "claude" ? sessionInfo?.untracked_background : undefined;
+
   return (
     <div className="min-h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col">
       <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-4 sticky top-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
@@ -925,6 +929,19 @@ export default function SessionDetailPage() {
               </Button>
             </div>
           </div>
+
+          {untrackedBackground && untrackedBackground.total > 0 && (
+            <div
+              role="note"
+              className="flex items-start gap-2 rounded-[var(--tt-radius)] border border-amber-400/30 bg-amber-400/[0.06] px-3 py-2 text-[11px] text-[var(--tt-fg-muted)]"
+            >
+              <Info size={14} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
+              <span>
+                {untrackedBackground.total} Claude Code background record{untrackedBackground.total === 1 ? "" : "s"} without local usage data
+                {" "}(recaps {untrackedBackground.recaps}, titles {untrackedBackground.titles}, compactions {untrackedBackground.compactions}); not included in the recorded cost.
+              </span>
+            </div>
+          )}
 
           {/* Timeline scrubber */}
           {!loading && events.length > 0 && (
