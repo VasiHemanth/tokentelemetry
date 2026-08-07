@@ -316,6 +316,7 @@ def test_artifacts_rejects_symlink_escape_and_outside_paths():
     assert _call_artifact("/etc/hosts")[0] == "denied"
     # Symlink planted inside an allowed dir but pointing out -> 403 (resolved check).
     evil = main.CLAUDE_DIR / "tt_symlink_escape_test"
+    evil.parent.mkdir(parents=True, exist_ok=True)
     try:
         if not evil.exists():
             os.symlink("/etc", evil)
@@ -331,6 +332,7 @@ def test_artifacts_serves_legit_under_allowlist():
     with tempfile.TemporaryDirectory() as d:
         # GEMINI_DIR is on the allow-list; create a file under it via the real root.
         f = main.GEMINI_DIR / "tt_artifact_serve_test.txt"
+        f.parent.mkdir(parents=True, exist_ok=True)
         try:
             f.write_text("hello")
             status, served = _call_artifact(str(f))
