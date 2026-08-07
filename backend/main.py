@@ -6657,7 +6657,7 @@ def _codex_visible_signatures(event: Dict[str, Any]) -> List[tuple]:
 
 
 def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove only event_msg records mirrored by nearby response_item data."""
+    """Return one visible Codex timeline from mirrored and streamed records."""
     canonical: Dict[tuple, List[tuple]] = {}
     for index, event in enumerate(events):
         if event.get("type") != "response_item":
@@ -6684,7 +6684,45 @@ def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, An
             if matches_canonical:
                 continue
         result.append(event)
-    return result
+
+    # Reasoning is streamed as snapshots. A snapshot may repeat the previous
+    # summary, extend it, or contain no visible text at all. The UI should show
+    # the most complete nearby snapshot once, not one Step Index row per write.
+    collapsed: List[Dict[str, Any]] = []
+    for event in result:
+        if event.get("type") != "response_item" or (event.get("payload") or {}).get("type") != "reasoning":
+            collapsed.append(event)
+            continue
+
+        current_text = "\n\n".join(
+            text for kind, text in _codex_visible_signatures(event) if kind == "reasoning" and text
+        )
+        if not current_text:
+            continue
+
+        previous_index = len(collapsed) - 1
+        while previous_index >= 0:
+            previous = collapsed[previous_index]
+            previous_payload = previous.get("payload") or {}
+            if previous.get("type") == "event_msg" and previous_payload.get("type") == "token_count":
+                previous_index -= 1
+                continue
+            break
+
+        if previous_index >= 0:
+            previous = collapsed[previous_index]
+            previous_payload = previous.get("payload") or {}
+            if previous.get("type") == "response_item" and previous_payload.get("type") == "reasoning":
+                previous_text = "\n\n".join(
+                    text for kind, text in _codex_visible_signatures(previous) if kind == "reasoning" and text
+                )
+                if previous_text == current_text or previous_text.startswith(current_text) or current_text.startswith(previous_text):
+                    if len(current_text) >= len(previous_text):
+                        collapsed[previous_index] = event
+                    continue
+
+        collapsed.append(event)
+    return collapsed
 
 
 @app.get("/sessions/{session_id}")

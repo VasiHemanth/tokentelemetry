@@ -93,3 +93,42 @@ def test_codex_detail_keeps_event_only_records(tmp_path, monkeypatch):
     result = asyncio.run(main.get_session_detail(session_id, "codex"))
 
     assert len(result) == 2
+
+
+def test_codex_detail_collapses_empty_and_streaming_reasoning_snapshots():
+    events = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning"}],
+            },
+        },
+        {
+            "type": "event_msg",
+            "payload": {"type": "agent_reasoning", "text": "Planning"},
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning"}],
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning the fix"}],
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {"type": "reasoning", "summary": []},
+        },
+    ]
+
+    result = main._canonicalize_codex_trace(events)
+
+    assert len(result) == 1
+    assert result[0]["payload"]["summary"][0]["text"] == "Planning the fix"
