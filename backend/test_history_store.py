@@ -58,6 +58,22 @@ def test_mark_absent_flags_without_deleting():
     assert rows[0]["source_present"] is False
 
 
+def test_mark_absent_skips_agents_with_an_incomplete_scan():
+    h = _fresh_store()
+    h.upsert_sessions([
+        _session("claude-live", agent="claude"),
+        _session("cline-unreadable", agent="cline"),
+        _session("codex-removed", agent="codex"),
+    ])
+
+    h.mark_absent({("claude", "claude-live")}, skip_agents={"cline"})
+    by_key = {(r["agent"], r["id"]): r for r in h.query()}
+
+    assert by_key[("claude", "claude-live")]["source_present"] is True
+    assert by_key[("cline", "cline-unreadable")]["source_present"] is True
+    assert by_key[("codex", "codex-removed")]["source_present"] is False
+
+
 def test_ecosystem_roundtrips():
     h = _fresh_store()
     h.upsert_sessions([_session(skills_used=[{"name": "x", "count": 2}],

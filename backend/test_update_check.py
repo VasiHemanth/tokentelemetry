@@ -27,7 +27,7 @@ def _isolate_prefs() -> None:
 
 def test_preferences_default_and_roundtrip():
     _isolate_prefs()
-    assert harness_config.load_preferences() == {"update_check": True}
+    assert harness_config.load_preferences() == harness_config.DEFAULT_PREFERENCES
     assert harness_config.save_preferences({"update_check": False})["update_check"] is False
     assert harness_config.load_preferences()["update_check"] is False
 
@@ -40,7 +40,7 @@ def test_preferences_rejects_unknown_keys_and_bad_types():
     assert saved["update_check"] is True  # string rejected -> default kept
     # A malformed file degrades to defaults, never raises.
     harness_config.PREFERENCES_FILE.write_text("not valid json {")
-    assert harness_config.load_preferences() == {"update_check": True}
+    assert harness_config.load_preferences() == harness_config.DEFAULT_PREFERENCES
 
 
 def test_version_gating_precedence():

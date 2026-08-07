@@ -209,27 +209,27 @@ def test_session_detail_pi_normalizes_to_claude_shape(tmp_path, monkeypatch):
     _write_pi_session(root, cwd="/Users/dev/proj", sid=sid)
     monkeypatch.setattr(main, "PI_SESSIONS_DIR", root)
 
-    events = asyncio.get_event_loop().run_until_complete(
-        main.get_session_detail(sid, "pi"))
+    events = asyncio.run(main.get_session_detail(sid, "pi"))
     assert isinstance(events, list) and events
 
-    # Every event is Claude-shaped and carries a normalized timestamp.
-    assert all("normalized_timestamp" in e for e in events)
-    roles = [e["message"]["role"] for e in events]
+    # Pi also exposes a thinking-level metadata event. Every MESSAGE event is
+    # Claude-shaped and carries Pi's native normalized timestamp.
+    messages = [e for e in events if "message" in e]
+    assert messages and all("normalized_timestamp" in e for e in messages)
+    roles = [e["message"]["role"] for e in messages]
     assert roles[0] == "user"
 
     # tool_use blocks must pair 1:1 with tool_result blocks by id.
-    tu = {b["id"] for e in events for b in e["message"]["content"] if b["type"] == "tool_use"}
-    tr = {b["tool_use_id"] for e in events for b in e["message"]["content"] if b.get("type") == "tool_result"}
+    tu = {b["id"] for e in messages for b in e["message"]["content"] if b["type"] == "tool_use"}
+    tr = {b["tool_use_id"] for e in messages for b in e["message"]["content"] if b.get("type") == "tool_result"}
     assert tu and tu == tr
 
     # Thinking + text blocks survive on the assistant turn.
-    kinds = {b["type"] for e in events for b in e["message"]["content"]}
+    kinds = {b["type"] for e in messages for b in e["message"]["content"]}
     assert {"thinking", "text", "tool_use", "tool_result"} <= kinds
 
 
 def test_session_detail_pi_not_found(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "PI_SESSIONS_DIR", tmp_path / "sessions")
-    res = asyncio.get_event_loop().run_until_complete(
-        main.get_session_detail("nonexistent-id", "pi"))
+    res = asyncio.run(main.get_session_detail("nonexistent-id", "pi"))
     assert res == {"error": "Not found"}

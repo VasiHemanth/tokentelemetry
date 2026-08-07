@@ -532,6 +532,7 @@ def test_scan_agents_without_signal_lack_keys(scan_env):
 
 def test_analytics_ecosystem_aggregates(monkeypatch):
     from datetime import datetime, timezone
+    import history_store
     base = {"project": "/tmp/x", "timestamp": datetime.now(timezone.utc),
             "tokens": {"input": 10, "output": 5, "cached": 0, "total": 15},
             "cost": 0.01, "model": "claude-opus-4-8", "mcp_tools": []}
@@ -568,7 +569,10 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
         return sessions
 
     monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
-    a = _run(main.get_analytics())
+    monkeypatch.setattr(history_store, "query", lambda *args: [])
+    a = _run(main.get_analytics(
+        from_=None, to=None, granularity="day", agents=[], models=[], projects=[]
+    ))
     assert a["by_skill"] == {"graphify": {"invocations": 3, "session_count": 2,
                                           "agents": ["claude"]}}
     assert a["by_mcp_server"] == {"chrome": {"calls": 6, "session_count": 2,
@@ -854,6 +858,27 @@ def _hist_env(tmp_path, monkeypatch):
     import history_store
     importlib.reload(history_store)
     return history_store
+
+
+def test_persist_history_passes_presence_guards_to_mark_absent(monkeypatch):
+    import history_store
+
+    captured = {}
+    monkeypatch.setattr(history_store, "upsert_sessions", lambda rows: len(rows))
+    monkeypatch.setattr(
+        history_store,
+        "mark_absent",
+        lambda seen, *, skip_agents: captured.update(seen=seen, skip_agents=skip_agents),
+    )
+    monkeypatch.setattr(main, "_archive_opted_in_transcripts", lambda rows: None)
+    session = {"agent": "cline", "id": "locked", "tokens": {}, "cost": 0.0}
+
+    main._persist_history_async([session], skip_agents={"cline"})
+
+    assert captured == {
+        "seen": {("cline", "locked")},
+        "skip_agents": {"cline"},
+    }
 
 
 def test_upsert_stub_does_not_crush_real_row(tmp_path, monkeypatch):
@@ -1214,6 +1239,31 @@ def test_codex_scan_cache_miss_after_real_mtime_change(scan_env, monkeypatch):
     result2 = main._scan_sessions_sync()
     sess2 = next(s for s in result2 if s["id"] == sid)
     assert sess2["tokens"]["total"] == 450
+
+
+def test_codex_unreadable_rollout_stays_stub_and_does_not_replace_cache(scan_env, monkeypatch):
+    """A transient rollout read failure must never turn a zero rollup into data."""
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    sid = "019eb056-4eae-7280-8617-000000000099"
+    path = _write_codex_rollout(scan_env / ".codex", sid, 0, [
+        _codex_session_meta(),
+        _codex_token_event("2026-07-01T00:00:00Z", 100, 10, 50),
+    ])
+
+    original_open = open
+
+    def locked_open(file, *args, **kwargs):
+        if Path(file) == path:
+            raise OSError("rollout temporarily locked")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", locked_open)
+    result = main._scan_sessions_sync()
+    sess = next(s for s in result if s["id"] == sid)
+
+    assert sess["stub"] is True
+    assert scan_cache.read_cache("codex", sid, path.stat().st_mtime) is None
 
 
 def test_codex_scan_cache_hit_reapplies_alias(scan_env, monkeypatch):

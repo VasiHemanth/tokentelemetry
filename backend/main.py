@@ -3315,7 +3315,7 @@ def _cline_loop_specs(db_path: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _scan_cline_sessions() -> List[Dict[str, Any]]:
+def _scan_cline_sessions(presence_guards: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
     """Scan Cline sessions from BOTH stores it writes to, deduping by session id
     (the CLI row wins when a session id appears in both).
 
@@ -3354,7 +3354,10 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 rows = conn.execute("SELECT * FROM sessions").fetchall()
             finally:
                 conn.close()
-        except Exception:
+        except Exception as e:
+            _log.warning("Cline CLI scan failed; preserving its history presence: %s", e)
+            if presence_guards is not None:
+                presence_guards.add("cline")
             rows = []
 
         # Cline spawns subagents/teams: each subagent is its OWN row with
@@ -3494,7 +3497,10 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
         try:
             with open(history_path, "r", encoding="utf-8", errors="replace") as f:
                 history = json.load(f)
-        except Exception:
+        except Exception as e:
+            _log.warning("Cline VS Code scan failed; preserving its history presence: %s", e)
+            if presence_guards is not None:
+                presence_guards.add("cline")
             history = []
 
         if isinstance(history, list):
@@ -4645,8 +4651,9 @@ def _apply_codex_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> None
     ]
 
 
-def _scan_sessions_sync():
+def _scan_sessions_with_presence_guards() -> Tuple[List[Dict[str, Any]], Set[str]]:
     sessions = []
+    presence_guards: Set[str] = set()
     aliases = _load_project_aliases()
 
     def apply_alias(path: str) -> str:
@@ -5184,13 +5191,16 @@ def _scan_sessions_sync():
                 continue
 
             day_snap = {}
+            parsed_rollout = False
             for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
+                        parsed_file = False
                         for line in f:
                             try:
                                 data = json.loads(line)
                             except Exception: continue
+                            parsed_file = True
                             if data.get("type") == "session_meta":
                                 sess["_raw_cwd"] = data["payload"].get("cwd", "unknown")
                                 sess["project"] = apply_alias(sess["_raw_cwd"])
@@ -5282,7 +5292,9 @@ def _scan_sessions_sync():
                                                 sess["has_plan"] = True
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
-                except Exception: pass
+                    parsed_rollout = parsed_rollout or parsed_file
+                except Exception as e:
+                    _log.warning("Codex rollout scan failed; preserving the session as a stub: %s", e)
             
             if day_snap:
                 tbd = {}
@@ -5302,7 +5314,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None:
+            if source_mtime is not None and parsed_rollout:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():
@@ -6145,7 +6157,7 @@ def _scan_sessions_sync():
     sessions.extend(_scan_grok_sessions())
 
     # 8b. Cline — CLI SQLite store + VS Code extension JSON store
-    sessions.extend(_scan_cline_sessions())
+    sessions.extend(_scan_cline_sessions(presence_guards))
 
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
@@ -6345,8 +6357,9 @@ def _scan_sessions_sync():
                     sessions.append(hermes_by_id[sid])
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Hermes scan failed for %s; preserving Hermes history presence: %s", db_path, e)
+            presence_guards.add("hermes")
     # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
     # of their own, already in totals) — annotate parents, never re-sum.
     for h_sess in hermes_by_id.values():
@@ -6376,6 +6389,12 @@ def _scan_sessions_sync():
 
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
+    return sessions, presence_guards
+
+
+def _scan_sessions_sync() -> List[Dict[str, Any]]:
+    """Compatibility wrapper for callers that only need live session rows."""
+    sessions, _presence_guards = _scan_sessions_with_presence_guards()
     return sessions
 
 
@@ -6445,16 +6464,18 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
     return None
 
 
-def _persist_history_async(data: List[Dict[str, Any]]) -> None:
+def _persist_history_async(data: List[Dict[str, Any]], *, skip_agents: Optional[Set[str]] = None) -> None:
     """Schedule the durable-history write off the request path. Fire-and-forget:
     failures are logged inside the store and never surface to the caller."""
     import history_store
+
+    guarded_agents = set(skip_agents or ())
 
     def _work() -> None:
         try:
             history_store.upsert_sessions(data)
             history_store.mark_absent({(s.get("agent"), s.get("id")) for s in data
-                                       if s.get("agent") and s.get("id")})
+                                       if s.get("agent") and s.get("id")}, skip_agents=guarded_agents)
             _archive_opted_in_transcripts(data)
         except Exception as e:  # noqa: BLE001
             _log.exception("history persist failed: %s", e)
@@ -6492,7 +6513,7 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         _sessions_cache["building"] = True
         try:
             t0 = _time.monotonic()
-            data = await _asyncio.to_thread(_scan_sessions_sync)
+            data, presence_guards = await _asyncio.to_thread(_scan_sessions_with_presence_guards)
             _sessions_cache["data"] = data
             _sessions_cache["at"] = _time.monotonic()
             _log.info("sessions scan: %d entries in %.0fms", len(data), (_time.monotonic() - t0) * 1000)
@@ -6500,7 +6521,10 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             # outlives the agents' own transcript pruning. Fire-and-forget on a
             # worker thread — a store failure must never break a request, and the
             # write must not add latency to this scan.
-            _persist_history_async(data)
+            if presence_guards:
+                _persist_history_async(data, skip_agents=presence_guards)
+            else:
+                _persist_history_async(data)
         except Exception as e:
             _log.exception("sessions scan failed: %s", e)
             # If we have a previous value, keep serving it rather than 500-ing.

@@ -252,10 +252,12 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
     return written
 
 
-def mark_absent(seen_keys: Set[Tuple[str, str]]) -> None:
+def mark_absent(seen_keys: Set[Tuple[str, str]], *, skip_agents: Optional[Set[str]] = None) -> None:
     """Flag rows whose (agent, id) was NOT in the latest scan as no longer on
-    disk (``source_present=0``). Never deletes — the rollup is what survives
-    agent pruning, so those rows are exactly the ones we must keep."""
+    disk (``source_present=0``), except agents whose source could not be read
+    this scan. Never deletes — the rollup is what survives agent pruning, so
+    those rows are exactly the ones we must keep."""
+    skip_agents = skip_agents or set()
     try:
         con = _connect()
         try:
@@ -263,7 +265,7 @@ def mark_absent(seen_keys: Set[Tuple[str, str]]) -> None:
                 "SELECT agent, id FROM sessions WHERE source_present=1"
             ).fetchall()
             gone = [(a, i) for (a, i) in ((r["agent"], r["id"]) for r in present)
-                    if (a, i) not in seen_keys]
+                    if a not in skip_agents and (a, i) not in seen_keys]
             if gone:
                 con.executemany(
                     "UPDATE sessions SET source_present=0 WHERE agent=? AND id=?", gone
