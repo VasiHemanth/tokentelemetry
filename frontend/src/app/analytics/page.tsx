@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   BarChart3, TrendingUp, ArrowDownToLine, ArrowUpFromLine,
-  Zap, DollarSign, Cpu, GitBranch, Repeat,
+  Zap, DollarSign, Cpu, GitBranch, Repeat, Info,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart as RePieChart, Pie, Cell,
@@ -214,6 +214,7 @@ export default function AnalyticsPage() {
   }
 
   const cacheEff = ((data.total.cached / Math.max(1, data.total.input + data.total.cached)) * 100);
+  const hasClaudeSessions = (data.by_agent.claude?.session_count ?? 0) > 0;
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -230,6 +231,19 @@ export default function AnalyticsPage() {
           )
         }
       />
+
+      {hasClaudeSessions && (
+        <div
+          role="note"
+          className="flex items-start gap-3 rounded-[var(--tt-radius)] border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3 text-[12px] text-[var(--tt-fg-muted)]"
+        >
+          <Info size={15} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
+          <div>
+            <p className="font-semibold text-[var(--tt-fg)]">Claude Code totals reflect recorded usage.</p>
+            <p className="mt-0.5">Recap, title, and compaction records can lack local token usage, so their activity cannot be priced or included in these totals.</p>
+          </div>
+        </div>
+      )}
 
       {/* Filter toolbar: granularity + custom range + agent/model selection.
           The date-range presets live on the consumption chart header. */}
