@@ -1,4 +1,4 @@
-# Price per 1M tokens in USD (Last Updated: 2026-05-17)
+# Price per 1M tokens in USD (Last Updated: 2026-08-07)
 #
 # Two-tier lookup:
 #   1. PRICING_BY_PROVIDER  — (provider, model_id_lower) → rates. Authoritative
@@ -17,10 +17,16 @@
 # Sources cited in PRICING_SOURCES.md alongside this file.
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
-PRICING_UPDATED = "2026-05-17"
+logger = logging.getLogger("tokentelemetry.pricing")
+# Models we've already warned about falling through to `_default` — so a
+# chatty session doesn't log the same warning on every single request.
+_warned_unpriced_models: set = set()
+
+PRICING_UPDATED = "2026-08-07"
 
 # Build-time pricing dataset (models.dev), refreshed maintainer/CI-side and
 # committed alongside this module — see pricing_sync.py. We read ONLY this
@@ -37,11 +43,23 @@ _PROVIDER_SEP = "\x00"
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
     # --- Anthropic (Claude) ---
+    # Verified against https://platform.claude.com/docs/en/about-claude/pricing
+    # on 2026-08-07 (per PR history, this is the SECOND time a new-model
+    # pricing gap has silently undercounted — see pricing_sync/models-dev).
+    "claude-fable-5":    {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    "claude-opus-5":     {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    "claude-opus-4-8":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-7":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-6":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-5":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-1":   {"in": 15.00, "out": 75.00, "cached_read": 1.50},
     "claude-opus-4":     {"in": 15.00, "out": 75.00, "cached_read": 1.50},
+    # Sonnet 5 is INTRODUCTORY pricing, in effect only through 2026-08-31;
+    # standard pricing (3.00/15.00/0.30 — same as Sonnet 4.x) takes over
+    # 2026-09-01. Update this entry then, or sessions after that date will be
+    # silently UNDERcounted by ~33% — the exact bug class this table exists
+    # to prevent. No code here dates the cutover automatically.
+    "claude-sonnet-5":   {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
     "claude-sonnet-4-6": {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
     "claude-sonnet-4-5": {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
     "claude-sonnet-4":   {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
@@ -385,6 +403,21 @@ def calculate_cost(
                     )
             except Exception:
                 pass
+            # No curated entry, no overlay entry, no fuzzy-prefix match, and not
+            # opted into local-power pricing — this model is being billed at the
+            # generic _default rate, which is almost certainly WRONG for a real
+            # API model. Log once per model so a new release degrades visibly
+            # (searchable in server logs) instead of silently undercounting for
+            # weeks, same class of bug as the Sonnet 5 / Opus 5 gap this table
+            # was extended to cover.
+            if model_name not in _warned_unpriced_models:
+                _warned_unpriced_models.add(model_name)
+                logger.warning(
+                    "No pricing entry for model %r (provider=%r) — billing at "
+                    "_default rate ($%.2f/$%.2f per MTok in/out). Add a curated "
+                    "entry in pricing.py or refresh pricing_data.json.",
+                    model_name, provider, PRICING["_default"]["in"], PRICING["_default"]["out"],
+                )
             config = PRICING["_default"]
 
     in_rate = config["in"] or 0
