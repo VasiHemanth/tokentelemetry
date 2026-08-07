@@ -6611,6 +6611,82 @@ def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
     return events
 
 
+def _codex_visible_signatures(event: Dict[str, Any]) -> List[tuple]:
+    """Return visible-content signatures used to identify Codex mirrors.
+
+    Codex rollouts can persist both a canonical ``response_item`` and a nearby
+    ``event_msg`` projection for the same user, assistant, or reasoning text.
+    Keep event-only records for older rollouts, and remove a projection only
+    when its canonical counterpart is present nearby.
+    """
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return []
+
+    event_type = event.get("type")
+    payload_type = payload.get("type")
+    if event_type == "event_msg":
+        if payload_type == "user_message":
+            text, kind = payload.get("message"), "user"
+        elif payload_type == "agent_message":
+            text, kind = payload.get("message"), "assistant"
+        elif payload_type == "agent_reasoning":
+            text, kind = payload.get("text"), "reasoning"
+        else:
+            return []
+        normalized = str(text or "").strip()
+        return [(kind, normalized)] if normalized else []
+
+    if event_type != "response_item":
+        return []
+    if payload_type == "reasoning":
+        return [
+            ("reasoning", str(item.get("text") or "").strip())
+            for item in payload.get("summary") or []
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+    if payload_type != "message" or payload.get("role") not in {"user", "assistant"}:
+        return []
+
+    text = "".join(
+        str(item.get("text") or "")
+        for item in payload.get("content") or []
+        if isinstance(item, dict) and item.get("type") in {"input_text", "output_text"}
+    ).strip()
+    return [(payload["role"], text)] if text else []
+
+
+def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove only event_msg records mirrored by nearby response_item data."""
+    canonical: Dict[tuple, List[tuple]] = {}
+    for index, event in enumerate(events):
+        if event.get("type") != "response_item":
+            continue
+        timestamp = event.get("normalized_timestamp")
+        for signature in _codex_visible_signatures(event):
+            canonical.setdefault(signature, []).append((index, timestamp))
+
+    result = []
+    for index, event in enumerate(events):
+        signatures = _codex_visible_signatures(event)
+        if event.get("type") == "event_msg" and signatures:
+            timestamp = event.get("normalized_timestamp")
+            matches_canonical = any(
+                abs(index - canonical_index) <= 4
+                and (
+                    not isinstance(timestamp, (int, float))
+                    or not isinstance(canonical_timestamp, (int, float))
+                    or abs(timestamp - canonical_timestamp) <= 100
+                )
+                for signature in signatures
+                for canonical_index, canonical_timestamp in canonical.get(signature, [])
+            )
+            if matches_canonical:
+                continue
+        result.append(event)
+    return result
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":
@@ -6620,7 +6696,7 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        return _parse_session_jsonl_cached(files[0])
+        return _canonicalize_codex_trace(_parse_session_jsonl_cached(files[0]))
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
