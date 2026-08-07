@@ -4285,6 +4285,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     totals = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     by_type: Dict[str, Dict[str, Any]] = {}
+    by_model: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         for k in totals:
             totals[k] += e["tokens"][k]
@@ -4292,12 +4293,22 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         bt["count"] += 1
         bt["total"] += e["tokens"]["total"]
         bt["cost"] = round(bt["cost"] + (e["cost"] or 0), 6)
+        # Subagents can run a different model than their parent (e.g. Explore on
+        # Haiku under an Opus session) — keyed here so folding delegated cost
+        # into the global by_model breakdown attributes it to the right model
+        # instead of lumping every subagent's spend onto the parent's model.
+        bm = by_model.setdefault(e.get("model") or "unknown", {
+            "input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0})
+        for k in ("input", "output", "cached", "total"):
+            bm[k] += e["tokens"][k]
+        bm["cost"] = round(bm["cost"] + (e["cost"] or 0), 6)
     return {
         "spawn_count": len(entries),
         "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
         "subagents": entries,
         "totals": totals,
         "by_type": by_type,
+        "by_model": by_model,
         "cost": round(sum(e["cost"] or 0 for e in entries), 6),
     }
 
@@ -4563,7 +4574,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
-    "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
+    "delegation", "delegated_cost", "delegated_by_model", "tool_counts", "mcp_usage", "skills_used",
     "loop", "published_artifacts", "goals", "untracked_background",
 )
 
@@ -5121,6 +5132,7 @@ def _scan_sessions_sync():
                         sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
                         sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
                         sess["delegated_cost"] = deleg["cost"]
+                        sess["delegated_by_model"] = deleg["by_model"]
 
                     if source_mtime is not None:
                         scan_cache.write_cache("claude", sid, source_mtime, _claude_cache_payload(sess))
@@ -8880,6 +8892,17 @@ async def get_analytics(
         # None for an unpriced session; feeds three aggregates plus
         # savings_vs_cloud() below, all of which need a number.
         scost = s.get("cost") or 0.0
+        # Delegated (Claude subagent/workflow) spend exists NOWHERE else — those
+        # transcripts aren't sessions themselves, so folding it in here is
+        # additive, never a double count (unlike linked_child_* below, which
+        # covers hermes/opencode children that already ARE sessions in `sessions`
+        # and must stay attribution-only). `delegation_totals` below still
+        # surfaces the same figure as a per-parent breakdown view.
+        dcost = s.get("delegated_cost") or 0.0
+        d_input = st.get("delegated_input", 0) or 0
+        d_output = st.get("delegated_output", 0) or 0
+        d_cached = st.get("delegated_cached", 0) or 0
+        d_total = d_input + d_output + d_cached
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
         if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
@@ -8897,8 +8920,12 @@ async def get_analytics(
         # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
         # `input` badly understates the hit rate on long sessions. Agents without
         # `_cached_sum` fall back to `cached` (prior behavior).
-        by_agent[agent]["cache_reads"] += st.get("_cached_sum") or st.get("cached", 0) or 0
-        by_agent[agent]["cost"] += scost
+        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cached
+        by_agent[agent]["input"] += d_input
+        by_agent[agent]["output"] += d_output
+        by_agent[agent]["cached"] += d_cached
+        by_agent[agent]["total"] += d_total
+        by_agent[agent]["cost"] += scost + dcost
         by_agent[agent]["energy_wh"] += energy
         by_agent[agent]["savings_usd"] += savings
         by_agent[agent]["co2_g"] += co2
@@ -8914,13 +8941,29 @@ async def get_analytics(
         by_model[model_name]["savings_usd"] += savings
         by_model[model_name]["co2_g"] += co2
         by_model[model_name]["session_count"] += 1
+        # Delegated spend attributed to the SUBAGENT's own model (can differ
+        # from the parent's, e.g. Explore on Haiku under an Opus session) —
+        # not lumped onto model_name above. No session_count bump: a subagent
+        # transcript isn't a session.
+        for dmodel, dm in (s.get("delegated_by_model") or {}).items():
+            if dmodel not in by_model:
+                by_model[dmodel] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                    "session_count": 0, "agent": agent}
+            for k in ("input", "output", "cached", "total"):
+                by_model[dmodel][k] += dm.get(k, 0)
+            by_model[dmodel]["cost"] += dm.get("cost", 0) or 0
         # Bucket by LOCAL day, not UTC.
         day = _bucket_key(s["timestamp"], granularity)
         if day not in by_day:
             by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0,
                            "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
-        by_day[day]["cost"] += scost
+        by_day[day]["input"] += d_input
+        by_day[day]["output"] += d_output
+        by_day[day]["cached"] += d_cached
+        by_day[day]["total"] += d_total
+        by_day[day]["cost"] += scost + dcost
         by_day[day]["energy_wh"] += energy
         by_day[day]["savings_usd"] += savings
         by_day[day]["co2_g"] += co2
@@ -8937,19 +8980,19 @@ async def get_analytics(
     total_cached = sum(a["cached"] for a in by_agent.values())
     total_cache_reads = sum(a["cache_reads"] for a in by_agent.values())
 
-    # Ecosystem usage: skills, MCP servers, subagent types. New keys only — the
-    # existing by_agent/by_day/by_model/total stay byte-identical (no silent
-    # historical changes). Delegated usage is exposed as its OWN bucket, never
-    # folded into the per-agent sums: claude subagent transcripts aren't
-    # sessions (counted nowhere else), while opencode/hermes children already
-    # appear as sessions above — adding parent-side sums would double-count.
+    # Ecosystem usage: skills, MCP servers, subagent types.
     by_skill: Dict[str, Dict[str, Any]] = {}
     by_mcp_server: Dict[str, Dict[str, Any]] = {}
     by_subagent_type: Dict[str, Dict[str, Any]] = {}
-    # delegated_*: usage that exists NOWHERE else (claude subagent transcripts).
-    # linked_child_*: child sessions spawned by a parent — their tokens are
-    # already in by_agent/by_day/total above; surfaced here as an attribution
-    # view, never added on top.
+    # delegated_*: claude subagent/workflow transcript usage — exists NOWHERE
+    # else, so it IS folded into by_agent/by_day/by_model/total above (see the
+    # `dcost`/`d_input` etc. additions in the loop above); delegation_totals here
+    # is an ADDITIONAL per-parent attribution view of that same already-counted
+    # spend, not a separate pool.
+    # linked_child_*: child sessions spawned by a parent (opencode/hermes) —
+    # those children already appear as ordinary sessions in `sessions` and are
+    # already in by_agent/by_day/total; surfaced here as an attribution view,
+    # never added on top (that WOULD double-count, unlike delegated_*).
     delegation_totals: Dict[str, Any] = {
         "delegated_tokens": 0, "delegated_cost": 0.0,
         "sessions_with_spawns": 0,
