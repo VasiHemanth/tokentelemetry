@@ -35,7 +35,7 @@ def _jl(**kw) -> str:
 
 def _assistant_line(model="claude-opus-4-8", inp=0, out=0, cache_read=0,
                     cache_creation=0, cache_creation_1h=0, attribution=None,
-                    content=None):
+                    content=None, message_id=None):
     usage = {
         "input_tokens": inp, "output_tokens": out,
         "cache_read_input_tokens": cache_read,
@@ -43,6 +43,8 @@ def _assistant_line(model="claude-opus-4-8", inp=0, out=0, cache_read=0,
         "cache_creation": {"ephemeral_1h_input_tokens": cache_creation_1h},
     }
     line = {"type": "assistant", "message": {"model": model, "usage": usage, "content": content or []}}
+    if message_id:
+        line["message"]["id"] = message_id
     if attribution:
         line["attributionAgent"] = attribution
     return json.dumps(line) + "\n"
@@ -209,13 +211,16 @@ def test_helper_rollup(tmp_path):
     assert one["description"] == "look around"
     assert one["tool_use_id"] == "toolu_1"
     assert one["model"] == "claude-haiku-4-5-20251001"
-    # input/output cumulative; cached = high-water-mark (NOT 100+300);
-    # cache_creation cumulative. Synthetic + truncated lines ignored.
+    # input/output cumulative; cached = high-water-mark (NOT 100+300), while
+    # _cached_sum tracks the billed per-turn reads. Cache creation is cumulative.
     assert one["tokens"]["input"] == 30
     assert one["tokens"]["output"] == 10
     assert one["tokens"]["cached"] == 300
+    assert one["tokens"]["_cached_sum"] == 400
     assert one["tokens"]["cache_creation"] == 100
     assert one["tokens"]["total"] == 30 + 10 + 300
+    assert one["cost"] == pytest.approx(main.calculate_cost(
+        "claude-haiku-4-5-20251001", 30, 10, 400, cache_creation_tokens=100))
     # meta fallbacks
     assert by_id["two"]["agent_type"] == "general-purpose"
     assert by_id["three"]["agent_type"] == "unknown"
@@ -223,6 +228,7 @@ def test_helper_rollup(tmp_path):
     assert deleg["totals"]["input"] == 30 + 7 + 1
     assert deleg["totals"]["output"] == 10 + 3 + 2
     assert deleg["totals"]["cached"] == 300 + 40 + 0
+    assert deleg["totals"]["_cached_sum"] == 400 + 40 + 0
     assert deleg["cost"] >= 0
 
 
@@ -297,6 +303,45 @@ def test_scan_claude_without_spawns(scan_env):
     assert s["delegation"]["spawn_count"] == 0
     assert "delegated_input" not in s["tokens"]
     assert "delegated_cost" not in s
+
+
+def test_claude_scan_dedupes_usage_and_records_unpriced_background_activity(scan_env):
+    """Repeated assistant records must not inflate cost, while usage-free
+    Claude background records remain visible as unpriced activity."""
+    sid = "sid-background-activity"
+    session_file = make_claude_tree(scan_env / ".claude", sid, with_subagents=False)
+    session_file.write_text(
+        _jl(type="user", cwd="/tmp/proj", message={"role": "user", "content": "hi"})
+        + _assistant_line(model="claude-sonnet-4-6", inp=100, out=10, cache_read=20,
+                          message_id="message-1")
+        + _assistant_line(model="claude-sonnet-4-6", inp=100, out=10, cache_read=20,
+                          message_id="message-1")
+        + _assistant_line(model="claude-sonnet-4-6", inp=50, out=5, cache_read=30,
+                          message_id="message-2")
+        + _jl(type="system", subtype="away_summary", content="summary")
+        + _jl(type="ai-title", aiTitle="A title", sessionId=sid)
+        + _jl(type="system", subtype="compact_boundary", compactMetadata={
+            "preTokens": 1000, "postTokens": 100,
+        })
+        + _jl(type="user", message={"role": "user", "content": "compact summary"}),
+        encoding="utf-8",
+    )
+
+    first = next(s for s in main._scan_sessions_sync() if s["agent"] == "claude" and s["id"] == sid)
+
+    assert first["tokens"] == {
+        "input": 150, "output": 15, "cached": 30, "_cached_sum": 50, "total": 195,
+        "cache_creation": 0, "cache_creation_1h": 0,
+    }
+    assert first["cost"] == pytest.approx(main.calculate_cost("claude-sonnet-4-6", 150, 15, 50))
+    assert first["untracked_background"] == {
+        "recaps": 1, "titles": 1, "compactions": 1, "total": 3,
+    }
+
+    # The sidecar cache must preserve the disclosure as well as the corrected cost.
+    second = next(s for s in main._scan_sessions_sync() if s["agent"] == "claude" and s["id"] == sid)
+    assert second["cost"] == first["cost"]
+    assert second["untracked_background"] == first["untracked_background"]
 
 
 def test_scan_cursor_spawn_count_only(scan_env):

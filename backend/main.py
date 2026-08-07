@@ -3961,17 +3961,19 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
 
     Each transcript runs its own context and often a DIFFERENT model than the
     parent (e.g. Explore on Haiku under an Opus session), so cost is computed
-    per file with that file's model. Cache semantics match the main scanner:
-    cached = high-water-mark of cache_read per transcript, cache writes are
-    billed per event and accumulate. Returns None if the file can't be read.
+    per file with that file's model. ``cached`` remains the per-transcript
+    high-water mark for display, while ``_cached_sum`` is the cumulative billed
+    cache-read volume. Cache writes are billed per event and accumulate.
+    Returns None if the file can't be read.
 
     Shared by _claude_subagent_usage (flat Task/Agent transcripts) and
     _claude_workflow_entries (dynamic-workflow agents) so the token/cost math
     can't drift between the two.
     """
-    tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+    tokens = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     model = None
+    seen_message_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -3991,18 +3993,24 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                 usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
                 if not usage:
                     continue
+                message_id = msg.get("id")
+                if message_id:
+                    if message_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(message_id)
                 cr = usage.get("cache_read_input_tokens", 0) or 0
                 cc = usage.get("cache_creation_input_tokens", 0) or 0
                 cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                 tokens["input"] += usage.get("input_tokens", 0) or 0
                 tokens["output"] += usage.get("output_tokens", 0) or 0
                 tokens["cached"] = max(tokens["cached"], cr)
+                tokens["_cached_sum"] += cr
                 tokens["cache_creation"] += cc
                 tokens["cache_creation_1h"] += cc_1h
     except Exception:
         return None
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-    cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
+    cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["_cached_sum"],
                           cache_creation_tokens=tokens["cache_creation"],
                           cache_creation_1h_tokens=tokens["cache_creation_1h"])
     entry = {
@@ -4129,7 +4137,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     entries.extend(_claude_workflow_entries(sub_dir))
     if not entries:
         return None
-    totals = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+    totals = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     by_type: Dict[str, Dict[str, Any]] = {}
     for e in entries:
@@ -4393,7 +4401,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
             # incremental, unlike Codex's whole-goal native count.
             "cost_basis": "attributed_turns",
             "cost": (calculate_cost(model, u.get("input", 0), u.get("output", 0),
-                                    u.get("cached", 0),
+                                    u.get("_cached_sum", u.get("cached", 0)),
                                     cache_creation_tokens=u.get("cache_creation", 0),
                                     cache_creation_1h_tokens=u.get("cache_creation_1h", 0))
                      if tokens else None),
@@ -4411,7 +4419,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts", "goals",
+    "loop", "published_artifacts", "goals", "untracked_background",
 )
 
 
@@ -4644,7 +4652,7 @@ def _scan_sessions_sync():
                     loop_prompts: set = set()                # loop prompt text, to count re-injected fires
                     loop_fires: List[str] = []               # ts of each re-injected fire
                     in_loop_span = False                     # inside a loop-fire response turn right now
-                    loop_usage = {"input": 0, "output": 0, "cached": 0,
+                    loop_usage = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0,
                                   "cache_creation": 0, "cache_creation_1h": 0}  # loop's OWN footprint
                     artifact_calls: Dict[str, Dict[str, Any]] = {}  # Artifact tool_use_id -> input meta
                     published_arts: Dict[str, Dict[str, Any]] = {}  # hosted url -> published-artifact record
@@ -4653,12 +4661,21 @@ def _scan_sessions_sync():
                     goal_blocks: List[Dict[str, Any]] = []   # each blocked stop, tagged with its arm
                     goal_span_arm: Optional[int] = None      # arm index owning the current post-block span
                     goal_usage_by_arm: Dict[int, Dict[str, int]] = {}  # arm idx -> attributed footprint
+                    seen_assistant_message_ids: set = set()
+                    untracked_background = {"recaps": 0, "titles": 0, "compactions": 0}
                     try:
                         with open(session_file, "r", encoding="utf-8", errors="replace") as f:
                             for line in f:
                                 try:
                                     data = json.loads(line)
                                 except Exception: continue
+                                if data.get("type") == "ai-title":
+                                    untracked_background["titles"] += 1
+                                elif data.get("type") == "system":
+                                    if data.get("subtype") == "away_summary":
+                                        untracked_background["recaps"] += 1
+                                    elif data.get("subtype") == "compact_boundary":
+                                        untracked_background["compactions"] += 1
                                 if data.get("type") in ("user", "assistant") and data.get("timestamp"):
                                     last_real_ts = data["timestamp"]
                                 if data.get("type") == "assistant":
@@ -4668,6 +4685,11 @@ def _scan_sessions_sync():
                                         sess["model"] = m
                                     usage = msg.get("usage", {})
                                     if usage:
+                                        message_id = msg.get("id")
+                                        if message_id:
+                                            if message_id in seen_assistant_message_ids:
+                                                continue
+                                            seen_assistant_message_ids.add(message_id)
                                         cr = usage.get("cache_read_input_tokens", 0) or 0
                                         cc = usage.get("cache_creation_input_tokens", 0) or 0
                                         cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
@@ -4683,6 +4705,7 @@ def _scan_sessions_sync():
                                             loop_usage["input"] += usage.get("input_tokens", 0) or 0
                                             loop_usage["output"] += usage.get("output_tokens", 0) or 0
                                             loop_usage["cached"] = max(loop_usage["cached"], cr)
+                                            loop_usage["_cached_sum"] += cr
                                             loop_usage["cache_creation"] += cc
                                             loop_usage["cache_creation_1h"] += cc_1h
                                         if goal_span_arm is not None:
@@ -4690,15 +4713,16 @@ def _scan_sessions_sync():
                                             # it is the goal's incremental cost. Same span technique
                                             # as the loop footprint above.
                                             gu = goal_usage_by_arm.setdefault(goal_span_arm, {
-                                                "input": 0, "output": 0, "cached": 0,
+                                                "input": 0, "output": 0, "cached": 0, "_cached_sum": 0,
                                                 "cache_creation": 0, "cache_creation_1h": 0})
                                             gu["input"] += usage.get("input_tokens", 0) or 0
                                             gu["output"] += usage.get("output_tokens", 0) or 0
                                             gu["cached"] = max(gu["cached"], cr)
+                                            gu["_cached_sum"] += cr
                                             gu["cache_creation"] += cc
                                             gu["cache_creation_1h"] += cc_1h
                                     sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
-                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]), cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
                                     for item in msg.get("content", []):
                                         if item.get("type") == "tool_use":
                                             tool = item.get("name")
@@ -4861,6 +4885,9 @@ def _scan_sessions_sync():
                             sess["timestamp"] = datetime.fromisoformat(last_real_ts.replace("Z", "+00:00"))
                         except ValueError:
                             pass
+                    untracked_total = sum(untracked_background.values())
+                    if untracked_total:
+                        sess["untracked_background"] = {**untracked_background, "total": untracked_total}
                     if published_arts:
                         sess["published_artifacts"] = sorted(
                             published_arts.values(),
@@ -4886,10 +4913,10 @@ def _scan_sessions_sync():
                         # Loop's OWN footprint: usage from the fire-response turns only, NOT
                         # the whole session (a session may do lots of non-loop work).
                         lu = loop_usage
-                        # Cost uses the same basis as the session (cached=high-water-mark), so
-                        # footprint_cost is guaranteed <= the session's own cost.
+                        # Cost uses cumulative cache reads, while the visible cached count
+                        # remains the context high-water mark used by the session header.
                         footprint_cost = calculate_cost(sess.get("model"), lu["input"], lu["output"],
-                            lu["cached"], cache_creation_tokens=lu["cache_creation"],
+                            lu.get("_cached_sum", lu["cached"]), cache_creation_tokens=lu["cache_creation"],
                             cache_creation_1h_tokens=lu["cache_creation_1h"])
                         # Billed tokens the loop's own turns produced/processed (input+output).
                         # Cache read/write is session context overhead, excluded — so this is the
