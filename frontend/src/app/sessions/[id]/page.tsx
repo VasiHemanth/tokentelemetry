@@ -235,6 +235,43 @@ function dedupeCodexMirrors(events: any[]): any[] {
   });
 }
 
+function collapseCodexReasoningSnapshots(events: any[]): any[] {
+  const collapsed: any[] = [];
+  for (const event of events) {
+    const isReasoning = event?.type === "response_item" && event?.payload?.type === "reasoning";
+    if (!isReasoning) {
+      collapsed.push(event);
+      continue;
+    }
+
+    const currentText = codexVisibleSignatures(event)
+      .filter((signature) => signature.startsWith("reasoning:"))
+      .map((signature) => signature.slice("reasoning:".length))
+      .join("\n\n");
+    if (!currentText) continue;
+
+    let previousIndex = collapsed.length - 1;
+    while (previousIndex >= 0 && collapsed[previousIndex]?.type === "event_msg" && collapsed[previousIndex]?.payload?.type === "token_count") {
+      previousIndex -= 1;
+    }
+
+    const previous = previousIndex >= 0 ? collapsed[previousIndex] : null;
+    if (previous?.type === "response_item" && previous?.payload?.type === "reasoning") {
+      const previousText = codexVisibleSignatures(previous)
+        .filter((signature) => signature.startsWith("reasoning:"))
+        .map((signature) => signature.slice("reasoning:".length))
+        .join("\n\n");
+      if (previousText === currentText || previousText.startsWith(currentText) || currentText.startsWith(previousText)) {
+        if (currentText.length >= previousText.length) collapsed[previousIndex] = event;
+        continue;
+      }
+    }
+
+    collapsed.push(event);
+  }
+  return collapsed;
+}
+
 /* Normalize a raw trace payload (session detail or subagent transcript) into
    renderable events — shared by the main trace fetch and the subagent
    drill-in viewer so both filter the same noise. */
@@ -268,7 +305,7 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
     // Codex writes a canonical response_item and an event_msg projection for
     // the same visible turn. Keep the canonical event so the Step Index and
     // conversation cards are driven by one shared timeline.
-    evts = dedupeCodexMirrors(evts);
+    evts = collapseCodexReasoningSnapshots(dedupeCodexMirrors(evts));
   }
   if (agent === "claude" || agent === "cursor") {
     const NOISE_TYPES = new Set([
