@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
 import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
@@ -74,6 +75,10 @@ export default function Home() {
   const totalModelSessions = modelRows.reduce((a, r) => a + r.session_count, 0) || 1;
 
   const loading = sessionsRes.loading;
+
+  // Restore scroll position when data fetch is complete
+  useScrollState("key_dashboard_page", !loading);
+  const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState("key_dashboard_recent_activity", !loading && sessions.length > 0);
 
   const [showLocalPower, setShowLocalPower] = useState(false);
   useEffect(() => {
@@ -247,7 +252,7 @@ export default function Home() {
               description="TokenTelemetry watches local agent runtimes for activity. Run Claude Code, Cursor, Copilot, or another supported agent to populate this feed."
             />
           ) : (
-            <div className="max-h-[560px] overflow-y-auto">
+            <div ref={recentActivityRef} onScroll={handleRecentActivityScroll} className="max-h-[560px] overflow-y-auto">
               <Table>
                 <THead>
                   <TR>

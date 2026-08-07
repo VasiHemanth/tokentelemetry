@@ -3,17 +3,19 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Folder, Search, ArrowRight, Wrench, Users, ClipboardList,
-  LayoutGrid, List as ListIcon, ArrowUpDown, FolderOpen,
+  Folder, Search, ArrowRight, Wrench,
+  LayoutGrid, List as ListIcon, ArrowUpDown,
   GitBranch, ChevronRight,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
+import { useSessionState } from "@/lib/useSessionState";
 import { getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import { formatTokens, formatCost } from "@/lib/format";
 import {
-  PageHeader, Section, Card, Badge, AgentBadge, Button, EmptyState, Skeleton,
+  PageHeader, Section, Card, Badge, AgentBadge, EmptyState, Skeleton,
   Table, THead, TBody, TR, TH, TD,
 } from "@/components/ui";
 
@@ -74,10 +76,16 @@ const SORTS: { key: SortKey; label: string }[] = [
 export default function ProjectsPage() {
   const { data: projects = [], loading } = useResource<Project[]>("/projects", { initial: [] });
 
-  const [search, setSearch] = useState("");
-  const [view, setView] = useState<ViewMode>("grid");
-  const [sortKey, setSortKey] = useState<SortKey>("sessions");
-  const [sortDesc, setSortDesc] = useState(true);
+  const [pageState, setPageState] = useSessionState("projects_page", {
+    search: "",
+    view: "grid" as ViewMode,
+    sortKey: "sessions" as SortKey,
+    sortDesc: true,
+  });
+  const { search, view, sortKey, sortDesc } = pageState;
+
+  // Restore scroll position when data fetch is complete
+  useScrollState("key_projects_page", !loading);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -121,7 +129,7 @@ export default function ProjectsPage() {
             type="text"
             placeholder="Search by name or path…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => setPageState({ search: e.target.value })}
             className="w-full h-9 pl-9 pr-3 rounded-[var(--tt-radius)] bg-[var(--tt-panel)] border border-[var(--tt-border)] text-[13px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-faint)] hover:border-[var(--tt-border-strong)] focus:border-[color:var(--tt-brand)]/40 focus:outline-none focus:ring-1 focus:ring-[color:var(--tt-brand)]/30 transition-colors"
           />
         </div>
@@ -132,7 +140,7 @@ export default function ProjectsPage() {
           {SORTS.map((s) => (
             <button
               key={s.key}
-              onClick={() => (sortKey === s.key ? setSortDesc(!sortDesc) : setSortKey(s.key))}
+              onClick={() => (sortKey === s.key ? setPageState({ sortDesc: !sortDesc }) : setPageState({ sortKey: s.key }))}
               className={cn(
                 "h-9 px-2.5 text-[12px] font-medium transition-colors flex items-center gap-1",
                 sortKey === s.key ? "text-[var(--tt-fg)] tt-tint-1" : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]",
@@ -154,7 +162,7 @@ export default function ProjectsPage() {
           ].map(({ v, icon: I, label }) => (
             <button
               key={v}
-              onClick={() => setView(v as ViewMode)}
+              onClick={() => setPageState({ view: v as ViewMode })}
               aria-label={label}
               className={cn(
                 "h-9 w-9 grid place-items-center transition-colors",

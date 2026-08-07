@@ -10,6 +10,7 @@ import {
   Kanban,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
 import {
   PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Section,
   Table, THead, TBody, TR, TH, TD, Badge,
@@ -164,7 +165,10 @@ export default function HermesPage() {
     });
   }, [hermesSessions]);
 
-  const loading = !sessionsRes.data;
+  const loading = sessionsRes.loading;
+
+  // Restore scroll position when data fetch is complete.
+  useScrollState("key_hermes_page", !loading);
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
