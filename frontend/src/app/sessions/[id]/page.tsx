@@ -169,6 +169,72 @@ function eventKind(evt: Event): StepKind {
   return "other";
 }
 
+function codexVisibleSignatures(event: any): string[] {
+  const payload = event?.payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  const textSignature = (kind: string, value: unknown) => {
+    const text = String(value ?? "").trim();
+    return text ? `${kind}:${text}` : null;
+  };
+
+  if (event.type === "event_msg") {
+    if (payload.type === "user_message") return [textSignature("user", payload.message)].filter(Boolean) as string[];
+    if (payload.type === "agent_message") return [textSignature("assistant", payload.message)].filter(Boolean) as string[];
+    if (payload.type === "agent_reasoning") return [textSignature("reasoning", payload.text)].filter(Boolean) as string[];
+    return [];
+  }
+
+  if (event.type !== "response_item") return [];
+  if (payload.type === "reasoning") {
+    return (payload.summary || [])
+      .filter((item: any) => item && typeof item === "object")
+      .map((item: any) => textSignature("reasoning", item.text))
+      .filter(Boolean) as string[];
+  }
+  if (payload.type !== "message" || !["user", "assistant"].includes(payload.role)) return [];
+
+  const text = (payload.content || [])
+    .filter((item: any) => item && ["input_text", "output_text"].includes(item.type))
+    .map((item: any) => item.text || "")
+    .join("");
+  const signature = textSignature(payload.role, text);
+  return signature ? [signature] : [];
+}
+
+function codexEventTimestamp(event: any): number | undefined {
+  if (typeof event?.normalized_timestamp === "number") return event.normalized_timestamp;
+  if (event?.timestamp) {
+    const timestamp = Date.parse(event.timestamp);
+    return Number.isNaN(timestamp) ? undefined : timestamp;
+  }
+  return undefined;
+}
+
+function dedupeCodexMirrors(events: any[]): any[] {
+  const canonical = new Map<string, Array<{ index: number; timestamp?: number }>>();
+  events.forEach((event, index) => {
+    if (event.type !== "response_item") return;
+    for (const signature of codexVisibleSignatures(event)) {
+      const matches = canonical.get(signature) || [];
+      matches.push({ index, timestamp: codexEventTimestamp(event) });
+      canonical.set(signature, matches);
+    }
+  });
+
+  return events.filter((event, index) => {
+    if (event.type !== "event_msg") return true;
+    const timestamp = codexEventTimestamp(event);
+    const mirrored = codexVisibleSignatures(event).some((signature) =>
+      (canonical.get(signature) || []).some((match) =>
+        Math.abs(index - match.index) <= 4 &&
+        (timestamp === undefined || match.timestamp === undefined || Math.abs(timestamp - match.timestamp) <= 100)
+      )
+    );
+    return !mirrored;
+  });
+}
+
 /* Normalize a raw trace payload (session detail or subagent transcript) into
    renderable events — shared by the main trace fetch and the subagent
    drill-in viewer so both filter the same noise. */
@@ -199,6 +265,10 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
       lastKept = e;
       return true;
     });
+    // Codex writes a canonical response_item and an event_msg projection for
+    // the same visible turn. Keep the canonical event so the Step Index and
+    // conversation cards are driven by one shared timeline.
+    evts = dedupeCodexMirrors(evts);
   }
   if (agent === "claude" || agent === "cursor") {
     const NOISE_TYPES = new Set([
