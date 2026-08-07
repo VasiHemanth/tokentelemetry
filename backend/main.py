@@ -2138,6 +2138,151 @@ async def hermes_telemetry():
     return _ht.build_telemetry(sessions, index, files_read)
 
 
+_HERMES_SESSION_SORTS = {
+    "newest", "oldest", "cost_desc", "cost_asc",
+    "tokens_desc", "tokens_asc", "project", "model",
+}
+
+_HERMES_SESSION_PUBLIC_FIELDS = (
+    "id", "agent", "project", "timestamp", "display", "text", "source_subtype",
+    "model", "tokens", "cost", "cost_anomaly", "hermes_profile",
+)
+
+
+def _hermes_session_public_view(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the session-list fields consumed by the Hermes explorer."""
+    return {field: session[field] for field in _HERMES_SESSION_PUBLIC_FIELDS if field in session}
+
+
+def _hermes_session_source(session: Dict[str, Any]) -> str:
+    """Return the stable source label used by the Hermes explorer contract."""
+    source = session.get("source_subtype") or session.get("source")
+    return str(source or "unknown")
+
+
+def _hermes_session_timestamp(session: Dict[str, Any]) -> datetime:
+    timestamp = session.get("timestamp")
+    if isinstance(timestamp, datetime):
+        return _aware(timestamp)
+    if isinstance(timestamp, str):
+        try:
+            return _aware(datetime.fromisoformat(timestamp.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _hermes_session_number(session: Dict[str, Any], field: str) -> float:
+    value = session.get(field)
+    if field == "tokens":
+        value = (session.get("tokens") or {}).get("total", 0)
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _hermes_session_matches(
+    session: Dict[str, Any],
+    *,
+    search: Optional[str],
+    project: Optional[str],
+    source: Optional[str],
+    model: Optional[str],
+) -> bool:
+    source_value = _hermes_session_source(session)
+    searchable = " ".join(
+        str(session.get(field) or "")
+        for field in ("id", "display", "project", "model", "provider")
+    ) + " " + source_value
+    if search and search.casefold() not in searchable.casefold():
+        return False
+    for requested, actual in (
+        (project, session.get("project")),
+        (source, source_value),
+        (model, session.get("model")),
+    ):
+        if requested and requested.casefold() not in str(actual or "").casefold():
+            return False
+    return True
+
+
+def _hermes_session_sort_key(session: Dict[str, Any], sort: str):
+    if sort in {"newest", "oldest"}:
+        return (_hermes_session_timestamp(session), str(session.get("id") or ""))
+    if sort in {"cost_desc", "cost_asc"}:
+        return (_hermes_session_number(session, "cost"), str(session.get("id") or ""))
+    if sort in {"tokens_desc", "tokens_asc"}:
+        return (_hermes_session_number(session, "tokens"), str(session.get("id") or ""))
+    if sort == "project":
+        return (str(session.get("project") or "").casefold(), str(session.get("id") or ""))
+    return (str(session.get("model") or "").casefold(), str(session.get("id") or ""))
+
+
+@app.get("/hermes/sessions")
+async def hermes_sessions(
+    page: int = 1,
+    page_size: int = 50,
+    search: Optional[str] = None,
+    project: Optional[str] = None,
+    source: Optional[str] = None,
+    model: Optional[str] = None,
+    sort: str = "newest",
+    fresh: bool = False,
+):
+    """Return a paginated, filterable Hermes session list.
+
+    The endpoint deliberately reuses the canonical session scan, keeping its
+    fields and timestamp/cost semantics aligned with ``/sessions``. Results
+    are sorted deterministically, including the session id as a tie-breaker.
+    """
+    if page < 1:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="page must be at least 1")
+    if page_size < 1 or page_size > 200:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="page_size must be between 1 and 200")
+    if sort not in _HERMES_SESSION_SORTS:
+        allowed = ", ".join(sorted(_HERMES_SESSION_SORTS))
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail=f"sort must be one of: {allowed}")
+
+    sessions = await get_sessions_cached(fresh=fresh)
+    filtered = [
+        session for session in sessions
+        if session.get("agent") == "hermes"
+        and _hermes_session_matches(
+            session,
+            search=search,
+            project=project,
+            source=source,
+            model=model,
+        )
+    ]
+    reverse = sort in {"newest", "cost_desc", "tokens_desc"}
+    filtered.sort(key=lambda session: _hermes_session_sort_key(session, sort), reverse=reverse)
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    page_sessions = filtered[start:start + page_size]
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    public_sessions = []
+    for session in page_sessions:
+        public = _hermes_session_public_view(session)
+        public.setdefault("source", _hermes_session_source(session))
+        public_sessions.append(public)
+
+    return {
+        "sessions": public_sessions,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Update checker — compares local git HEAD to remote main, pulls curated
 # highlights from UPDATE.json at the repo root. The "What's new" banner in
@@ -6476,6 +6621,120 @@ def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
     return events
 
 
+def _codex_visible_signatures(event: Dict[str, Any]) -> List[tuple]:
+    """Return visible-content signatures used to identify Codex mirrors.
+
+    Codex rollouts can persist both a canonical ``response_item`` and a nearby
+    ``event_msg`` projection for the same user, assistant, or reasoning text.
+    Keep event-only records for older rollouts, and remove a projection only
+    when its canonical counterpart is present nearby.
+    """
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return []
+
+    event_type = event.get("type")
+    payload_type = payload.get("type")
+    if event_type == "event_msg":
+        if payload_type == "user_message":
+            text, kind = payload.get("message"), "user"
+        elif payload_type == "agent_message":
+            text, kind = payload.get("message"), "assistant"
+        elif payload_type == "agent_reasoning":
+            text, kind = payload.get("text"), "reasoning"
+        else:
+            return []
+        normalized = str(text or "").strip()
+        return [(kind, normalized)] if normalized else []
+
+    if event_type != "response_item":
+        return []
+    if payload_type == "reasoning":
+        return [
+            ("reasoning", str(item.get("text") or "").strip())
+            for item in payload.get("summary") or []
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+    if payload_type != "message" or payload.get("role") not in {"user", "assistant"}:
+        return []
+
+    text = "".join(
+        str(item.get("text") or "")
+        for item in payload.get("content") or []
+        if isinstance(item, dict) and item.get("type") in {"input_text", "output_text"}
+    ).strip()
+    return [(payload["role"], text)] if text else []
+
+
+def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return one visible Codex timeline from mirrored and streamed records."""
+    canonical: Dict[tuple, List[tuple]] = {}
+    for index, event in enumerate(events):
+        if event.get("type") != "response_item":
+            continue
+        timestamp = event.get("normalized_timestamp")
+        for signature in _codex_visible_signatures(event):
+            canonical.setdefault(signature, []).append((index, timestamp))
+
+    result = []
+    for index, event in enumerate(events):
+        signatures = _codex_visible_signatures(event)
+        if event.get("type") == "event_msg" and signatures:
+            timestamp = event.get("normalized_timestamp")
+            matches_canonical = any(
+                abs(index - canonical_index) <= 4
+                and (
+                    not isinstance(timestamp, (int, float))
+                    or not isinstance(canonical_timestamp, (int, float))
+                    or abs(timestamp - canonical_timestamp) <= 100
+                )
+                for signature in signatures
+                for canonical_index, canonical_timestamp in canonical.get(signature, [])
+            )
+            if matches_canonical:
+                continue
+        result.append(event)
+
+    # Reasoning is streamed as snapshots. A snapshot may repeat the previous
+    # summary, extend it, or contain no visible text at all. The UI should show
+    # the most complete nearby snapshot once, not one Step Index row per write.
+    collapsed: List[Dict[str, Any]] = []
+    for event in result:
+        if event.get("type") != "response_item" or (event.get("payload") or {}).get("type") != "reasoning":
+            collapsed.append(event)
+            continue
+
+        current_text = "\n\n".join(
+            text for kind, text in _codex_visible_signatures(event) if kind == "reasoning" and text
+        )
+        if not current_text:
+            continue
+
+        previous_index = len(collapsed) - 1
+        while previous_index >= 0:
+            previous = collapsed[previous_index]
+            previous_payload = previous.get("payload") or {}
+            if previous.get("type") == "event_msg" and previous_payload.get("type") == "token_count":
+                previous_index -= 1
+                continue
+            break
+
+        if previous_index >= 0:
+            previous = collapsed[previous_index]
+            previous_payload = previous.get("payload") or {}
+            if previous.get("type") == "response_item" and previous_payload.get("type") == "reasoning":
+                previous_text = "\n\n".join(
+                    text for kind, text in _codex_visible_signatures(previous) if kind == "reasoning" and text
+                )
+                if previous_text == current_text or previous_text.startswith(current_text) or current_text.startswith(previous_text):
+                    if len(current_text) >= len(previous_text):
+                        collapsed[previous_index] = event
+                    continue
+
+        collapsed.append(event)
+    return collapsed
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":
@@ -6485,7 +6744,7 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        return _parse_session_jsonl_cached(files[0])
+        return _canonicalize_codex_trace(_parse_session_jsonl_cached(files[0]))
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each

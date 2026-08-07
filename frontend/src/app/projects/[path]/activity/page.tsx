@@ -10,12 +10,17 @@ import {
   Table, THead, TBody, TR, TH, TD,
 } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
+import { useScrollState } from "@/lib/useScrollState";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 
 export default function ActivityTab() {
   const pathname = usePathname();
   const { sessions, loading } = useProject();
+
+  // Restore scroll position when data fetch is complete
+  useScrollState(`key_project_activity_page`, !loading);
+  const { ref: sessionHistoryRef, onScroll: handleSessionHistoryScroll } = useScrollState(`key_project_activity_sessions`, !loading && sessions.length > 0);
 
   return (
     <Card padding="none">
@@ -35,7 +40,7 @@ export default function ActivityTab() {
           description="Once any agent runs in this workspace, sessions will appear here."
         />
       ) : (
-        <div className="max-h-[700px] overflow-y-auto">
+        <div ref={sessionHistoryRef} onScroll={handleSessionHistoryScroll} className="max-h-[700px] overflow-y-auto">
           <Table>
             <THead>
               <TR>

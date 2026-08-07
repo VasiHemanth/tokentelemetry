@@ -10,6 +10,7 @@ import {
   Kanban,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
 import {
   PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Section,
   Table, THead, TBody, TR, TH, TD, Badge,
@@ -20,7 +21,7 @@ import {
 } from "@/lib/hermesTelemetry";
 import SourceBadge from "@/components/SourceBadge";
 import HermesIcon from "@/components/icons/HermesIcon";
-import { formatTokens, formatCost } from "@/lib/format";
+import { formatCost } from "@/lib/format";
 import { profileColor, profileTint } from "@/lib/profileColor";
 import { trackEvent } from "@/lib/telemetry";
 
@@ -64,17 +65,6 @@ interface Session {
   hermes_profile?: string;
   project_inferred?: boolean;
   cost_anomaly?: boolean;
-}
-
-interface Group {
-  /** display label */
-  label: string;
-  /** "project" or "source" — drives the icon/badge shown next to the label */
-  kind: "project" | "source";
-  /** group key for stable sort */
-  key: string;
-  sessions: Session[];
-  totalCost: number;
 }
 
 export default function HermesPage() {
@@ -141,30 +131,17 @@ export default function HermesPage() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [hermesSessions]);
 
-  const groups = useMemo<Group[]>(() => {
-    const byKey = new Map<string, Group>();
-    for (const s of hermesSessions) {
-      const hasProject = s.project && s.project !== "unknown";
-      const key = hasProject ? `p:${s.project}` : `s:${s.source_subtype || "unknown"}`;
-      const label = hasProject ? s.project : (s.source_subtype || "unknown");
-      const kind: "project" | "source" = hasProject ? "project" : "source";
-      let g = byKey.get(key);
-      if (!g) {
-        g = { label, kind, key, sessions: [], totalCost: 0 };
-        byKey.set(key, g);
-      }
-      g.sessions.push(s);
-      g.totalCost += s.cost || 0;
-    }
-    // sort: projects first (alphabetical), then sources (by session count desc)
-    return [...byKey.values()].sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "project" ? -1 : 1;
-      if (a.kind === "project") return a.label.localeCompare(b.label);
-      return b.sessions.length - a.sessions.length;
-    });
-  }, [hermesSessions]);
+  const loading = sessionsRes.loading;
+  const recentSessions = useMemo(
+    () => hermesSessions
+      .slice()
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 10),
+    [hermesSessions]
+  );
 
-  const loading = !sessionsRes.data;
+  // Restore scroll position when data fetch is complete.
+  useScrollState("key_hermes_page", !loading);
 
   return (
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
@@ -460,114 +437,49 @@ export default function HermesPage() {
         </Card>
       )}
 
-      {/* Grouped sessions */}
-      {!loading && groups.map((g) => (
-        <Card key={g.key}>
-          <CardHeader>
-            <CardTitle>
-              {g.kind === "project" ? (
-                <span className="flex items-center gap-2">
-                  <span className="font-mono text-[var(--tt-fg)] truncate" title={g.label}>
-                    {g.label}
-                  </span>
-                  <Badge variant="neutral" size="xs">project</Badge>
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  <SourceBadge source={g.label} size="sm" />
-                  <span className="text-[11px] text-[var(--tt-fg-dim)] font-normal">no project</span>
-                </span>
-              )}
-            </CardTitle>
-            <div className="ml-auto text-[11px] tabular text-[var(--tt-fg-muted)]">
-              {g.sessions.length} session{g.sessions.length === 1 ? "" : "s"}
-              {g.totalCost > 0 && ` · ${formatCost(g.totalCost)}`}
+      {/* Recent sessions — the full history lives in the dedicated explorer. */}
+      {!loading && hermesSessions.length > 0 && (
+        <Card padding="none" className="overflow-hidden">
+          <CardHeader className="px-5 pt-5">
+            <div>
+              <CardTitle>Recent Hermes sessions</CardTitle>
+              <div className="mt-1 text-[11px] text-[var(--tt-fg-muted)]">
+                Showing {recentSessions.length} of {hermesSessions.length.toLocaleString()} sessions
+              </div>
             </div>
+            <Link href="/hermes/sessions" className="inline-flex items-center gap-1.5 text-[12px] text-[var(--tt-brand)] hover:underline">
+              View all sessions <ArrowRight size={13} />
+            </Link>
           </CardHeader>
           <Table>
             <THead>
               <TR>
                 <TH className="pl-5">Source</TH>
-                <TH>Model</TH>
+                <TH>Project</TH>
                 <TH>Message</TH>
+                <TH>Model</TH>
                 <TH className="text-right">API equiv.</TH>
                 <TH className="text-right pr-5">Time</TH>
               </TR>
             </THead>
             <TBody>
-              {g.sessions
-                .slice()
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .map((s) => (
-                  <TR key={s.id} interactive>
-                    <TD className="pl-5">
-                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
-                        <span className="inline-flex items-center gap-1.5">
-                          <SourceBadge source={s.source_subtype} size="xs" />
-                          {s.hermes_profile && profileScope === "all" && (
-                            <span
-                              className="inline-flex items-center gap-1 font-mono text-[9px] px-1.5 h-4 rounded-full border"
-                              style={{
-                                color: profileColor(s.hermes_profile) ?? undefined,
-                                borderColor: profileColor(s.hermes_profile) ?? undefined,
-                                background: profileTint(s.hermes_profile) ?? undefined,
-                              }}
-                              title={`Profile: ${s.hermes_profile}`}
-                            >
-                              {s.hermes_profile}
-                            </span>
-                          )}
-                        </span>
-                      </Link>
-                    </TD>
-                    <TD className="font-mono text-[11px] text-[var(--tt-fg-muted)] max-w-[180px] truncate" title={s.model}>
-                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate">
-                        {s.model || "—"}
-                      </Link>
-                    </TD>
-                    <TD className="text-[var(--tt-fg)] max-w-[480px] truncate">
-                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate">
-                        <span className="inline-flex items-center gap-1.5">
-                          {s.cost_anomaly && (
-                            <span
-                              title={`Reasoning tokens (${s.tokens?.reasoning?.toLocaleString() ?? 0}) dominate output (${s.tokens?.output?.toLocaleString() ?? 0}) — possible silent thinking-mode waste`}
-                              className="inline-flex items-center gap-0.5 text-[9px] text-[var(--tt-warn-fg)] font-mono uppercase tracking-wider"
-                            >
-                              <AlertTriangle size={9} /> reasoning
-                            </span>
-                          )}
-                          <span className="truncate">
-                            {s.display || s.text || (
-                              <span className="italic text-[var(--tt-fg-faint)]">No message content</span>
-                            )}
-                          </span>
-                        </span>
-                      </Link>
-                    </TD>
-                    <TD className="text-right tabular text-[11px] text-[var(--tt-fg-muted)]">
-                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
-                        {s.cost && s.cost > 0 ? formatCost(s.cost) : "—"}
-                        {s.tokens?.reasoning && s.tokens.reasoning > 0 ? (
-                          <div className="text-[9px] text-[var(--tt-fg-faint)] uppercase tracking-wider">
-                            +{formatTokens(s.tokens.reasoning)} reasoning
-                          </div>
-                        ) : null}
-                      </Link>
-                    </TD>
-                    <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)]">
-                      <Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">
-                        <div>{format(new Date(s.timestamp), "HH:mm:ss")}</div>
-                        <div className="text-[10px] text-[var(--tt-fg-faint)] uppercase tracking-wider">
-                          {format(new Date(s.timestamp), "MMM d")}
-                        </div>
-                      </Link>
-                    </TD>
-                  </TR>
-                ))}
+              {recentSessions.map((s) => (
+                <TR key={s.id} interactive>
+                  <TD className="pl-5"><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`}><SourceBadge source={s.source_subtype} size="xs" /></Link></TD>
+                  <TD className="max-w-[180px] truncate" title={s.project}><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate text-[var(--tt-fg-muted)]">{s.project || "unknown"}</Link></TD>
+                  <TD className="max-w-[480px] truncate"><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate text-[var(--tt-fg)]">
+                    {s.cost_anomaly && <AlertTriangle size={10} className="inline mr-1 text-[var(--tt-warn-fg)]" aria-label="Reasoning cost anomaly" />}
+                    {s.display || s.text || <span className="italic text-[var(--tt-fg-faint)]">No message content</span>}
+                  </Link></TD>
+                  <TD className="font-mono text-[11px] text-[var(--tt-fg-muted)] max-w-[160px] truncate" title={s.model}><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block truncate">{s.model || "—"}</Link></TD>
+                  <TD className="text-right tabular text-[11px] text-[var(--tt-fg-muted)]"><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block">{s.cost && s.cost > 0 ? formatCost(s.cost) : "—"}</Link></TD>
+                  <TD className="text-right pr-5 tabular text-[11px] text-[var(--tt-fg-muted)]"><Link href={`/sessions/${s.id}?agent=hermes&from=${encodeURIComponent(pathname)}`} className="block"><div>{formatDistanceToNow(new Date(s.timestamp), { addSuffix: true })}</div><div className="text-[10px] text-[var(--tt-fg-faint)]">{format(new Date(s.timestamp), "MMM d")}</div></Link></TD>
+                </TR>
+              ))}
             </TBody>
           </Table>
         </Card>
-      ))}
+      )}
     </div>
   );
 }

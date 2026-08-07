@@ -9,6 +9,7 @@ import {
 import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
+import { clearPageState } from "@/lib/pageState";
 import { ThemeToggle } from "./ThemeToggle";
 import NotificationBell from "./notifications/NotificationBell";
 import HermesIcon from "./icons/HermesIcon";
@@ -129,6 +130,7 @@ function NavLink({ link, pathname, isCollapsed }: {
     <Link
       href={link.href}
       title={isCollapsed ? link.name : undefined}
+      onClick={() => {clearPageState()}}
       className={cn(
         "relative flex items-center gap-3 rounded-[var(--tt-radius)] px-2.5 py-2 text-[13px] font-medium transition-colors",
         isActive
