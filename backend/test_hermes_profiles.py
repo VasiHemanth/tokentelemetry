@@ -149,6 +149,24 @@ def test_scan_tags_profile(hermes_env):
     assert by_id["20260102_000000_bbbb2222"]["hermes_profile"] == "coder"
 
 
+def test_scan_hermes_sqlite_failure_reports_presence_guard(hermes_env, monkeypatch):
+    profile_db = hermes_env / "profiles" / "coder" / "state.db"
+    real_connect = main.sqlite3.connect
+
+    def locked_connect(database, *args, **kwargs):
+        if str(profile_db) in str(database):
+            raise main.sqlite3.OperationalError("database is locked")
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(main.sqlite3, "connect", locked_connect)
+
+    sessions, presence_guards = main._scan_sessions_with_presence_guards()
+    by_id = {s["id"]: s for s in sessions if s["agent"] == "hermes"}
+
+    assert set(by_id) == {"20260101_000000_aaaa1111"}
+    assert presence_guards == {"hermes"}
+
+
 def test_session_profile_resolver(hermes_env):
     assert main._hermes_session_profile("20260101_000000_aaaa1111") is None
     assert main._hermes_session_profile("20260102_000000_bbbb2222") == "coder"

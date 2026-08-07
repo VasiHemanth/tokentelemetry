@@ -226,6 +226,27 @@ def test_scan_cline_cli_uses_aggregate_usage(tmp_path, monkeypatch):
     assert rec["cline"]["provider"] == "anthropic"
 
 
+def test_cline_sqlite_failure_reports_presence_guard(tmp_path, monkeypatch):
+    cline_dir = tmp_path / ".cline"
+    db = cline_dir / "data" / "db" / "sessions.db"
+    _build_cline_cli_db(db, "locked-session", workspace_root=str(tmp_path / "proj"))
+    monkeypatch.setattr(main, "CLINE_DIR", cline_dir)
+    monkeypatch.setattr(main, "CLINE_VSCODE_DIR", tmp_path / "missing-vscode")
+
+    real_connect = main.sqlite3.connect
+
+    def locked_connect(database, *args, **kwargs):
+        if str(db) in str(database):
+            raise main.sqlite3.OperationalError("database is locked")
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(main.sqlite3, "connect", locked_connect)
+    presence_guards = set()
+
+    assert main._scan_cline_sessions(presence_guards) == []
+    assert presence_guards == {"cline"}
+
+
 def test_scan_cline_cli_falls_back_to_messages_metrics(tmp_path, monkeypatch):
     """When aggregateUsage AND usage are both all-zero, sum metrics from the
     messages_path transcript instead (verified fallback shape)."""
