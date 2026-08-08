@@ -39,7 +39,7 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   smallcode:   { key: "smallcode",   label: "SmallCode",   hex: "#0d9488", icon: Boxes },
   pi:          { key: "pi",          label: "Pi",          hex: "#fafafa", icon: PiIcon },
   muse:        { key: "muse",        label: "Muse Code",   hex: "#2563eb", icon: MuseIcon },
-  prime:       { key: "prime",       label: "Prime Agent", hex: "#ea580c", icon: PrimeIcon },
+  prime:       { key: "prime",       label: "Prime Agent", hex: "#D4FF47", icon: PrimeIcon },
 };
 
 const FALLBACK: AgentMeta = {
