@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Ban, Loader2, Plug, AlertCircle } from "lucide-react";
 import { getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { cn } from "@/lib/cn";
 import {
   listCodexModels, listOllamaModels, testOpenAICompat,
@@ -73,7 +74,6 @@ export function BackendPicker({
       <div className="grid gap-2">
         {backends.map((b) => {
           const meta = getAgent(b.name);
-          const Icon = meta.icon;
           const active = selected === b.name;
           return (
             <div key={b.name}>
@@ -91,7 +91,7 @@ export function BackendPicker({
                   className="h-8 w-8 shrink-0 grid place-items-center rounded-md"
                   style={{ backgroundColor: `${meta.hex}14`, color: meta.hex }}
                 >
-                  <Icon size={16} />
+                  <AgentLogo agent={b.name} size={16} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-semibold text-[var(--tt-fg)] truncate">{b.display_name}</div>

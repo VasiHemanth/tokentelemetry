@@ -14,6 +14,7 @@ import {
 import { useResource } from "@/lib/api";
 import { trackEvent } from "@/lib/telemetry";
 import { getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { useTheme } from "@/components/ThemeProvider";
 import { formatTokens as compact } from "@/lib/format";
 import {
@@ -297,6 +298,7 @@ export default function AnalyticsPage() {
                     : "border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
                 )}
               >
+                <AgentLogo agent={a} size={11} />
                 {getAgent(a).label}
               </button>
             ))}

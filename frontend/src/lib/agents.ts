@@ -7,6 +7,7 @@ import GrokIcon from "@/components/icons/GrokIcon";
 import PiIcon from "@/components/icons/PiIcon";
 import MuseIcon from "@/components/icons/MuseIcon";
 import PrimeIcon from "@/components/icons/PrimeIcon";
+import PiIcon from "@/components/icons/PiIcon";
 
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"

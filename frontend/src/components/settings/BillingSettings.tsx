@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Wallet, Check, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { Card, CardHeader, CardTitle, Badge, Skeleton } from "@/components/ui";
 import {
   getBillingConfig, setBillingMode, MODE_LABEL,
@@ -102,7 +103,6 @@ export function BillingSettings() {
         <div className="divide-y divide-[var(--tt-border)]">
           {entries.map(([agent, b]) => {
             const meta = getAgent(agent);
-            const Icon = meta.icon;
             const value = b.source === "user" ? b.mode : "auto";
             const overview = routes?.agents[agent];
             const isExpanded = expanded === agent;
@@ -114,7 +114,7 @@ export function BillingSettings() {
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
                       style={{ background: `${meta.hex}1a`, color: meta.hex }}
                     >
-                      <Icon size={15} />
+                      <AgentLogo agent={agent} size={15} />
                     </span>
                     <div className="min-w-0">
                       <div className="text-[13px] font-medium text-[var(--tt-fg)]">{meta.label}</div>

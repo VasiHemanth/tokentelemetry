@@ -345,7 +345,7 @@ export default function Home() {
                       <div key={k} className="space-y-1.5">
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="flex items-center gap-2 text-[var(--tt-fg-muted)]">
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.hex }} />
+                            <AgentLogo agent={k} size={12} />
                             {meta.label}
                           </span>
                           <span className="tabular text-[var(--tt-fg-dim)]">
