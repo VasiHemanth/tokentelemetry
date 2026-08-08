@@ -634,11 +634,9 @@ export default function SessionDetailPage() {
       push(e.model); // some providers
       if (e.type === "session_meta") {
         push(e.payload?.model);
-        push(e.payload?.model_provider);
       }
       if (e.type === "turn_context") {
         push(e.payload?.model);
-        push(e.payload?.model_provider);
       }
       if (e.payload?.model) push(e.payload.model);
     });
@@ -661,7 +659,9 @@ export default function SessionDetailPage() {
     return {
       sessionId: id,
       agent: sessionInfo?.agent,
-      model: modelsUsed[0] || meta?.model || meta?.model_provider || sessionInfo?.model,
+      // Prefer the scanner's latest observed model; Codex can switch models
+      // mid-session and exposes its provider separately below.
+      model: sessionInfo?.model || modelsUsed.at(-1) || meta?.model,
       modelsUsed,
       provider: meta?.model_provider,
       cwd: meta?.cwd || sessionInfo?.project,

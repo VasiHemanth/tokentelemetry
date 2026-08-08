@@ -85,6 +85,20 @@ def test_scan_muse_uses_cwd_and_keeps_child_tokens_out_of_parent_totals(tmp_path
     assert rec["delegation"]["delegated_total"] == 75
 
 
+def test_scan_muse_uses_workspace_root_when_cwd_is_not_logged(tmp_path, monkeypatch):
+    session = tmp_path / "muse" / "2026" / "08" / "08" / "muse-workspace" / "session.jsonl"
+    _write_jsonl(session, [
+        _muse_event("runtime.session.route_facts", {
+            "record": {"workspace_root": "/tmp/muse-workspace-project"},
+        }),
+    ])
+    monkeypatch.setattr(main, "MUSE_SESSIONS_DIR", tmp_path / "muse")
+
+    sessions = main._scan_muse_sessions()
+
+    assert sessions[0]["project"] == "/tmp/muse-workspace-project"
+
+
 def test_scan_prime_counts_only_active_branch_and_uses_reported_cost(tmp_path, monkeypatch):
     _write_prime_session(tmp_path / "prime")
     monkeypatch.setattr(main, "PRIME_SESSIONS_DIR", tmp_path / "prime")

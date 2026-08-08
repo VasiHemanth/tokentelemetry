@@ -543,6 +543,8 @@ def _muse_log_summary(path: Path) -> Dict[str, Any]:
                 if isinstance(payload_record, dict):
                     if isinstance(payload_record.get("cwd"), str) and payload_record["cwd"].strip():
                         result["cwd"] = payload_record["cwd"]
+                    elif isinstance(payload_record.get("workspace_root"), str) and payload_record["workspace_root"].strip():
+                        result["cwd"] = payload_record["workspace_root"]
                     model_id = payload_record.get("model_id")
                     if isinstance(model_id, str) and model_id:
                         result["model"] = model_id
@@ -555,6 +557,8 @@ def _muse_log_summary(path: Path) -> Dict[str, Any]:
                 if isinstance(record, dict):
                     if isinstance(record.get("cwd"), str) and record["cwd"].strip():
                         result["cwd"] = record["cwd"]
+                    elif isinstance(record.get("workspace_root"), str) and record["workspace_root"].strip():
+                        result["cwd"] = record["workspace_root"]
                     model_id = record.get("model_id")
                     if isinstance(model_id, str) and model_id:
                         result["model"] = model_id
@@ -4901,7 +4905,7 @@ def _apply_claude_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> Non
 
 
 _CODEX_CACHE_FIELDS = (
-    "tokens", "model", "_provider", "cost", "mcp_tools", "has_plan", "plans",
+    "tokens", "model", "models_used", "_provider", "cost", "mcp_tools", "has_plan", "plans",
     "text", "tokens_by_day", "tool_counts", "_skill_counts",
     "parent_session_id", "subagent_info", "_raw_cwd",
 )
@@ -5480,6 +5484,19 @@ def _scan_sessions_sync():
                 continue
 
             day_snap = {}
+
+            def record_codex_model(value: Any) -> None:
+                """Keep full Codex model IDs in trace order, latest as primary."""
+                if not isinstance(value, str) or not value.strip():
+                    return
+                model_id = value.strip()
+                models = sess.setdefault("models_used", [])
+                if model_id not in models:
+                    models.append(model_id)
+                # Codex logs model changes as later turn-context/settings events.
+                # The current model is the final observed model, not its provider.
+                sess["model"] = model_id
+
             for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
@@ -5490,8 +5507,7 @@ def _scan_sessions_sync():
                             if data.get("type") == "session_meta":
                                 sess["_raw_cwd"] = data["payload"].get("cwd", "unknown")
                                 sess["project"] = apply_alias(sess["_raw_cwd"])
-                                if not sess.get("model") and data["payload"].get("model"):
-                                    sess["model"] = data["payload"].get("model")
+                                record_codex_model(data["payload"].get("model"))
                                 if not sess.get("_provider"):
                                     sess["_provider"] = data["payload"].get("model_provider")
                                 # Subagent threads (multi_agent feature): the child
@@ -5512,9 +5528,14 @@ def _scan_sessions_sync():
                                         "nickname": _spawn.get("agent_nickname") or data["payload"].get("agent_nickname"),
                                         "depth": _spawn.get("depth"),
                                     }
-                            if data.get("type") == "turn_context" and not sess.get("model"):
-                                sess["model"] = data.get("payload", {}).get("model")
+                            if data.get("type") == "turn_context":
+                                record_codex_model(data.get("payload", {}).get("model"))
                             if data.get("type") == "event_msg":
+                                event_payload = data.get("payload") or {}
+                                if event_payload.get("type") == "thread_settings_applied":
+                                    settings = event_payload.get("thread_settings") or {}
+                                    if isinstance(settings, dict):
+                                        record_codex_model(settings.get("model"))
                                 ts_str = data.get("timestamp")
                                 event_day = None
                                 if ts_str:
