@@ -18,8 +18,10 @@ export const AGENTS: Agent[] = [
   { name: "GitHub Copilot", vendor: "GitHub",    captures: ["tokens", "traces", "cost"],                           logPath: "VS Code chatSessions/",           hex: "#6366f1" },
   { name: "OpenCode",       vendor: "OpenCode",  captures: ["tokens", "traces"],                                   logPath: "~/.local/share/opencode/",        hex: "#f59e0b" },
   { name: "Grok Build",     vendor: "xAI",       captures: ["tokens", "traces", "reasoning", "cost"],              logPath: "~/.grok/sessions/",               hex: "#d4d4d8" },
-  { name: "Cline",          vendor: "Cline (open source)", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.cline/ + VS Code taskHistory", hex: "#7c3aed" },
-  { name: "SmallCode",      vendor: "SmallCode (open source)", captures: ["tokens", "traces", "model", "tool steps"], logPath: "<project>/.smallcode/traces/",    hex: "#0d9488" },
-  { name: "Pi",             vendor: "Earendil Works", captures: ["tokens", "traces", "reasoning", "cost", "model"], logPath: "~/.pi/agent/sessions/",           hex: "#fafafa" },
+  { name: "Cline",          vendor: "Cline (open source)", captures: ["tokens", "traces", "cache", "cost", "model"], logPath: "~/.cline/data/db/ + VS Code",      hex: "#7c3aed" },
+  { name: "SmallCode",      vendor: "SmallCode (open source)", captures: ["tokens", "traces", "model", "tools", "timing"], logPath: "<project>/.smallcode/traces/", hex: "#0d9488" },
+  { name: "Pi",             vendor: "Pi Coding Agent", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.pi/agent/sessions/",             hex: "#fafafa" },
+  { name: "Muse Code",      vendor: "Meta",      captures: ["tokens", "traces", "model", "subagents"],             logPath: "${XDG_DATA_HOME:-~/.local/share}/muse/sessions/", hex: "#2563eb" },
+  { name: "Prime Agent",    vendor: "Prime Intelligence", captures: ["tokens", "traces", "cost", "model", "branches"], logPath: "~/.prime/agent/sessions/",          hex: "#ea580c" },
   { name: "Hermes Agent",   vendor: "Nous Research", captures: ["tokens", "traces", "cost", "subagents", "skills", "memory", "cron", "38 sources"], logPath: "~/.hermes/",                      hex: "#eab308" },
 ];

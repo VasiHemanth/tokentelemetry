@@ -70,6 +70,9 @@ TokenTelemetry looks for agent logs in their default locations:
 - `~/.claude/projects/` for Claude Code
 - `~/.codex/sessions/` for Codex
 - `~/.gemini/` for Gemini CLI
+- `~/.pi/agent/sessions/` for Pi
+- `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/` for Muse Code
+- `~/.prime/agent/sessions/` for Prime Agent
 - And so on — see [Supported Agents](/docs/supported-agents) for the full list.
 
 No configuration is needed. If you keep agent logs in a non-default location, see [Custom Data Directory](/docs/configuration/data-directory) — though that flag controls where TokenTelemetry stores *its own* state, not where it looks for agent logs.
