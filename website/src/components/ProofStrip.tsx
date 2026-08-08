@@ -1,15 +1,15 @@
 "use client";
 import { AGENTS } from "@/data/agents";
 import { useGithubStats } from "@/lib/useGithubStats";
+import AgentIcon from "@/components/AgentIcon";
 
 export default function ProofStrip() {
   const { stars, forks } = useGithubStats();
-  // Derive the count from the source of truth so it never goes stale when an
-  // agent is added. Hermes is the autonomous agent, counted separately from the
-  // coding-agent headline used across the site.
-  const codingAgentCount = AGENTS.filter((a) => a.name !== "Hermes Agent").length;
+  // Derive the total from the source of truth so the landing-page number stays
+  // in sync as coding or autonomous agents are added.
+  const agentCount = AGENTS.length;
   const STATS = [
-    { value: String(codingAgentCount), unit: "agents", label: "auto-detected, zero config", green: false },
+    { value: String(agentCount), unit: "agents", label: "auto-detected, zero config", green: false },
     { value: "0", unit: "bytes uploaded", label: "fully local · read-only", green: true },
     { value: String(stars), unit: `★ · ${forks} forks`, label: "open source · MIT", green: false },
     { value: "1", unit: "command", label: "no SDK · no signup", green: false },
@@ -37,7 +37,13 @@ export default function ProofStrip() {
         <div className="flex gap-2.5 w-max tt-marquee-track">
           {chips.map((a, i) => (
             <span key={i} className="inline-flex items-center gap-2 h-[34px] px-3.5 rounded-full border border-[var(--tt-border)] bg-[var(--tt-panel)] text-[12.5px] font-medium text-[var(--tt-fg-muted)] whitespace-nowrap">
-              <span className="w-[7px] h-[7px] rounded-full" style={{ backgroundColor: a.hex }} />
+              <span
+                aria-hidden
+                className="grid h-5 w-5 place-items-center rounded-[5px] border"
+                style={{ backgroundColor: `${a.hex}18`, borderColor: `${a.hex}35`, color: a.hex }}
+              >
+                <AgentIcon name={a.name} size={12} />
+              </span>
               {a.name}
             </span>
           ))}
