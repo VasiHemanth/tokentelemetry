@@ -7251,6 +7251,7 @@ async def get_session_detail(session_id: str, agent: str):
                                 _tle["normalized_timestamp"] = _aware(datetime.fromisoformat(str(_tlts).replace("Z", "+00:00"))).timestamp() * 1000
                             except Exception:
                                 pass
+                        _tle.setdefault("normalized_timestamp", len(events) * 1000)
                         events.append(_tle)
                     continue
                 if evt.get("type") != "message":
@@ -7314,6 +7315,7 @@ async def get_session_detail(session_id: str, agent: str):
                         norm["normalized_timestamp"] = _ts.timestamp() * 1000
                     except Exception:
                         pass
+                norm.setdefault("normalized_timestamp", len(events) * 1000)
                 events.append(norm)
         return events
 
