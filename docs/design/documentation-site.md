@@ -80,7 +80,7 @@ The content the docs must cover, grounded in the actual feature surface
   Requirements: Node 18+, Python 3.9+, npm, agents already installed.
 - **Quick Start** — first launch, auto-detection, opening the dashboard, the
   `AGENT_HARNESS_NO_OPEN` note.
-- **Supported Agents** — the 10 coding agents + Hermes, how each is detected
+- **Supported Agents** — 15 coding agents + Hermes, how each is detected
   (`~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.cursor/`, `~/.vscode/`,
   `~/.local/share/opencode/`, `~/.hermes/`, `~/.grok/`, `~/.qwen/`), and what each
   captures. Reuse `website/src/data/agents.ts`.

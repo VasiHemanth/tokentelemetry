@@ -134,7 +134,7 @@ export default function Hero() {
                 </span>
               </div>
               <div className="aspect-[16/12] sm:aspect-[16/11] overflow-hidden bg-[var(--tt-sunken)]">
-                <img src="/screenshots/dashboard.png" width={3200} height={3000}
+                <img src="/screenshots/dashboard.png" width={1645} height={983}
                   alt="TokenTelemetry dashboard showing live token usage across detected agents"
                   className="block w-full h-auto object-cover object-top" loading="eager" decoding="async" />
               </div>
