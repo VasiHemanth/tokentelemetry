@@ -44,6 +44,8 @@
   --agent-cursor:      #60a5fa;
   --agent-copilot:     #6366f1;
   --agent-opencode:    #f59e0b;
+  --agent-muse:        #2563eb;
+  --agent-prime:       #ea580c;
 
   /* Radii + shadow */
   --tt-radius-sm: 6px;

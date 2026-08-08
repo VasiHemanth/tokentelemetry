@@ -462,6 +462,18 @@ CLINE_VSCODE_DIR = Path(
     or (VSCODE_BASE / "User" / "globalStorage" / "saoudrizwan.claude-dev")
 ).expanduser()
 
+# Meta Muse Code writes date-sharded event logs. Prime Agent writes one JSONL
+# conversation tree per session. Both variables are overridable for containers
+# and relocated home directories, matching the other scanner contracts.
+MUSE_SESSIONS_DIR = Path(os.environ.get("TT_MUSE_SESSIONS_DIR") or (
+    Path(os.environ.get("XDG_DATA_HOME")) if os.environ.get("XDG_DATA_HOME") else HOME / ".local/share"
+) / "muse" / "sessions").expanduser()
+PRIME_SESSIONS_DIR = Path(
+    os.environ.get("TT_PRIME_SESSIONS_DIR")
+    or os.environ.get("PRIME_AGENT_SESSION_DIR")
+    or (HOME / ".prime" / "agent" / "sessions")
+).expanduser()
+
 
 def _split_roots_env(value: Optional[str]) -> List[str]:
     """Split a roots env var on BOTH os.pathsep and comma so it works whether
@@ -475,6 +487,288 @@ def _split_roots_env(value: Optional[str]) -> List[str]:
             if p:
                 parts.append(p)
     return parts
+
+
+def _usage_number(value: Any) -> int:
+    """Return a safe non-negative integer from a log usage field."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _muse_usage(event: Any) -> Optional[Dict[str, int]]:
+    """Extract one *actual* Muse model-call usage event.
+
+    Muse emits an adjacent ``record.quantity`` accounting event for the same
+    call. Only model-tagged ``usage`` events are additive, so accepting the
+    record form would double-count every turn.
+    """
+    if not isinstance(event, dict) or not event.get("model"):
+        return None
+    usage = event.get("usage")
+    if not isinstance(usage, dict) or "input_tokens" not in usage:
+        return None
+    return {
+        "input": _usage_number(usage.get("input_tokens")),
+        "output": _usage_number(usage.get("output_tokens")),
+        "cached": _usage_number(usage.get("cached_tokens", usage.get("cache_read_tokens"))),
+        "cache_creation": _usage_number(usage.get("cache_write_tokens")),
+        "reasoning": _usage_number(usage.get("reasoning_tokens")),
+    }
+
+
+def _muse_log_summary(path: Path) -> Dict[str, Any]:
+    """Safely summarize one Muse JSONL file without trusting its contents."""
+    result: Dict[str, Any] = {
+        "cwd": None, "model": None, "display": None, "timestamp": _file_mtime_utc(path),
+        "tokens": {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0},
+        "children": [], "tools": [],
+    }
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                recorded_at = row.get("recorded_at")
+                if isinstance(recorded_at, (int, float)) and recorded_at > 0:
+                    result["timestamp"] = datetime.fromtimestamp(recorded_at / 1_000_000, tz=timezone.utc)
+                payload = row.get("payload")
+                event = payload.get("event") if isinstance(payload, dict) else None
+                payload_record = payload.get("record") if isinstance(payload, dict) else None
+                if isinstance(payload_record, dict):
+                    if isinstance(payload_record.get("cwd"), str) and payload_record["cwd"].strip():
+                        result["cwd"] = payload_record["cwd"]
+                    model_id = payload_record.get("model_id")
+                    if isinstance(model_id, str) and model_id:
+                        result["model"] = model_id
+                    effective = payload_record.get("effective")
+                    if isinstance(effective, dict) and isinstance(effective.get("model_id"), str) and effective["model_id"]:
+                        result["model"] = effective["model_id"]
+                if not isinstance(event, dict):
+                    continue
+                record = event.get("record")
+                if isinstance(record, dict):
+                    if isinstance(record.get("cwd"), str) and record["cwd"].strip():
+                        result["cwd"] = record["cwd"]
+                    model_id = record.get("model_id")
+                    if isinstance(model_id, str) and model_id:
+                        result["model"] = model_id
+                if isinstance(event.get("model"), str) and event["model"]:
+                    result["model"] = event["model"]
+                usage = _muse_usage(event)
+                if usage:
+                    for key, value in usage.items():
+                        result["tokens"][key] += value
+                child = event.get("child_session_log_path")
+                if isinstance(child, str) and child:
+                    result["children"].append(child)
+                kind = event.get("kind")
+                if kind == "user_prompt_display" and isinstance(event.get("text"), str) and not result["display"]:
+                    result["display"] = event["text"][:120]
+                if kind == "assistant_tool_calls_committed":
+                    for call in event.get("tool_calls") or []:
+                        if isinstance(call, dict) and isinstance(call.get("name"), str):
+                            result["tools"].append(call["name"])
+    except OSError:
+        pass
+    result["tools"] = list(dict.fromkeys(result["tools"]))
+    return result
+
+
+def _scan_muse_sessions() -> List[Dict[str, Any]]:
+    """Scan root Muse sessions; delegated children remain attributed to parents."""
+    out: List[Dict[str, Any]] = []
+    try:
+        session_paths = sorted(MUSE_SESSIONS_DIR.glob("*/*/*/*/session.jsonl"))
+    except OSError:
+        return out
+    for path in session_paths:
+        summary = _muse_log_summary(path)
+        tokens = summary["tokens"]
+        total = sum(tokens.values())
+        tokens["total"] = total
+        tokens["cost"] = calculate_cost(summary["model"], tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens["cache_creation"])
+        subagents = []
+        delegated = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0}
+        root = path.parent.resolve()
+        for rel in dict.fromkeys(summary["children"]):
+            try:
+                child_path = (path.parent / rel).resolve()
+                if not child_path.is_relative_to(root) or not child_path.is_file():
+                    continue
+            except (OSError, ValueError):
+                continue
+            child = _muse_log_summary(child_path)
+            child_tokens = child["tokens"]
+            for key in delegated:
+                delegated[key] += child_tokens[key]
+            subagents.append({
+                "agent_id": child_path.parent.name,
+                "agent_type": "muse-subagent",
+                "model": child["model"],
+                "tokens": {**child_tokens, "total": sum(child_tokens.values())},
+                "cost": calculate_cost(child["model"], child_tokens["input"], child_tokens["output"], child_tokens["cached"], cache_creation_tokens=child_tokens["cache_creation"]),
+            })
+        delegated_total = sum(delegated.values())
+        delegation = {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                      "subagents": subagents, "delegated_total": delegated_total,
+                      "delegated_cost": sum(s["cost"] for s in subagents),
+                      "by_type": {"muse-subagent": {"count": len(subagents), "total": delegated_total,
+                                                        "cost": sum(s["cost"] for s in subagents)}} if subagents else {}}
+        sid = path.parent.name
+        out.append({
+            "id": sid, "agent": "muse", "project": summary["cwd"] or "unknown",
+            "timestamp": summary["timestamp"], "display": summary["display"] or f"Muse Code session {sid[:8]}",
+            "tokens": tokens, "model": summary["model"], "mcp_tools": summary["tools"],
+            "has_plan": False, "plans": [], "artifacts": [], "cost": tokens["cost"],
+            "cost_source": "estimated",
+            "delegation": delegation, "muse": {"session_path": str(path)},
+        })
+    return out
+
+
+def _muse_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize Muse's event envelope into the shared trace-event contract."""
+    events: List[Dict[str, Any]] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try: row = json.loads(line)
+                except (json.JSONDecodeError, ValueError): continue
+                payload = row.get("payload") if isinstance(row, dict) else None
+                event = payload.get("event") if isinstance(payload, dict) else None
+                if not isinstance(event, dict): continue
+                recorded_at = row.get("recorded_at")
+                ts_ms = recorded_at / 1000 if isinstance(recorded_at, (int, float)) else None
+                base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+                kind = event.get("kind")
+                if kind == "user_prompt_display" and isinstance(event.get("text"), str):
+                    events.append({"type": "user", "payload": {"content": event["text"]}, **base})
+                elif kind == "assistant_message_committed" and isinstance(event.get("text"), str):
+                    events.append({"type": "assistant", "payload": {"content": event["text"]}, **base})
+                elif kind == "assistant_tool_calls_committed":
+                    for call in event.get("tool_calls") or []:
+                        if isinstance(call, dict):
+                            events.append({"type": "tool_call", "payload": {"tool": call.get("name"),
+                                           "args": call.get("arguments") or call.get("input")}, **base})
+                elif _muse_usage(event):
+                    events.append({"type": "usage", "payload": {"model": event.get("model"),
+                                   "usage": _muse_usage(event)}, **base})
+    except OSError:
+        pass
+    return events
+
+
+def _prime_active_entries(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the newest leaf's ancestry from Prime's in-file session tree."""
+    entries = [r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("type") != "session"]
+    by_id = {r["id"]: r for r in entries}
+    parents = {r.get("parentId") for r in entries if isinstance(r.get("parentId"), str)}
+    leaves = [r for r in entries if r["id"] not in parents]
+    if not leaves:
+        return []
+    # A resumed tree appends to its selected branch, so its latest leaf is the
+    # durable active path. Stable index breaks equal-timestamp ties.
+    indexed = {id(r): i for i, r in enumerate(entries)}
+    leaf = max(leaves, key=lambda r: (str(r.get("timestamp") or ""), indexed[id(r)]))
+    chain: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    current: Optional[Dict[str, Any]] = leaf
+    while current and current["id"] not in seen:
+        seen.add(current["id"])
+        chain.append(current)
+        parent_id = current.get("parentId")
+        current = by_id.get(parent_id) if isinstance(parent_id, str) else None
+    return list(reversed(chain))
+
+
+def _prime_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    return ""
+
+
+def _scan_prime_sessions() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    try:
+        paths = sorted(PRIME_SESSIONS_DIR.glob("*.jsonl"))
+    except OSError:
+        return out
+    for path in paths:
+        rows: List[Dict[str, Any]] = []
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+        except OSError:
+            continue
+        header = next((r for r in rows if r.get("type") == "session"), None)
+        if not isinstance(header, dict) or not isinstance(header.get("id"), str):
+            continue
+        active = _prime_active_entries(rows)
+        aggregate_by_target = {r.get("targetId"): r.get("aggregateUsage") for r in active
+                               if r.get("type") == "child_usage_attributed" and isinstance(r.get("aggregateUsage"), dict)}
+        tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
+        cost = 0.0
+        display = None
+        model = None
+        tools: List[str] = []
+        last_ts = _file_mtime_utc(path)
+        for row in active:
+            ts = row.get("timestamp")
+            if isinstance(ts, str):
+                try: last_ts = _aware(datetime.fromisoformat(ts.replace("Z", "+00")))
+                except ValueError: pass
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "user":
+                # The active branch can inherit an earlier prompt. Its newest
+                # user message is the most useful project-activity label.
+                text = _prime_text(message.get("content"))
+                if text:
+                    display = text[:120]
+            if message.get("role") != "assistant":
+                continue
+            usage = aggregate_by_target.get(row.get("id"), message.get("usage"))
+            if not isinstance(usage, dict):
+                continue
+            tokens["input"] += _usage_number(usage.get("input"))
+            tokens["output"] += _usage_number(usage.get("output"))
+            tokens["cached"] += _usage_number(usage.get("cacheRead"))
+            tokens["cache_creation"] += _usage_number(usage.get("cacheWrite"))
+            usage_cost = usage.get("cost")
+            if isinstance(usage_cost, dict):
+                try: cost += max(0.0, float(usage_cost.get("total") or 0))
+                except (TypeError, ValueError): pass
+            if isinstance(message.get("model"), str): model = message["model"]
+            for part in message.get("content") or []:
+                if isinstance(part, dict) and part.get("type") == "toolCall" and isinstance(part.get("name"), str):
+                    tools.append(part["name"])
+        tokens["total"] = sum(tokens.values())
+        tokens["cost"] = cost
+        branches = len([r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("type") != "session" and r["id"] not in {e.get("parentId") for e in rows if isinstance(e, dict)}])
+        out.append({
+            "id": header["id"], "agent": "prime", "project": header.get("cwd") if isinstance(header.get("cwd"), str) else "unknown",
+            "timestamp": last_ts, "display": display or f"Prime Agent session {header['id'][:8]}",
+            "tokens": tokens, "model": model, "mcp_tools": list(dict.fromkeys(tools)),
+            "has_plan": False, "plans": [], "artifacts": [], "cost": cost, "cost_source": "reported",
+            "prime": {"session_path": str(path), "branch_count": branches},
+            "delegation": {"supported": True, "tokens_recorded": True},
+        })
+    return out
 
 
 # SmallCode traces are PROJECT-LOCAL (<project>/.smallcode/traces/*.json), not
@@ -2554,6 +2848,8 @@ def _list_available_agents() -> list:
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
     if (CLINE_DIR / "data" / "db" / "sessions.db").exists() or (CLINE_VSCODE_DIR / "state" / "taskHistory.json").exists():
         agents.append("cline")
+    if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
+    if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
     # SmallCode traces are project-local; cheaply check only the explicitly
     # configured extra roots here (the full project-derived root set is only
     # known after _scan_sessions_sync runs the other scanners).
@@ -6150,7 +6446,13 @@ def _scan_sessions_sync():
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
 
-    # 8c. SmallCode — traces are PROJECT-LOCAL (<project>/.smallcode/traces/),
+    # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
+    # cwd, so they naturally participate in project/worktree navigation.
+    for sess in _scan_muse_sessions() + _scan_prime_sessions():
+        sess["project"] = apply_alias(sess.get("project") or "unknown")
+        sessions.append(sess)
+
+    # 8d. SmallCode — traces are PROJECT-LOCAL (<project>/.smallcode/traces/),
     # so discover roots from projects already seen from other agents (they ran
     # somewhere real) unioned with any user-configured extra roots, then scan.
     smallcode_roots = {
@@ -7112,6 +7414,53 @@ async def get_session_detail(session_id: str, agent: str):
                     "messages": log_messages,
                 }
         return {"error": "Not found"}
+    elif agent == "muse":
+        path = next((p for p in MUSE_SESSIONS_DIR.glob("*/*/*/*/session.jsonl")
+                     if p.parent.name == session_id), None)
+        if path is None:
+            return {"error": "Not found"}
+        return _muse_trace_events(path)
+    elif agent == "prime":
+        path = None
+        rows: List[Dict[str, Any]] = []
+        for candidate in PRIME_SESSIONS_DIR.glob("*.jsonl"):
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="replace") as f:
+                    candidate_rows = [json.loads(line) for line in f if line.strip()]
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+            header = next((r for r in candidate_rows if isinstance(r, dict) and r.get("type") == "session"), None)
+            if isinstance(header, dict) and header.get("id") == session_id:
+                path, rows = candidate, [r for r in candidate_rows if isinstance(r, dict)]
+                break
+        if path is None:
+            return {"error": "Not found"}
+        events = []
+        for row in _prime_active_entries(rows):
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            ts = row.get("timestamp")
+            try: ts_ms = _aware(datetime.fromisoformat(ts.replace("Z", "+00:00"))).timestamp() * 1000 if isinstance(ts, str) else None
+            except ValueError: ts_ms = None
+            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+            role = message.get("role")
+            if role == "user":
+                text = _prime_text(message.get("content"))
+                if text: events.append({"type": "user", "payload": {"content": text}, **base})
+            elif role == "assistant":
+                for part in message.get("content") or []:
+                    if not isinstance(part, dict): continue
+                    if part.get("type") == "text" and isinstance(part.get("text"), str):
+                        events.append({"type": "assistant", "payload": {"content": part["text"]}, **base})
+                    elif part.get("type") == "thinking" and isinstance(part.get("thinking"), str):
+                        events.append({"type": "assistant_thinking", "payload": {"text": part["thinking"]}, **base})
+                    elif part.get("type") == "toolCall":
+                        events.append({"type": "tool_call", "payload": {"tool": part.get("name"), "args": part.get("arguments")}, **base})
+            elif role == "toolResult":
+                text = _prime_text(message.get("content"))
+                events.append({"type": "tool_result", "payload": {"tool": message.get("toolName"), "content": text}, **base})
+        return events
     elif agent == "qwen":
         files = list(QWEN_DIR.glob(f"projects/**/chats/{session_id}.jsonl"))
         if not files: return {"error": "Not found"}
@@ -7524,7 +7873,7 @@ _SUBAGENT_ID_RE = re.compile(r"^[\w.-]+$")
 async def session_subagent_trace(session_id: str, agent_id: str, agent: str):
     """Raw trace of ONE subagent transcript, for the in-place drill-in viewer.
 
-    Only claude and cursor need this: their subagent transcripts are files
+    Claude, Cursor, and Muse need this: their subagent transcripts are files
     inside the parent's session dir, NOT sessions of their own (grok/codex/
     opencode/hermes children are real sessions — fetch the normal detail
     endpoint for those instead)."""
@@ -7548,6 +7897,18 @@ async def session_subagent_trace(session_id: str, agent_id: str, agent: str):
             if t.exists():
                 return _jsonl_events(t)
         return {"error": "Not found"}
+    if agent == "muse":
+        parent = next((p for p in MUSE_SESSIONS_DIR.glob("*/*/*/*/session.jsonl")
+                       if p.parent.name == session_id), None)
+        if parent is None:
+            return {"error": "Not found"}
+        child = parent.parent / "subagent" / agent_id / "session.jsonl"
+        try:
+            if not child.resolve().is_relative_to(parent.parent.resolve()) or not child.is_file():
+                return {"error": "Not found"}
+        except OSError:
+            return {"error": "Not found"}
+        return _muse_trace_events(child)
     return {"error": "Invalid agent"}
 
 
@@ -7580,6 +7941,31 @@ async def session_delegation(session_id: str, agent: str):
                         "subagents": [{"agent_id": f.stem, "agent_type": "unknown",
                                        "tokens": None, "cost": None} for f in sub_files]}
         return {"error": "Not found"}
+
+    if agent == "muse":
+        parent = next((p for p in MUSE_SESSIONS_DIR.glob("*/*/*/*/session.jsonl")
+                       if p.parent.name == session_id), None)
+        if parent is None:
+            return {"error": "Not found"}
+        summary = _muse_log_summary(parent)
+        subagents = []
+        for rel in dict.fromkeys(summary["children"]):
+            try:
+                child = (parent.parent / rel).resolve()
+                if not child.is_relative_to(parent.parent.resolve()) or not child.is_file():
+                    continue
+            except (OSError, ValueError):
+                continue
+            child_summary = _muse_log_summary(child)
+            t = child_summary["tokens"]
+            subagents.append({"agent_id": child.parent.name, "agent_type": "muse-subagent",
+                              "model": child_summary["model"], "tokens": {**t, "total": sum(t.values())},
+                              "cost": calculate_cost(child_summary["model"], t["input"], t["output"], t["cached"], cache_creation_tokens=t["cache_creation"])})
+        totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
+                  for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
+        return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                "subagents": subagents, "totals": totals,
+                "cost": sum(s["cost"] for s in subagents)}
 
     if agent == "opencode":
         _oc_db = _opencode_db_for_session(session_id)

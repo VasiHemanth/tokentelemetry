@@ -56,6 +56,7 @@ interface Session {
   models_used?: string[];
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
   cost?: number;
+  cost_source?: "reported" | "estimated";
   artifacts?: Artifact[];
   published_artifacts?: PublishedArtifact[];
   /** Copilot-only: which surface (cli vs vscode) */
@@ -887,6 +888,14 @@ export default function SessionDetailPage() {
                     status={sessionInfo.cost_status}
                   />
                 )}
+                {agent !== "hermes" && sessionInfo?.cost != null && (
+                   <StatPill
+                     icon={<DollarSign size={11} />}
+                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
+                     value={formatCost(sessionInfo.cost)}
+                     tone="amber"
+                   />
+                 )}
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
@@ -1281,7 +1290,7 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
 function SubagentTraceModal({ entry, agent, sessionId, onClose }: { entry: any; agent: string; sessionId: string; onClose: () => void }) {
   const [traceEvents, setTraceEvents] = useState<Event[] | null>(null);
 
-  const isTranscript = entry.agent_id && (agent === "claude" || agent === "cursor");
+  const isTranscript = entry.agent_id && (agent === "claude" || agent === "cursor" || agent === "muse");
   const childId: string | null = entry.child_session_id || null;
 
   useEffect(() => {
@@ -2524,6 +2533,48 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
         </div>
       );
     }
+  }
+
+  // 10c. Muse Code / Prime Agent normalized trace events. Their backend
+  // adapters intentionally emit the same small event shape as OpenCode, but
+  // retain a neutral tool card rather than borrowing another agent's branding.
+  if ((agent === "muse" || agent === "prime") && type === "tool_call" && payload && mode !== "dialogue") {
+    parts.push(
+      <div className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-4 group">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[var(--tt-brand)] font-black text-[10px] uppercase tracking-[0.2em]">
+            <Wrench size={14} strokeWidth={3} /> Tool · {payload.tool || "unknown"}
+          </div>
+          {renderTimestamp()}
+        </div>
+        {payload.args !== undefined && (
+          <details className="mt-2">
+            <summary className="text-[10px] font-mono text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">arguments ▸</summary>
+            <pre className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap">{typeof payload.args === "string" ? payload.args : JSON.stringify(payload.args, null, 2)}</pre>
+          </details>
+        )}
+      </div>
+    );
+  }
+  if ((agent === "muse" || agent === "prime") && type === "tool_result" && payload && mode !== "dialogue") {
+    parts.push(
+      <div className="ml-4 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-panel)]/50 p-4 group">
+        <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-fg-muted)]">
+          <span className="flex items-center gap-2"><Terminal size={14} strokeWidth={3} /> Result · {payload.tool || "tool"}</span>
+          {renderTimestamp()}
+        </div>
+        {payload.content && <pre className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap">{String(payload.content).slice(0, 6000)}</pre>}
+      </div>
+    );
+  }
+  if (agent === "muse" && type === "usage" && payload?.usage && mode !== "dialogue") {
+    const usage = payload.usage;
+    parts.push(
+      <div className="rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-panel)]/40 px-4 py-3 text-[10px] font-mono text-[var(--tt-fg-muted)]">
+        <span className="text-[var(--tt-brand)]">{payload.model || "Muse model"}</span>
+        <span className="ml-3">{(usage.input || 0).toLocaleString()} in · {(usage.output || 0).toLocaleString()} out · {(usage.cached || 0).toLocaleString()} cached</span>
+      </div>
+    );
   }
 
   // 11. SYSTEM METADATA
