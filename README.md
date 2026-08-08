@@ -412,7 +412,7 @@ Know of another? [Open an issue](https://github.com/VasiHemanth/tokentelemetry/i
 
 ## Troubleshooting
 
-**Port conflicts:** Check/kill processes on ports 3000 and 8000.  
+**Port conflicts:** Check/kill processes on ports 3000 and 8000.
 **Python not found:** Install Python 3.9+ and ensure it's in your PATH.  
 **No sessions showing:** Run an agent (Claude Code, Gemini CLI, etc.) first — TokenTelemetry needs existing log files.  
 **Windows issues:** Run PowerShell as Administrator for the installer.
