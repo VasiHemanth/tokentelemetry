@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 import { getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 
 type Variant = "neutral" | "brand" | "success" | "warn" | "danger" | "info" | "outline";
 
@@ -40,7 +41,7 @@ export interface AgentBadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   size?: "xs" | "sm";
 }
 
-/** Agent identity chip — dot + label tinted by agent hex. Uniform across the app. */
+/** Agent identity chip — brand mark + label tinted by agent hex. Uniform across the app. */
 export function AgentBadge({
   agent, withDot = true, withLabel = true, size = "xs", className, ...rest
 }: AgentBadgeProps) {
@@ -60,11 +61,7 @@ export function AgentBadge({
       {...rest}
     >
       {withDot && (
-        <span
-          aria-hidden
-          className="w-1.5 h-1.5 rounded-full"
-          style={{ backgroundColor: meta.hex, boxShadow: `0 0 6px ${meta.hex}80` }}
-        />
+        <AgentLogo agent={agent} size={size === "xs" ? 11 : 13} />
       )}
       {withLabel && meta.label}
     </span>

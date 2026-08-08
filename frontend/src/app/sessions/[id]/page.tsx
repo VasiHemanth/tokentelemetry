@@ -389,18 +389,18 @@ const stepRingClass: Record<StepKind, string> = {
 
 function stepLabel(evt: Event, kind: StepKind): string {
   if (kind === "tool") {
-    if (evt.toolCalls?.[0]) return evt.toolCalls[0].name;
+    if (evt.toolCalls?.[0]) return displayText(evt.toolCalls[0].name) || "Tool call";
     const tu = Array.isArray(evt.message?.content) ? evt.message.content.find((c: any) => c.type === "tool_use") : null;
-    if (tu) return tu.name;
-    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return (evt.payload as any).name;
+    if (tu) return displayText(tu.name) || "Tool call";
+    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return displayText((evt.payload as any).name) || "Tool call";
   }
   if (kind === "user") {
     // Codex event_msg user_message
     if (evt.type === "event_msg" && (evt.payload as any)?.type === "user_message") {
-      return ((evt.payload as any).message || "User Query").slice(0, 40);
+      return (displayText((evt.payload as any).message) || "User Query").slice(0, 40);
     }
     const c = evt.message?.content || evt.payload?.content;
-    const text = Array.isArray(c) ? c.map((p: any) => p.text || p.input_text).filter(Boolean).join(" ") : (typeof c === "string" ? c : "");
+    const text = displayText(c);
     return (text || "User Query").slice(0, 40);
   }
   if (kind === "assistant") return "Response";
@@ -1900,11 +1900,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   // Helper to extract text from content array (Used by Claude and Cursor)
   const extractText = (contentArr: any[]) => {
     if (!Array.isArray(contentArr)) return "";
-    return contentArr
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text)
-      .filter(Boolean)
-      .join("\n");
+    return contentArr.filter((c: any) => c.type === "text").map(displayText).filter(Boolean).join("\n");
   };
 
   const parts: React.ReactNode[] = [];
@@ -1920,7 +1916,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{content}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(content)}</div>
         </div>
      );
   }
@@ -1937,7 +1933,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.text}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.text)}</div>
         </div>
        );
     }
@@ -1950,7 +1946,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{payload.text}</div>
+          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{displayText(payload.text)}</div>
         </div>
        );
     }
@@ -2002,7 +1998,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.content}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.content)}</div>
         </div>
      );
   }
@@ -2259,10 +2255,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   // 7. CATCH-ALL for separate reasoning events (Claude/Cursor/Copilot/Qwen)
   if ((type === "agent_reasoning" || type === "assistant_thinking" || type === "reasoning" || payload?.type === "reasoning") && mode !== "dialogue") {
     const rawReasoning = payload?.text ?? payload?.content ?? payload?.thinking ?? payload?.summary ?? payload?.value ?? payload?.message ?? event.thoughts ?? (typeof payload === 'string' ? payload : payload);
-    let text = "";
-    if (typeof rawReasoning === 'string') text = rawReasoning;
-    else if (Array.isArray(rawReasoning)) text = rawReasoning.map((p: any) => (typeof p === 'string' ? p : (p?.text ?? p?.thinking ?? p?.content ?? p?.value ?? ""))).filter(Boolean).join("\n\n");
-    else if (rawReasoning && typeof rawReasoning === 'object') text = rawReasoning.text ?? rawReasoning.thinking ?? rawReasoning.content ?? rawReasoning.value ?? JSON.stringify(rawReasoning, null, 2);
+    const text = displayText(rawReasoning);
     if (text) {
       const isCopilot = agent === "copilot" || type === "assistant_thinking";
       const accent = isCopilot ? "border-l-indigo-500/50" : "border-l-amber-500/50";
@@ -2332,7 +2325,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
 
     if (thinkingArr.length > 0 && mode !== "dialogue") {
        thinkingArr.forEach((t: any, i: number) => {
-         const body = t.thinking || t.text || t.content || "";
+         const body = displayText(t.thinking || t.text || t.content);
          const isEncrypted = !body && (t.signature || t.type === "redacted_thinking");
          parts.push(
             <div key={`think-${i}`} className="bg-amber-500/5 border border-amber-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-amber-500/50 group">
@@ -2404,7 +2397,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
               {renderTimestamp()}
             </div>
             <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{
-              coerceReasoningText(payload.content ?? payload.summary ?? payload.text)
+              displayText(payload.content ?? payload.summary ?? payload.text)
             }</div>
           </div>
        );
@@ -2501,7 +2494,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{payload.text}</div>
+          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{displayText(payload.text)}</div>
         </div>
       );
     } else if (msgType !== "user_message" && msgType !== "agent_message" && msgType !== "agent_reasoning" && msgType !== "token_count") {
@@ -2647,7 +2640,7 @@ function displayText(value: unknown): string {
   if (Array.isArray(value)) return value.map(displayText).filter(Boolean).join("\n");
   if (value && typeof value === "object") {
     const block = value as Record<string, unknown>;
-    for (const key of ["text", "input_text", "content", "message", "summary", "value"]) {
+    for (const key of ["text", "input_text", "content", "message", "summary", "value", "thinking", "description", "output"]) {
       if (block[key] !== undefined) {
         const text = displayText(block[key]);
         if (text) return text;
