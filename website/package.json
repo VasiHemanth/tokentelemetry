@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@lobehub/icons": "^5.15.0",
     "@types/mdx": "^2.0.14",
     "framer-motion": "^12.42.2",
     "fumadocs-core": "^16.10.3",

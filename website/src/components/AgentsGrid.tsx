@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { AGENTS } from "@/data/agents";
 import { track } from "@/lib/track";
+import AgentIcon from "@/components/AgentIcon";
 
 /**
  * Interactive agent cards. The CRO audit (D3) found visitors tapping the old
@@ -43,12 +44,18 @@ export default function AgentsGrid() {
                   +
                 </span>
                 <span className="flex items-center gap-2.5 mb-1">
-                  <span className="w-[9px] h-[9px] rounded-full shrink-0" style={{ backgroundColor: a.hex, boxShadow: `0 0 8px ${a.hex}66` }} />
+                  <span
+                    aria-hidden
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md border"
+                    style={{ backgroundColor: `${a.hex}18`, borderColor: `${a.hex}35`, color: a.hex }}
+                  >
+                    <AgentIcon name={a.name} size={15} />
+                  </span>
                   <span className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--tt-fg)]">{a.name}</span>
                 </span>
-                <span className="font-mono text-[11px] text-[var(--tt-fg-dim)] pl-[19px]">{a.vendor}</span>
+                <span className="font-mono text-[11px] text-[var(--tt-fg-dim)] pl-[38px]">{a.vendor}</span>
 
-                <span className="overflow-hidden transition-all duration-300 ease-out pl-[19px]"
+                <span className="overflow-hidden transition-all duration-300 ease-out pl-[38px]"
                   style={{ maxHeight: isOpen ? 160 : 0, opacity: isOpen ? 1 : 0, marginTop: isOpen ? 8 : 0 }}>
                   <span className="block text-[11.5px] text-[var(--tt-fg-muted)] leading-relaxed">
                     Reads from <span className="font-mono text-[var(--tt-fg-muted)]">{a.logPath}</span>
