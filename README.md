@@ -1,6 +1,6 @@
 # Token Telemetry (TokenTelemetry)
 
-> **Local observability for AI coding agents AND autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, _and_ Nous Research's Hermes Agent.**
+> **Local observability for AI coding agents and autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Muse Code, Prime Agent, _and_ Nous Research's Hermes Agent.**
 
 **Token Telemetry** (one word: **TokenTelemetry**) — free, open-source, 100% local.
 
@@ -15,12 +15,9 @@
 **TokenTelemetry** is a free, open-source, 100% local observability dashboard that tracks **token usage**, **LLM costs**, **tool calls**, **session traces**, and **reasoning steps** across all your AI coding agents — in one unified place. No signup. No cloud. Your logs never leave your machine.
 
 🌐 **Website & Docs:** [https://tokentelemetry.com](https://tokentelemetry.com)  
-🎥 **Demo:** [3-minute walkthrough](https://youtu.be/AXGdSFFNS_w)  
 🖥️ **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.sh | bash`
 🧰 **Windows:** `irm https://raw.githubusercontent.com/VasiHemanth/tokentelemetry/main/install.ps1 | iex`
 🐙 **GitHub:** [github.com/VasiHemanth/tokentelemetry](https://github.com/VasiHemanth/tokentelemetry)
-
-[![Watch the TokenTelemetry demo](https://img.youtube.com/vi/AXGdSFFNS_w/maxresdefault.jpg)](https://youtu.be/AXGdSFFNS_w)
 
 ---
 
@@ -58,7 +55,11 @@ TokenTelemetry reads session logs from these agents automatically.
 | **Vibe**                    | ✅ Fully supported |
 | **Antigravity**             | ✅ Fully supported |
 | **Grok Build** (xAI)        | ✅ Fully supported |
+| **Cline**                   | ✅ Fully supported |
+| **SmallCode**               | ✅ Fully supported |
 | **Pi Coding Agent**         | ✅ Fully supported |
+| **Muse Code** (Meta)        | ✅ Fully supported |
+| **Prime Agent**             | ✅ Fully supported |
 
 ### Autonomous agents
 
@@ -148,46 +149,6 @@ cd tokentelemetry
 ```
 
 Then open: **http://localhost:3000**
-
-`./start.sh` is also how you relaunch it later — there's no global `tokentelemetry` command, by design, so it stays a self-contained local checkout. Re-run it from the repo folder whenever you want to start it again.
-
-### Option 3: Docker or Podman
-
-```bash
-git clone https://github.com/VasiHemanth/tokentelemetry.git
-cd tokentelemetry
-make up
-```
-
-Then open: **http://localhost:13000**
-
-Requires Docker or Podman (auto-detected). Images are built on first run and reused on subsequent runs — `make up` skips the build if images already exist. Run `make` to see all available targets (`make build`, `make down`, `make logs`, etc.).
-
-The frontend runs on host port **13000** and the backend on **18000**, bound to loopback by default. Override ports with `PORT=` and `TT_API_PORT=` — but note that `TT_API_PORT` also controls `NEXT_PUBLIC_API_PORT`, which is baked into the Next.js client bundle at build time. If you change `TT_API_PORT` after images are already built, run `make build` first so the frontend bundle picks up the new port.
-
-**Windows:** the container path requires WSL or Git Bash — `${HOME}` is not set in plain `cmd.exe` or PowerShell, which causes the `~/.claude` mount to fail silently.
-
-Pre-built images are published to GitHub Container Registry when a push to main touches `backend/`, `frontend/`, or `compose.yml`. To run without building locally, use the production overlay:
-
-```bash
-make up-prod                                   # pull from GHCR and start detached
-# or pin a specific build:
-TT_IMAGE_TAG=sha-abc1234 make up-prod
-```
-
-`make up` (dev) builds images locally. `make up-prod` pulls pre-built GHCR images and is the faster path on machines where you don't have the source. Because the GHCR images have `TT_API_PORT` baked in, do not override `TT_API_PORT` with `make up-prod`.
-
----
-
-## Updating
-
-```bash
-cd tokentelemetry   # your clone
-git pull
-./start.sh          # start.bat on Windows
-```
-
-Dependencies re-install automatically on the next launch when they've changed — nothing else to do. The dashboard's update check (**Settings → Updates & privacy**) tells you *when* a new version is out; `git pull` is how you apply it. Re-running the one-line installer over an existing clone now updates it too, but a manual `git pull` is the reliable path.
 
 ---
 
@@ -361,16 +322,11 @@ This method requires no firewall changes on the remote machine and reuses your e
 
 ```
 tokentelemetry/
-  backend/           FastAPI app (Python) — reads agent logs, serves REST API
-  backend/Dockerfile
-  frontend/          Next.js 16 dashboard — React UI
-  frontend/Dockerfile
-  compose.yml        Container compose file (Docker / Podman) — dev, builds locally
-  docker-compose.prod.yml  Production overlay — pulls pre-built images from GHCR
-  Makefile           Container management (make up / up-prod / down / build / logs …)
-  bin/cli.js         Cross-platform launcher
-  install.sh         One-line installer (macOS/Linux)
-  install.ps1        One-line installer (Windows)
+  backend/        FastAPI app (Python) — reads agent logs, serves REST API
+  frontend/       Next.js 16 dashboard — React UI
+  bin/cli.js      Cross-platform launcher
+  install.sh      One-line installer (macOS/Linux)
+  install.ps1     One-line installer (Windows)
 ```
 
 ---
@@ -456,11 +412,9 @@ Know of another? [Open an issue](https://github.com/VasiHemanth/tokentelemetry/i
 
 ## Troubleshooting
 
-**Port conflicts (native):** Check/kill processes on ports 3000 and 8000.  
-**Port conflicts (container):** The container path uses ports 13000 (frontend) and 18000 (backend) by default — override with `PORT=` and `TT_API_PORT=`.  
+**Port conflicts:** Check/kill processes on ports 3000 and 8000.
 **Python not found:** Install Python 3.9+ and ensure it's in your PATH.  
 **No sessions showing:** Run an agent (Claude Code, Gemini CLI, etc.) first — TokenTelemetry needs existing log files.  
-**How do I start it again?** `cd` into the clone folder and run `./start.sh` (`start.bat` on Windows) — there's no global command.  
 **Windows issues:** Run PowerShell as Administrator for the installer.
 
 ---

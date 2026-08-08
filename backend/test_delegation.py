@@ -1166,6 +1166,31 @@ def test_codex_scan_has_no_100_cap(scan_env, monkeypatch):
     assert not stubs
 
 
+def test_codex_scan_tracks_full_model_ids_and_latest_model(scan_env, monkeypatch):
+    """Codex starts a rollout with a context model and may switch later.
+
+    The session list needs the newest model as its primary label, while the
+    detail view needs the complete, ordered model journey.
+    """
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    sid = "019eb056-4eae-7280-8617-000000000777"
+    _write_codex_rollout(scan_env / ".codex", sid, 0, [
+        _codex_session_meta(model=None, provider="openai"),
+        {"type": "turn_context", "payload": {"model": "gpt-5.6-luna"}},
+        {"type": "event_msg", "payload": {
+            "type": "thread_settings_applied",
+            "thread_settings": {"model": "gpt-5.6-terra"},
+        }},
+        _codex_token_event("2026-07-01T00:00:00Z", 100, 0, 50),
+    ])
+
+    session = next(s for s in main._scan_sessions_sync() if s["id"] == sid)
+
+    assert session["model"] == "gpt-5.6-terra"
+    assert session["models_used"] == ["gpt-5.6-luna", "gpt-5.6-terra"]
+
+
 def test_codex_scan_cache_hit_serves_stale_content(scan_env, monkeypatch):
     monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
     monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))

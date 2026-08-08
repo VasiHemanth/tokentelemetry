@@ -1,0 +1,10 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "network": "proxy-only"
+  },
+  "approval": {
+    "mode": "on-request",
+    "judge": "on"
+  }
+}

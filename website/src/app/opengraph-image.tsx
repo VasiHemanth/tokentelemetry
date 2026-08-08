@@ -95,7 +95,7 @@ export default function OpenGraphImage() {
           </div>
           <div style={{ display: "flex", fontSize: "28px", color: "#94a3b8", fontWeight: 500 }}>
             <span style={{ color: "#fde047", fontWeight: 600 }}>Hermes Agent</span>
-            <span style={{ display: "flex", color: "#94a3b8" }}>&nbsp;· Claude · Codex · Gemini · Cursor · Copilot · and 4 more.</span>
+            <span style={{ display: "flex", color: "#94a3b8" }}>&nbsp;· Claude · Codex · Gemini · Cursor · Copilot · and 11 more.</span>
           </div>
         </div>
 

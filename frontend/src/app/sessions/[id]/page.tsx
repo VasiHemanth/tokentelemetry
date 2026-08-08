@@ -56,6 +56,7 @@ interface Session {
   models_used?: string[];
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
   cost?: number;
+  cost_source?: "reported" | "estimated";
   artifacts?: Artifact[];
   published_artifacts?: PublishedArtifact[];
   /** Copilot-only: which surface (cli vs vscode) */
@@ -388,18 +389,18 @@ const stepRingClass: Record<StepKind, string> = {
 
 function stepLabel(evt: Event, kind: StepKind): string {
   if (kind === "tool") {
-    if (evt.toolCalls?.[0]) return evt.toolCalls[0].name;
+    if (evt.toolCalls?.[0]) return displayText(evt.toolCalls[0].name) || "Tool call";
     const tu = Array.isArray(evt.message?.content) ? evt.message.content.find((c: any) => c.type === "tool_use") : null;
-    if (tu) return tu.name;
-    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return (evt.payload as any).name;
+    if (tu) return displayText(tu.name) || "Tool call";
+    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return displayText((evt.payload as any).name) || "Tool call";
   }
   if (kind === "user") {
     // Codex event_msg user_message
     if (evt.type === "event_msg" && (evt.payload as any)?.type === "user_message") {
-      return ((evt.payload as any).message || "User Query").slice(0, 40);
+      return (displayText((evt.payload as any).message) || "User Query").slice(0, 40);
     }
     const c = evt.message?.content || evt.payload?.content;
-    const text = Array.isArray(c) ? c.map((p: any) => p.text || p.input_text).filter(Boolean).join(" ") : (typeof c === "string" ? c : "");
+    const text = displayText(c);
     return (text || "User Query").slice(0, 40);
   }
   if (kind === "assistant") return "Response";
@@ -633,11 +634,9 @@ export default function SessionDetailPage() {
       push(e.model); // some providers
       if (e.type === "session_meta") {
         push(e.payload?.model);
-        push(e.payload?.model_provider);
       }
       if (e.type === "turn_context") {
         push(e.payload?.model);
-        push(e.payload?.model_provider);
       }
       if (e.payload?.model) push(e.payload.model);
     });
@@ -660,7 +659,9 @@ export default function SessionDetailPage() {
     return {
       sessionId: id,
       agent: sessionInfo?.agent,
-      model: modelsUsed[0] || meta?.model || meta?.model_provider || sessionInfo?.model,
+      // Prefer the scanner's latest observed model; Codex can switch models
+      // mid-session and exposes its provider separately below.
+      model: sessionInfo?.model || modelsUsed.at(-1) || meta?.model,
       modelsUsed,
       provider: meta?.model_provider,
       cwd: meta?.cwd || sessionInfo?.project,
@@ -887,6 +888,14 @@ export default function SessionDetailPage() {
                     status={sessionInfo.cost_status}
                   />
                 )}
+                {agent !== "hermes" && sessionInfo?.cost != null && (
+                   <StatPill
+                     icon={<DollarSign size={11} />}
+                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
+                     value={formatCost(sessionInfo.cost)}
+                     tone="amber"
+                   />
+                 )}
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
@@ -1281,7 +1290,7 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
 function SubagentTraceModal({ entry, agent, sessionId, onClose }: { entry: any; agent: string; sessionId: string; onClose: () => void }) {
   const [traceEvents, setTraceEvents] = useState<Event[] | null>(null);
 
-  const isTranscript = entry.agent_id && (agent === "claude" || agent === "cursor");
+  const isTranscript = entry.agent_id && (agent === "claude" || agent === "cursor" || agent === "muse");
   const childId: string | null = entry.child_session_id || null;
 
   useEffect(() => {
@@ -1891,11 +1900,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   // Helper to extract text from content array (Used by Claude and Cursor)
   const extractText = (contentArr: any[]) => {
     if (!Array.isArray(contentArr)) return "";
-    return contentArr
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text)
-      .filter(Boolean)
-      .join("\n");
+    return contentArr.filter((c: any) => c.type === "text").map(displayText).filter(Boolean).join("\n");
   };
 
   const parts: React.ReactNode[] = [];
@@ -1911,7 +1916,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{content}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(content)}</div>
         </div>
      );
   }
@@ -1928,7 +1933,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.text}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.text)}</div>
         </div>
        );
     }
@@ -1941,7 +1946,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{payload.text}</div>
+          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{displayText(payload.text)}</div>
         </div>
        );
     }
@@ -1993,7 +1998,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.content}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.content)}</div>
         </div>
      );
   }
@@ -2250,10 +2255,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   // 7. CATCH-ALL for separate reasoning events (Claude/Cursor/Copilot/Qwen)
   if ((type === "agent_reasoning" || type === "assistant_thinking" || type === "reasoning" || payload?.type === "reasoning") && mode !== "dialogue") {
     const rawReasoning = payload?.text ?? payload?.content ?? payload?.thinking ?? payload?.summary ?? payload?.value ?? payload?.message ?? event.thoughts ?? (typeof payload === 'string' ? payload : payload);
-    let text = "";
-    if (typeof rawReasoning === 'string') text = rawReasoning;
-    else if (Array.isArray(rawReasoning)) text = rawReasoning.map((p: any) => (typeof p === 'string' ? p : (p?.text ?? p?.thinking ?? p?.content ?? p?.value ?? ""))).filter(Boolean).join("\n\n");
-    else if (rawReasoning && typeof rawReasoning === 'object') text = rawReasoning.text ?? rawReasoning.thinking ?? rawReasoning.content ?? rawReasoning.value ?? JSON.stringify(rawReasoning, null, 2);
+    const text = displayText(rawReasoning);
     if (text) {
       const isCopilot = agent === "copilot" || type === "assistant_thinking";
       const accent = isCopilot ? "border-l-indigo-500/50" : "border-l-amber-500/50";
@@ -2323,7 +2325,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
 
     if (thinkingArr.length > 0 && mode !== "dialogue") {
        thinkingArr.forEach((t: any, i: number) => {
-         const body = t.thinking || t.text || t.content || "";
+         const body = displayText(t.thinking || t.text || t.content);
          const isEncrypted = !body && (t.signature || t.type === "redacted_thinking");
          parts.push(
             <div key={`think-${i}`} className="bg-amber-500/5 border border-amber-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-amber-500/50 group">
@@ -2395,7 +2397,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
               {renderTimestamp()}
             </div>
             <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80">{
-              coerceReasoningText(payload.content ?? payload.summary ?? payload.text)
+              displayText(payload.content ?? payload.summary ?? payload.text)
             }</div>
           </div>
        );
@@ -2467,7 +2469,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.message}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.message)}</div>
         </div>
       );
     } else if (msgType === "agent_message" && payload?.message && mode !== "brain") {
@@ -2492,7 +2494,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{payload.text}</div>
+          <div className="text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-[11px] leading-relaxed font-mono opacity-80">{displayText(payload.text)}</div>
         </div>
       );
     } else if (msgType !== "user_message" && msgType !== "agent_message" && msgType !== "agent_reasoning" && msgType !== "token_count") {
@@ -2524,6 +2526,48 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
         </div>
       );
     }
+  }
+
+  // 10c. Muse Code / Prime Agent normalized trace events. Their backend
+  // adapters intentionally emit the same small event shape as OpenCode, but
+  // retain a neutral tool card rather than borrowing another agent's branding.
+  if ((agent === "muse" || agent === "prime") && type === "tool_call" && payload && mode !== "dialogue") {
+    parts.push(
+      <div className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-4 group">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[var(--tt-brand)] font-black text-[10px] uppercase tracking-[0.2em]">
+            <Wrench size={14} strokeWidth={3} /> Tool · {payload.tool || "unknown"}
+          </div>
+          {renderTimestamp()}
+        </div>
+        {payload.args !== undefined && (
+          <details className="mt-2">
+            <summary className="text-[10px] font-mono text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">arguments ▸</summary>
+            <pre className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap">{typeof payload.args === "string" ? payload.args : JSON.stringify(payload.args, null, 2)}</pre>
+          </details>
+        )}
+      </div>
+    );
+  }
+  if ((agent === "muse" || agent === "prime") && type === "tool_result" && payload && mode !== "dialogue") {
+    parts.push(
+      <div className="ml-4 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-panel)]/50 p-4 group">
+        <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-fg-muted)]">
+          <span className="flex items-center gap-2"><Terminal size={14} strokeWidth={3} /> Result · {payload.tool || "tool"}</span>
+          {renderTimestamp()}
+        </div>
+        {payload.content && <pre className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap">{String(payload.content).slice(0, 6000)}</pre>}
+      </div>
+    );
+  }
+  if (agent === "muse" && type === "usage" && payload?.usage && mode !== "dialogue") {
+    const usage = payload.usage;
+    parts.push(
+      <div className="rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-panel)]/40 px-4 py-3 text-[10px] font-mono text-[var(--tt-fg-muted)]">
+        <span className="text-[var(--tt-brand)]">{payload.model || "Muse model"}</span>
+        <span className="ml-3">{(usage.input || 0).toLocaleString()} in · {(usage.output || 0).toLocaleString()} out · {(usage.cached || 0).toLocaleString()} cached</span>
+      </div>
+    );
   }
 
   // 11. SYSTEM METADATA
@@ -2584,9 +2628,32 @@ function StepTokensChip({ t }: { t: StepTokens }) {
     </div>
   );
 }
-function ResponseBody({ text, tone = "default" }: { text: string; tone?: "default" | "muted" }) {
+/**
+ * Coding-agent logs are not stable schemas. In particular, Codex may nest a
+ * content block in `{ type, text }` instead of returning a primitive string.
+ * Convert those blocks before they reach JSX or ReactMarkdown, both of which
+ * reject objects as children.
+ */
+function displayText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(displayText).filter(Boolean).join("\n");
+  if (value && typeof value === "object") {
+    const block = value as Record<string, unknown>;
+    for (const key of ["text", "input_text", "content", "message", "summary", "value", "thinking", "description", "output"]) {
+      if (block[key] !== undefined) {
+        const text = displayText(block[key]);
+        if (text) return text;
+      }
+    }
+  }
+  return "";
+}
+
+function ResponseBody({ text, tone = "default" }: { text: unknown; tone?: "default" | "muted" }) {
   const [mode, setMode] = useState<"md" | "raw">("md");
-  if (!text) return null;
+  const safeText = displayText(text);
+  if (!safeText) return null;
   const base = tone === "muted"
     ? "text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80"
     : "text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium";
@@ -2594,10 +2661,10 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
     <div className="relative group/body">
       {mode === "md" ? (
         <div className="prose prose-sm max-w-none text-[var(--tt-fg)] text-sm leading-relaxed">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{safeText}</ReactMarkdown>
         </div>
       ) : (
-        <div className={base}>{text}</div>
+        <div className={base}>{safeText}</div>
       )}
       <button
         onClick={(e) => { e.stopPropagation(); setMode(mode === "md" ? "raw" : "md"); }}

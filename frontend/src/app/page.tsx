@@ -11,6 +11,7 @@ import {
 import { useResource } from "@/lib/api";
 import { useScrollState } from "@/lib/useScrollState";
 import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
@@ -168,7 +169,6 @@ export default function Home() {
           const meta = AGENTS[k as AgentKey];
           if (!meta) return null;
           const count = sessions.filter((s) => s.agent === k).length;
-          const Icon = meta.icon;
           const inner = (
             <>
               <div
@@ -181,7 +181,7 @@ export default function Home() {
                   className="h-7 w-7 grid place-items-center rounded-md"
                   style={{ backgroundColor: `${meta.hex}14`, color: meta.hex }}
                 >
-                  <Icon size={14} />
+                  <AgentLogo agent={k} size={16} />
                 </div>
                 <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
               </div>
@@ -345,7 +345,7 @@ export default function Home() {
                       <div key={k} className="space-y-1.5">
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="flex items-center gap-2 text-[var(--tt-fg-muted)]">
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.hex }} />
+                            <AgentLogo agent={k} size={12} />
                             {meta.label}
                           </span>
                           <span className="tabular text-[var(--tt-fg-dim)]">

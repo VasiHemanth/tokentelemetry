@@ -5,11 +5,13 @@ import {
 import HermesIcon from "@/components/icons/HermesIcon";
 import GrokIcon from "@/components/icons/GrokIcon";
 import PiIcon from "@/components/icons/PiIcon";
+import MuseIcon from "@/components/icons/MuseIcon";
+import PrimeIcon from "@/components/icons/PrimeIcon";
 
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
-  | "openai_compat" | "cline" | "smallcode" | "pi";
+  | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -35,6 +37,8 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   cline:       { key: "cline",       label: "Cline",       hex: "#7c3aed", icon: Bot },
   smallcode:   { key: "smallcode",   label: "SmallCode",   hex: "#0d9488", icon: Boxes },
   pi:          { key: "pi",          label: "Pi",          hex: "#fafafa", icon: PiIcon },
+  muse:        { key: "muse",        label: "Muse Code",   hex: "#2563eb", icon: MuseIcon },
+  prime:       { key: "prime",       label: "Prime Agent", hex: "#D4FF47", icon: PrimeIcon },
 };
 
 const FALLBACK: AgentMeta = {

@@ -20,9 +20,9 @@ import {
   COST_STATUS_LABELS, outcomeBucketLabel, outcomeBucketSplit,
 } from "@/lib/hermesTelemetry";
 import SourceBadge from "@/components/SourceBadge";
-import HermesIcon from "@/components/icons/HermesIcon";
 import { formatCost } from "@/lib/format";
 import { profileColor, profileTint } from "@/lib/profileColor";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { trackEvent } from "@/lib/telemetry";
 
 interface GatewayState {
@@ -148,7 +148,7 @@ export default function HermesPage() {
       <PageHeader
         icon={
           <div className="h-10 w-10 grid place-items-center rounded-[var(--tt-radius)] bg-[#eab308]/10 border border-[#eab308]/30">
-            <HermesIcon size={20} className="text-[#eab308]" />
+            <AgentLogo agent="hermes" size={20} />
           </div>
         }
         eyebrow="Nous Research"

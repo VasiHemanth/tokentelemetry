@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { cn } from "@/lib/cn";
 import { clearPageState } from "@/lib/pageState";
 import { ThemeToggle } from "./ThemeToggle";
@@ -81,10 +82,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
                 const meta = getAgent(k);
                 return (
                   <div key={k} className="flex items-center gap-2 text-[11px] text-[var(--tt-fg-muted)]">
-                    <span
-                      className="w-1.5 h-1.5 rounded-full"
-                      style={{ backgroundColor: meta.hex, boxShadow: `0 0 8px ${meta.hex}80` }}
-                    />
+                    <AgentLogo agent={k} size={13} />
                     <span className="truncate">{meta.label}</span>
                   </div>
                 );

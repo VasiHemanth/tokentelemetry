@@ -12,6 +12,7 @@ import { useResource } from "@/lib/api";
 import { useScrollState } from "@/lib/useScrollState";
 import { useSessionState } from "@/lib/useSessionState";
 import { getAgent } from "@/lib/agents";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 import { cn } from "@/lib/cn";
 import { formatTokens, formatCost } from "@/lib/format";
 import {
@@ -314,7 +315,6 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="px-5 pb-3 flex items-center gap-1.5 flex-wrap">
         {displayAgents.slice(0, 5).map((a) => {
           const meta = getAgent(a);
-          const Icon = meta.icon;
           return (
             <span
               key={a}
@@ -322,7 +322,7 @@ function ProjectCard({ project }: { project: Project }) {
               className="h-6 w-6 grid place-items-center rounded-md border"
               style={{ backgroundColor: `${meta.hex}10`, borderColor: `${meta.hex}33`, color: meta.hex }}
             >
-              <Icon size={12} />
+              <AgentLogo agent={a} size={13} />
             </span>
           );
         })}

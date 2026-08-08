@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 13 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 15 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -21,7 +21,9 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Grok Build** | xAI | `~/.grok/sessions/` | tokens, traces, reasoning, cost |
 | **Cline** | Cline (open source) | `~/.cline/data/db/sessions.db` + VS Code `taskHistory.json` | tokens in/out, cache read/write, cost, model, provider, cwd |
 | **SmallCode** | SmallCode (open source) | `<project>/.smallcode/traces/<id>.json` | prompt/completion tokens, model, tool-call steps, timing |
-| **Pi** | Earendil Works | `~/.pi/agent/sessions/` | tokens, traces, reasoning, cost, model |
+| **Pi** | Pi Coding Agent | `~/.pi/agent/sessions/` | tokens, traces, cost, model, provider |
+| **Muse Code** | Meta | `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/` | tokens, traces, model, subagents |
+| **Prime Agent** | Prime Intellect | `~/.prime/agent/sessions/` | tokens, traces, reported cost, model, active branch |
 
 ## Autonomous agents
 
@@ -61,8 +63,6 @@ Reads Copilot's chat session files from VS Code's `chatSessions/` directory (ins
 
 Reads session data from `~/.local/share/opencode/`. Token counts and traces are captured; OpenCode children sessions are included in the relayed-session count (they are already counted in the parent session's token totals).
 
-The data directory follows `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` when set, and the database filename depends on the release channel the build came from: `latest` and `beta` use `opencode.db`, everything else uses `opencode-<channel>.db` (a Nix install on the `stable` channel writes `opencode-stable.db`). TokenTelemetry reads all of them, so switching channels doesn't hide your older sessions.
-
 ### Cline
 
 TokenTelemetry reads both the Cline CLI SQLite store and the VS Code extension's JSON task history, de-duplicating sessions that appear in both.
@@ -73,7 +73,15 @@ SmallCode writes traces into each project directory rather than a global home di
 
 ### Pi
 
-Reads one JSONL per session from `~/.pi/agent/sessions/<encoded-cwd>/`. Each assistant turn carries per-request token usage (input/output, cache read + write, reasoning) plus the provider, model, and cost, so token, cost, reasoning, and model data are captured per message. Cost is recomputed per turn with TokenTelemetry's own pricing — mixed-model sessions bill correctly, and turns where Pi runs against Ollama (or another local endpoint) are priced by local electricity instead of API rates.
+Pi Coding Agent writes one JSONL file per session under `~/.pi/agent/sessions/<project>/`. TokenTelemetry reads per-message usage, model, provider, cache activity, and tool calls, then rolls them up into the session and project views.
+
+### Muse Code
+
+Muse Code writes date-sharded JSONL logs to `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl` (normally `~/.local/share/muse/sessions/` on macOS and Linux). TokenTelemetry records the root session's usage and trace, attributes child logs as subagents, and uses the session workspace as the project. Set `TT_MUSE_SESSIONS_DIR` when this directory is mounted or relocated.
+
+### Prime Agent
+
+Prime Agent writes one JSONL session tree per file in `~/.prime/agent/sessions/`. TokenTelemetry follows the active branch and its ancestry so the trace mirrors the conversation a user sees, while preserving reported token totals, cost, and model metadata. Set `TT_PRIME_SESSIONS_DIR` (or Prime's `PRIME_AGENT_SESSION_DIR`) when the sessions directory is relocated.
 
 ### Hermes Agent
 

@@ -30,7 +30,7 @@ export const FEATURES: Feature[] = [
       "High-level metrics for total sessions, token burn, and cost estimates.",
       "Agent distribution and model usage leaderboards, updated live.",
     ],
-    screenshot: "/screenshots/dashboard.png",
+    screenshot: "/screenshots/dashboard-hero.png",
   },
   {
     id: "traces",

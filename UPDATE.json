@@ -2,6 +2,22 @@
   "releases": [
     {
       "tag": "2026-08-08",
+      "title": "Muse Code and Prime Agent support",
+      "highlights": [
+        {
+          "title": "Muse Code and Prime sessions are tracked",
+          "description": "TokenTelemetry now discovers Muse Code and Prime Agent sessions from their local logs, grouping them by project and showing their traces, models, token usage, costs, and available subagent or branch details.",
+          "href": "/"
+        },
+        {
+          "title": "Agent brands are easier to scan",
+          "description": "Connected agents, settings, project badges, trace headers, and the website now use each agent's own mark and color so mixed-agent work is easier to recognize at a glance.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-08",
       "title": "Find any Hermes session without loading them all",
       "highlights": [
         {
