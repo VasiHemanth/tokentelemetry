@@ -2476,7 +2476,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{payload.message}</div>
+          <div className="text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium">{displayText(payload.message)}</div>
         </div>
       );
     } else if (msgType === "agent_message" && payload?.message && mode !== "brain") {
@@ -2635,9 +2635,32 @@ function StepTokensChip({ t }: { t: StepTokens }) {
     </div>
   );
 }
-function ResponseBody({ text, tone = "default" }: { text: string; tone?: "default" | "muted" }) {
+/**
+ * Coding-agent logs are not stable schemas. In particular, Codex may nest a
+ * content block in `{ type, text }` instead of returning a primitive string.
+ * Convert those blocks before they reach JSX or ReactMarkdown, both of which
+ * reject objects as children.
+ */
+function displayText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(displayText).filter(Boolean).join("\n");
+  if (value && typeof value === "object") {
+    const block = value as Record<string, unknown>;
+    for (const key of ["text", "input_text", "content", "message", "summary", "value"]) {
+      if (block[key] !== undefined) {
+        const text = displayText(block[key]);
+        if (text) return text;
+      }
+    }
+  }
+  return "";
+}
+
+function ResponseBody({ text, tone = "default" }: { text: unknown; tone?: "default" | "muted" }) {
   const [mode, setMode] = useState<"md" | "raw">("md");
-  if (!text) return null;
+  const safeText = displayText(text);
+  if (!safeText) return null;
   const base = tone === "muted"
     ? "text-[var(--tt-fg-muted)] whitespace-pre-wrap italic text-xs leading-relaxed font-mono opacity-80"
     : "text-[var(--tt-fg)] whitespace-pre-wrap text-sm leading-relaxed font-medium";
@@ -2645,10 +2668,10 @@ function ResponseBody({ text, tone = "default" }: { text: string; tone?: "defaul
     <div className="relative group/body">
       {mode === "md" ? (
         <div className="prose prose-sm max-w-none text-[var(--tt-fg)] text-sm leading-relaxed">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{safeText}</ReactMarkdown>
         </div>
       ) : (
-        <div className={base}>{text}</div>
+        <div className={base}>{safeText}</div>
       )}
       <button
         onClick={(e) => { e.stopPropagation(); setMode(mode === "md" ? "raw" : "md"); }}
