@@ -6187,6 +6187,17 @@ async def cache_status():
     }
 
 
+@app.get("/resources/host/health")
+async def resources_host_health():
+    """Current local host impact plus a personal, comparable-load baseline.
+
+    The sampler stores aggregate measurements only.  It never returns process
+    command lines, project paths, prompts, or other agent-file content.
+    """
+    import resource_monitor
+    return await _asyncio.to_thread(resource_monitor.record_and_build_health)
+
+
 @app.post("/cache/invalidate")
 async def invalidate_cache():
     """Drop the sessions cache so the next read triggers a fresh scan."""

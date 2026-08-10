@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-10",
+      "title": "See an agent's impact on your Mac",
+      "highlights": [
+        {
+          "title": "System Impact baseline",
+          "description": "The new System Impact page shows detected Claude and Codex memory alongside host wired memory, free memory and background load. It learns what is normal on your own machine at a similar number of active agents, so a number is described as normal, unusual or extreme only when your local history supports it.",
+          "href": "/resources"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-02",
       "title": "Menu bar app: no terminal to keep open",
       "highlights": [
