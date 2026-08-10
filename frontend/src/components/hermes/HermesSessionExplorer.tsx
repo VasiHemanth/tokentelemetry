@@ -7,7 +7,7 @@ import {
   AlertTriangle, ChevronDown, ExternalLink, RotateCcw,
   Search, SlidersHorizontal, X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useResource } from "@/lib/api";
 import {
   buildHermesSessionsPath, formatHermesProject, type HermesSessionPage,
@@ -22,6 +22,13 @@ const PAGE_SIZE = 50;
 // hold at once. Past it the filters are the way to narrow things down, which is
 // why there is no page-by-page walk any more.
 const MAX_ROWS = 200;
+
+// The last filter set, so leaving the page and coming back through the sidebar
+// does not silently drop it. Deliberately NOT passed to registerStateKey: every
+// sidebar link calls clearPageState(), which is the exact trip this has to
+// survive. The URL stays the source of truth — this is only consulted when the
+// explorer is opened with no query of its own, so shared links still win.
+const FILTER_MEMORY_KEY = "hermes_explorer_filters";
 
 function readQuery(searchParams: { get(name: string): string | null }): HermesSessionQuery {
   const rawSort = searchParams.get("sort");
@@ -57,6 +64,17 @@ export default function HermesSessionExplorer() {
     return () => window.clearTimeout(timer);
   }, [searchInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Re-apply the remembered filters when the explorer is opened cold, e.g. via
+  // the "View all sessions" link, which carries no query of its own.
+  const filtersRestored = useRef(false);
+  useEffect(() => {
+    if (filtersRestored.current) return;
+    filtersRestored.current = true;
+    if (searchParams.toString()) return;
+    const remembered = sessionStorage.getItem(FILTER_MEMORY_KEY);
+    if (remembered) router.replace(`${pathname}?${remembered}`, { scroll: false });
+  }, [pathname, router, searchParams]);
+
   // How many rows to ask for. "Load more" grows this rather than walking pages,
   // so one request always returns the whole visible list and there is no page
   // number to fall out of sync with the results.
@@ -84,6 +102,8 @@ export default function HermesSessionExplorer() {
     // Any filter change re-scopes the list, so start from one screenful again.
     setRowLimit(PAGE_SIZE);
     const nextQuery = next.toString();
+    // Clearing writes an empty string, so a cleared list stays cleared.
+    sessionStorage.setItem(FILTER_MEMORY_KEY, nextQuery);
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   }
 

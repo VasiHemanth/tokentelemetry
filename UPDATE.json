@@ -2,11 +2,11 @@
   "releases": [
     {
       "tag": "2026-08-10",
-      "title": "Hermes session list loads on demand",
+      "title": "Hermes session explorer keeps your place",
       "highlights": [
         {
-          "title": "Load more replaces page numbers",
-          "description": "The Hermes session explorer grows the list in place instead of walking page by page. The footer tells you how many of the matching sessions are on screen, and the filters stay the way to narrow a long history.",
+          "title": "Load more, and filters that stay put",
+          "description": "The Hermes session explorer grows the list with a Load more button instead of walking page by page, and the footer says how many of the matching sessions are on screen. Filtering, moving to another page and coming back now returns you to the same filtered list, and the filters stay in the address bar so a filtered view is still something you can bookmark or share.",
           "href": "/hermes/sessions"
         }
       ]
