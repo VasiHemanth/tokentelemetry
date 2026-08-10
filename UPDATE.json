@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-10",
+      "title": "Hermes session explorer keeps your place",
+      "highlights": [
+        {
+          "title": "Load more, and filters that stay put",
+          "description": "The Hermes session explorer grows the list with a Load more button instead of walking page by page, and the footer says how many of the matching sessions are on screen. Filtering, moving to another page and coming back now returns you to the same filtered list, and the filters stay in the address bar so a filtered view is still something you can bookmark or share.",
+          "href": "/hermes/sessions"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-08",
       "title": "Muse Code and Prime Agent support",
       "highlights": [
