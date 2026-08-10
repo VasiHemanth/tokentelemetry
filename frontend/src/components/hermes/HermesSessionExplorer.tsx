@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
 import {
-  AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, RotateCcw,
+  AlertTriangle, ChevronDown, ExternalLink, RotateCcw,
   Search, SlidersHorizontal, X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -18,6 +18,10 @@ import { Badge, Button, Card, EmptyState, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
 
 const PAGE_SIZE = 50;
+// The backend rejects page_size above 200, so that is the most rows this view can
+// hold at once. Past it the filters are the way to narrow things down, which is
+// why there is no page-by-page walk any more.
+const MAX_ROWS = 200;
 
 function readQuery(searchParams: { get(name: string): string | null }): HermesSessionQuery {
   const rawSort = searchParams.get("sort");
@@ -25,8 +29,6 @@ function readQuery(searchParams: { get(name: string): string | null }): HermesSe
     ? rawSort
     : "newest";
   return {
-    page: Math.max(1, Number(searchParams.get("page")) || 1),
-    pageSize: PAGE_SIZE,
     search: searchParams.get("search") || "",
     project: searchParams.get("project") || "",
     source: searchParams.get("source") || "",
@@ -50,12 +52,20 @@ export default function HermesSessionExplorer() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (searchInput.trim() === (query.search || "").trim()) return;
-      updateQuery({ search: searchInput.trim() || null, page: "1" });
+      updateQuery({ search: searchInput.trim() || null });
     }, 300);
     return () => window.clearTimeout(timer);
   }, [searchInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const path = useMemo(() => buildHermesSessionsPath(query), [query]);
+  // How many rows to ask for. "Load more" grows this rather than walking pages,
+  // so one request always returns the whole visible list and there is no page
+  // number to fall out of sync with the results.
+  const [rowLimit, setRowLimit] = useState(PAGE_SIZE);
+
+  const path = useMemo(
+    () => buildHermesSessionsPath({ ...query, page: 1, pageSize: rowLimit }),
+    [query, rowLimit],
+  );
   const { data, loading, error, refetch } = useResource<HermesSessionPage>(path, {
     pollMs: 15_000,
     initial: { sessions: [], pagination: { page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 } },
@@ -69,17 +79,26 @@ export default function HermesSessionExplorer() {
       if (value) next.set(key, value);
       else next.delete(key);
     }
+    // Left over from the old paginated view; harmless in the URL but misleading.
+    next.delete("page");
+    // Any filter change re-scopes the list, so start from one screenful again.
+    setRowLimit(PAGE_SIZE);
     const nextQuery = next.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   }
 
   function clearFilters() {
     setSearchInput("");
-    updateQuery({ search: null, project: null, source: null, model: null, sort: null, page: "1" });
+    updateQuery({ search: null, project: null, source: null, model: null, sort: null });
   }
 
   const sessions = data?.sessions ?? [];
-  const totalPages = data?.pagination.total_pages ?? 0;
+  const total = data?.pagination.total ?? 0;
+  // A larger limit than we have rows for means the wider request is still in
+  // flight — useResource keeps serving the previous response until it lands.
+  const loadingMore = rowLimit > sessions.length && sessions.length < total;
+  const canLoadMore = sessions.length < total && rowLimit < MAX_ROWS;
+  const cappedOut = rowLimit >= MAX_ROWS && total > sessions.length;
   const returnPath = searchParams.toString() ? `${pathname}?${searchParams.toString()}` : pathname;
 
   return (
@@ -97,13 +116,13 @@ export default function HermesSessionExplorer() {
               className="w-full h-9 pl-9 pr-3 rounded-[var(--tt-radius)] bg-[var(--tt-panel)] border border-[var(--tt-border)] text-[13px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-dim)] focus:outline-none focus:border-[var(--tt-border-strong)]"
             />
           </label>
-          <FilterInput label="Project" value={query.project || ""} onChange={(value) => updateQuery({ project: value || null, page: "1" })} />
-          <FilterInput label="Source" value={query.source || ""} onChange={(value) => updateQuery({ source: value || null, page: "1" })} />
-          <FilterInput label="Model" value={query.model || ""} onChange={(value) => updateQuery({ model: value || null, page: "1" })} />
+          <FilterInput label="Project" value={query.project || ""} onChange={(value) => updateQuery({ project: value || null })} />
+          <FilterInput label="Source" value={query.source || ""} onChange={(value) => updateQuery({ source: value || null })} />
+          <FilterInput label="Model" value={query.model || ""} onChange={(value) => updateQuery({ model: value || null })} />
           <select
             aria-label="Sort Hermes sessions"
             value={query.sort || "newest"}
-            onChange={(event) => updateQuery({ sort: event.target.value === "newest" ? null : event.target.value, page: "1" })}
+            onChange={(event) => updateQuery({ sort: event.target.value === "newest" ? null : event.target.value })}
             className="h-9 rounded-[var(--tt-radius)] bg-[var(--tt-panel)] border border-[var(--tt-border)] px-2.5 text-[12px] text-[var(--tt-fg-muted)] focus:outline-none focus:border-[var(--tt-border-strong)]"
           >
             <option value="newest">Newest first</option>
@@ -151,11 +170,19 @@ export default function HermesSessionExplorer() {
             {sessions.map((session) => <HermesSessionRow key={session.id} session={session} returnPath={returnPath} />)}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-[var(--tt-border)] text-[11px] text-[var(--tt-fg-muted)]">
-            <span>Page {data?.pagination.page ?? query.page} of {totalPages || 1}</span>
-            <div className="flex items-center gap-1">
-              <Button aria-label="Previous page" variant="ghost" size="sm" disabled={(data?.pagination.page ?? query.page ?? 1) <= 1} onClick={() => updateQuery({ page: String(Math.max(1, (data?.pagination.page ?? query.page ?? 1) - 1)) })}><ChevronLeft size={14} /></Button>
-              <Button aria-label="Next page" variant="ghost" size="sm" disabled={totalPages === 0 || (data?.pagination.page ?? query.page ?? 1) >= totalPages} onClick={() => updateQuery({ page: String((data?.pagination.page ?? query.page ?? 1) + 1) })}><ChevronRight size={14} /></Button>
-            </div>
+            <span>Showing {sessions.length.toLocaleString()} of {total.toLocaleString()}</span>
+            {canLoadMore ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={loadingMore}
+                onClick={() => setRowLimit((limit) => Math.min(MAX_ROWS, limit + PAGE_SIZE))}
+              >
+                {loadingMore ? "Loading…" : <>Load more <ChevronDown size={14} /></>}
+              </Button>
+            ) : cappedOut ? (
+              <span>Showing the first {MAX_ROWS} — narrow with filters to reach the rest</span>
+            ) : null}
           </div>
         </Card>
       )}
