@@ -17,10 +17,26 @@ from typing import Any, Dict, List
 from resource_baselines import assess_personal_baseline
 from tt_paths import data_dir
 
-_AGENT_MARKERS = {
-    "claude": ("claude", "claude-code"),
-    "codex": ("codex", "openai-codex"),
-}
+# Keep this in the same vocabulary as frontend/src/lib/agents.ts.  Order is
+# intentional: Antigravity runs on Gemini infrastructure, so its distinctive
+# marker must win before the generic Gemini one.
+_AGENT_MARKERS = (
+    ("antigravity", ("antigravity",)),
+    ("claude", ("claude", "claude-code")),
+    ("codex", ("codex", "openai-codex")),
+    ("gemini", ("gemini",)),
+    ("qwen", ("qwen",)),
+    ("vibe", ("vibe",)),
+    ("cursor", ("cursor",)),
+    ("copilot", ("copilot",)),
+    ("opencode", ("opencode",)),
+    ("hermes", ("hermes",)),
+    ("grok", ("grok",)),
+    ("cline", ("cline",)),
+    ("smallcode", ("smallcode",)),
+    # Avoid matching the common two-letter syllable inside arbitrary paths.
+    ("pi", ("pi-coding-agent", " pi ", "/pi ")),
+)
 _SERIES_LIMIT = 360
 
 
@@ -56,6 +72,19 @@ def _memory_total_bytes() -> int:
         return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
     except (AttributeError, OSError, ValueError):
         return 0
+
+
+def agent_labels_for_command(command: str) -> List[str]:
+    """Return one supported coding-agent label for a process command line.
+
+    The input is used transiently to classify the running process and is never
+    persisted or returned by the API.
+    """
+    searchable = f" {command.lower()} "
+    for agent, markers in _AGENT_MARKERS:
+        if any(marker in searchable for marker in markers):
+            return [agent]
+    return []
 
 
 def _linux_memory() -> Dict[str, int | None]:
@@ -121,12 +150,10 @@ def _agent_processes() -> tuple[int, int, List[str]]:
             rss_kib = int(parts[0])
         except ValueError:
             continue
-        searchable = " ".join(parts[1:]).lower()
-        for agent, markers in _AGENT_MARKERS.items():
-            if any(marker in searchable for marker in markers):
-                names.add(agent)
-                rss_bytes += rss_kib * 1024
-                break
+        labels = agent_labels_for_command(" ".join(parts[1:]))
+        if labels:
+            names.add(labels[0])
+            rss_bytes += rss_kib * 1024
     return rss_bytes, len(names), sorted(names)
 
 

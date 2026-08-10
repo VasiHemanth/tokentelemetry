@@ -2,6 +2,7 @@
 
 import { Activity, Cpu, Database, Info, MemoryStick, ShieldCheck } from "lucide-react";
 import { useResource } from "@/lib/api";
+import { getAgent } from "@/lib/agents";
 import { formatBytes, type HostImpactHealth } from "@/lib/resources";
 import SystemImpactTimeline from "@/components/resources/SystemImpactTimeline";
 import {
@@ -27,7 +28,9 @@ export default function SystemImpactPage() {
   const data = health.data;
   const current = data?.current;
   const baseline = data?.baseline.agent_rss_bytes;
-  const agentLabel = current?.agents?.length ? current.agents.join(", ") : "No supported agent process";
+  const agentLabel = current?.agents?.length
+    ? current.agents.map((agent) => getAgent(agent).label).join(", ")
+    : "No supported agent process";
   const memoryUsed = current?.memory_total_bytes && current.memory_available_bytes
     ? current.memory_total_bytes - current.memory_available_bytes
     : null;

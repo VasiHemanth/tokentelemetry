@@ -6,7 +6,7 @@
       "highlights": [
         {
           "title": "System Impact baseline",
-          "description": "The new System Impact page shows detected Claude and Codex memory alongside host wired memory, free memory and background load. It learns what is normal on your own machine at a similar number of active agents, so a number is described as normal, unusual or extreme only when your local history supports it.",
+          "description": "The new System Impact page shows detected coding-agent memory alongside host wired memory, free memory and background load. It recognizes every coding-agent family TokenTelemetry supports, and learns what is normal on your own machine at a similar number of active agents, so a number is described as normal, unusual or extreme only when your local history supports it.",
           "href": "/resources"
         }
       ]
