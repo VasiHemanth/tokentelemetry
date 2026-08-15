@@ -2,6 +2,20 @@
   "releases": [
     {
       "tag": "2026-08-15",
+      "title": "Install fixes for Linux, faster setup with uv",
+      "highlights": [
+        {
+          "title": "Installs no longer stop at \"No module named pip\"",
+          "description": "On Debian and Ubuntu, Python creates the virtual environment but leaves pip out of it unless the separate python3-venv package is installed, so the first launch failed on the backend dependencies. The launcher now bootstraps pip itself, and if that isn't possible it names the package to install instead of showing a pip traceback. Thanks to yannschepens for reporting this (issue #267)."
+        },
+        {
+          "title": "Setup uses uv when you already have it",
+          "description": "If uv is on your PATH, first-run setup uses it for the virtual environment and the dependency install: about 0.4 seconds instead of 2.8 on a warm cache, with the same Python and the same hash-checked packages. Nothing to install and nothing to configure; without uv the setup works exactly as before."
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-15",
       "title": "Filter the step index on a session trace",
       "highlights": [
         {

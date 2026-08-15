@@ -122,7 +122,10 @@ function printHelp() {
   ].join('\n'));
 }
 
-function run(cmd, args, opts = {}) {
+function runSoft(cmd, args, opts = {}) {
+  // Returns the exit status instead of dying, for commands we want to attempt
+  // and recover from (pip probes, the ensurepip repair).
+  //
   // On Windows we spawn through the shell so PATH-resolved commands (`py`, the
   // python launcher, etc.) work — but cmd.exe re-parses the line and does NOT
   // quote for us. When the repo lives in a path with spaces (e.g.
@@ -140,7 +143,12 @@ function run(cmd, args, opts = {}) {
     useShell ? args.map(quote) : args,
     { stdio: 'inherit', shell: useShell, ...opts },
   );
-  if (res.status !== 0) die(`"${cmd} ${args.join(' ')}" exited with ${res.status}`);
+  return res.status;
+}
+
+function run(cmd, args, opts = {}) {
+  const status = runSoft(cmd, args, opts);
+  if (status !== 0) die(`"${cmd} ${args.join(' ')}" exited with ${status}`);
 }
 
 function canConnect(host, port, timeoutMs = 300) {
@@ -236,11 +244,92 @@ function findPython() {
   die('Python 3.9+ is required. Install from https://www.python.org/downloads/ and retry.');
 }
 
+function pythonSeries() {
+  // "3.10" for the venv interpreter (or the system one, if there's no venv yet).
+  // Used to name the right distro package in the pip-bootstrap hint. No shell,
+  // so paths with spaces are safe on every platform.
+  const cmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+  const probe = spawnSync(cmd, ['-c', 'import sys; print("%d.%d" % sys.version_info[:2])'], { encoding: 'utf8' });
+  return probe.status === 0 ? probe.stdout.trim() : '';
+}
+
+function pipBootstrapHint() {
+  if (isWindows) {
+    return 'Reinstall Python from https://www.python.org/downloads/ with the "pip" component\nselected, then delete backend\\venv and run this again.';
+  }
+  if (process.platform === 'darwin') {
+    return 'Install a Python that bundles pip (e.g. `brew install python`), then delete\nbackend/venv and run this again.';
+  }
+  const series = pythonSeries();
+  return [
+    "Python couldn't bootstrap pip into the venv. On Debian/Ubuntu that step ships",
+    'in a separate package:',
+    `  sudo apt install python${series || '3'}-venv`,
+    '  sudo dnf install python3-pip        # Fedora/RHEL',
+    'Then delete backend/venv and run this again.',
+  ].join('\n');
+}
+
+function findUv() {
+  // Opportunistic only: uv builds the venv itself instead of going through the
+  // stdlib venv module, so it never touches ensurepip, and it installs an order
+  // of magnitude faster. We never install it — if it isn't already on PATH we
+  // use python/pip exactly as before, so uv is a speed-up, not a prerequisite.
+  // TT_NO_UV=1 forces the pip path.
+  if (process.env.TT_NO_UV === '1') return null;
+  if (!which('uv')) return null;
+  return runSoft('uv', ['--version'], { stdio: 'ignore' }) === 0 ? 'uv' : null;
+}
+
+function venvPipWorks() {
+  if (!fs.existsSync(venvPython)) return false;
+  return runSoft(venvPython, ['-m', 'pip', '--version'], { stdio: 'ignore' }) === 0;
+}
+
+function ensureVenvPip() {
+  if (venvPipWorks()) return;
+  // The venv directory and its interpreter can both exist while pip does not:
+  // `python -m venv` bootstraps pip through ensurepip as its final step, and on
+  // Debian/Ubuntu that step is what fails when python3-venv isn't installed.
+  // The half-built tree is left behind, so the next launch skips creation and
+  // dies with "No module named pip" (issue #267). Repair it from the wheels
+  // bundled with the stdlib — offline, no PyPI round-trip.
+  console.log('→ venv has no pip, bootstrapping it…');
+  runSoft(venvPython, ['-m', 'ensurepip', '--upgrade']);
+  if (venvPipWorks()) return;
+  die('the Python venv at backend/venv has no working pip.\n' + pipBootstrapHint());
+}
+
 function ensureBackend() {
-  if (!fs.existsSync(venvDir)) {
+  const uv = findUv();
+  // Check for the interpreter rather than the directory: an interrupted or
+  // failed `python -m venv` leaves a directory behind with nothing runnable in
+  // it. Re-running venv creation over an existing directory fills in what's
+  // missing, so there's nothing to delete here.
+  if (!fs.existsSync(venvPython)) {
     const py = findPython();
-    console.log('→ creating Python venv…');
-    run(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    console.log(uv ? '→ creating Python venv (uv)…' : '→ creating Python venv…');
+    // Pin uv to the same interpreter the pip path would have used, so `uv` on
+    // PATH changes the speed of the bootstrap and nothing else. The resolved
+    // path matters: given the bare name `python3`, uv prefers its own managed
+    // CPython over the one on PATH, which would quietly build the venv on a
+    // different Python than every previous release. An absolute path also means
+    // uv has nothing to go and download. --seed puts pip inside the venv: uv
+    // leaves it out by default, and without it a user who later drops uv gets a
+    // venv this script can't install into.
+    let created = uv
+      ? runSoft(uv, ['venv', 'venv', '--seed', '--python', which(py) || py], { cwd: backendDir })
+      : runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    if (uv && created !== 0) {
+      // A uv old enough not to know one of these flags shouldn't cost anyone
+      // their install. Unlike a retry of the same command this is a different
+      // tool, which can genuinely succeed where the first one didn't.
+      console.log('→ uv could not create the venv, falling back to python -m venv…');
+      created = runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    }
+    if (created !== 0 || !fs.existsSync(venvPython)) {
+      die('could not create the Python venv at backend/venv.\n' + pipBootstrapHint());
+    }
   }
   // Skip pip install when requirements haven't changed since last install.
   // Previously this ran every launch (hitting PyPI ~6× per hour for someone
@@ -260,11 +349,22 @@ function ensureBackend() {
   try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
   const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(installFrom)).digest('hex');
   if (cachedSha === currentSha) return;
-  console.log('→ installing backend dependencies…');
-  if (useLock) {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r', 'requirements.lock'], { cwd: backendDir });
+  const reqFile = useLock ? 'requirements.lock' : 'requirements.txt';
+  const hashFlags = useLock ? ['--require-hashes'] : [];
+  if (uv) {
+    // uv reads the same pip-style lock and enforces the same hashes. --python
+    // targets our venv explicitly rather than whatever VIRTUAL_ENV points at.
+    console.log('→ installing backend dependencies (uv)…');
+    if (runSoft(uv, ['pip', 'install', '--quiet', '--python', venvPython, ...hashFlags, '-r', reqFile], { cwd: backendDir }) !== 0) {
+      die(`installing backend dependencies with uv failed (see above).\nRe-run with TT_NO_UV=1 to install ${reqFile} with pip instead.`);
+    }
   } else {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+    // Only probe pip on the install path. The stamp lives inside the venv, so a
+    // matching stamp means this venv already completed an install with a working
+    // pip — no need to pay a Python startup on every launch.
+    ensureVenvPip();
+    console.log('→ installing backend dependencies…');
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', ...hashFlags, '-r', reqFile], { cwd: backendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
