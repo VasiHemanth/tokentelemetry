@@ -463,6 +463,36 @@ export default function SessionDetailPage() {
 
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
+  const filterBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [filterAnchor, setFilterAnchor] = useState<{ top: number; right: number; listMaxH: number } | null>(null);
+
+  // The filter panel is portalled to <body>: the session layout's backdrop-blur
+  // ancestors break `position: fixed` inside the aside, and the aside's own
+  // overflow-y-auto would clip the panel. Anchor it to the button and size the
+  // category list to the room actually left below it, so short viewports don't
+  // push rows past the fold on a page that never scrolls.
+  useEffect(() => {
+    if (!filterOpen) { setFilterAnchor(null); return; }
+    const place = () => {
+      const el = filterBtnRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const top = r.bottom + 4;
+      setFilterAnchor({
+        top,
+        right: Math.max(8, window.innerWidth - r.right),
+        listMaxH: Math.max(120, Math.min(300, window.innerHeight - top - 76)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // capture: the aside scrolls, not the window, so the panel follows the button
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [filterOpen]);
 
   useEffect(() => {
     if (id && agent) {
@@ -1063,20 +1093,24 @@ export default function SessionDetailPage() {
         <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
           {/* LEFT: Step Index */}
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
-             <div className="px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between">
+             <div className="sticky top-0 z-30 px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between bg-[var(--tt-sunken)] backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-sunken)]/85">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
                    <ListMusic size={12} /> Step Index
                 </div>
                 <div className="relative">
                    <button
+                     ref={filterBtnRef}
                      onClick={() => setFilterOpen(!filterOpen)}
                      className={`p-1 rounded cursor-pointer transition-colors ${selectedFilters.size > 0 ? "bg-[var(--tt-brand-bg)] text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)] hover:bg-[var(--tt-panel-hover)]"}`}
                      title="Filter steps"
                    >
                      <Filter size={14} />
                    </button>
-                   {filterOpen && (
-                     <div className="absolute right-0 top-full mt-1 w-52 bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded shadow-xl z-50 p-2 flex flex-col gap-2">
+                   {filterOpen && filterAnchor && typeof document !== "undefined" && createPortal(
+                     <div
+                       className="fixed w-52 bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded shadow-xl z-[60] p-2 flex flex-col gap-2"
+                       style={{ top: filterAnchor.top, right: filterAnchor.right }}
+                     >
                        <div className="flex items-center justify-between pb-1 border-b border-[var(--tt-border)]">
                          <button 
                            className="text-[11px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-brand)] cursor-pointer"
@@ -1092,7 +1126,7 @@ export default function SessionDetailPage() {
                            <X size={14} />
                          </button>
                        </div>
-                       <div className="max-h-[300px] overflow-y-auto space-y-1">
+                       <div className="overflow-y-auto space-y-1" style={{ maxHeight: filterAnchor.listMaxH }}>
                          {stepCategoryCounts.map(([label, { count, kind }]) => {
                            const icon = STEP_ICONS[kind] || STEP_ICONS.other;
                            
@@ -1116,7 +1150,8 @@ export default function SessionDetailPage() {
                            );
                          })}
                        </div>
-                     </div>
+                     </div>,
+                     document.body
                    )}
                 </div>
              </div>
