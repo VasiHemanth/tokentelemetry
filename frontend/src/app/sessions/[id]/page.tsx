@@ -1625,6 +1625,29 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
   );
 }
 
+// Project-scoped entries live in the repo's own .claude/ (or equivalent) and are
+// the ones a reader is usually looking for, so they sort above the user-scoped
+// ones inherited from ~/. Ties break alphabetically.
+const byScopeThenName = (a: any, b: any) =>
+  (a?.scope === "project" ? 0 : 1) - (b?.scope === "project" ? 0 : 1) ||
+  String(a?.name ?? "").localeCompare(String(b?.name ?? ""));
+
+// Skills tint project scope cyan, MCP badges tint it blue. The swatch has to
+// match whichever section it sits under or the legend lies about the colour.
+function ScopeLegend({ tone }: { tone: "cyan" | "blue" }) {
+  const project = tone === "cyan" ? "bg-cyan-500/10 border-cyan-500/20" : "bg-blue-500/10 border-blue-500/20";
+  return (
+    <div className="flex items-center gap-3 mt-1.5 text-[9px] font-mono text-[var(--tt-fg-faint)]">
+      <span className="flex items-center gap-1">
+        <span className={`inline-block w-2 h-2 rounded-sm border ${project}`} /> project
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="inline-block w-2 h-2 rounded-sm border tt-tint-2 border-[var(--tt-border-strong)]" /> user
+      </span>
+    </div>
+  );
+}
+
 function ContextPanel({ ctx }: { ctx: any }) {
   const Row = ({ k, v, mono = true }: { k: string; v?: any; mono?: boolean }) =>
     v ? (
@@ -1683,8 +1706,9 @@ function ContextPanel({ ctx }: { ctx: any }) {
               <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills ({ctx.projectConfig.counts.skills}) ▸
               </summary>
+              <ScopeLegend tone="cyan" />
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {ctx.projectConfig.skills.map((s: any, i: number) => (
+                {[...(ctx.projectConfig.skills ?? [])].sort(byScopeThenName).map((s: any, i: number) => (
                   <span
                     key={i}
                     title={`${s.scope} · ${s.agent}${s.description ? "\n" + s.description : ""}`}
@@ -1701,8 +1725,9 @@ function ContextPanel({ ctx }: { ctx: any }) {
               <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 MCP Servers ({ctx.projectConfig.counts.mcps}) ▸
               </summary>
+              <ScopeLegend tone="blue" />
               <div className="mt-2 space-y-1">
-                {ctx.projectConfig.mcps.map((m: any, i: number) => (
+                {[...(ctx.projectConfig.mcps ?? [])].sort(byScopeThenName).map((m: any, i: number) => (
                   <div key={i} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
                     <span className="text-[var(--tt-fg)] truncate" title={m.command || m.url || ""}>{m.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m.agent}</span>
