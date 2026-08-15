@@ -1214,7 +1214,7 @@ export default function SessionDetailPage() {
           </section>
 
           {/* RIGHT: Sidebar */}
-          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)] sticky top-[200px]">
+          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
              {!sidebarOpen ? (
                 <button
                    onClick={() => setSidebarOpen(true)}
