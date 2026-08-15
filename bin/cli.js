@@ -309,20 +309,26 @@ function ensureBackend() {
   if (!fs.existsSync(venvPython)) {
     const py = findPython();
     console.log(uv ? '→ creating Python venv (uv)…' : '→ creating Python venv…');
-    // Pin uv to the same interpreter the pip path would have used, and forbid
-    // Python downloads, so `uv` on PATH changes the speed of the bootstrap and
-    // nothing else. The resolved path matters: given the bare name `python3`,
-    // uv prefers its own managed CPython over the one on PATH, which would
-    // quietly build the venv on a different Python than every previous release.
-    // --seed puts pip inside the venv: uv leaves it out by default, and without
-    // it a user who later drops uv gets a venv this script can't install into.
-    const created = uv
-      ? runSoft(uv, ['venv', 'venv', '--seed', '--no-python-downloads', '--python', which(py) || py], { cwd: backendDir })
+    // Pin uv to the same interpreter the pip path would have used, so `uv` on
+    // PATH changes the speed of the bootstrap and nothing else. The resolved
+    // path matters: given the bare name `python3`, uv prefers its own managed
+    // CPython over the one on PATH, which would quietly build the venv on a
+    // different Python than every previous release. An absolute path also means
+    // uv has nothing to go and download. --seed puts pip inside the venv: uv
+    // leaves it out by default, and without it a user who later drops uv gets a
+    // venv this script can't install into.
+    let created = uv
+      ? runSoft(uv, ['venv', 'venv', '--seed', '--python', which(py) || py], { cwd: backendDir })
       : runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    if (uv && created !== 0) {
+      // A uv old enough not to know one of these flags shouldn't cost anyone
+      // their install. Unlike a retry of the same command this is a different
+      // tool, which can genuinely succeed where the first one didn't.
+      console.log('→ uv could not create the venv, falling back to python -m venv…');
+      created = runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    }
     if (created !== 0 || !fs.existsSync(venvPython)) {
-      die('could not create the Python venv at backend/venv.\n' + (uv
-        ? 'Delete backend/venv and retry, or set TT_NO_UV=1 to bootstrap with python -m venv.'
-        : pipBootstrapHint()));
+      die('could not create the Python venv at backend/venv.\n' + pipBootstrapHint());
     }
   }
   // Skip pip install when requirements haven't changed since last install.
@@ -349,7 +355,9 @@ function ensureBackend() {
     // uv reads the same pip-style lock and enforces the same hashes. --python
     // targets our venv explicitly rather than whatever VIRTUAL_ENV points at.
     console.log('→ installing backend dependencies (uv)…');
-    run(uv, ['pip', 'install', '--quiet', '--python', venvPython, ...hashFlags, '-r', reqFile], { cwd: backendDir });
+    if (runSoft(uv, ['pip', 'install', '--quiet', '--python', venvPython, ...hashFlags, '-r', reqFile], { cwd: backendDir }) !== 0) {
+      die(`installing backend dependencies with uv failed (see above).\nRe-run with TT_NO_UV=1 to install ${reqFile} with pip instead.`);
+    }
   } else {
     // Only probe pip on the install path. The stamp lives inside the venv, so a
     // matching stamp means this venv already completed an install with a working
