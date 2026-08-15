@@ -1062,7 +1062,7 @@ export default function SessionDetailPage() {
       ) : (
         <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
           {/* LEFT: Step Index */}
-          <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)] sticky top-[200px]">
+          <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
              <div className="px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
                    <ListMusic size={12} /> Step Index
