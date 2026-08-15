@@ -862,8 +862,8 @@ export default function SessionDetailPage() {
   const untrackedBackground = agent === "claude" ? sessionInfo?.untracked_background : undefined;
 
   return (
-    <div className="min-h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col">
-      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-4 sticky top-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
+    <div className="h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col overflow-hidden">
+      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-4 shrink-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
         <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="flex items-start gap-3 min-w-0">
@@ -1092,7 +1092,7 @@ export default function SessionDetailPage() {
       ) : (
         <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
           {/* LEFT: Step Index */}
-          <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
+          <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full scroll-pt-10">
              <div className="sticky top-0 z-30 px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between bg-[var(--tt-sunken)] backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-sunken)]/85">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
                    <ListMusic size={12} /> Step Index
@@ -1160,7 +1160,7 @@ export default function SessionDetailPage() {
                    const filterKey = s.kind === "user" ? "User Prompt" : (s.label || s.kind);
                    if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
                    return (
-                     <div key={s.idx} ref={(el) => { stepIndexRefs.current[s.idx] = el; }}>
+                     <div key={s.idx} ref={(el) => { stepIndexRefs.current[s.idx] = el; }} className="scroll-mt-2">
                         <StepRow step={s} active={activeStep === s.idx} beyond={s.idx >= playbackIndex} onClick={() => jumpTo(s.idx)} />
                      </div>
                    );
@@ -1169,7 +1169,7 @@ export default function SessionDetailPage() {
           </aside>
 
           {/* CENTER: Conversation */}
-          <section className="overflow-y-auto max-h-[calc(100vh-200px)] p-8">
+          <section className="overflow-y-auto h-full p-8">
              {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
              {agent && (
                <div className="mb-8">
@@ -1249,7 +1249,7 @@ export default function SessionDetailPage() {
           </section>
 
           {/* RIGHT: Sidebar */}
-          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
+          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full">
              {!sidebarOpen ? (
                 <button
                    onClick={() => setSidebarOpen(true)}
@@ -1306,7 +1306,7 @@ export default function SessionDetailPage() {
 
       {/* RESTORED: Waterfall Footer */}
       {!loading && waterfallData.length > 0 && (
-         <footer className="bg-[var(--tt-panel)] border-t border-[var(--tt-border)] sticky bottom-0 z-40 backdrop-blur-xl bg-opacity-80">
+         <footer className="bg-[var(--tt-panel)] border-t border-[var(--tt-border)] shrink-0 z-40 backdrop-blur-xl bg-opacity-80">
             <div className={`max-w-[1600px] mx-auto ${timelineOpen ? "p-6" : "px-6 py-2"}`}>
                <div className={`flex items-center justify-between ${timelineOpen ? "mb-6" : ""}`}>
                   <button
