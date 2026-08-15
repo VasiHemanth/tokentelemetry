@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-08-15",
+      "title": "Filter the step index on a session trace",
+      "highlights": [
+        {
+          "title": "Narrow a long trace to the steps you care about",
+          "description": "The Step Index on a session trace now has a filter next to its heading, listing every event category in the session with a count: user prompts, responses, reasoning, and each tool by name. Tick the ones you want and both the index and the trace beside it drop to just those steps, which makes a run with several thousand steps navigable. Thanks to hwantage for building and contributing this (PR #269)."
+        }
+      ]
+    },
+    {
       "tag": "2026-08-10",
       "title": "Hermes session explorer keeps your place",
       "highlights": [

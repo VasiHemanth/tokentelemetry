@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -377,6 +377,16 @@ function normalizeTs(evt: Event): number | undefined {
   return undefined;
 }
 
+const STEP_ICONS: Record<StepKind, React.ReactNode> = {
+  user: <User size={11} className="text-[var(--tt-brand)]" />,
+  assistant: <MessageSquare size={11} className="text-[var(--tt-success-fg)]" />,
+  reasoning: <Brain size={11} className="text-[var(--tt-warn-fg)]" />,
+  tool: <Wrench size={11} className="text-sky-400" />,
+  tool_result: <Terminal size={11} className="text-[var(--tt-fg-dim)]" />,
+  meta: <Info size={11} className="text-[var(--tt-fg-faint)]" />,
+  other: <Zap size={11} className="text-[var(--tt-fg-faint)]" />,
+};
+
 const stepRingClass: Record<StepKind, string> = {
   user: "ring-2 ring-blue-500/70",
   assistant: "ring-2 ring-emerald-500/70",
@@ -450,6 +460,39 @@ export default function SessionDetailPage() {
   const [projectConfig, setProjectConfig] = useState<any>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
+  const filterBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [filterAnchor, setFilterAnchor] = useState<{ top: number; right: number; listMaxH: number } | null>(null);
+
+  // The filter panel is portalled to <body>: the session layout's backdrop-blur
+  // ancestors break `position: fixed` inside the aside, and the aside's own
+  // overflow-y-auto would clip the panel. Anchor it to the button and size the
+  // category list to the room actually left below it, so short viewports don't
+  // push rows past the fold on a page that never scrolls.
+  useEffect(() => {
+    if (!filterOpen) { setFilterAnchor(null); return; }
+    const place = () => {
+      const el = filterBtnRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const top = r.bottom + 4;
+      setFilterAnchor({
+        top,
+        right: Math.max(8, window.innerWidth - r.right),
+        listMaxH: Math.max(120, Math.min(300, window.innerHeight - top - 76)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // capture: the aside scrolls, not the window, so the panel follows the button
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [filterOpen]);
 
   useEffect(() => {
     if (id && agent) {
@@ -593,6 +636,27 @@ export default function SessionDetailPage() {
       }),
     [events, stepTokens]
   );
+
+  const stepCategoryCounts = useMemo(() => {
+    const map: Record<string, { count: number, kind: StepKind }> = {};
+    steps.forEach((s) => {
+      const key = s.kind === "user" ? "User Prompt" : (s.label || s.kind);
+      if (!map[key]) {
+        map[key] = { count: 0, kind: s.kind };
+      }
+      map[key].count += 1;
+    });
+    const priority: Record<string, number> = {
+      "User Prompt": 1,
+      "Response": 2,
+    };
+    return Object.entries(map).sort((a, b) => {
+      const pA = priority[a[0]] || 99;
+      const pB = priority[b[0]] || 99;
+      if (pA !== pB) return pA - pB;
+      return b[1].count - a[1].count;
+    });
+  }, [steps]);
 
   // Stats
   const stats = useMemo(() => {
@@ -1029,15 +1093,78 @@ export default function SessionDetailPage() {
         <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
           {/* LEFT: Step Index */}
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto max-h-[calc(100vh-200px)]">
-             <div className="px-3 py-2 border-b border-[var(--tt-border)] flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
-                <ListMusic size={12} /> Step Index
+             <div className="sticky top-0 z-30 px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between bg-[var(--tt-sunken)] backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-sunken)]/85">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+                   <ListMusic size={12} /> Step Index
+                </div>
+                <div className="relative">
+                   <button
+                     ref={filterBtnRef}
+                     onClick={() => setFilterOpen(!filterOpen)}
+                     className={`p-1 rounded cursor-pointer transition-colors ${selectedFilters.size > 0 ? "bg-[var(--tt-brand-bg)] text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)] hover:bg-[var(--tt-panel-hover)]"}`}
+                     title="Filter steps"
+                   >
+                     <Filter size={14} />
+                   </button>
+                   {filterOpen && filterAnchor && typeof document !== "undefined" && createPortal(
+                     <div
+                       className="fixed w-52 bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded shadow-xl z-[60] p-2 flex flex-col gap-2"
+                       style={{ top: filterAnchor.top, right: filterAnchor.right }}
+                     >
+                       <div className="flex items-center justify-between pb-1 border-b border-[var(--tt-border)]">
+                         <button 
+                           className="text-[11px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-brand)] cursor-pointer"
+                           onClick={() => setSelectedFilters(new Set())}
+                         >
+                           Reset
+                         </button>
+                         <button 
+                           className="text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] p-0.5 rounded cursor-pointer"
+                           onClick={() => setFilterOpen(false)}
+                           title="Close"
+                         >
+                           <X size={14} />
+                         </button>
+                       </div>
+                       <div className="overflow-y-auto space-y-1" style={{ maxHeight: filterAnchor.listMaxH }}>
+                         {stepCategoryCounts.map(([label, { count, kind }]) => {
+                           const icon = STEP_ICONS[kind] || STEP_ICONS.other;
+                           
+                           return (
+                             <label key={label} className="flex items-center gap-2 px-1 py-1 hover:bg-[var(--tt-panel-hover)] rounded cursor-pointer">
+                               <input 
+                                 type="checkbox" 
+                                 className="accent-[var(--tt-brand)] cursor-pointer"
+                                 checked={selectedFilters.has(label)}
+                                 onChange={(e) => {
+                                   const next = new Set(selectedFilters);
+                                   if (e.target.checked) next.add(label);
+                                   else next.delete(label);
+                                   setSelectedFilters(next);
+                                 }}
+                               />
+                               <div>{icon}</div>
+                               <span className="text-[12px] text-[var(--tt-fg)] flex-1 truncate" title={label}>{label}</span>
+                               <span className="text-[10px] text-[var(--tt-fg-dim)]">({count})</span>
+                             </label>
+                           );
+                         })}
+                       </div>
+                     </div>,
+                     document.body
+                   )}
+                </div>
              </div>
              <div className="py-1">
-                {steps.map((s) => (
-                   <div key={s.idx} ref={(el) => { stepIndexRefs.current[s.idx] = el; }}>
-                      <StepRow step={s} active={activeStep === s.idx} beyond={s.idx >= playbackIndex} onClick={() => jumpTo(s.idx)} />
-                   </div>
-                ))}
+                {steps.map((s) => {
+                   const filterKey = s.kind === "user" ? "User Prompt" : (s.label || s.kind);
+                   if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
+                   return (
+                     <div key={s.idx} ref={(el) => { stepIndexRefs.current[s.idx] = el; }}>
+                        <StepRow step={s} active={activeStep === s.idx} beyond={s.idx >= playbackIndex} onClick={() => jumpTo(s.idx)} />
+                     </div>
+                   );
+                })}
              </div>
           </aside>
 
@@ -1085,6 +1212,9 @@ export default function SessionDetailPage() {
                       
                       if (splitView && ((isReasoning || hasThinkingPart) && !hasText)) return null;
                       const kind = eventKind(event);
+                      const baseLabel = stepLabel(event, kind);
+                      const filterKey = kind === "user" ? "User Prompt" : baseLabel;
+                      if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
 
                       return (
                          <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
@@ -1104,6 +1234,9 @@ export default function SessionDetailPage() {
 
                          if (!isReasoning && !isTool && !hasThinkingPart) return null;
                          const kind = eventKind(event);
+                         const baseLabel = stepLabel(event, kind);
+                         const filterKey = kind === "user" ? "User Prompt" : baseLabel;
+                         if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
                          return (
                             <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
                                <EventCard event={event} mode="brain" agent={agent} />
@@ -1472,31 +1605,13 @@ function TabBtn({ active, onClick, icon, children }: { active: boolean; onClick:
 }
 
 function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolean; beyond: boolean; onClick: () => void }) {
-  const icon: Record<StepKind, React.ReactNode> = {
-    user: <User size={11} />,
-    assistant: <MessageSquare size={11} />,
-    reasoning: <Brain size={11} />,
-    tool: <Wrench size={11} />,
-    tool_result: <Terminal size={11} />,
-    meta: <Info size={11} />,
-    other: <Zap size={11} />,
-  };
-  const color: Record<StepKind, string> = {
-    user: "text-[var(--tt-brand)]",
-    assistant: "text-[var(--tt-success-fg)]",
-    reasoning: "text-[var(--tt-warn-fg)]",
-    tool: "text-sky-400",
-    tool_result: "text-[var(--tt-fg-dim)]",
-    meta: "text-[var(--tt-fg-faint)]",
-    other: "text-[var(--tt-fg-faint)]",
-  };
   return (
     <button
       onClick={onClick}
       className={`w-full text-left flex items-center gap-2 px-3 py-1.5 text-[10px] font-mono border-l-2 transition-colors ${active ? "bg-blue-500/10 border-blue-500" : "border-transparent hover:bg-[var(--tt-panel)]/70"} ${beyond ? "opacity-30" : ""}`}
     >
       <span className="text-[var(--tt-fg-faint)] w-7 tabular-nums">{step.idx.toString().padStart(3, "0")}</span>
-      <span className={color[step.kind]}>{icon[step.kind]}</span>
+      <span>{STEP_ICONS[step.kind] || STEP_ICONS.other}</span>
       <span className="text-[var(--tt-fg)] truncate flex-1">{step.label}</span>
       {step.tokens && (
         <span
