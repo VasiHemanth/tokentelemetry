@@ -270,6 +270,17 @@ function pipBootstrapHint() {
   ].join('\n');
 }
 
+function findUv() {
+  // Opportunistic only: uv builds the venv itself instead of going through the
+  // stdlib venv module, so it never touches ensurepip, and it installs an order
+  // of magnitude faster. We never install it — if it isn't already on PATH we
+  // use python/pip exactly as before, so uv is a speed-up, not a prerequisite.
+  // TT_NO_UV=1 forces the pip path.
+  if (process.env.TT_NO_UV === '1') return null;
+  if (!which('uv')) return null;
+  return runSoft('uv', ['--version'], { stdio: 'ignore' }) === 0 ? 'uv' : null;
+}
+
 function venvPipWorks() {
   if (!fs.existsSync(venvPython)) return false;
   return runSoft(venvPython, ['-m', 'pip', '--version'], { stdio: 'ignore' }) === 0;
@@ -290,15 +301,28 @@ function ensureVenvPip() {
 }
 
 function ensureBackend() {
+  const uv = findUv();
   // Check for the interpreter rather than the directory: an interrupted or
   // failed `python -m venv` leaves a directory behind with nothing runnable in
   // it. Re-running venv creation over an existing directory fills in what's
   // missing, so there's nothing to delete here.
   if (!fs.existsSync(venvPython)) {
     const py = findPython();
-    console.log('→ creating Python venv…');
-    if (runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir }) !== 0 || !fs.existsSync(venvPython)) {
-      die('could not create the Python venv at backend/venv.\n' + pipBootstrapHint());
+    console.log(uv ? '→ creating Python venv (uv)…' : '→ creating Python venv…');
+    // Pin uv to the same interpreter the pip path would have used, and forbid
+    // Python downloads, so `uv` on PATH changes the speed of the bootstrap and
+    // nothing else. The resolved path matters: given the bare name `python3`,
+    // uv prefers its own managed CPython over the one on PATH, which would
+    // quietly build the venv on a different Python than every previous release.
+    // --seed puts pip inside the venv: uv leaves it out by default, and without
+    // it a user who later drops uv gets a venv this script can't install into.
+    const created = uv
+      ? runSoft(uv, ['venv', 'venv', '--seed', '--no-python-downloads', '--python', which(py) || py], { cwd: backendDir })
+      : runSoft(py, ['-m', 'venv', 'venv'], { cwd: backendDir });
+    if (created !== 0 || !fs.existsSync(venvPython)) {
+      die('could not create the Python venv at backend/venv.\n' + (uv
+        ? 'Delete backend/venv and retry, or set TT_NO_UV=1 to bootstrap with python -m venv.'
+        : pipBootstrapHint()));
     }
   }
   // Skip pip install when requirements haven't changed since last install.
@@ -319,15 +343,20 @@ function ensureBackend() {
   try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
   const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(installFrom)).digest('hex');
   if (cachedSha === currentSha) return;
-  // Only probe pip on the install path. The stamp lives inside the venv, so a
-  // matching stamp means this venv already completed an install with a working
-  // pip — no need to pay a Python startup on every launch.
-  ensureVenvPip();
-  console.log('→ installing backend dependencies…');
-  if (useLock) {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r', 'requirements.lock'], { cwd: backendDir });
+  const reqFile = useLock ? 'requirements.lock' : 'requirements.txt';
+  const hashFlags = useLock ? ['--require-hashes'] : [];
+  if (uv) {
+    // uv reads the same pip-style lock and enforces the same hashes. --python
+    // targets our venv explicitly rather than whatever VIRTUAL_ENV points at.
+    console.log('→ installing backend dependencies (uv)…');
+    run(uv, ['pip', 'install', '--quiet', '--python', venvPython, ...hashFlags, '-r', reqFile], { cwd: backendDir });
   } else {
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], { cwd: backendDir });
+    // Only probe pip on the install path. The stamp lives inside the venv, so a
+    // matching stamp means this venv already completed an install with a working
+    // pip — no need to pay a Python startup on every launch.
+    ensureVenvPip();
+    console.log('→ installing backend dependencies…');
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', ...hashFlags, '-r', reqFile], { cwd: backendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }

@@ -188,6 +188,26 @@ python3 --version   # should show 3.9+
 
 ---
 
+## `No module named pip` during install
+
+**Symptom:** On Linux, the first launch stops at:
+
+```
+→ installing backend dependencies…
+backend/venv/bin/python3: No module named pip
+```
+
+**Cause:** `python3 -m venv` bootstraps pip as its last step, and on Debian/Ubuntu that step ships in a separate package. Without it the venv is left half-built.
+
+**Fix:** Update to the current version, which repairs this automatically. On older versions, install the package and delete the broken venv:
+
+```bash
+sudo apt install python3-venv     # Debian/Ubuntu
+rm -rf backend/venv && ./start.sh
+```
+
+---
+
 ## No sessions showing after first install
 
 **Symptom:** The dashboard shows zero sessions immediately after installing.

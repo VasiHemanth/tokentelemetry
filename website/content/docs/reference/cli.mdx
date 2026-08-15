@@ -58,6 +58,7 @@ node bin/cli.js [options]     # cross-platform
 | `TOKENTELEMETRY_DATA_DIR` | Sets the data directory (used verbatim, no `.tokentelemetry` suffix). `--data-dir` flag wins. |
 | `TT_AUTH_TOKEN` | Access token for remote requests. `--auth-token` flag wins. |
 | `AGENT_HARNESS_NO_OPEN` | Set to any non-empty value to skip auto-opening the browser on startup. |
+| `TT_NO_UV` | Set to `1` to bootstrap the backend venv with `python -m venv` and pip even when [uv](https://docs.astral.sh/uv/) is on PATH. |
 | `NEXT_PUBLIC_API_PORT` | Passed to the Next.js dev server to tell the frontend which port the backend is on. Set automatically by the launcher from `--api-port`. |
 | `NEXT_PUBLIC_API_BASE` | Full backend URL override (e.g. `http://localhost:8000`). Overrides the runtime auto-detection from `window.location`. Useful in SSH-tunnel setups. |
 

@@ -71,6 +71,8 @@ node bin/cli.js
 
 The launcher creates a Python virtual environment and installs dependencies on first run. Subsequent starts skip the setup step if nothing has changed.
 
+If [uv](https://docs.astral.sh/uv/) is already on your PATH the launcher uses it for both steps, which is a good deal faster; otherwise it uses `python -m venv` and pip. You don't need to install uv, and either way you get the same interpreter and the same hash-checked packages. Set `TT_NO_UV=1` to force the pip path.
+
 ## What gets installed
 
 TokenTelemetry does **not** add any global npm package or modify your agent's config. It installs:
