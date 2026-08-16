@@ -4115,6 +4115,13 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     display = None
     last_ts: Optional[float] = None
     tool_counts: Dict[str, int] = {}
+    # DSH loads skills/plugins/tools DYNAMICALLY at runtime, so what a session
+    # actually had is only knowable from the session's own log -- a filesystem
+    # scan can't answer it (and the catalog genuinely differs between sessions
+    # in the same workspace). Both are captured from the log, never inferred.
+    skills_catalog: Dict[str, str] = {}   # name -> description, last write wins
+    tools_available: List[str] = []
+    providers_used: List[str] = []
 
     for row in rows[1:]:
         rtype = row.get("type")
@@ -4129,14 +4136,33 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         if rtype == "request/context":
             cur_provider = data.get("provider") or cur_provider
             cur_model = data.get("model") or cur_model
+            if cur_provider and cur_provider not in providers_used:
+                providers_used.append(cur_provider)
 
-        elif rtype == "user/message" and display is None:
-            for block in data.get("content") or []:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text = (block.get("text") or "").strip()
-                    if text and not text.startswith("<system-reminder>"):
-                        display = text[:120]
-                        break
+        elif rtype == "request/header":
+            # The tool list handed to the model this request IS the runtime
+            # capability set (DSH tools + any MCP-backed ones), so read it
+            # rather than guessing from config on disk.
+            for tool in ((data.get("header") or {}).get("tools") or []):
+                name = tool.get("name") if isinstance(tool, dict) else None
+                if isinstance(name, str) and name and name not in tools_available:
+                    tools_available.append(name)
+
+        elif rtype == "user/message":
+            source = data.get("source") or {}
+            if source.get("kind") == "skill-catalog":
+                # DSH splices the live skill catalog into the conversation; this
+                # is the only record of which skills the run could actually use.
+                for entry in (source.get("entries") or []):
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                        skills_catalog[entry["name"]] = (entry.get("description") or "")[:200]
+            if display is None:
+                for block in data.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = (block.get("text") or "").strip()
+                        if text and not text.startswith("<system-reminder>"):
+                            display = text[:120]
+                            break
 
         elif rtype == "tool/call":
             name = data.get("name")
@@ -4201,7 +4227,10 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         "model": last_model,
         "models_used": models_used,
         "provider": last_provider,
+        "providers_used": providers_used,
         "tool_counts": tool_counts,
+        "skills_catalog": [{"name": n, "description": d} for n, d in sorted(skills_catalog.items())],
+        "tools_available": sorted(tools_available),
         "path": path,
     }
 
@@ -4284,7 +4313,16 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             "provider": parsed["provider"],
             "artifacts": [{"name": "session.jsonl.zstd", "path": str(parsed["path"]), "type": "document"}],
             "cost": parsed["cost"],
-            "dsh": {"agent_preset": parsed["agent_preset"], "models_used": parsed["models_used"]},
+            # Runtime capability set, read from this session's own log -- DSH
+            # resolves skills/plugins/tools dynamically, so these are per-session
+            # facts, NOT a filesystem scan of what happens to be installed now.
+            "dsh": {
+                "agent_preset": parsed["agent_preset"],
+                "models_used": parsed["models_used"],
+                "providers_used": parsed["providers_used"],
+                "skills_catalog": parsed["skills_catalog"],
+                "tools_available": parsed["tools_available"],
+            },
         }
         if delegation:
             sess["delegation"] = delegation

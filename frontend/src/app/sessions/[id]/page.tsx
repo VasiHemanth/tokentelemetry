@@ -67,6 +67,17 @@ interface Session {
   source_subtype?: string;
   /** Hermes-only: owning profile (~/.hermes/profiles/<name>); absent = default home */
   hermes_profile?: string;
+  /** DSH-only: capability set the harness resolved at RUN TIME for this
+   *  session, read back from its own log. DSH loads skills/plugins dynamically,
+   *  so this legitimately differs between sessions in the same workspace and
+   *  must never be substituted with a scan of what is installed on disk. */
+  dsh?: {
+    agent_preset?: string;
+    models_used?: string[];
+    providers_used?: string[];
+    skills_catalog?: { name: string; description?: string }[];
+    tools_available?: string[];
+  };
   parent_session_id?: string | null;
   end_reason?: string | null;
   /** Hermes-only: how the cost figure was arrived at (absent on other agents). */
@@ -744,18 +755,26 @@ export default function SessionDetailPage() {
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
+      // DSH's runtime-resolved capability set for THIS session (see backend).
+      dsh: agent === "dsh" ? sessionInfo?.dsh : undefined,
     };
   }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
 
-  // Fetch per-project config (skills + MCPs) once we know the cwd
+  // Fetch per-project config (skills + MCPs) once we know the cwd.
+  // NOTE: /config reports what is installed for CLAUDE CODE on disk, so it must
+  // not be shown for agents that resolve their own capabilities. DSH loads
+  // skills/plugins at runtime and records the live catalog in its session log
+  // (surfaced as sessionInfo.dsh), so rendering Claude's list there would
+  // assert capabilities the run never had.
   useEffect(() => {
+    if (agent === "dsh") return;
     const cwd = events.find((e) => e.type === "session_meta")?.payload?.cwd || sessionInfo?.project;
     if (!cwd) return;
     apiFetch(`/config?project=${encodeURIComponent(cwd)}`)
       .then((r) => r.json())
       .then(setProjectConfig)
       .catch(() => {});
-  }, [events, sessionInfo]);
+  }, [events, sessionInfo, agent]);
 
   // Map each tool_use_id -> the user event carrying its tool_result. Built once
   // per events change so the tool summary and waterfall can pair a call to its
@@ -1711,6 +1730,52 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 ))}
               </div>
             </details>
+          )}
+        </div>
+      )}
+
+      {ctx.dsh && ((ctx.dsh.skills_catalog?.length ?? 0) > 0 || (ctx.dsh.tools_available?.length ?? 0) > 0) && (
+        <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+            <Settings2 size={12} /> Runtime Capabilities
+          </div>
+          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+            Resolved by DSH at run time and read back from this session&apos;s log — not a scan of what is installed now.
+          </div>
+          {(ctx.dsh.skills_catalog?.length ?? 0) > 0 && (
+            <details open>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                Skills Loaded ({ctx.dsh.skills_catalog.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.dsh.skills_catalog.map((s: any, i: number) => (
+                  <span
+                    key={i}
+                    title={s.description || ""}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
+                  >
+                    {s.name}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
+          {(ctx.dsh.tools_available?.length ?? 0) > 0 && (
+            <details>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                Tools Available ({ctx.dsh.tools_available.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.dsh.tools_available.map((t: string, i: number) => (
+                  <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
+          {(ctx.dsh.providers_used?.length ?? 0) > 0 && (
+            <Row k="Providers" v={ctx.dsh.providers_used.join(", ")} />
           )}
         </div>
       )}

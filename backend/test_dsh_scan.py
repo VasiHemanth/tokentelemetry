@@ -296,3 +296,82 @@ def test_session_detail_dsh_unknown_id_is_not_found(scan_env):
     import asyncio
     result = asyncio.run(main.get_session_detail("session-nope", "dsh"))
     assert result == {"error": "Not found"}
+
+
+# ---------------------------------------------------------------------------
+# Runtime capabilities
+#
+# DSH resolves skills/plugins/tools dynamically at run time, so a session's real
+# capability set is only knowable from its own log. Two sessions in the SAME
+# workspace legitimately differ (verified on real data: the "cordis" preset
+# session had 8 skills / 32 tools where "standard" sessions had 6 / 25), which
+# is exactly why a filesystem scan must never be used to describe a DSH run.
+# ---------------------------------------------------------------------------
+
+def test_captures_runtime_skill_catalog_from_session_log(scan_env):
+    events = _usage_events(turn=1, step=1, in_t=10, out_t=5) + [
+        {"type": "user/message", "seq": 9, "time": 1786850753020,
+         "data": {"role": "user",
+                  "source": {"kind": "skill-catalog", "form": "catalog", "entries": [
+                      {"name": "find-skills", "description": "Discover and install agent skills"},
+                      {"name": "cordis-plugin-development", "description": "Create dynamic Cordis plugins"},
+                  ]},
+                  "content": [{"type": "text", "text": "<system-reminder>catalog</system-reminder>"}]}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-skills", {}, events)
+
+    out = main._scan_dsh_sessions()
+    catalog = out[0]["dsh"]["skills_catalog"]
+    assert [s["name"] for s in catalog] == ["cordis-plugin-development", "find-skills"]  # sorted
+    assert catalog[0]["description"] == "Create dynamic Cordis plugins"
+
+
+def test_captures_runtime_tool_list_and_providers(scan_env):
+    events = [
+        {"type": "request/context", "seq": 1, "time": 1000,
+         "data": {"provider": "ollama", "model": "deepseek-v4-flash:cloud"}},
+        {"type": "request/header", "seq": 2, "time": 1001,
+         "data": {"header": {"config": {"provider": "ollama", "model": "deepseek-v4-flash:cloud"},
+                             "tools": [{"name": "bash"}, {"name": "skill"}, {"name": "subagent"}]}}},
+        {"type": "request/context", "seq": 3, "time": 2000,
+         "data": {"provider": "cerebras", "model": "zai-glm-4.7"}},
+        {"type": "request/header", "seq": 4, "time": 2001,
+         "data": {"header": {"config": {"provider": "cerebras", "model": "zai-glm-4.7"},
+                             "tools": [{"name": "bash"}, {"name": "web_search"}]}}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-tools-rt", {}, events)
+
+    dsh = main._scan_dsh_sessions()[0]["dsh"]
+    # union across requests, de-duped and sorted
+    assert dsh["tools_available"] == ["bash", "skill", "subagent", "web_search"]
+    assert dsh["providers_used"] == ["ollama", "cerebras"]
+
+
+def test_skill_catalog_is_per_session_not_global(scan_env):
+    """Two sessions in one workspace must report their OWN catalogs."""
+    base = _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-a", {}, base + [
+        {"type": "user/message", "seq": 9, "time": 1786850753020,
+         "data": {"role": "user", "content": [],
+                  "source": {"kind": "skill-catalog", "entries": [{"name": "only-in-a"}]}}},
+    ])
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-b", {}, base + [
+        {"type": "user/message", "seq": 9, "time": 1786850753020,
+         "data": {"role": "user", "content": [],
+                  "source": {"kind": "skill-catalog", "entries": [
+                      {"name": "only-in-b"}, {"name": "shared"}]}}},
+    ])
+
+    by_id = {s["id"]: s for s in main._scan_dsh_sessions()}
+    assert [s["name"] for s in by_id["session-a"]["dsh"]["skills_catalog"]] == ["only-in-a"]
+    assert [s["name"] for s in by_id["session-b"]["dsh"]["skills_catalog"]] == ["only-in-b", "shared"]
+
+
+def test_skill_catalog_absent_when_log_records_none(scan_env):
+    """No catalog in the log means we report nothing -- never a fallback to
+    whatever another agent has installed on disk."""
+    events = _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-nocat", {}, events)
+
+    dsh = main._scan_dsh_sessions()[0]["dsh"]
+    assert dsh["skills_catalog"] == []
