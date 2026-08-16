@@ -375,3 +375,29 @@ def test_skill_catalog_absent_when_log_records_none(scan_env):
 
     dsh = main._scan_dsh_sessions()[0]["dsh"]
     assert dsh["skills_catalog"] == []
+
+
+def test_effective_preset_follows_midsession_switch(scan_env):
+    """DSH can swap agent presets at run time, and the preset decides which
+    skills/tools load. The header only records the STARTING preset, so the
+    effective one must come from the agent-preset/selected event chain."""
+    events = [
+        {"type": "agent-preset/selected", "seq": 3, "time": 1100,
+         "data": {"agentPreset": "cordis"}},
+    ] + _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-preset",
+                       {"agentPreset": "standard"}, events)
+
+    dsh = main._scan_dsh_sessions()[0]["dsh"]
+    assert dsh["agent_preset"] == "cordis", "must report the effective preset, not the header's"
+    assert dsh["preset_chain"] == ["standard", "cordis"]
+
+
+def test_preset_chain_without_switch_is_just_the_header(scan_env):
+    events = _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-nopreset",
+                       {"agentPreset": "standard"}, events)
+
+    dsh = main._scan_dsh_sessions()[0]["dsh"]
+    assert dsh["agent_preset"] == "standard"
+    assert dsh["preset_chain"] == ["standard"]

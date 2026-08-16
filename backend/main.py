@@ -4122,6 +4122,15 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     skills_catalog: Dict[str, str] = {}   # name -> description, last write wins
     tools_available: List[str] = []
     providers_used: List[str] = []
+    # The header's agentPreset is only the STARTING preset. DSH can swap presets
+    # mid-session (an `agent-preset/selected` event), and the preset determines
+    # which skills/tools get loaded -- so reporting the header value alone
+    # misdescribes the run. Verified on real data: a session whose header says
+    # "standard" switched to "cordis" and ran with 8 skills / 32 tools instead
+    # of 6 / 25. Track the whole chain and report the effective (last) one.
+    preset_chain: List[str] = []
+    if isinstance(header.get("agentPreset"), str) and header["agentPreset"]:
+        preset_chain.append(header["agentPreset"])
 
     for row in rows[1:]:
         rtype = row.get("type")
@@ -4138,6 +4147,11 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
             cur_model = data.get("model") or cur_model
             if cur_provider and cur_provider not in providers_used:
                 providers_used.append(cur_provider)
+
+        elif rtype == "agent-preset/selected":
+            preset = data.get("agentPreset")
+            if isinstance(preset, str) and preset and (not preset_chain or preset_chain[-1] != preset):
+                preset_chain.append(preset)
 
         elif rtype == "request/header":
             # The tool list handed to the model this request IS the runtime
@@ -4219,7 +4233,8 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         "origin": header.get("origin"),
         "parent_session": header.get("parentSession"),
         "delegation_depth": header.get("delegationDepth") or 0,
-        "agent_preset": header.get("agentPreset"),
+        "agent_preset": preset_chain[-1] if preset_chain else header.get("agentPreset"),
+        "preset_chain": preset_chain,
         "timestamp": ts,
         "display": display,
         "tokens": tokens,
@@ -4318,6 +4333,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             # facts, NOT a filesystem scan of what happens to be installed now.
             "dsh": {
                 "agent_preset": parsed["agent_preset"],
+                "preset_chain": parsed["preset_chain"],
                 "models_used": parsed["models_used"],
                 "providers_used": parsed["providers_used"],
                 "skills_catalog": parsed["skills_catalog"],

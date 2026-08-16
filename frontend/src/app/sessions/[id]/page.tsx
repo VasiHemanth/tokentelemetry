@@ -73,6 +73,8 @@ interface Session {
    *  must never be substituted with a scan of what is installed on disk. */
   dsh?: {
     agent_preset?: string;
+    /** Presets the session ran under, in order; >1 means it hot-swapped. */
+    preset_chain?: string[];
     models_used?: string[];
     providers_used?: string[];
     skills_catalog?: { name: string; description?: string }[];
@@ -1773,6 +1775,14 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 ))}
               </div>
             </details>
+          )}
+          {ctx.dsh.agent_preset && (
+            <Row
+              k="Agent Preset"
+              v={(ctx.dsh.preset_chain?.length ?? 0) > 1
+                ? `${ctx.dsh.preset_chain.join(" → ")} (switched mid-session)`
+                : ctx.dsh.agent_preset}
+            />
           )}
           {(ctx.dsh.providers_used?.length ?? 0) > 0 && (
             <Row k="Providers" v={ctx.dsh.providers_used.join(", ")} />
