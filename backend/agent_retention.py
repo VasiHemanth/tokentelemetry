@@ -126,6 +126,13 @@ _RETENTION: Dict[str, Dict[str, Any]] = {
         "settings_hint": None,
         "note": "Project-local .smallcode/traces JSON; no auto-pruning.",
     },
+    "dsh": {
+        "label": "DeepSeek Harness",
+        "default_days": None,
+        "configurable": False,
+        "settings_hint": None,
+        "note": "Zstd-compressed session logs under ~/.dsh/sessions; no auto-pruning.",
+    },
 }
 
 # Which agents we can actually archive (single-file resolvable transcript).

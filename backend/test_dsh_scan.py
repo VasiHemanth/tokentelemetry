@@ -204,3 +204,95 @@ def test_tool_calls_counted(scan_env):
 
     out = main._scan_dsh_sessions()
     assert out[0]["tool_counts"] == {"bash": 2}
+
+
+# ---------------------------------------------------------------------------
+# Trace (get_session_detail)
+# ---------------------------------------------------------------------------
+
+def test_trace_normalizes_messages_tools_and_reasoning(scan_env):
+    """DSH events must come back in the shared Claude-shaped trace contract so
+    the existing EventCard renderer handles them unchanged."""
+    events = [
+        {"type": "user/message", "seq": 1, "time": 1000,
+         "data": {"role": "user", "source": {"kind": "user"},
+                  "content": [{"type": "text", "text": "hello there"}]}},
+        {"type": "assistant/message", "seq": 2, "time": 2000,
+         "data": {"turn": 1, "step": 1, "message": {"role": "assistant", "source": {"provider": "cerebras", "model": "zai-glm-4.7"},
+                  "content": [{"type": "reasoning", "text": "thinking it over"},
+                              {"type": "text", "text": "hi back"}]}}},
+        {"type": "tool/call", "seq": 3, "time": 3000,
+         "data": {"turn": 1, "step": 1, "callId": "c1", "name": "bash",
+                  "arguments": '{"command":"ls"}'}},
+        {"type": "tool/result", "seq": 4, "time": 4000,
+         "data": {"turn": 1, "step": 1, "message": {
+             "role": "user", "source": {"kind": "tool", "callId": "c1"},
+             "content": [{"type": "tool-result", "toolCallId": "c1", "isError": False,
+                          "content": [{"type": "text", "text": "file1.txt"}]}]}}},
+    ]
+    path = _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-trace", {}, events)
+
+    trace = main._dsh_trace_events(path)
+    assert [e["type"] for e in trace] == ["user", "assistant", "assistant", "user"]
+
+    assert trace[0]["message"]["content"][0]["text"] == "hello there"
+
+    blocks = trace[1]["message"]["content"]
+    assert blocks[0] == {"type": "thinking", "thinking": "thinking it over"}
+    assert blocks[1] == {"type": "text", "text": "hi back"}
+
+    tool_use = trace[2]["message"]["content"][0]
+    assert tool_use["type"] == "tool_use"
+    assert tool_use["id"] == "c1"
+    assert tool_use["name"] == "bash"
+    assert tool_use["input"] == {"command": "ls"}  # DSH stores args as a JSON string
+
+    tool_result = trace[3]["message"]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["tool_use_id"] == "c1"  # must pair with the tool_use above
+    assert tool_result["content"] == "file1.txt"
+
+    assert [e["normalized_timestamp"] for e in trace] == [1000, 2000, 3000, 4000]
+
+
+def test_trace_drops_plugin_injected_user_messages(scan_env):
+    """DSH splices runtime-context/skill-catalog snapshots in as user-role
+    messages; only source.kind == "user" is a real human turn."""
+    events = [
+        {"type": "user/message", "seq": 1, "time": 1000,
+         "data": {"role": "user", "source": {"kind": "plugin", "plugin": "@deepseek-ai/dsh-system-prompt"},
+                  "content": [{"type": "text", "text": "Current runtime context snapshot..."}]}},
+        {"type": "user/message", "seq": 2, "time": 1100,
+         "data": {"role": "user", "source": {"kind": "skill-catalog"},
+                  "content": [{"type": "text", "text": "<system-reminder>skills</system-reminder>"}]}},
+        {"type": "user/message", "seq": 3, "time": 1200,
+         "data": {"role": "user", "source": {"kind": "user"},
+                  "content": [{"type": "text", "text": "the real question"}]}},
+    ]
+    path = _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-inject", {}, events)
+
+    trace = main._dsh_trace_events(path)
+    assert len(trace) == 1
+    assert trace[0]["message"]["content"][0]["text"] == "the real question"
+
+
+def test_session_detail_dispatches_dsh(scan_env):
+    """agent="dsh" must resolve through get_session_detail rather than falling
+    through to the {"error": "Invalid agent"} tail of the dispatch chain."""
+    events = [
+        {"type": "user/message", "seq": 1, "time": 1000,
+         "data": {"role": "user", "source": {"kind": "user"},
+                  "content": [{"type": "text", "text": "trace me"}]}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-detail", {}, events)
+
+    import asyncio
+    result = asyncio.run(main.get_session_detail("session-detail", "dsh"))
+    assert isinstance(result, list)
+    assert result[0]["message"]["content"][0]["text"] == "trace me"
+
+
+def test_session_detail_dsh_unknown_id_is_not_found(scan_env):
+    import asyncio
+    result = asyncio.run(main.get_session_detail("session-nope", "dsh"))
+    assert result == {"error": "Not found"}

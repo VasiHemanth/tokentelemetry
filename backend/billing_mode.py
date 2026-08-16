@@ -54,6 +54,7 @@ DEFAULT_MODES: Dict[str, str] = {
     "vibe": "unknown",
     "cline": "api",                # BYOK across providers (Anthropic/OpenAI/Ollama/etc.)
     "smallcode": "local",          # runs local models (e.g. ollama-served nemotron)
+    "dsh": "api",                  # BYOK; routes to any provider (cerebras/groq/ollama/…)
 }
 
 # Human-readable note on where a detected value came from (shown in Settings so

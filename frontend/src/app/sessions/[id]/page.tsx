@@ -542,8 +542,9 @@ export default function SessionDetailPage() {
 
       // 5. Delegation overlay: subagent spawns + delegated token/cost attribution.
       // Only agents whose logs record spawns at all (claude full, cursor count-only,
-      // grok/codex/antigravity/opencode/hermes parent-child links).
-      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity"].includes(agent)) {
+      // grok/codex/antigravity/opencode/hermes parent-child links, dsh full via
+      // its children's own session logs).
+      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh"].includes(agent)) {
         apiFetch(`/sessions/${id}/delegation?agent=${agent}`)
           .then(res => res.json())
           .then(data => setDelegation(data && data.supported ? data : null))

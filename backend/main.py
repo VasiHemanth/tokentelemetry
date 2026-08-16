@@ -2862,6 +2862,7 @@ def _list_available_agents() -> list:
         agents.append("cline")
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
     if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
+    if DSH_DIR.exists(): agents.append("dsh")
     # SmallCode traces are project-local; cheaply check only the explicitly
     # configured extra roots here (the full project-derived root set is only
     # known after _scan_sessions_sync runs the other scanners).
@@ -4291,6 +4292,112 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
         out.append(sess)
 
     return out
+
+
+def _dsh_session_file(session_id: str) -> Optional[Path]:
+    """Locate one DSH session's log by id. The session dir IS the id, so a
+    direct glob resolves it without reversing DSH's lossy cwd slug."""
+    if not DSH_SESSIONS_DIR.exists() or not session_id or "/" in session_id:
+        return None
+    for match in DSH_SESSIONS_DIR.glob(f"*/{session_id}/session.jsonl.zstd"):
+        return match
+    return None
+
+
+def _dsh_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize a DSH session log into the shared Claude-shaped trace events
+    the EventCard renderer expects (same contract as the pi branch).
+
+    DSH's `user/message` stream carries more than real user turns -- the
+    harness splices in plugin snapshots (runtime context, sandbox policy) and
+    skill catalogs as user-role messages. Only source.kind == "user" is a
+    human turn, so the rest are dropped rather than dumped into the trace as
+    if the user had typed them.
+    """
+    rows = _dsh_read_events(path)
+    if not rows:
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for row in rows:
+        rtype = row.get("type")
+        data = row.get("data")
+        if not isinstance(data, dict):
+            continue
+        norm: Optional[Dict[str, Any]] = None
+
+        if rtype == "user/message":
+            if (data.get("source") or {}).get("kind") != "user":
+                continue  # plugin/skill-catalog injection, not a human turn
+            text = "".join(
+                c.get("text", "") for c in (data.get("content") or [])
+                if isinstance(c, dict) and c.get("type") == "text"
+            )
+            if text.strip():
+                norm = {"type": "user", "message": {"role": "user",
+                        "content": [{"type": "text", "text": text}]}}
+
+        elif rtype == "assistant/message":
+            blocks: List[Dict[str, Any]] = []
+            for c in ((data.get("message") or {}).get("content") or []):
+                if not isinstance(c, dict):
+                    continue
+                ctype = c.get("type")
+                txt = c.get("text") or ""
+                if not txt.strip():
+                    continue
+                if ctype == "reasoning":
+                    blocks.append({"type": "thinking", "thinking": txt})
+                elif ctype == "text":
+                    blocks.append({"type": "text", "text": txt})
+            if blocks:
+                norm = {"type": "assistant", "message": {"role": "assistant", "content": blocks}}
+
+        elif rtype == "tool/call":
+            raw_args = data.get("arguments")
+            try:
+                parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+            except Exception:
+                parsed_args = {"raw": raw_args}  # DSH stores args as an unparsed JSON string
+            norm = {"type": "assistant", "message": {"role": "assistant", "content": [{
+                "type": "tool_use",
+                "id": data.get("callId"),
+                "name": data.get("name"),
+                "input": parsed_args,
+            }]}}
+
+        elif rtype == "tool/result":
+            message = data.get("message") or {}
+            call_id = ((message.get("source") or {}).get("callId"))
+            text_parts: List[str] = []
+            for block in (message.get("content") or []):
+                if not isinstance(block, dict):
+                    continue
+                if call_id is None:
+                    call_id = block.get("toolCallId")
+                inner = block.get("content")
+                if isinstance(inner, str):
+                    text_parts.append(inner)
+                elif isinstance(inner, list):
+                    text_parts.extend(
+                        b.get("text", "") for b in inner
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+            norm = {"type": "user", "message": {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": "".join(text_parts),
+            }]}}
+
+        if norm is None:
+            continue
+        t = row.get("time")
+        if isinstance(t, (int, float)) and t > 0:
+            norm["normalized_timestamp"] = t
+        norm.setdefault("normalized_timestamp", len(events) * 1000)
+        events.append(norm)
+
+    return events
 
 
 def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
@@ -7578,6 +7685,16 @@ async def get_session_detail(session_id: str, agent: str):
                 events.append(norm)
         return events
 
+    elif agent == "dsh":
+        # DeepSeek Harness — zstd-compressed JSONL; _dsh_trace_events normalizes
+        # it into the same Claude-shaped events the pi branch above produces.
+        # Subagent children are their own session files, so a delegated run is
+        # traceable by requesting its own id.
+        sess_file = _dsh_session_file(session_id)
+        if not sess_file:
+            return {"error": "Not found"}
+        return _dsh_trace_events(sess_file)
+
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
         # conversations/<id>.db — far richer than the brain markdown. Prefer it.
@@ -8243,6 +8360,29 @@ async def session_delegation(session_id: str, agent: str):
             subagents.append({"agent_id": child.parent.name, "agent_type": "muse-subagent",
                               "model": child_summary["model"], "tokens": {**t, "total": sum(t.values())},
                               "cost": calculate_cost(child_summary["model"], t["input"], t["output"], t["cached"], cache_creation_tokens=t["cache_creation"])})
+        totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
+                  for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
+        return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                "subagents": subagents, "totals": totals,
+                "cost": sum(s["cost"] for s in subagents)}
+
+    if agent == "dsh":
+        # DSH children are their own session logs, linked by an explicit
+        # parentSession header field, so per-subagent usage is real (not just a
+        # spawn count) -- same contract as muse above.
+        parent_file = _dsh_session_file(session_id)
+        if parent_file is None:
+            return {"error": "Not found"}
+        subagents = []
+        for child_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+            if child_file == parent_file:
+                continue
+            child = _dsh_parse_session(child_file)
+            if not child or child.get("origin") != "subagent" or child.get("parent_session") != session_id:
+                continue
+            subagents.append({"agent_id": child["id"], "agent_type": "dsh-subagent",
+                              "model": child["model"], "tokens": child["tokens"],
+                              "cost": child["cost"]})
         totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
                   for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
         return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
