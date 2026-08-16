@@ -37,6 +37,7 @@ TokenTelemetry detects the billing mode for each agent automatically:
 | Vibe | `local` (if using a local endpoint) or `api` |
 | Antigravity | `api` |
 | Grok Build | `api` |
+| DeepSeek Harness | `api` (bring-your-own-key; a session can route to several providers) |
 | Hermes Agent | `api` or `local` depending on provider config |
 
 Detection is best-effort. If the agent's auth configuration can't be read, the mode defaults to `unknown`.

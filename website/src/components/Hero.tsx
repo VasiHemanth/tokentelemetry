@@ -45,7 +45,7 @@ export default function Hero() {
                 </span>
                 100% local
               </span>
-              {["MIT open source", "16 agents", "No signup"].map((c) => (
+              {["MIT open source", "17 agents", "No signup"].map((c) => (
                 <span key={c} className="inline-flex items-center h-7 px-2.5 rounded-full text-[11.5px] font-medium text-[var(--tt-fg-muted)] bg-[var(--tt-panel)] border border-[var(--tt-border)]">
                   {c}
                 </span>
