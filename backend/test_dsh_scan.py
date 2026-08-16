@@ -565,3 +565,78 @@ def test_subagent_fork_is_treated_as_a_subagent(scan_env):
     assert {s["id"] for s in out} == {"session-forkparent"}
     assert out[0]["delegation"]["spawn_count"] == 1
     assert out[0]["tool_counts"]["subagent_fork"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Latency metrics
+#
+# Formulas are pinned against DSH's own UI footer, which reported for
+# session-5e450316: 1 turn / 2 steps, LLM 3.8s, tool 37.2s, TTFT avg 1.5s,
+# 166 tok/s, cache hit 50%. Our derivation reproduced all of them.
+# ---------------------------------------------------------------------------
+
+def test_latency_breakdown_matches_dsh_formulas(scan_env):
+    """One step: start@1000, first chunk@2000, finish@3000; a tool call
+    spanning 3100..9100. So TTFT=1000ms, LLM=2000ms, gen=1000ms, tool=6000ms,
+    and 50 output tokens over 1s of generation = 50 tok/s."""
+    events = [
+        {"type": "turn/start", "seq": 1, "time": 900, "data": {"turn": 1}},
+        {"type": "step/start", "seq": 2, "time": 1000, "data": {"turn": 1, "step": 1}},
+        {"type": "request/context", "seq": 3, "time": 1001,
+         "data": {"provider": "cerebras", "model": "zai-glm-4.7"}},
+        {"type": "assistant/chunk", "seq": 4, "time": 2000,
+         "data": {"turn": 1, "step": 1, "chunk": {"type": "block-start"}}},
+        {"type": "assistant/chunk", "seq": 5, "time": 3000,
+         "data": {"turn": 1, "step": 1,
+                  "chunk": {"type": "usage", "usage": {"inputTokens": 100, "outputTokens": 50}}}},
+        {"type": "tool/call", "seq": 6, "time": 3100,
+         "data": {"turn": 1, "step": 1, "callId": "c1", "name": "bash", "arguments": "{}"}},
+        {"type": "tool/result", "seq": 7, "time": 9100,
+         "data": {"turn": 1, "step": 1,
+                  "message": {"source": {"kind": "tool", "callId": "c1"}, "content": []}}},
+        {"type": "step/end", "seq": 8, "time": 9200, "data": {"turn": 1, "step": 1}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-metrics", {}, events)
+
+    m = main._scan_dsh_sessions()[0]["dsh"]["metrics"]
+    assert m["turns"] == 1
+    assert m["steps"] == 1
+    assert m["ttft_ms_avg"] == 1000       # first chunk - step start
+    assert m["llm_ms"] == 2000            # finish - step start
+    assert m["tool_ms"] == 6000           # result - call
+    assert m["output_tok_per_sec"] == 50  # 50 tok over 1s of generation
+
+
+def test_cache_hit_counts_cache_reads_as_input(scan_env):
+    """DSH's footer folds cache reads into input (8.3K + 8.2K = "16.5K"), so
+    the hit rate is cached / (input + cached). Mirroring it keeps the two UIs
+    from disagreeing on the same session."""
+    events = [
+        {"type": "step/start", "seq": 1, "time": 1000, "data": {"turn": 1, "step": 1}},
+        {"type": "assistant/chunk", "seq": 2, "time": 1100,
+         "data": {"turn": 1, "step": 1, "chunk": {"type": "block-start"}}},
+        {"type": "assistant/chunk", "seq": 3, "time": 1200,
+         "data": {"turn": 1, "step": 1, "chunk": {"type": "usage", "usage": {
+             "inputTokens": 300, "outputTokens": 10, "cacheReadTokens": 700}}}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-cache", {}, events)
+
+    m = main._scan_dsh_sessions()[0]["dsh"]["metrics"]
+    assert m["cache_hit_pct"] == 70.0  # 700 / (300 + 700)
+
+
+def test_metrics_absent_without_timing_data(scan_env):
+    """A session that errored before generating must not report fabricated
+    latency."""
+    events = [
+        {"type": "request/context", "seq": 1, "time": 1000,
+         "data": {"provider": "ollama", "model": "deepseek-v4-flash:cloud"}},
+        {"type": "turn/end", "seq": 2, "time": 1001,
+         "data": {"turn": 1, "reason": {"kind": "error", "error": {"code": "AUTH"}}}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-nom", {}, events)
+
+    m = main._scan_dsh_sessions()[0]["dsh"]["metrics"]
+    assert m["llm_ms"] is None
+    assert m["ttft_ms_avg"] is None
+    assert m["output_tok_per_sec"] is None

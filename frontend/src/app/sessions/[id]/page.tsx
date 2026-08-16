@@ -88,6 +88,16 @@ interface Session {
       approval_source?: string;
       permission_preset?: string;
     };
+    /** Latency breakdown derived from the log; matches DSH's own UI footer. */
+    metrics?: {
+      turns?: number;
+      steps?: number;
+      llm_ms?: number | null;
+      tool_ms?: number | null;
+      ttft_ms_avg?: number | null;
+      output_tok_per_sec?: number | null;
+      cache_hit_pct?: number | null;
+    };
   };
   parent_session_id?: string | null;
   end_reason?: string | null;
@@ -1799,6 +1809,30 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 ))}
               </div>
             </details>
+          )}
+          {ctx.dsh.metrics && (ctx.dsh.metrics.llm_ms || ctx.dsh.metrics.tool_ms) && (
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+                Latency Breakdown
+              </div>
+              {/* Wall-clock split. Tool time routinely dwarfs model time, which
+                  is invisible if you only look at total duration. */}
+              {ctx.dsh.metrics.llm_ms != null && (
+                <Row k="LLM Time" v={`${(ctx.dsh.metrics.llm_ms / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.tool_ms != null && (
+                <Row k="Tool Time" v={`${(ctx.dsh.metrics.tool_ms / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.ttft_ms_avg != null && (
+                <Row k="TTFT (avg)" v={`${(ctx.dsh.metrics.ttft_ms_avg / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.output_tok_per_sec != null && (
+                <Row k="Throughput" v={`${ctx.dsh.metrics.output_tok_per_sec} tok/s`} />
+              )}
+              {ctx.dsh.metrics.cache_hit_pct != null && (
+                <Row k="Cache Hit" v={`${ctx.dsh.metrics.cache_hit_pct}%`} />
+              )}
+            </div>
           )}
           {ctx.dsh.sandbox?.mode && (
             <Row

@@ -4147,6 +4147,21 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     # act without prompting. That is a trust-boundary fact, so the source is
     # kept rather than flattened into the value.
     sandbox: Dict[str, Any] = {}
+    # Latency breakdown. DSH's own UI footer shows these, and every formula
+    # below was checked against it on a real session (TTFT 1.5s, LLM 3.8s,
+    # tool 37.2s, 166 tok/s) before being written:
+    #   TTFT      = first assistant chunk - step/start
+    #   LLM time  = assistant finish - step/start          (per step, summed)
+    #   gen time  = assistant finish - first chunk         (drives tok/s)
+    #   tool time = tool/result - tool/call                (per call, summed)
+    # Tool time is wall-clock and can dwarf LLM time (a 41s session here was 37s
+    # of one subagent call), which is exactly why the split is worth keeping.
+    step_start: Dict[Tuple[Any, Any], float] = {}
+    step_first_chunk: Dict[Tuple[Any, Any], float] = {}
+    step_finish: Dict[Tuple[Any, Any], float] = {}
+    tool_call_at: Dict[str, float] = {}
+    tool_ms_total = 0.0
+    turns = steps = 0
 
     for row in rows[1:]:
         rtype = row.get("type")
@@ -4208,15 +4223,38 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
                             display = text[:120]
                             break
 
+        elif rtype == "turn/start":
+            turns += 1
+
+        elif rtype == "step/start":
+            steps += 1
+            if isinstance(t, (int, float)):
+                step_start[(data.get("turn"), data.get("step"))] = t
+
         elif rtype == "tool/call":
             name = data.get("name")
             if isinstance(name, str) and name:
                 tool_counts[name] = tool_counts.get(name, 0) + 1
+            call_id = data.get("callId")
+            if isinstance(call_id, str) and isinstance(t, (int, float)):
+                tool_call_at[call_id] = t
+
+        elif rtype == "tool/result":
+            call_id = ((data.get("message") or {}).get("source") or {}).get("callId")
+            started = tool_call_at.pop(call_id, None) if isinstance(call_id, str) else None
+            if started is not None and isinstance(t, (int, float)) and t >= started:
+                tool_ms_total += t - started
 
         elif rtype == "assistant/chunk":
             chunk = data.get("chunk")
+            key = (data.get("turn"), data.get("step"))
+            if isinstance(t, (int, float)):
+                # First chunk of the step marks time-to-first-token; the
+                # terminal chunk marks the end of generation.
+                step_first_chunk.setdefault(key, t)
+                if isinstance(chunk, dict) and chunk.get("type") in ("finish", "usage"):
+                    step_finish[key] = max(step_finish.get(key, 0.0), t)
             if isinstance(chunk, dict) and chunk.get("type") == "usage":
-                key = (data.get("turn"), data.get("step"))
                 usage_by_step[key] = {**(chunk.get("usage") or {}), "provider": cur_provider, "model": cur_model}
                 last_provider, last_model = cur_provider, cur_model
 
@@ -4250,6 +4288,32 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         cost += calculate_cost(model, in_t, out_t, cr, cache_creation_tokens=cw, provider=u.get("provider"))
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
 
+    # --- latency breakdown (formulas noted where the inputs are collected)
+    ttfts = [step_first_chunk[k] - step_start[k]
+             for k in step_first_chunk
+             if k in step_start and step_first_chunk[k] >= step_start[k]]
+    llm_ms = sum(step_finish[k] - step_start[k]
+                 for k in step_finish
+                 if k in step_start and step_finish[k] >= step_start[k])
+    gen_ms = sum(step_finish[k] - step_first_chunk[k]
+                 for k in step_finish
+                 if k in step_first_chunk and step_finish[k] >= step_first_chunk[k])
+    metrics: Dict[str, Any] = {
+        "turns": turns,
+        "steps": steps,
+        "llm_ms": round(llm_ms) or None,
+        "tool_ms": round(tool_ms_total) or None,
+        "ttft_ms_avg": round(sum(ttfts) / len(ttfts)) if ttfts else None,
+        # Output tokens over GENERATION time only -- dividing by total LLM time
+        # would fold in time-to-first-token and understate throughput.
+        "output_tok_per_sec": round(tokens["output"] / (gen_ms / 1000), 1)
+                              if gen_ms > 0 and tokens["output"] else None,
+    }
+    # DSH counts cache reads as part of input -- that is how its own footer
+    # reports "Input 16.5K" for an 8.3K + 8.2K split. Mirror it so the two agree.
+    billed_input = tokens["input"] + tokens["cached"]
+    metrics["cache_hit_pct"] = round(tokens["cached"] / billed_input * 100, 1) if billed_input else None
+
     if last_ts:
         ts = _aware(datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc))
     elif isinstance(header.get("createdAt"), (int, float)) and header["createdAt"] > 0:
@@ -4266,6 +4330,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         "agent_preset": preset_chain[-1] if preset_chain else header.get("agentPreset"),
         "preset_chain": preset_chain,
         "sandbox": sandbox,
+        "metrics": metrics,
         "timestamp": ts,
         "display": display,
         "tokens": tokens,
@@ -4371,6 +4436,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
                 "agent_preset": parsed["agent_preset"],
                 "preset_chain": parsed["preset_chain"],
                 "sandbox": parsed["sandbox"],
+                "metrics": parsed["metrics"],
                 "models_used": parsed["models_used"],
                 "providers_used": parsed["providers_used"],
                 "skills_catalog": parsed["skills_catalog"],
