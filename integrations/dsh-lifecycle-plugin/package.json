@@ -1,0 +1,20 @@
+{
+  "name": "@tokentelemetry/dsh-lifecycle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Records DeepSeek Harness plugin lifecycle transitions for TokenTelemetry. Observational only.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  }
+}

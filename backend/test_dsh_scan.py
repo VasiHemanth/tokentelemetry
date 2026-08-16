@@ -401,3 +401,87 @@ def test_preset_chain_without_switch_is_just_the_header(scan_env):
     dsh = main._scan_dsh_sessions()[0]["dsh"]
     assert dsh["agent_preset"] == "standard"
     assert dsh["preset_chain"] == ["standard"]
+
+
+# ---------------------------------------------------------------------------
+# Plugin lifecycle sidecar
+#
+# DSH's persisted log has a closed 44-type vocabulary and Cordis emits component
+# lifecycle only on an in-memory bus, so these transitions are unobservable
+# after the fact. The TT DSH plugin subscribes live and appends them here.
+# ---------------------------------------------------------------------------
+
+def _write_lifecycle(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+@pytest.fixture
+def lifecycle_env(tmp_path, monkeypatch):
+    p = tmp_path / "dsh_lifecycle.jsonl"
+    monkeypatch.setattr(main, "DSH_LIFECYCLE_FILE", p)
+    return p
+
+
+def test_lifecycle_absent_file_is_not_an_error(lifecycle_env):
+    """Plugin not installed is the normal case, not a failure."""
+    assert main._dsh_lifecycle_events() == []
+
+
+def test_lifecycle_reads_and_normalises_states(lifecycle_env):
+    _write_lifecycle(lifecycle_env, [
+        {"ts": 1000, "plugin": "tt-probe", "from": 0, "to": 1},          # ints (const enum)
+        {"ts": 2000, "plugin": "tt-probe", "from": "LOADING", "to": "ACTIVE"},  # names
+    ])
+    ev = main._dsh_lifecycle_events()
+    assert [e["to"] for e in ev] == ["loading", "active"]
+    assert [e["from"] for e in ev] == ["pending", "loading"]
+
+
+def test_lifecycle_skips_torn_final_line(lifecycle_env):
+    """We may read mid-append; a partial line must be skipped, not raise."""
+    lifecycle_env.parent.mkdir(parents=True, exist_ok=True)
+    with open(lifecycle_env, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": 1000, "plugin": "a", "from": 1, "to": 2}) + "\n")
+        f.write('{"ts": 2000, "plugin": "b", "fr')  # torn
+    ev = main._dsh_lifecycle_events()
+    assert len(ev) == 1
+    assert ev[0]["plugin"] == "a"
+
+
+def test_lifecycle_time_window_filter(lifecycle_env):
+    _write_lifecycle(lifecycle_env, [
+        {"ts": 100, "plugin": "early", "from": 1, "to": 2},
+        {"ts": 500, "plugin": "inside", "from": 1, "to": 2},
+        {"ts": 900, "plugin": "late", "from": 1, "to": 2},
+    ])
+    ev = main._dsh_lifecycle_events(since_ms=200, until_ms=800)
+    assert [e["plugin"] for e in ev] == ["inside"]
+
+
+def test_lifecycle_summary_counts_failures_and_reloads(lifecycle_env):
+    """A FAILED arrival is Cordis's analogue of the paper's L-Raise -- an
+    activation rolled back -- and is the signal a state poll would miss."""
+    _write_lifecycle(lifecycle_env, [
+        {"ts": 1, "plugin": "good", "from": 1, "to": 2},      # -> active
+        {"ts": 2, "plugin": "bad", "from": 1, "to": 3, "error": "boom"},  # -> failed
+        {"ts": 3, "plugin": "good", "from": 2, "to": 1},      # active -> loading = reload
+        {"ts": 4, "plugin": "good", "from": 2, "to": 5},      # -> unloading
+    ])
+    s = main._dsh_lifecycle_summary(main._dsh_lifecycle_events())
+    assert s["transitions"] == 4
+    assert s["failed"] == 1
+    assert s["reloads"] == 1
+    assert s["unloads"] == 1
+    assert s["plugins"][0]["plugin"] == "bad"  # failures sort first
+    assert s["plugins"][0]["failed"] == 1
+
+
+def test_lifecycle_endpoint_reports_not_installed(lifecycle_env):
+    import asyncio
+    res = asyncio.run(main.dsh_lifecycle())
+    assert res["installed"] is False
+    assert res["events"] == []
+    assert res["correlation"] == "none"

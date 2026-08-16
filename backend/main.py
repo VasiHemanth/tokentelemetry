@@ -296,6 +296,15 @@ PI_SESSIONS_DIR = PI_DIR / "sessions"
 # _scan_dsh_sessions.
 DSH_DIR = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")).expanduser()
 DSH_SESSIONS_DIR = DSH_DIR / "sessions"
+# Plugin-lifecycle sidecar. DSH's persisted session log has a CLOSED vocabulary
+# (44 known event types; the read path rejects anything else), and Cordis emits
+# component lifecycle transitions only on its in-memory `internal/status` bus.
+# So a load/unload/failure is unobservable after the fact unless something
+# subscribes live. integrations/dsh-lifecycle-plugin/ is a TT-authored DSH
+# plugin that does exactly that and appends here — same push-based shape as
+# backend/omnigent_policy.py. Absent file = plugin not installed, which is the
+# normal case and must never be an error.
+DSH_LIFECYCLE_FILE = data_dir() / "dsh_lifecycle.jsonl"
 HF_DIR = HOME / ".cache/huggingface"
 def _opencode_dbs_in(d: Path) -> List[Path]:
     """DB files OpenCode may have written inside data dir ``d``, canonical first.
@@ -4346,6 +4355,133 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
         out.append(sess)
 
     return out
+
+
+# Cordis FiberState (vendor/cordis/src/fiber.ts) -> readable names. It is a
+# `const enum`, so it inlines to these ordinals at runtime.
+_DSH_FIBER_STATES: Dict[int, str] = {
+    0: "pending", 1: "loading", 2: "active",
+    3: "failed", 4: "disposed", 5: "unloading",
+}
+
+
+def _dsh_lifecycle_events(since_ms: Optional[float] = None,
+                          until_ms: Optional[float] = None,
+                          limit: int = 500) -> List[Dict[str, Any]]:
+    """Read plugin lifecycle transitions from the sidecar, newest last.
+
+    The file is append-only JSONL written by the TT DSH plugin. It is read
+    defensively: a missing file (plugin not installed) yields [], and a torn
+    final line (we may read mid-append) is skipped rather than raising.
+
+    `from`/`to` are Cordis FiberState values. They arrive as ints because
+    FiberState is a `const enum` and inlines numerically, but the plugin writes
+    the names too; we accept either and normalise to names.
+    """
+    if not DSH_LIFECYCLE_FILE.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(DSH_LIFECYCLE_FILE, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue  # torn/partial line
+                if not isinstance(row, dict):
+                    continue
+                ts = row.get("ts")
+                if not isinstance(ts, (int, float)):
+                    continue
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+
+                def _state(v):
+                    if isinstance(v, str) and v:
+                        return v.lower()
+                    return _DSH_FIBER_STATES.get(v) if isinstance(v, int) else None
+
+                out.append({
+                    "ts": ts,
+                    "plugin": row.get("plugin") or row.get("name") or "unknown",
+                    "entry_id": row.get("entry_id"),
+                    "from": _state(row.get("from")),
+                    "to": _state(row.get("to")),
+                    "error": row.get("error") or None,
+                })
+    except OSError:
+        return []
+    out.sort(key=lambda r: r["ts"])
+    return out[-limit:] if limit and len(out) > limit else out
+
+
+def _dsh_lifecycle_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Roll transitions up into the numbers a UI wants.
+
+    `failed` counts arrivals in the FAILED state -- the Cordis analogue of the
+    paper's L-Raise (an activation whose effects were rolled back), which is the
+    transition most worth surfacing and the one a state poll would miss.
+    """
+    plugins: Dict[str, Dict[str, Any]] = {}
+    failed = reloads = unloads = 0
+    for e in events:
+        p = plugins.setdefault(e["plugin"], {"plugin": e["plugin"], "transitions": 0,
+                                             "failed": 0, "final_state": None})
+        p["transitions"] += 1
+        p["final_state"] = e["to"]
+        if e["to"] == "failed":
+            p["failed"] += 1
+            failed += 1
+        elif e["to"] == "loading" and e["from"] in ("active", "failed", "disposed"):
+            reloads += 1
+        elif e["to"] == "unloading":
+            unloads += 1
+    return {
+        "transitions": len(events),
+        "plugins": sorted(plugins.values(), key=lambda p: (-p["failed"], p["plugin"])),
+        "failed": failed,
+        "reloads": reloads,
+        "unloads": unloads,
+        "first_ts": events[0]["ts"] if events else None,
+        "last_ts": events[-1]["ts"] if events else None,
+    }
+
+
+@app.get("/dsh/lifecycle")
+async def dsh_lifecycle(session_id: Optional[str] = None, limit: int = 500):
+    """Plugin lifecycle transitions recorded by the TT DSH plugin.
+
+    With `session_id`, the window is narrowed to that session's own span, since
+    Cordis fibers are runtime-global and carry no session id -- correlation is
+    by time and is therefore approximate, which `correlation` states outright
+    rather than implying the events belong to the session.
+    """
+    since = until = None
+    correlation = "none"
+    if session_id:
+        sess_file = _dsh_session_file(session_id)
+        if sess_file is None:
+            return {"error": "Not found"}
+        parsed = _dsh_parse_session(sess_file)
+        if parsed:
+            rows = _dsh_read_events(sess_file) or []
+            created = rows[0].get("createdAt") if rows else None
+            if isinstance(created, (int, float)):
+                since = created
+            until = parsed["timestamp"].timestamp() * 1000
+            correlation = "time-window"
+    events = _dsh_lifecycle_events(since_ms=since, until_ms=until, limit=limit)
+    return {
+        "installed": DSH_LIFECYCLE_FILE.exists(),
+        "correlation": correlation,
+        "events": events,
+        **_dsh_lifecycle_summary(events),
+    }
 
 
 def _dsh_session_file(session_id: str) -> Optional[Path]:
