@@ -288,6 +288,14 @@ OLLAMA_DIR = HOME / ".ollama"
 # _scan_pi_sessions.
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
+# DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
+# multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
+# compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
+# session.jsonl.zstd; each file's own header carries `cwd`, so we don't need
+# to reverse DSH's lossy path-slugging to resolve the project. See
+# _scan_dsh_sessions.
+DSH_DIR = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")).expanduser()
+DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 HF_DIR = HOME / ".cache/huggingface"
 def _opencode_dbs_in(d: Path) -> List[Path]:
     """DB files OpenCode may have written inside data dir ``d``, canonical first.
@@ -4037,6 +4045,254 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+def _dsh_read_events(path: Path) -> Optional[List[Dict[str, Any]]]:
+    """Decompress + parse one DSH session.jsonl.zstd into JSON rows.
+
+    Returns None if the optional `zstandard` dependency isn't installed or the
+    file can't be read/decoded -- callers must treat that as "skip this
+    session", the same as every other harness whose store is simply absent.
+    stream_reader decodes concatenated zstd frames as one logical stream
+    (standard zstd framing), so an appended/resumed session file is handled
+    without special-casing.
+    """
+    try:
+        import zstandard
+    except ImportError:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            dctx = zstandard.ZstdDecompressor()
+            with dctx.stream_reader(fh) as reader:
+                text = reader.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    rows: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
+    """Parse one DSH session file into a summary dict, or None if unreadable.
+
+    Usage accounting: DSH emits a per-(turn,step) usage sample on the
+    streaming `assistant/chunk` event and again, identically, on the final
+    `assistant/message` -- both are the SAME sample, not additive deltas (DSH's
+    own usage-projection code replaces rather than sums same-(turn,step)
+    values). We key a dict by (turn,step) and let the later event win, then
+    sum across keys once -- summing every usage-bearing event naively would
+    double count every turn.
+
+    Cost: DSH has no cost/pricing concept anywhere (confirmed in its source --
+    a NO_COST constant zeroes it before it ever reaches a consumer), and one
+    session can span multiple providers/models (e.g. an ollama call that
+    errors, retried on cerebras). So cost is recomputed per (turn,step) with
+    that step's own provider+model via TokenTelemetry's own pricing, and
+    summed -- never priced once from a single session-level model.
+    """
+    rows = _dsh_read_events(path)
+    if not rows:
+        return None
+    header = rows[0]
+    if header.get("type") != "session":
+        return None
+    sid = header.get("id")
+    if not isinstance(sid, str) or not sid:
+        return None
+
+    usage_by_step: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    cur_provider = cur_model = None
+    last_provider = last_model = None
+    display = None
+    last_ts: Optional[float] = None
+    tool_counts: Dict[str, int] = {}
+
+    for row in rows[1:]:
+        rtype = row.get("type")
+        data = row.get("data")
+        if not isinstance(data, dict):
+            continue
+
+        t = row.get("time")
+        if isinstance(t, (int, float)) and t > 0 and (last_ts is None or t > last_ts):
+            last_ts = t
+
+        if rtype == "request/context":
+            cur_provider = data.get("provider") or cur_provider
+            cur_model = data.get("model") or cur_model
+
+        elif rtype == "user/message" and display is None:
+            for block in data.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = (block.get("text") or "").strip()
+                    if text and not text.startswith("<system-reminder>"):
+                        display = text[:120]
+                        break
+
+        elif rtype == "tool/call":
+            name = data.get("name")
+            if isinstance(name, str) and name:
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+
+        elif rtype == "assistant/chunk":
+            chunk = data.get("chunk")
+            if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                key = (data.get("turn"), data.get("step"))
+                usage_by_step[key] = {**(chunk.get("usage") or {}), "provider": cur_provider, "model": cur_model}
+                last_provider, last_model = cur_provider, cur_model
+
+        elif rtype == "assistant/message":
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                key = (data.get("turn"), data.get("step"))
+                source = ((data.get("message") or {}).get("source")) or {}
+                msg_provider = source.get("provider") or cur_provider
+                msg_model = source.get("model") or cur_model
+                usage_by_step[key] = {**usage, "provider": msg_provider, "model": msg_model}
+                last_provider, last_model = msg_provider, msg_model
+
+    tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0, "total": 0}
+    cost = 0.0
+    models_used: List[str] = []
+    for u in usage_by_step.values():
+        in_t = int(u.get("inputTokens") or 0)
+        out_t = int(u.get("outputTokens") or 0)
+        cr = int(u.get("cacheReadTokens") or 0)
+        cw = int(u.get("cacheWriteTokens") or 0)
+        reas = int(u.get("reasoningTokens") or 0)
+        tokens["input"] += in_t
+        tokens["output"] += out_t
+        tokens["cached"] += cr
+        tokens["cache_creation"] += cw
+        tokens["reasoning"] += reas
+        model = u.get("model")
+        if model and model not in models_used:
+            models_used.append(model)
+        cost += calculate_cost(model, in_t, out_t, cr, cache_creation_tokens=cw, provider=u.get("provider"))
+    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+
+    if last_ts:
+        ts = _aware(datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc))
+    elif isinstance(header.get("createdAt"), (int, float)) and header["createdAt"] > 0:
+        ts = _aware(datetime.fromtimestamp(header["createdAt"] / 1000, tz=timezone.utc))
+    else:
+        ts = _file_mtime_utc(path)
+
+    return {
+        "id": sid,
+        "project": header.get("cwd") or "unknown",
+        "origin": header.get("origin"),
+        "parent_session": header.get("parentSession"),
+        "delegation_depth": header.get("delegationDepth") or 0,
+        "agent_preset": header.get("agentPreset"),
+        "timestamp": ts,
+        "display": display,
+        "tokens": tokens,
+        "cost": cost,
+        "model": last_model,
+        "models_used": models_used,
+        "provider": last_provider,
+        "tool_counts": tool_counts,
+        "path": path,
+    }
+
+
+def _scan_dsh_sessions() -> List[Dict[str, Any]]:
+    """Scan DeepSeek Harness (DSH) sessions under ~/.dsh/sessions/.
+
+    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session.jsonl.zstd
+    Each file's own header carries `cwd`, so we glob for session files directly
+    rather than reversing DSH's lossy (251-char-truncated) path slug. Requires
+    the optional `zstandard` dependency; DSH is skipped silently, like any
+    other absent harness, when it isn't installed or no sessions exist.
+
+    Delegation: DSH stamps subagent children with an explicit
+    origin="subagent" + parentSession in the header -- no directory-naming or
+    timing inference needed. Children are folded into the parent's
+    `delegation` block (subagents / delegated_total / delegated_cost),
+    matching the convention used elsewhere (see _scan_muse_sessions) rather
+    than surfaced as separate top-level sessions. A `session-`-prefixed id
+    that carries a parentSession but no origin (an in-process "fork") has no
+    observed example on real data -- left as a standalone top-level session
+    rather than guessing at rollup semantics that can't be verified.
+    """
+    if not DSH_SESSIONS_DIR.exists():
+        return []
+
+    aliases = _load_project_aliases()
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for sess_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+        parsed = _dsh_parse_session(sess_file)
+        if parsed:
+            by_id[parsed["id"]] = parsed
+    if not by_id:
+        return []
+
+    children_of: Dict[str, List[Dict[str, Any]]] = {}
+    for parsed in by_id.values():
+        parent_id = parsed.get("parent_session")
+        if parsed.get("origin") == "subagent" and parent_id in by_id:
+            children_of.setdefault(parent_id, []).append(parsed)
+
+    out: List[Dict[str, Any]] = []
+    for sid, parsed in by_id.items():
+        if parsed.get("origin") == "subagent" and parsed.get("parent_session") in by_id:
+            continue  # folded into its parent below, not a top-level session
+
+        kids = children_of.get(sid, [])
+        delegation = None
+        if kids:
+            subagents = [{
+                "agent_id": kid["id"], "agent_type": "dsh-subagent", "model": kid["model"],
+                "tokens": kid["tokens"], "cost": kid["cost"],
+            } for kid in kids]
+            delegated_tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0}
+            for kid in kids:
+                for key in delegated_tokens:
+                    delegated_tokens[key] += kid["tokens"][key]
+            delegated_total = sum(delegated_tokens.values())
+            delegated_cost = sum(s["cost"] for s in subagents)
+            delegation = {
+                "supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                "subagents": subagents, "delegated_total": delegated_total, "delegated_cost": delegated_cost,
+                "by_type": {"dsh-subagent": {"count": len(subagents), "total": delegated_total, "cost": delegated_cost}},
+            }
+
+        tool_counts = parsed["tool_counts"]
+        sess = {
+            "id": sid,
+            "agent": "dsh",
+            "project": aliases.get(parsed["project"], parsed["project"]),
+            "timestamp": parsed["timestamp"],
+            "display": parsed["display"] or f"DeepSeek Harness session {sid[-8:]}",
+            "text": parsed["display"],
+            "tokens": parsed["tokens"],
+            "mcp_tools": [t for t in tool_counts if isinstance(t, str) and t.startswith("mcp")],
+            "has_plan": False,
+            "plans": [],
+            "model": parsed["model"],
+            "provider": parsed["provider"],
+            "artifacts": [{"name": "session.jsonl.zstd", "path": str(parsed["path"]), "type": "document"}],
+            "cost": parsed["cost"],
+            "dsh": {"agent_preset": parsed["agent_preset"], "models_used": parsed["models_used"]},
+        }
+        if delegation:
+            sess["delegation"] = delegation
+        _attach_tool_usage(sess, tool_counts)
+        out.append(sess)
+
+    return out
+
+
 def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
     """Reconstruct a Copilot chat session object from VS Code's newer .jsonl
     delta-log format (VS Code ~1.100+ writes <id>.jsonl instead of <id>.json).
@@ -6466,6 +6722,9 @@ def _scan_sessions_sync():
 
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
+
+    # 8b3. DeepSeek Harness (DSH) — zstd-compressed JSONL under ~/.dsh/sessions/
+    sessions.extend(_scan_dsh_sessions())
 
     # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
     # cwd, so they naturally participate in project/worktree navigation.
