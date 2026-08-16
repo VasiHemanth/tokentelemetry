@@ -158,7 +158,7 @@ Full docs site: https://tokentelemetry.com/docs
 - [Introduction](https://tokentelemetry.com/docs): What TokenTelemetry is and who it's for.
 - [Installation](https://tokentelemetry.com/docs/installation): One-line curl install, Windows PowerShell script, or clone from source.
 - [Quick Start](https://tokentelemetry.com/docs/quick-start): First launch, agent auto-detection, and opening the dashboard.
-- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 15 coding agents and Hermes, how each is detected, and what data each captures.
+- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 16 coding agents and Hermes, how each is detected, and what data each captures.
 
 ### Features
 
