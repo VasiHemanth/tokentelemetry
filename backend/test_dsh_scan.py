@@ -485,3 +485,83 @@ def test_lifecycle_endpoint_reports_not_installed(lifecycle_env):
     assert res["installed"] is False
     assert res["events"] == []
     assert res["correlation"] == "none"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox / approval posture
+# ---------------------------------------------------------------------------
+
+def test_captures_sandbox_and_approval_posture(scan_env):
+    events = [
+        {"type": "permission/preset", "seq": 1, "time": 900, "data": {"preset": "workspace-write"}},
+        {"type": "sandbox/mode", "seq": 2, "time": 901, "data": {"mode": "workspace-write"}},
+        {"type": "approval/policy", "seq": 3, "time": 902, "data": {"policy": "ask"}},
+    ] + _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-sandbox", {}, events)
+
+    sb = main._scan_dsh_sessions()[0]["dsh"]["sandbox"]
+    assert sb["permission_preset"] == "workspace-write"
+    assert sb["mode"] == "workspace-write"
+    assert sb["approval"] == "ask"
+    # set for this session, not inherited
+    assert sb["mode_source"] == "session"
+    assert sb["approval_source"] == "session"
+
+
+def test_subagent_carries_its_own_inherited_posture(scan_env):
+    """A delegated child inherits sandbox/approval and can be MORE permissive
+    than its parent -- real data: parent on "ask" spawns a child on "never".
+    The child is folded into the parent and has no page of its own, so its
+    posture must ride on the subagent entry or it becomes invisible."""
+    parent_events = [
+        {"type": "sandbox/mode", "seq": 1, "time": 900, "data": {"mode": "workspace-write"}},
+        {"type": "approval/policy", "seq": 2, "time": 901, "data": {"policy": "ask"}},
+    ] + _usage_events(turn=1, step=1, in_t=100, out_t=20)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-parent", {}, parent_events)
+
+    child_events = [
+        {"type": "sandbox/mode", "seq": 1, "time": 950,
+         "data": {"mode": "workspace-write", "source": "delegation"}},
+        {"type": "approval/policy", "seq": 2, "time": 951,
+         "data": {"policy": "never", "source": "delegation"}},
+    ] + _usage_events(turn=1, step=1, in_t=50, out_t=10)
+    _write_dsh_session(
+        scan_env / "dsh_sessions", "--proj--", "child-uuid-1",
+        {"origin": "subagent", "parentSession": "session-parent", "delegationDepth": 1},
+        child_events,
+    )
+
+    parent = main._scan_dsh_sessions()[0]
+    assert parent["dsh"]["sandbox"]["approval"] == "ask"
+
+    child = parent["delegation"]["subagents"][0]
+    assert child["sandbox"]["approval"] == "never"
+    assert child["sandbox"]["approval_source"] == "delegation"
+
+
+def test_sandbox_absent_when_log_records_none(scan_env):
+    events = _usage_events(turn=1, step=1, in_t=10, out_t=5)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-nosb", {}, events)
+    assert main._scan_dsh_sessions()[0]["dsh"]["sandbox"] == {}
+
+
+def test_subagent_fork_is_treated_as_a_subagent(scan_env):
+    """DSH's subagent_fork tool still stamps origin="subagent" on the child
+    (verified on real data), so it folds into the parent like `subagent` does
+    rather than hitting the unverified standalone-fork path."""
+    parent_events = _usage_events(turn=1, step=1, in_t=100, out_t=20) + [
+        {"type": "tool/call", "seq": 20, "time": 1786850753030,
+         "data": {"turn": 1, "step": 1, "callId": "f1", "name": "subagent_fork",
+                  "arguments": '{"description":"child work"}'}},
+    ]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-forkparent", {}, parent_events)
+    _write_dsh_session(
+        scan_env / "dsh_sessions", "--proj--", "forked-uuid",
+        {"origin": "subagent", "parentSession": "session-forkparent", "delegationDepth": 1},
+        _usage_events(turn=1, step=1, in_t=5, out_t=1),
+    )
+
+    out = main._scan_dsh_sessions()
+    assert {s["id"] for s in out} == {"session-forkparent"}
+    assert out[0]["delegation"]["spawn_count"] == 1
+    assert out[0]["tool_counts"]["subagent_fork"] == 1

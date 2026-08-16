@@ -79,6 +79,15 @@ interface Session {
     providers_used?: string[];
     skills_catalog?: { name: string; description?: string }[];
     tools_available?: string[];
+    /** File-sandbox + approval posture. `*_source: "delegation"` means the
+     *  value was inherited from a parent rather than set for this session. */
+    sandbox?: {
+      mode?: string;
+      mode_source?: string;
+      approval?: string;
+      approval_source?: string;
+      permission_preset?: string;
+    };
   };
   parent_session_id?: string | null;
   end_reason?: string | null;
@@ -1431,6 +1440,21 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
               {s.cost != null && <span>{formatCost(s.cost)} · </span>}
               {typeof s.duration_ms === "number" && <span>{(s.duration_ms / 1000).toFixed(1)}s</span>}
             </div>
+            {/* A delegated child inherits its sandbox/approval posture and can
+                end up more permissive than the session that spawned it (DSH
+                runs children on approval "never" under an "ask" parent). The
+                child has no page of its own, so surface it here. */}
+            {s.sandbox?.approval && (
+              <div className="text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5">
+                <span title="File-sandbox mode and approval policy this subagent ran under">
+                  sandbox {s.sandbox.mode || "?"} · approval{" "}
+                  <span className={s.sandbox.approval === "never" ? "text-[var(--tt-warn-fg)]" : ""}>
+                    {s.sandbox.approval}
+                  </span>
+                  {s.sandbox.approval_source === "delegation" && " (inherited)"}
+                </span>
+              </div>
+            )}
           </button>
         ))}
       </div>
@@ -1775,6 +1799,18 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 ))}
               </div>
             </details>
+          )}
+          {ctx.dsh.sandbox?.mode && (
+            <Row
+              k="File Sandbox"
+              v={ctx.dsh.sandbox.mode + (ctx.dsh.sandbox.mode_source === "delegation" ? " (inherited)" : "")}
+            />
+          )}
+          {ctx.dsh.sandbox?.approval && (
+            <Row
+              k="Approval Policy"
+              v={ctx.dsh.sandbox.approval + (ctx.dsh.sandbox.approval_source === "delegation" ? " (inherited)" : "")}
+            />
           )}
           {ctx.dsh.agent_preset && (
             <Row

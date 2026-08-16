@@ -4140,6 +4140,13 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     preset_chain: List[str] = []
     if isinstance(header.get("agentPreset"), str) and header["agentPreset"]:
         preset_chain.append(header["agentPreset"])
+    # Sandbox / approval posture. DSH runs every session under a file-sandbox
+    # mode and an approval policy, and a delegated child INHERITS them with
+    # `source: "delegation"` -- real example on this machine: a parent running
+    # approval "ask" spawned a subagent running "never", i.e. the child could
+    # act without prompting. That is a trust-boundary fact, so the source is
+    # kept rather than flattened into the value.
+    sandbox: Dict[str, Any] = {}
 
     for row in rows[1:]:
         rtype = row.get("type")
@@ -4156,6 +4163,20 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
             cur_model = data.get("model") or cur_model
             if cur_provider and cur_provider not in providers_used:
                 providers_used.append(cur_provider)
+
+        elif rtype == "sandbox/mode":
+            if isinstance(data.get("mode"), str):
+                sandbox["mode"] = data["mode"]
+                sandbox["mode_source"] = data.get("source") or "session"
+
+        elif rtype == "approval/policy":
+            if isinstance(data.get("policy"), str):
+                sandbox["approval"] = data["policy"]
+                sandbox["approval_source"] = data.get("source") or "session"
+
+        elif rtype == "permission/preset":
+            if isinstance(data.get("preset"), str):
+                sandbox["permission_preset"] = data["preset"]
 
         elif rtype == "agent-preset/selected":
             preset = data.get("agentPreset")
@@ -4244,6 +4265,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         "delegation_depth": header.get("delegationDepth") or 0,
         "agent_preset": preset_chain[-1] if preset_chain else header.get("agentPreset"),
         "preset_chain": preset_chain,
+        "sandbox": sandbox,
         "timestamp": ts,
         "display": display,
         "tokens": tokens,
@@ -4308,6 +4330,11 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             subagents = [{
                 "agent_id": kid["id"], "agent_type": "dsh-subagent", "model": kid["model"],
                 "tokens": kid["tokens"], "cost": kid["cost"],
+                # A child inherits its sandbox/approval posture from the parent
+                # and can end up more permissive than it (approval "never" under
+                # a parent on "ask"), so carry it per child rather than assuming
+                # the parent's posture describes the whole tree.
+                "sandbox": kid["sandbox"],
             } for kid in kids]
             delegated_tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0}
             for kid in kids:
@@ -4343,6 +4370,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             "dsh": {
                 "agent_preset": parsed["agent_preset"],
                 "preset_chain": parsed["preset_chain"],
+                "sandbox": parsed["sandbox"],
                 "models_used": parsed["models_used"],
                 "providers_used": parsed["providers_used"],
                 "skills_catalog": parsed["skills_catalog"],
