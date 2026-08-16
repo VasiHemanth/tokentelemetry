@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-16",
+      "title": "DeepSeek Harness support",
+      "highlights": [
+        {
+          "title": "DeepSeek Harness (dsh) sessions are tracked",
+          "description": "TokenTelemetry now discovers DeepSeek Harness sessions from their local logs, showing tokens, cost, and model/provider per session (DSH is multi-provider, so a session can mix a free local Ollama model with a paid cloud one and each part is priced correctly). Subagent sessions DSH spawns are linked back to the session that started them.",
+          "href": "/"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-15",
       "title": "Install fixes for Linux, faster setup with uv",
       "highlights": [

@@ -95,7 +95,7 @@ The **Split brain** toggle in the header splits the trace into two synchronized 
 
 ## Delegation & sub-agents
 
-Many agents farm work out to sub-agents — Claude Code's `Task` tool, Hermes' `delegate_task`, and similar. When a session spawns sub-agents, the trace attributes their token spend and cost back to the parent and lets you drill into each child's own trace.
+Many agents farm work out to sub-agents — Claude Code's `Task` tool, Hermes' `delegate_task`, DeepSeek Harness' `subagent` and `subagent_fork`, and similar. When a session spawns sub-agents, the trace attributes their token spend and cost back to the parent and lets you drill into each child's own trace.
 
 ![Delegated work and the sub-agent inspector in a session trace](/screenshots/trace-delegated-work.png)
 
@@ -114,6 +114,14 @@ The right-hand inspector's **Context** tab carries a **Sub-agents** list — the
 ### Parent session link
 
 The link works the other way too. Open a sub-agent session on its own and a **parent session** link appears in its header; clicking it opens the parent trace. Between the two you can walk the full delegation chain from any point — down from a parent into the sub-agents it spawned, or up from a child to the session that spawned it.
+
+## DeepSeek Harness sessions
+
+DeepSeek Harness resolves its skills, tools, and providers at run time, so the inspector's **Context** tab reads a **Runtime Capabilities** panel back from that session's own log instead of scanning what is installed now. Two sessions in the same folder can legitimately differ: a `cordis`-preset session loaded 8 skills and 32 tools where `standard`-preset sessions alongside it loaded 6 and 25. The panel lists **Skills Loaded** and **Tools Available** as they were resolved for that run, the **Agent Preset** it ran under, and the **Providers** the session routed to. A single DSH session can span several providers and models.
+
+Below that sit **File Sandbox** and **Approval Policy**: the sandbox mode (for example `workspace-write`) and the approval policy (for example `ask`). A delegated sub-agent inherits both from its parent and can end up more permissive than it, so an inherited value is marked as inherited on the child.
+
+The latency rows report **LLM Time** and **Tool Time** separately, alongside **TTFT (avg)**, **Throughput** in tok/s, and **Cache Hit**. These match the figures DSH prints in its own UI footer.
 
 ## Tips
 

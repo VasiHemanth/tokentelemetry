@@ -67,6 +67,38 @@ interface Session {
   source_subtype?: string;
   /** Hermes-only: owning profile (~/.hermes/profiles/<name>); absent = default home */
   hermes_profile?: string;
+  /** DSH-only: capability set the harness resolved at RUN TIME for this
+   *  session, read back from its own log. DSH loads skills/plugins dynamically,
+   *  so this legitimately differs between sessions in the same workspace and
+   *  must never be substituted with a scan of what is installed on disk. */
+  dsh?: {
+    agent_preset?: string;
+    /** Presets the session ran under, in order; >1 means it hot-swapped. */
+    preset_chain?: string[];
+    models_used?: string[];
+    providers_used?: string[];
+    skills_catalog?: { name: string; description?: string }[];
+    tools_available?: string[];
+    /** File-sandbox + approval posture. `*_source: "delegation"` means the
+     *  value was inherited from a parent rather than set for this session. */
+    sandbox?: {
+      mode?: string;
+      mode_source?: string;
+      approval?: string;
+      approval_source?: string;
+      permission_preset?: string;
+    };
+    /** Latency breakdown derived from the log; matches DSH's own UI footer. */
+    metrics?: {
+      turns?: number;
+      steps?: number;
+      llm_ms?: number | null;
+      tool_ms?: number | null;
+      ttft_ms_avg?: number | null;
+      output_tok_per_sec?: number | null;
+      cache_hit_pct?: number | null;
+    };
+  };
   parent_session_id?: string | null;
   end_reason?: string | null;
   /** Hermes-only: how the cost figure was arrived at (absent on other agents). */
@@ -542,8 +574,9 @@ export default function SessionDetailPage() {
 
       // 5. Delegation overlay: subagent spawns + delegated token/cost attribution.
       // Only agents whose logs record spawns at all (claude full, cursor count-only,
-      // grok/codex/antigravity/opencode/hermes parent-child links).
-      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity"].includes(agent)) {
+      // grok/codex/antigravity/opencode/hermes parent-child links, dsh full via
+      // its children's own session logs).
+      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh"].includes(agent)) {
         apiFetch(`/sessions/${id}/delegation?agent=${agent}`)
           .then(res => res.json())
           .then(data => setDelegation(data && data.supported ? data : null))
@@ -743,18 +776,26 @@ export default function SessionDetailPage() {
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
+      // DSH's runtime-resolved capability set for THIS session (see backend).
+      dsh: agent === "dsh" ? sessionInfo?.dsh : undefined,
     };
   }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
 
-  // Fetch per-project config (skills + MCPs) once we know the cwd
+  // Fetch per-project config (skills + MCPs) once we know the cwd.
+  // NOTE: /config reports what is installed for CLAUDE CODE on disk, so it must
+  // not be shown for agents that resolve their own capabilities. DSH loads
+  // skills/plugins at runtime and records the live catalog in its session log
+  // (surfaced as sessionInfo.dsh), so rendering Claude's list there would
+  // assert capabilities the run never had.
   useEffect(() => {
+    if (agent === "dsh") return;
     const cwd = events.find((e) => e.type === "session_meta")?.payload?.cwd || sessionInfo?.project;
     if (!cwd) return;
     apiFetch(`/config?project=${encodeURIComponent(cwd)}`)
       .then((r) => r.json())
       .then(setProjectConfig)
       .catch(() => {});
-  }, [events, sessionInfo]);
+  }, [events, sessionInfo, agent]);
 
   // Map each tool_use_id -> the user event carrying its tool_result. Built once
   // per events change so the tool summary and waterfall can pair a call to its
@@ -1409,6 +1450,21 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
               {s.cost != null && <span>{formatCost(s.cost)} · </span>}
               {typeof s.duration_ms === "number" && <span>{(s.duration_ms / 1000).toFixed(1)}s</span>}
             </div>
+            {/* A delegated child inherits its sandbox/approval posture and can
+                end up more permissive than the session that spawned it (DSH
+                runs children on approval "never" under an "ask" parent). The
+                child has no page of its own, so surface it here. */}
+            {s.sandbox?.approval && (
+              <div className="text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5">
+                <span title="File-sandbox mode and approval policy this subagent ran under">
+                  sandbox {s.sandbox.mode || "?"} · approval{" "}
+                  <span className={s.sandbox.approval === "never" ? "text-[var(--tt-warn-fg)]" : ""}>
+                    {s.sandbox.approval}
+                  </span>
+                  {s.sandbox.approval_source === "delegation" && " (inherited)"}
+                </span>
+              </div>
+            )}
           </button>
         ))}
       </div>
@@ -1710,6 +1766,96 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 ))}
               </div>
             </details>
+          )}
+        </div>
+      )}
+
+      {ctx.dsh && ((ctx.dsh.skills_catalog?.length ?? 0) > 0 || (ctx.dsh.tools_available?.length ?? 0) > 0) && (
+        <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+            <Settings2 size={12} /> Runtime Capabilities
+          </div>
+          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+            Resolved by DSH at run time and read back from this session&apos;s log — not a scan of what is installed now.
+          </div>
+          {(ctx.dsh.skills_catalog?.length ?? 0) > 0 && (
+            <details open>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                Skills Loaded ({ctx.dsh.skills_catalog.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.dsh.skills_catalog.map((s: any, i: number) => (
+                  <span
+                    key={i}
+                    title={s.description || ""}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
+                  >
+                    {s.name}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
+          {(ctx.dsh.tools_available?.length ?? 0) > 0 && (
+            <details>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                Tools Available ({ctx.dsh.tools_available.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.dsh.tools_available.map((t: string, i: number) => (
+                  <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
+          {ctx.dsh.metrics && (ctx.dsh.metrics.llm_ms || ctx.dsh.metrics.tool_ms) && (
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+                Latency Breakdown
+              </div>
+              {/* Wall-clock split. Tool time routinely dwarfs model time, which
+                  is invisible if you only look at total duration. */}
+              {ctx.dsh.metrics.llm_ms != null && (
+                <Row k="LLM Time" v={`${(ctx.dsh.metrics.llm_ms / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.tool_ms != null && (
+                <Row k="Tool Time" v={`${(ctx.dsh.metrics.tool_ms / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.ttft_ms_avg != null && (
+                <Row k="TTFT (avg)" v={`${(ctx.dsh.metrics.ttft_ms_avg / 1000).toFixed(1)}s`} />
+              )}
+              {ctx.dsh.metrics.output_tok_per_sec != null && (
+                <Row k="Throughput" v={`${ctx.dsh.metrics.output_tok_per_sec} tok/s`} />
+              )}
+              {ctx.dsh.metrics.cache_hit_pct != null && (
+                <Row k="Cache Hit" v={`${ctx.dsh.metrics.cache_hit_pct}%`} />
+              )}
+            </div>
+          )}
+          {ctx.dsh.sandbox?.mode && (
+            <Row
+              k="File Sandbox"
+              v={ctx.dsh.sandbox.mode + (ctx.dsh.sandbox.mode_source === "delegation" ? " (inherited)" : "")}
+            />
+          )}
+          {ctx.dsh.sandbox?.approval && (
+            <Row
+              k="Approval Policy"
+              v={ctx.dsh.sandbox.approval + (ctx.dsh.sandbox.approval_source === "delegation" ? " (inherited)" : "")}
+            />
+          )}
+          {ctx.dsh.agent_preset && (
+            <Row
+              k="Agent Preset"
+              v={(ctx.dsh.preset_chain?.length ?? 0) > 1
+                ? `${ctx.dsh.preset_chain.join(" → ")} (switched mid-session)`
+                : ctx.dsh.agent_preset}
+            />
+          )}
+          {(ctx.dsh.providers_used?.length ?? 0) > 0 && (
+            <Row k="Providers" v={ctx.dsh.providers_used.join(", ")} />
           )}
         </div>
       )}

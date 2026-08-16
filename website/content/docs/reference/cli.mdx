@@ -81,6 +81,7 @@ node bin/cli.js [options]     # cross-platform
 | `TT_MUSE_SESSIONS_DIR` | Path to Muse Code's session directory. Default: `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/`. Useful for a mounted or relocated agent data directory. |
 | `TT_PRIME_SESSIONS_DIR` | Path to Prime Agent's session directory. Default: `~/.prime/agent/sessions/`. Useful for a mounted or relocated agent data directory. |
 | `PRIME_AGENT_SESSION_DIR` | Prime Agent's own session-directory override. TokenTelemetry honors it when `TT_PRIME_SESSIONS_DIR` is not set. |
+| `DSH_HOME` | DeepSeek Harness' own home-directory override. Default: `~/.dsh/`; TokenTelemetry reads sessions from `<DSH_HOME>/sessions/`. |
 
 ### Summarizer backends
 

@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 15 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 16 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -24,6 +24,7 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Pi** | Pi Coding Agent | `~/.pi/agent/sessions/` | tokens, traces, cost, model, provider |
 | **Muse Code** | Meta | `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/` | tokens, traces, model, subagents |
 | **Prime Agent** | Prime Intellect | `~/.prime/agent/sessions/` | tokens, traces, reported cost, model, active branch |
+| **DeepSeek Harness** | DeepSeek | `~/.dsh/sessions/` | tokens, traces, cost, model, provider, subagents, skills/tools, latency |
 
 ## Autonomous agents
 
@@ -82,6 +83,14 @@ Muse Code writes date-sharded JSONL logs to `${XDG_DATA_HOME:-~/.local/share}/mu
 ### Prime Agent
 
 Prime Agent writes one JSONL session tree per file in `~/.prime/agent/sessions/`. TokenTelemetry follows the active branch and its ancestry so the trace mirrors the conversation a user sees, while preserving reported token totals, cost, and model metadata. Set `TT_PRIME_SESSIONS_DIR` (or Prime's `PRIME_AGENT_SESSION_DIR`) when the sessions directory is relocated.
+
+### DeepSeek Harness
+
+DeepSeek Harness (the `dsh` CLI, npm `@deepseek-ai/dsh`) writes one zstd-compressed JSONL log per session to `~/.dsh/sessions/<slugged-cwd>/<session-id>/session.jsonl.zstd`. TokenTelemetry reads it read-only and honors `DSH_HOME` when the directory is relocated. Decompression needs the `zstandard` Python package, which `backend/requirements.txt` already pins; a virtualenv created before that pin was added will skip DSH sessions silently, so re-run the launcher if none show up.
+
+DSH records no cost of its own (its source zeroes the cost metadata deliberately), and it is bring-your-own-key across providers, so TokenTelemetry prices each `(turn, step)` with that step's own provider and model. A session that runs part of its work on a local Ollama model and part on a paid cloud model is priced correctly on both halves, with the local segments falling through to [local-model pricing](/docs/configuration/local-models). Tokens are de-duplicated per step, because DSH emits the same usage sample twice: once on the streaming chunk, once on the final message.
+
+Subagents spawned with the `subagent` and `subagent_fork` tools are linked through DSH's own `parentSession` and `origin` header fields, then folded into the parent with per-child tokens and cost. What a DSH trace shows beyond that (runtime skills and tools, sandbox and approval policy, latency breakdown) is covered in [Traces](/docs/features/traces#deepseek-harness-sessions).
 
 ### Hermes Agent
 

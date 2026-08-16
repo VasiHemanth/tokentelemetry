@@ -288,6 +288,23 @@ OLLAMA_DIR = HOME / ".ollama"
 # _scan_pi_sessions.
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
+# DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
+# multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
+# compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
+# session.jsonl.zstd; each file's own header carries `cwd`, so we don't need
+# to reverse DSH's lossy path-slugging to resolve the project. See
+# _scan_dsh_sessions.
+DSH_DIR = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")).expanduser()
+DSH_SESSIONS_DIR = DSH_DIR / "sessions"
+# Plugin-lifecycle sidecar. DSH's persisted session log has a CLOSED vocabulary
+# (44 known event types; the read path rejects anything else), and Cordis emits
+# component lifecycle transitions only on its in-memory `internal/status` bus.
+# So a load/unload/failure is unobservable after the fact unless something
+# subscribes live. integrations/dsh-lifecycle-plugin/ is a TT-authored DSH
+# plugin that does exactly that and appends here — same push-based shape as
+# backend/omnigent_policy.py. Absent file = plugin not installed, which is the
+# normal case and must never be an error.
+DSH_LIFECYCLE_FILE = data_dir() / "dsh_lifecycle.jsonl"
 HF_DIR = HOME / ".cache/huggingface"
 def _opencode_dbs_in(d: Path) -> List[Path]:
     """DB files OpenCode may have written inside data dir ``d``, canonical first.
@@ -2854,6 +2871,7 @@ def _list_available_agents() -> list:
         agents.append("cline")
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
     if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
+    if DSH_DIR.exists(): agents.append("dsh")
     # SmallCode traces are project-local; cheaply check only the explicitly
     # configured extra roots here (the full project-derived root set is only
     # known after _scan_sessions_sync runs the other scanners).
@@ -4035,6 +4053,635 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
             out.append(sess)
 
     return out
+
+
+def _dsh_read_events(path: Path) -> Optional[List[Dict[str, Any]]]:
+    """Decompress + parse one DSH session.jsonl.zstd into JSON rows.
+
+    Returns None if the optional `zstandard` dependency isn't installed or the
+    file can't be read/decoded -- callers must treat that as "skip this
+    session", the same as every other harness whose store is simply absent.
+    stream_reader decodes concatenated zstd frames as one logical stream
+    (standard zstd framing), so an appended/resumed session file is handled
+    without special-casing.
+    """
+    try:
+        import zstandard
+    except ImportError:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            dctx = zstandard.ZstdDecompressor()
+            with dctx.stream_reader(fh) as reader:
+                text = reader.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    rows: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
+    """Parse one DSH session file into a summary dict, or None if unreadable.
+
+    Usage accounting: DSH emits a per-(turn,step) usage sample on the
+    streaming `assistant/chunk` event and again, identically, on the final
+    `assistant/message` -- both are the SAME sample, not additive deltas (DSH's
+    own usage-projection code replaces rather than sums same-(turn,step)
+    values). We key a dict by (turn,step) and let the later event win, then
+    sum across keys once -- summing every usage-bearing event naively would
+    double count every turn.
+
+    Cost: DSH has no cost/pricing concept anywhere (confirmed in its source --
+    a NO_COST constant zeroes it before it ever reaches a consumer), and one
+    session can span multiple providers/models (e.g. an ollama call that
+    errors, retried on cerebras). So cost is recomputed per (turn,step) with
+    that step's own provider+model via TokenTelemetry's own pricing, and
+    summed -- never priced once from a single session-level model.
+    """
+    rows = _dsh_read_events(path)
+    if not rows:
+        return None
+    header = rows[0]
+    if header.get("type") != "session":
+        return None
+    sid = header.get("id")
+    if not isinstance(sid, str) or not sid:
+        return None
+
+    usage_by_step: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    cur_provider = cur_model = None
+    last_provider = last_model = None
+    display = None
+    last_ts: Optional[float] = None
+    tool_counts: Dict[str, int] = {}
+    # DSH loads skills/plugins/tools DYNAMICALLY at runtime, so what a session
+    # actually had is only knowable from the session's own log -- a filesystem
+    # scan can't answer it (and the catalog genuinely differs between sessions
+    # in the same workspace). Both are captured from the log, never inferred.
+    skills_catalog: Dict[str, str] = {}   # name -> description, last write wins
+    tools_available: List[str] = []
+    providers_used: List[str] = []
+    # The header's agentPreset is only the STARTING preset. DSH can swap presets
+    # mid-session (an `agent-preset/selected` event), and the preset determines
+    # which skills/tools get loaded -- so reporting the header value alone
+    # misdescribes the run. Verified on real data: a session whose header says
+    # "standard" switched to "cordis" and ran with 8 skills / 32 tools instead
+    # of 6 / 25. Track the whole chain and report the effective (last) one.
+    preset_chain: List[str] = []
+    if isinstance(header.get("agentPreset"), str) and header["agentPreset"]:
+        preset_chain.append(header["agentPreset"])
+    # Sandbox / approval posture. DSH runs every session under a file-sandbox
+    # mode and an approval policy, and a delegated child INHERITS them with
+    # `source: "delegation"` -- real example on this machine: a parent running
+    # approval "ask" spawned a subagent running "never", i.e. the child could
+    # act without prompting. That is a trust-boundary fact, so the source is
+    # kept rather than flattened into the value.
+    sandbox: Dict[str, Any] = {}
+    # Latency breakdown. DSH's own UI footer shows these, and every formula
+    # below was checked against it on a real session (TTFT 1.5s, LLM 3.8s,
+    # tool 37.2s, 166 tok/s) before being written:
+    #   TTFT      = first assistant chunk - step/start
+    #   LLM time  = assistant finish - step/start          (per step, summed)
+    #   gen time  = assistant finish - first chunk         (drives tok/s)
+    #   tool time = tool/result - tool/call                (per call, summed)
+    # Tool time is wall-clock and can dwarf LLM time (a 41s session here was 37s
+    # of one subagent call), which is exactly why the split is worth keeping.
+    step_start: Dict[Tuple[Any, Any], float] = {}
+    step_first_chunk: Dict[Tuple[Any, Any], float] = {}
+    step_finish: Dict[Tuple[Any, Any], float] = {}
+    tool_call_at: Dict[str, float] = {}
+    tool_ms_total = 0.0
+    turns = steps = 0
+
+    for row in rows[1:]:
+        rtype = row.get("type")
+        data = row.get("data")
+        if not isinstance(data, dict):
+            continue
+
+        t = row.get("time")
+        if isinstance(t, (int, float)) and t > 0 and (last_ts is None or t > last_ts):
+            last_ts = t
+
+        if rtype == "request/context":
+            cur_provider = data.get("provider") or cur_provider
+            cur_model = data.get("model") or cur_model
+            if cur_provider and cur_provider not in providers_used:
+                providers_used.append(cur_provider)
+
+        elif rtype == "sandbox/mode":
+            if isinstance(data.get("mode"), str):
+                sandbox["mode"] = data["mode"]
+                sandbox["mode_source"] = data.get("source") or "session"
+
+        elif rtype == "approval/policy":
+            if isinstance(data.get("policy"), str):
+                sandbox["approval"] = data["policy"]
+                sandbox["approval_source"] = data.get("source") or "session"
+
+        elif rtype == "permission/preset":
+            if isinstance(data.get("preset"), str):
+                sandbox["permission_preset"] = data["preset"]
+
+        elif rtype == "agent-preset/selected":
+            preset = data.get("agentPreset")
+            if isinstance(preset, str) and preset and (not preset_chain or preset_chain[-1] != preset):
+                preset_chain.append(preset)
+
+        elif rtype == "request/header":
+            # The tool list handed to the model this request IS the runtime
+            # capability set (DSH tools + any MCP-backed ones), so read it
+            # rather than guessing from config on disk.
+            for tool in ((data.get("header") or {}).get("tools") or []):
+                name = tool.get("name") if isinstance(tool, dict) else None
+                if isinstance(name, str) and name and name not in tools_available:
+                    tools_available.append(name)
+
+        elif rtype == "user/message":
+            source = data.get("source") or {}
+            if source.get("kind") == "skill-catalog":
+                # DSH splices the live skill catalog into the conversation; this
+                # is the only record of which skills the run could actually use.
+                for entry in (source.get("entries") or []):
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                        skills_catalog[entry["name"]] = (entry.get("description") or "")[:200]
+            if display is None:
+                for block in data.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = (block.get("text") or "").strip()
+                        if text and not text.startswith("<system-reminder>"):
+                            display = text[:120]
+                            break
+
+        elif rtype == "turn/start":
+            turns += 1
+
+        elif rtype == "step/start":
+            steps += 1
+            if isinstance(t, (int, float)):
+                step_start[(data.get("turn"), data.get("step"))] = t
+
+        elif rtype == "tool/call":
+            name = data.get("name")
+            if isinstance(name, str) and name:
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+            call_id = data.get("callId")
+            if isinstance(call_id, str) and isinstance(t, (int, float)):
+                tool_call_at[call_id] = t
+
+        elif rtype == "tool/result":
+            call_id = ((data.get("message") or {}).get("source") or {}).get("callId")
+            started = tool_call_at.pop(call_id, None) if isinstance(call_id, str) else None
+            if started is not None and isinstance(t, (int, float)) and t >= started:
+                tool_ms_total += t - started
+
+        elif rtype == "assistant/chunk":
+            chunk = data.get("chunk")
+            key = (data.get("turn"), data.get("step"))
+            if isinstance(t, (int, float)):
+                # First chunk of the step marks time-to-first-token; the
+                # terminal chunk marks the end of generation.
+                step_first_chunk.setdefault(key, t)
+                if isinstance(chunk, dict) and chunk.get("type") in ("finish", "usage"):
+                    step_finish[key] = max(step_finish.get(key, 0.0), t)
+            if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                usage_by_step[key] = {**(chunk.get("usage") or {}), "provider": cur_provider, "model": cur_model}
+                last_provider, last_model = cur_provider, cur_model
+
+        elif rtype == "assistant/message":
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                key = (data.get("turn"), data.get("step"))
+                source = ((data.get("message") or {}).get("source")) or {}
+                msg_provider = source.get("provider") or cur_provider
+                msg_model = source.get("model") or cur_model
+                usage_by_step[key] = {**usage, "provider": msg_provider, "model": msg_model}
+                last_provider, last_model = msg_provider, msg_model
+
+    tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0, "total": 0}
+    cost = 0.0
+    models_used: List[str] = []
+    for u in usage_by_step.values():
+        in_t = int(u.get("inputTokens") or 0)
+        out_t = int(u.get("outputTokens") or 0)
+        cr = int(u.get("cacheReadTokens") or 0)
+        cw = int(u.get("cacheWriteTokens") or 0)
+        reas = int(u.get("reasoningTokens") or 0)
+        tokens["input"] += in_t
+        tokens["output"] += out_t
+        tokens["cached"] += cr
+        tokens["cache_creation"] += cw
+        tokens["reasoning"] += reas
+        model = u.get("model")
+        if model and model not in models_used:
+            models_used.append(model)
+        cost += calculate_cost(model, in_t, out_t, cr, cache_creation_tokens=cw, provider=u.get("provider"))
+    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+
+    # --- latency breakdown (formulas noted where the inputs are collected)
+    ttfts = [step_first_chunk[k] - step_start[k]
+             for k in step_first_chunk
+             if k in step_start and step_first_chunk[k] >= step_start[k]]
+    llm_ms = sum(step_finish[k] - step_start[k]
+                 for k in step_finish
+                 if k in step_start and step_finish[k] >= step_start[k])
+    gen_ms = sum(step_finish[k] - step_first_chunk[k]
+                 for k in step_finish
+                 if k in step_first_chunk and step_finish[k] >= step_first_chunk[k])
+    metrics: Dict[str, Any] = {
+        "turns": turns,
+        "steps": steps,
+        "llm_ms": round(llm_ms) or None,
+        "tool_ms": round(tool_ms_total) or None,
+        "ttft_ms_avg": round(sum(ttfts) / len(ttfts)) if ttfts else None,
+        # Output tokens over GENERATION time only -- dividing by total LLM time
+        # would fold in time-to-first-token and understate throughput.
+        "output_tok_per_sec": round(tokens["output"] / (gen_ms / 1000), 1)
+                              if gen_ms > 0 and tokens["output"] else None,
+    }
+    # DSH counts cache reads as part of input -- that is how its own footer
+    # reports "Input 16.5K" for an 8.3K + 8.2K split. Mirror it so the two agree.
+    billed_input = tokens["input"] + tokens["cached"]
+    metrics["cache_hit_pct"] = round(tokens["cached"] / billed_input * 100, 1) if billed_input else None
+
+    if last_ts:
+        ts = _aware(datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc))
+    elif isinstance(header.get("createdAt"), (int, float)) and header["createdAt"] > 0:
+        ts = _aware(datetime.fromtimestamp(header["createdAt"] / 1000, tz=timezone.utc))
+    else:
+        ts = _file_mtime_utc(path)
+
+    return {
+        "id": sid,
+        "project": header.get("cwd") or "unknown",
+        "origin": header.get("origin"),
+        "parent_session": header.get("parentSession"),
+        "delegation_depth": header.get("delegationDepth") or 0,
+        "agent_preset": preset_chain[-1] if preset_chain else header.get("agentPreset"),
+        "preset_chain": preset_chain,
+        "sandbox": sandbox,
+        "metrics": metrics,
+        "timestamp": ts,
+        "display": display,
+        "tokens": tokens,
+        "cost": cost,
+        "model": last_model,
+        "models_used": models_used,
+        "provider": last_provider,
+        "providers_used": providers_used,
+        "tool_counts": tool_counts,
+        "skills_catalog": [{"name": n, "description": d} for n, d in sorted(skills_catalog.items())],
+        "tools_available": sorted(tools_available),
+        "path": path,
+    }
+
+
+def _scan_dsh_sessions() -> List[Dict[str, Any]]:
+    """Scan DeepSeek Harness (DSH) sessions under ~/.dsh/sessions/.
+
+    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session.jsonl.zstd
+    Each file's own header carries `cwd`, so we glob for session files directly
+    rather than reversing DSH's lossy (251-char-truncated) path slug. Requires
+    the optional `zstandard` dependency; DSH is skipped silently, like any
+    other absent harness, when it isn't installed or no sessions exist.
+
+    Delegation: DSH stamps subagent children with an explicit
+    origin="subagent" + parentSession in the header -- no directory-naming or
+    timing inference needed. Children are folded into the parent's
+    `delegation` block (subagents / delegated_total / delegated_cost),
+    matching the convention used elsewhere (see _scan_muse_sessions) rather
+    than surfaced as separate top-level sessions. A `session-`-prefixed id
+    that carries a parentSession but no origin (an in-process "fork") has no
+    observed example on real data -- left as a standalone top-level session
+    rather than guessing at rollup semantics that can't be verified.
+    """
+    if not DSH_SESSIONS_DIR.exists():
+        return []
+
+    aliases = _load_project_aliases()
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for sess_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+        parsed = _dsh_parse_session(sess_file)
+        if parsed:
+            by_id[parsed["id"]] = parsed
+    if not by_id:
+        return []
+
+    children_of: Dict[str, List[Dict[str, Any]]] = {}
+    for parsed in by_id.values():
+        parent_id = parsed.get("parent_session")
+        if parsed.get("origin") == "subagent" and parent_id in by_id:
+            children_of.setdefault(parent_id, []).append(parsed)
+
+    out: List[Dict[str, Any]] = []
+    for sid, parsed in by_id.items():
+        if parsed.get("origin") == "subagent" and parsed.get("parent_session") in by_id:
+            continue  # folded into its parent below, not a top-level session
+
+        kids = children_of.get(sid, [])
+        delegation = None
+        if kids:
+            subagents = [{
+                "agent_id": kid["id"], "agent_type": "dsh-subagent", "model": kid["model"],
+                "tokens": kid["tokens"], "cost": kid["cost"],
+                # A child inherits its sandbox/approval posture from the parent
+                # and can end up more permissive than it (approval "never" under
+                # a parent on "ask"), so carry it per child rather than assuming
+                # the parent's posture describes the whole tree.
+                "sandbox": kid["sandbox"],
+            } for kid in kids]
+            delegated_tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0}
+            for kid in kids:
+                for key in delegated_tokens:
+                    delegated_tokens[key] += kid["tokens"][key]
+            delegated_total = sum(delegated_tokens.values())
+            delegated_cost = sum(s["cost"] for s in subagents)
+            delegation = {
+                "supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                "subagents": subagents, "delegated_total": delegated_total, "delegated_cost": delegated_cost,
+                "by_type": {"dsh-subagent": {"count": len(subagents), "total": delegated_total, "cost": delegated_cost}},
+            }
+
+        tool_counts = parsed["tool_counts"]
+        sess = {
+            "id": sid,
+            "agent": "dsh",
+            "project": aliases.get(parsed["project"], parsed["project"]),
+            "timestamp": parsed["timestamp"],
+            "display": parsed["display"] or f"DeepSeek Harness session {sid[-8:]}",
+            "text": parsed["display"],
+            "tokens": parsed["tokens"],
+            "mcp_tools": [t for t in tool_counts if isinstance(t, str) and t.startswith("mcp")],
+            "has_plan": False,
+            "plans": [],
+            "model": parsed["model"],
+            "provider": parsed["provider"],
+            "artifacts": [{"name": "session.jsonl.zstd", "path": str(parsed["path"]), "type": "document"}],
+            "cost": parsed["cost"],
+            # Runtime capability set, read from this session's own log -- DSH
+            # resolves skills/plugins/tools dynamically, so these are per-session
+            # facts, NOT a filesystem scan of what happens to be installed now.
+            "dsh": {
+                "agent_preset": parsed["agent_preset"],
+                "preset_chain": parsed["preset_chain"],
+                "sandbox": parsed["sandbox"],
+                "metrics": parsed["metrics"],
+                "models_used": parsed["models_used"],
+                "providers_used": parsed["providers_used"],
+                "skills_catalog": parsed["skills_catalog"],
+                "tools_available": parsed["tools_available"],
+            },
+        }
+        if delegation:
+            sess["delegation"] = delegation
+        _attach_tool_usage(sess, tool_counts)
+        out.append(sess)
+
+    return out
+
+
+# Cordis FiberState (vendor/cordis/src/fiber.ts) -> readable names. It is a
+# `const enum`, so it inlines to these ordinals at runtime.
+_DSH_FIBER_STATES: Dict[int, str] = {
+    0: "pending", 1: "loading", 2: "active",
+    3: "failed", 4: "disposed", 5: "unloading",
+}
+
+
+def _dsh_lifecycle_events(since_ms: Optional[float] = None,
+                          until_ms: Optional[float] = None,
+                          limit: int = 500) -> List[Dict[str, Any]]:
+    """Read plugin lifecycle transitions from the sidecar, newest last.
+
+    The file is append-only JSONL written by the TT DSH plugin. It is read
+    defensively: a missing file (plugin not installed) yields [], and a torn
+    final line (we may read mid-append) is skipped rather than raising.
+
+    `from`/`to` are Cordis FiberState values. They arrive as ints because
+    FiberState is a `const enum` and inlines numerically, but the plugin writes
+    the names too; we accept either and normalise to names.
+    """
+    if not DSH_LIFECYCLE_FILE.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(DSH_LIFECYCLE_FILE, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue  # torn/partial line
+                if not isinstance(row, dict):
+                    continue
+                ts = row.get("ts")
+                if not isinstance(ts, (int, float)):
+                    continue
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+
+                def _state(v):
+                    if isinstance(v, str) and v:
+                        return v.lower()
+                    return _DSH_FIBER_STATES.get(v) if isinstance(v, int) else None
+
+                out.append({
+                    "ts": ts,
+                    "plugin": row.get("plugin") or row.get("name") or "unknown",
+                    "entry_id": row.get("entry_id"),
+                    "from": _state(row.get("from")),
+                    "to": _state(row.get("to")),
+                    "error": row.get("error") or None,
+                })
+    except OSError:
+        return []
+    out.sort(key=lambda r: r["ts"])
+    return out[-limit:] if limit and len(out) > limit else out
+
+
+def _dsh_lifecycle_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Roll transitions up into the numbers a UI wants.
+
+    `failed` counts arrivals in the FAILED state -- the Cordis analogue of the
+    paper's L-Raise (an activation whose effects were rolled back), which is the
+    transition most worth surfacing and the one a state poll would miss.
+    """
+    plugins: Dict[str, Dict[str, Any]] = {}
+    failed = reloads = unloads = 0
+    for e in events:
+        p = plugins.setdefault(e["plugin"], {"plugin": e["plugin"], "transitions": 0,
+                                             "failed": 0, "final_state": None})
+        p["transitions"] += 1
+        p["final_state"] = e["to"]
+        if e["to"] == "failed":
+            p["failed"] += 1
+            failed += 1
+        elif e["to"] == "loading" and e["from"] in ("active", "failed", "disposed"):
+            reloads += 1
+        elif e["to"] == "unloading":
+            unloads += 1
+    return {
+        "transitions": len(events),
+        "plugins": sorted(plugins.values(), key=lambda p: (-p["failed"], p["plugin"])),
+        "failed": failed,
+        "reloads": reloads,
+        "unloads": unloads,
+        "first_ts": events[0]["ts"] if events else None,
+        "last_ts": events[-1]["ts"] if events else None,
+    }
+
+
+@app.get("/dsh/lifecycle")
+async def dsh_lifecycle(session_id: Optional[str] = None, limit: int = 500):
+    """Plugin lifecycle transitions recorded by the TT DSH plugin.
+
+    With `session_id`, the window is narrowed to that session's own span, since
+    Cordis fibers are runtime-global and carry no session id -- correlation is
+    by time and is therefore approximate, which `correlation` states outright
+    rather than implying the events belong to the session.
+    """
+    since = until = None
+    correlation = "none"
+    if session_id:
+        sess_file = _dsh_session_file(session_id)
+        if sess_file is None:
+            return {"error": "Not found"}
+        parsed = _dsh_parse_session(sess_file)
+        if parsed:
+            rows = _dsh_read_events(sess_file) or []
+            created = rows[0].get("createdAt") if rows else None
+            if isinstance(created, (int, float)):
+                since = created
+            until = parsed["timestamp"].timestamp() * 1000
+            correlation = "time-window"
+    events = _dsh_lifecycle_events(since_ms=since, until_ms=until, limit=limit)
+    return {
+        "installed": DSH_LIFECYCLE_FILE.exists(),
+        "correlation": correlation,
+        "events": events,
+        **_dsh_lifecycle_summary(events),
+    }
+
+
+def _dsh_session_file(session_id: str) -> Optional[Path]:
+    """Locate one DSH session's log by id. The session dir IS the id, so a
+    direct glob resolves it without reversing DSH's lossy cwd slug."""
+    if not DSH_SESSIONS_DIR.exists() or not session_id or "/" in session_id:
+        return None
+    for match in DSH_SESSIONS_DIR.glob(f"*/{session_id}/session.jsonl.zstd"):
+        return match
+    return None
+
+
+def _dsh_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize a DSH session log into the shared Claude-shaped trace events
+    the EventCard renderer expects (same contract as the pi branch).
+
+    DSH's `user/message` stream carries more than real user turns -- the
+    harness splices in plugin snapshots (runtime context, sandbox policy) and
+    skill catalogs as user-role messages. Only source.kind == "user" is a
+    human turn, so the rest are dropped rather than dumped into the trace as
+    if the user had typed them.
+    """
+    rows = _dsh_read_events(path)
+    if not rows:
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for row in rows:
+        rtype = row.get("type")
+        data = row.get("data")
+        if not isinstance(data, dict):
+            continue
+        norm: Optional[Dict[str, Any]] = None
+
+        if rtype == "user/message":
+            if (data.get("source") or {}).get("kind") != "user":
+                continue  # plugin/skill-catalog injection, not a human turn
+            text = "".join(
+                c.get("text", "") for c in (data.get("content") or [])
+                if isinstance(c, dict) and c.get("type") == "text"
+            )
+            if text.strip():
+                norm = {"type": "user", "message": {"role": "user",
+                        "content": [{"type": "text", "text": text}]}}
+
+        elif rtype == "assistant/message":
+            blocks: List[Dict[str, Any]] = []
+            for c in ((data.get("message") or {}).get("content") or []):
+                if not isinstance(c, dict):
+                    continue
+                ctype = c.get("type")
+                txt = c.get("text") or ""
+                if not txt.strip():
+                    continue
+                if ctype == "reasoning":
+                    blocks.append({"type": "thinking", "thinking": txt})
+                elif ctype == "text":
+                    blocks.append({"type": "text", "text": txt})
+            if blocks:
+                norm = {"type": "assistant", "message": {"role": "assistant", "content": blocks}}
+
+        elif rtype == "tool/call":
+            raw_args = data.get("arguments")
+            try:
+                parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+            except Exception:
+                parsed_args = {"raw": raw_args}  # DSH stores args as an unparsed JSON string
+            norm = {"type": "assistant", "message": {"role": "assistant", "content": [{
+                "type": "tool_use",
+                "id": data.get("callId"),
+                "name": data.get("name"),
+                "input": parsed_args,
+            }]}}
+
+        elif rtype == "tool/result":
+            message = data.get("message") or {}
+            call_id = ((message.get("source") or {}).get("callId"))
+            text_parts: List[str] = []
+            for block in (message.get("content") or []):
+                if not isinstance(block, dict):
+                    continue
+                if call_id is None:
+                    call_id = block.get("toolCallId")
+                inner = block.get("content")
+                if isinstance(inner, str):
+                    text_parts.append(inner)
+                elif isinstance(inner, list):
+                    text_parts.extend(
+                        b.get("text", "") for b in inner
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+            norm = {"type": "user", "message": {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": "".join(text_parts),
+            }]}}
+
+        if norm is None:
+            continue
+        t = row.get("time")
+        if isinstance(t, (int, float)) and t > 0:
+            norm["normalized_timestamp"] = t
+        norm.setdefault("normalized_timestamp", len(events) * 1000)
+        events.append(norm)
+
+    return events
 
 
 def _reconstruct_vscode_chat_jsonl(path) -> Dict[str, Any]:
@@ -6467,6 +7114,9 @@ def _scan_sessions_sync():
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
 
+    # 8b3. DeepSeek Harness (DSH) — zstd-compressed JSONL under ~/.dsh/sessions/
+    sessions.extend(_scan_dsh_sessions())
+
     # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
     # cwd, so they naturally participate in project/worktree navigation.
     for sess in _scan_muse_sessions() + _scan_prime_sessions():
@@ -7319,6 +7969,16 @@ async def get_session_detail(session_id: str, agent: str):
                 events.append(norm)
         return events
 
+    elif agent == "dsh":
+        # DeepSeek Harness — zstd-compressed JSONL; _dsh_trace_events normalizes
+        # it into the same Claude-shaped events the pi branch above produces.
+        # Subagent children are their own session files, so a delegated run is
+        # traceable by requesting its own id.
+        sess_file = _dsh_session_file(session_id)
+        if not sess_file:
+            return {"error": "Not found"}
+        return _dsh_trace_events(sess_file)
+
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
         # conversations/<id>.db — far richer than the brain markdown. Prefer it.
@@ -7984,6 +8644,29 @@ async def session_delegation(session_id: str, agent: str):
             subagents.append({"agent_id": child.parent.name, "agent_type": "muse-subagent",
                               "model": child_summary["model"], "tokens": {**t, "total": sum(t.values())},
                               "cost": calculate_cost(child_summary["model"], t["input"], t["output"], t["cached"], cache_creation_tokens=t["cache_creation"])})
+        totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
+                  for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
+        return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
+                "subagents": subagents, "totals": totals,
+                "cost": sum(s["cost"] for s in subagents)}
+
+    if agent == "dsh":
+        # DSH children are their own session logs, linked by an explicit
+        # parentSession header field, so per-subagent usage is real (not just a
+        # spawn count) -- same contract as muse above.
+        parent_file = _dsh_session_file(session_id)
+        if parent_file is None:
+            return {"error": "Not found"}
+        subagents = []
+        for child_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+            if child_file == parent_file:
+                continue
+            child = _dsh_parse_session(child_file)
+            if not child or child.get("origin") != "subagent" or child.get("parent_session") != session_id:
+                continue
+            subagents.append({"agent_id": child["id"], "agent_type": "dsh-subagent",
+                              "model": child["model"], "tokens": child["tokens"],
+                              "cost": child["cost"]})
         totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
                   for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
         return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
