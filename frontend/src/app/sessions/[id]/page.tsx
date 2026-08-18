@@ -492,6 +492,7 @@ export default function SessionDetailPage() {
   const [projectConfig, setProjectConfig] = useState<any>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const waterfallRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
@@ -599,6 +600,8 @@ export default function SessionDetailPage() {
         setActiveStep(target);
         requestAnimationFrame(() => {
           stepRefs.current[target]?.scrollIntoView({ behavior: "smooth", block: "center" });
+          stepIndexRefs.current[target]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          waterfallRefs.current[target]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
         });
         return next;
       });
@@ -850,6 +853,7 @@ export default function SessionDetailPage() {
     setPlaybackIndex((p) => Math.max(p, idx + 1));
     requestAnimationFrame(() => {
       stepRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      waterfallRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
   };
 
@@ -865,6 +869,7 @@ export default function SessionDetailPage() {
     setActiveStep(idx);
     requestAnimationFrame(() => {
       stepIndexRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      waterfallRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
   };
 
@@ -883,18 +888,18 @@ export default function SessionDetailPage() {
               // Look ahead for tool_result from user
               const result = toolResultByUseId.get(tu.id);
               const endTime = result?.normalized_timestamp || (result?.timestamp ? new Date(result.timestamp).getTime() : startTime + 2000);
-              tools.push({ name: toolName, start: startTime, end: endTime, id: tu.id });
+              tools.push({ name: toolName, start: startTime, end: endTime, id: tu.id, idx });
            }
         }
         // Gemini / Antigravity Tool Call Detection
         if (evt.toolCalls) {
            evt.toolCalls.forEach(tc => {
-              tools.push({ name: tc.name, start: startTime, end: startTime + 800, id: tc.name + idx });
+              tools.push({ name: tc.name, start: startTime, end: startTime + 800, id: tc.name + idx, idx });
            });
         }
         // Codex Tool Call Detection
         if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") {
-           tools.push({ name: evt.payload.name, start: startTime, end: startTime + 500, id: (evt.payload.name || "tool") + idx });
+           tools.push({ name: evt.payload.name, start: startTime, end: startTime + 500, id: (evt.payload.name || "tool") + idx, idx });
         }
      });
      return tools;
@@ -1379,16 +1384,21 @@ export default function SessionDetailPage() {
                      const totalRange = waterfallData[waterfallData.length-1].end - waterfallData[0].start;
                      const left = ((tool.start - waterfallData[0].start) / Math.max(1, totalRange)) * 95;
                      const width = ((tool.end - tool.start) / Math.max(1, totalRange)) * 95;
+                     const isActive = activeStep === tool.idx;
                      
                      return (
-                        <div key={i} className="flex items-center gap-4 group">
+                        <div 
+                           key={i} 
+                           ref={(el) => { waterfallRefs.current[tool.idx] = el; }} 
+                           className={`flex items-center gap-4 group transition-colors rounded px-1.5 py-0.5 ${isActive ? "bg-blue-500/10" : ""}`}
+                        >
                            <div className="w-28 flex flex-col">
-                              <span className="text-[9px] font-bold text-[var(--tt-fg-muted)] truncate group-hover:text-[var(--tt-fg)] transition-colors">{tool.name}</span>
+                              <span className={`text-[9px] font-bold truncate transition-colors ${isActive ? "text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)] group-hover:text-[var(--tt-fg)]"}`}>{tool.name}</span>
                               <span className="text-[7px] font-mono text-[var(--tt-fg-faint)] uppercase">{(tool.end - tool.start).toFixed(0)}ms</span>
                            </div>
                            <div className="flex-1 bg-[var(--tt-sunken)] h-3 rounded-full relative border border-[var(--tt-border)]">
                               <div 
-                                 className="absolute h-full bg-gradient-to-r from-blue-600/30 to-blue-500/60 border-r border-blue-400 rounded-full group-hover:from-blue-500 group-hover:to-blue-400 transition-all"
+                                 className={`absolute h-full rounded-full transition-all ${isActive ? "bg-gradient-to-r from-blue-500 to-blue-400 ring-2 ring-blue-400/50" : "bg-gradient-to-r from-blue-600/30 to-blue-500/60 border-r border-blue-400 group-hover:from-blue-500 group-hover:to-blue-400"}`}
                                  style={{ left: `${left}%`, width: `${Math.max(1, width)}%` }}
                               ></div>
                            </div>
