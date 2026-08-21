@@ -150,7 +150,7 @@ def scan_env(tmp_path, monkeypatch):
     only the Claude tree we build under tmp_path/.claude is discovered."""
     missing = tmp_path / "missing"
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
-                 "GROK_SESSIONS_DIR", "VSCODE_STORAGE", "CURSOR_STORAGE",
+                 "GROK_SESSIONS_DIR", "GROK_UNIFIED_LOG", "VSCODE_STORAGE", "CURSOR_STORAGE",
                  "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
                  "HERMES_DIR", "PI_SESSIONS_DIR"):
         monkeypatch.setattr(main, attr, missing / attr.lower())

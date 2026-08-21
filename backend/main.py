@@ -435,6 +435,9 @@ HERMES_PROFILES_DIR = HERMES_DIR / "profiles"
 # Stores rich per-session data under ~/.grok/sessions/<encoded-cwd>/<uuid>/
 GROK_DIR = HOME / ".grok"
 GROK_SESSIONS_DIR = GROK_DIR / "sessions"
+# Per-turn billed usage (prompt / cached / completion) lives here, not in the
+# session dir. Session files only expose a context-window footprint.
+GROK_UNIFIED_LOG = GROK_DIR / "logs" / "unified.jsonl"
 
 # Grok Build session file names (per <cwd-uuid> directory)
 GROK_SUMMARY = "summary.json"
@@ -3079,13 +3082,99 @@ def _grok_loop_detect(
     }
 
 
+# Cached parse of ~/.grok/logs/unified.jsonl. Keyed by (resolved path, mtime, size)
+# so a dashboard refresh does not re-read a multi-MB JSONL unless it changed.
+_GROK_LOG_CACHE: Dict[str, Any] = {"key": None, "data": {}}
+
+
+def _grok_usage_from_unified_log(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    """Aggregate billed usage from Grok's unified inference log.
+
+    Each ``shell.turn.inference_done`` row is one request:
+      input  = prompt_tokens − cached_prompt_tokens
+      cached = cached_prompt_tokens
+      output = completion_tokens
+    Turns are kept so cost can apply xAI's per-request 200k long-context 2×.
+    Missing / unreadable log → {}.
+    """
+    log_path = path if path is not None else GROK_UNIFIED_LOG
+    if not log_path.exists() or not log_path.is_file():
+        return {}
+    try:
+        st = log_path.stat()
+        cache_key = (str(log_path.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    if _GROK_LOG_CACHE.get("key") == cache_key:
+        return _GROK_LOG_CACHE["data"]
+
+    by_sid: Dict[str, Dict[str, Any]] = {}
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if "inference_done" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("msg") != "shell.turn.inference_done":
+                    continue
+                sid = rec.get("sid")
+                if not sid:
+                    continue
+                ctx = rec.get("ctx") or {}
+                try:
+                    prompt = int(ctx.get("prompt_tokens") or 0)
+                    cached = int(ctx.get("cached_prompt_tokens") or 0)
+                    completion = int(ctx.get("completion_tokens") or 0)
+                    reasoning = int(ctx.get("reasoning_tokens") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if prompt < 0 or cached < 0 or completion < 0:
+                    continue
+                cached = min(cached, prompt)
+                row = by_sid.get(sid)
+                if row is None:
+                    row = {
+                        "input": 0,
+                        "output": 0,
+                        "cached": 0,
+                        "reasoning": 0,
+                        "turns": [],
+                    }
+                    by_sid[sid] = row
+                row["input"] += prompt - cached
+                row["output"] += completion
+                row["cached"] += cached
+                row["reasoning"] += max(reasoning, 0)
+                row["turns"].append((prompt, cached, completion))
+    except OSError:
+        return {}
+
+    _GROK_LOG_CACHE["key"] = cache_key
+    _GROK_LOG_CACHE["data"] = by_sid
+    return by_sid
+
+
+def _grok_price_turns(model: str, turns: List[Tuple[int, int, int]]) -> float:
+    """Sum per-request xAI cost (applies the 200k-prompt 2× cliff per turn)."""
+    from pricing import calculate_xai_turn_cost
+    return sum(calculate_xai_turn_cost(model, prompt, completion, cached)
+               for prompt, cached, completion in turns)
+
+
 def _scan_grok_sessions() -> List[Dict[str, Any]]:
     """Scan Grok Build sessions under ~/.grok/sessions/.
 
     Produces the standard TokenTelemetry session record with rich Grok-specific forensics.
+    Prefers billed usage from ``unified.jsonl`` when the session appears there;
+    otherwise falls back to the context-window footprint (output/cached n/a).
     """
     if not GROK_SESSIONS_DIR.exists():
         return []
+
+    usage_by_sid = _grok_usage_from_unified_log()
 
     # Load aliases locally so this top-level function doesn't depend on closures inside _scan_sessions_sync
     aliases = _load_project_aliases()
@@ -3143,52 +3232,64 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                 except Exception:
                     signals = {}
 
-            # Token forensics. Grok exposes no prompt/completion split anywhere, so we
-            # use signals.contextTokensUsed (the measured context footprint) when present,
-            # falling back to the max cumulative totalTokens scanned from updates.jsonl.
-            tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-            ctx_used = signals.get("contextTokensUsed")
-            if isinstance(ctx_used, (int, float)) and ctx_used > 0:
-                total = int(ctx_used)
-            else:
-                # Fallback only when signals lacks a usable figure: scan the (large)
-                # updates.jsonl for the max cumulative totalTokens. Skipped entirely
-                # in the common case so the list scan stays cheap.
-                max_total = 0
-                updates_path = sess_id_dir / GROK_UPDATES
-                if updates_path.exists():
-                    try:
-                        with open(updates_path, "r", encoding="utf-8", errors="ignore") as f:
-                            for line in f:
-                                if "totalTokens" not in line:
-                                    continue
-                                try:
-                                    u = json.loads(line)
-                                    meta = (u.get("params") or {}).get("_meta") or {}
-                                    val = meta.get("totalTokens")
-                                    if isinstance(val, (int, float)) and val > max_total:
-                                        max_total = int(val)
-                                except Exception:
-                                    continue
-                    except Exception:
-                        pass
-                total = max_total
-
-            # Grok exposes no prompt/completion split; the agentic context is overwhelmingly
-            # fed-in tool/file content, so we attribute the measured context footprint to input
-            # rather than fabricating a 50/50 guess. Cost is therefore a lower-bound estimate.
-            tokens["total"] = total
-            tokens["input"] = total
-            tokens["output"] = 0
-            tokens["cached"] = 0
-
-            # Grok Build exposes only a single context-footprint total (no cache-write field); nothing to pass.
-            tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0))
-
-            # Prefer signals.modelsUsed for the model when available.
+            # Resolve the model BEFORE pricing. signals.modelsUsed is the
+            # fallback when summary.json carries no current_model_id; leaving
+            # this below the token block meant a session could be priced as
+            # "grok-build" while displaying the model it actually ran.
             models_used = signals.get("modelsUsed")
             if isinstance(models_used, list) and models_used:
                 model = summary.get("current_model_id") or models_used[0] or model
+
+            # Token forensics. Prefer billed per-turn usage from unified.jsonl.
+            # Session files only record contextTokensUsed (current window
+            # footprint) — that is not a prompt/completion split and must not
+            # be shown as billed Input when the log has the real numbers.
+            tokens = {"input": 0, "output": 0, "cached": 0, "total": 0, "source": "context"}
+            usage = usage_by_sid.get(sid)
+            if usage and usage.get("turns"):
+                tokens["input"] = usage["input"]
+                tokens["output"] = usage["output"]
+                tokens["cached"] = usage["cached"]
+                tokens["total"] = usage["input"] + usage["output"] + usage["cached"]
+                tokens["source"] = "usage"
+                tokens["cost"] = _grok_price_turns(model, usage["turns"])
+            else:
+                ctx_used = signals.get("contextTokensUsed")
+                if isinstance(ctx_used, (int, float)) and ctx_used > 0:
+                    total = int(ctx_used)
+                else:
+                    # Fallback only when signals lacks a usable figure: scan the (large)
+                    # updates.jsonl for the max cumulative totalTokens. Skipped entirely
+                    # in the common case so the list scan stays cheap.
+                    max_total = 0
+                    updates_path = sess_id_dir / GROK_UPDATES
+                    if updates_path.exists():
+                        try:
+                            with open(updates_path, "r", encoding="utf-8", errors="ignore") as f:
+                                for line in f:
+                                    if "totalTokens" not in line:
+                                        continue
+                                    try:
+                                        u = json.loads(line)
+                                        meta = (u.get("params") or {}).get("_meta") or {}
+                                        val = meta.get("totalTokens")
+                                        if isinstance(val, (int, float)) and val > max_total:
+                                            max_total = int(val)
+                                    except Exception:
+                                        continue
+                        except Exception:
+                            pass
+                    total = max_total
+
+                # No billed split on disk: attribute the window footprint to
+                # input and leave output/cached at 0. Frontend renders those
+                # as "—" when source == "context". Cost is a lower bound.
+                tokens["total"] = total
+                tokens["input"] = total
+                tokens["output"] = 0
+                tokens["cached"] = 0
+                tokens["source"] = "context"
+                tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0))
 
             # Tool names — prefer signals.toolsUsed (accurate, deduped) and avoid the
             # redundant full events.jsonl scan when it's available.

@@ -54,7 +54,7 @@ interface Session {
   plans: any[];
   model?: string;
   models_used?: string[];
-  tokens?: { input: number; output: number; cached: number; total: number; cost?: number };
+  tokens?: { input: number; output: number; cached: number; total: number; cost?: number; source?: "usage" | "context" };
   cost?: number;
   cost_source?: "reported" | "estimated";
   artifacts?: Artifact[];
@@ -1009,11 +1009,10 @@ export default function SessionDetailPage() {
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
-                  {agent === "grok" ? (
-                    // Grok Build only reports cumulative context (input-side) usage —
-                    // it never logs generated-output or cache-read tokens, so we label
-                    // the figure "Context" and show "—" (not reported) rather than a
-                    // misleading 0. See GrokForensicsCard for the context-window meter.
+                  {agent === "grok" && sessionInfo.tokens.source !== "usage" ? (
+                    // Session files only record a context-window footprint.
+                    // When unified.jsonl has billed usage, source === "usage"
+                    // and we fall through to the Input/Output/Cached row.
                     <>
                       <TokenStat label="Context" value={sessionInfo.tokens.input.toLocaleString()} />
                       <span className="w-px h-5 bg-[var(--tt-border)]" />
