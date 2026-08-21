@@ -138,3 +138,46 @@ def test_xai_turn_cost_short_vs_long():
     base = calculate_cost("grok-4.6", 190_000, 1_000, 10_000)
     assert long == pytest.approx(base * 2)
     assert long > short * 2
+
+
+def test_grok_build_uses_grok_build_0_1_rates():
+    # grok-build sessions bill under grok-build-0.1, not grok-code-fast-1.
+    # https://docs.x.ai/developers/models/grok-build-0.1
+    for key in ("grok-build", "grok-build-0.1"):
+        rates = PRICING[key]
+        assert rates["in"] == 1.00, key
+        assert rates["out"] == 2.00, key
+        assert rates["cached_read"] == 0.20, key
+    assert calculate_cost("grok-build", 1_000_000, 0, 0) == pytest.approx(1.00)
+    assert calculate_cost("grok-build", 0, 1_000_000, 0) == pytest.approx(2.00)
+    assert calculate_cost("grok-build", 0, 0, 1_000_000) == pytest.approx(0.20)
+    # grok-code-fast-1 is a different model and keeps its own rates.
+    assert calculate_cost("grok-code-fast-1", 1_000_000, 0, 0) == pytest.approx(0.20)
+
+
+def test_model_resolved_before_pricing(tmp_path, monkeypatch):
+    """No current_model_id + modelsUsed present must price as the used model.
+
+    The model used to be reassigned from signals.modelsUsed *after* the token
+    block, so the session displayed one model and was priced as grok-build.
+    """
+    sessions = tmp_path / "sessions"
+    log = tmp_path / "unified.jsonl"
+    d = _make_session(sessions, SID, ctx=9_999, model="grok-4.6")
+    summary = json.loads((d / "summary.json").read_text(encoding="utf-8"))
+    del summary["current_model_id"]
+    (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    _write_log(log, [_inference(SID, 100, 20, 10)])
+    monkeypatch.setattr(main, "GROK_SESSIONS_DIR", sessions)
+    monkeypatch.setattr(main, "GROK_UNIFIED_LOG", log)
+    monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
+
+    sess = {s["id"]: s for s in main._scan_grok_sessions()}[SID]
+    assert sess["model"] == "grok-4.6"
+    assert sess["tokens"]["cost"] == pytest.approx(
+        calculate_xai_turn_cost("grok-4.6", 100, 10, 20)
+    )
+    # grok-build's rates would give a different figure; the two must not agree.
+    assert sess["tokens"]["cost"] != pytest.approx(
+        calculate_xai_turn_cost("grok-build", 100, 10, 20)
+    )

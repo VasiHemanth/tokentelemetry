@@ -3232,6 +3232,14 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                 except Exception:
                     signals = {}
 
+            # Resolve the model BEFORE pricing. signals.modelsUsed is the
+            # fallback when summary.json carries no current_model_id; leaving
+            # this below the token block meant a session could be priced as
+            # "grok-build" while displaying the model it actually ran.
+            models_used = signals.get("modelsUsed")
+            if isinstance(models_used, list) and models_used:
+                model = summary.get("current_model_id") or models_used[0] or model
+
             # Token forensics. Prefer billed per-turn usage from unified.jsonl.
             # Session files only record contextTokensUsed (current window
             # footprint) — that is not a prompt/completion split and must not
@@ -3282,11 +3290,6 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                 tokens["cached"] = 0
                 tokens["source"] = "context"
                 tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0))
-
-            # Prefer signals.modelsUsed for the model when available.
-            models_used = signals.get("modelsUsed")
-            if isinstance(models_used, list) and models_used:
-                model = summary.get("current_model_id") or models_used[0] or model
 
             # Tool names — prefer signals.toolsUsed (accurate, deduped) and avoid the
             # redundant full events.jsonl scan when it's available.
