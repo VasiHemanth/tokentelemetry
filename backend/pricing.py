@@ -100,9 +100,12 @@ PRICING = {
     "grok-4.3-latest":              {"in": 1.25,  "out": 2.50,  "cached_read": 0.20},
     # Grok Build — xAI's agentic coding CLI. Sessions record the model id as the
     # generic "grok-build"; the underlying model is grok-build-0.1 (256K context;
-    # grok-code-fast-1 requests route here after 2026-05-15). API rates below.
-    "grok-build":                   {"in": 0.20,  "out": 1.50,  "cached_read": None},
-    "grok-build-0.1":               {"in": 0.20,  "out": 1.50,  "cached_read": None},
+    # grok-code-fast-1 requests route here after 2026-05-15). These are
+    # grok-build-0.1's own rates, not grok-code-fast-1's; the two differ, and
+    # the id we bill under is grok-build-0.1.
+    # https://docs.x.ai/developers/models/grok-build-0.1
+    "grok-build":                   {"in": 1.00,  "out": 2.00,  "cached_read": 0.20},
+    "grok-build-0.1":               {"in": 1.00,  "out": 2.00,  "cached_read": 0.20},
     "grok-code-fast-1":             {"in": 0.20,  "out": 1.50,  "cached_read": None},
     "grok-code-fast":               {"in": 0.20,  "out": 1.50,  "cached_read": None},
 
