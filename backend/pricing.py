@@ -90,8 +90,14 @@ PRICING = {
     "deepseek-v4-pro":              {"in": 1.74,  "out": 3.48,  "cached_read": 0.0145},
 
     # --- xAI (Grok) ---
-    "grok-4.3":                     {"in": 1.25,  "out": 2.50,  "cached_read": None},
-    "grok-4.3-latest":              {"in": 1.25,  "out": 2.50,  "cached_read": None},
+    # List prices are the <200k-prompt band. Requests whose prompt reaches
+    # 200k tokens are billed at 2x all three rates for that request — see
+    # calculate_xai_turn_cost. https://docs.x.ai/developers/models/grok-4.6
+    "grok-4.6":                     {"in": 2.00,  "out": 6.00,  "cached_read": 0.50},
+    "grok-4.6-latest":              {"in": 2.00,  "out": 6.00,  "cached_read": 0.50},
+    "grok-4.5":                     {"in": 2.00,  "out": 6.00,  "cached_read": 0.30},
+    "grok-4.3":                     {"in": 1.25,  "out": 2.50,  "cached_read": 0.20},
+    "grok-4.3-latest":              {"in": 1.25,  "out": 2.50,  "cached_read": 0.20},
     # Grok Build — xAI's agentic coding CLI. Sessions record the model id as the
     # generic "grok-build"; the underlying model is grok-build-0.1 (256K context;
     # grok-code-fast-1 requests route here after 2026-05-15). API rates below.
@@ -270,6 +276,27 @@ def _load_bundled_pricing() -> None:
 _load_bundled_pricing()
 
 
+# xAI long-context cliff: a request whose prompt reaches this many tokens is
+# billed at 2x the <200k list rates for every token in that request (input,
+# cached input, and output). Applies per request, not per session.
+XAI_LONG_PROMPT_THRESHOLD = 200_000
+
+
+def _fuzzy_key_matches(key: str, model: str) -> bool:
+    """Substring match that refuses a shorter dotted version prefix.
+
+    ``grok-4`` must not win for ``grok-4.6`` (that used to silently bill at
+    grok-4's $3/$15). ``grok-4`` may still match ``grok-4-fast-reasoning``.
+    """
+    idx = model.find(key)
+    if idx < 0:
+        return False
+    after = model[idx + len(key):]
+    if after[:1] == "." and after[1:2].isdigit():
+        return False
+    return True
+
+
 def _normalize_model_id(model: str) -> str:
     """Lowercase and strip common aggregator namespace prefixes."""
     m = model.lower().strip()
@@ -364,7 +391,7 @@ def calculate_cost(
             # Fuzzy prefix match against the flat table (longer keys first)
             sorted_keys = sorted([k for k in PRICING.keys() if k != "_default"], key=len, reverse=True)
             for k in sorted_keys:
-                if k in m_norm:
+                if _fuzzy_key_matches(k, m_norm):
                     config = PRICING[k]
                     break
         if not config:
@@ -406,3 +433,25 @@ def calculate_cost(
 
     cache_write_cost = (cc_5m / 1_000_000) * cache_write_rate + (cc_1h / 1_000_000) * cache_write_1h_rate
     return in_cost + out_cost + cached_cost + cache_write_cost
+
+
+def calculate_xai_turn_cost(
+    model_name: Optional[str],
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
+) -> float:
+    """Price one xAI request, applying the 200k-prompt 2x cliff.
+
+    ``prompt_tokens`` is the full prompt (cached + uncached). Uncached input is
+    ``prompt − cached``. The 2x multiplier applies to the whole request when
+    the prompt reaches ``XAI_LONG_PROMPT_THRESHOLD``.
+    """
+    prompt = max(int(prompt_tokens or 0), 0)
+    cached = min(max(int(cached_tokens or 0), 0), prompt)
+    uncached = prompt - cached
+    completion = max(int(completion_tokens or 0), 0)
+    cost = calculate_cost(model_name, uncached, completion, cached)
+    if prompt >= XAI_LONG_PROMPT_THRESHOLD:
+        return cost * 2.0
+    return cost
