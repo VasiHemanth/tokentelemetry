@@ -165,6 +165,101 @@ def _split_on_chain_operators(s: str) -> List[str]:
     return fragments
 
 
+def _cd_target(tokens: List[str]) -> Optional[str]:
+    """If a command fragment is a bare `cd <dir>`, return <dir>, else None.
+
+    `cd` with no argument, `cd -`, and `cd ~...` are treated as unknown so the
+    caller falls back rather than guessing at a directory.
+    """
+    i = 0
+    while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+        i += 1
+    if i >= len(tokens) or tokens[i] != "cd":
+        return None
+    rest = [t for t in tokens[i + 1:] if not t.startswith("-")]
+    if len(rest) != 1:
+        return None
+    target = rest[0]
+    if target.startswith("~"):
+        return None
+    return target
+
+
+def _git_dash_c_target(tokens: List[str]) -> Optional[str]:
+    """Return the argument of `git -C <dir>` / `--work-tree=<dir>` if present."""
+    i = 0
+    while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+        i += 1
+    if i >= len(tokens) or tokens[i] != "git":
+        return None
+    j = i + 1
+    while j < len(tokens):
+        tok = tokens[j]
+        if tok in ("-C", "--work-tree"):
+            return tokens[j + 1] if j + 1 < len(tokens) else None
+        if tok.startswith("--work-tree="):
+            return tok.split("=", 1)[1]
+        if tok in ("--git-dir", "--namespace"):
+            j += 2
+        elif tok.startswith(("--git-dir=", "--namespace=")):
+            j += 1
+        elif tok.startswith("-"):
+            j += 1
+        else:
+            break
+    return None
+
+
+def resolve_push_cwd(command_str: str, payload_cwd: Optional[str] = None) -> Optional[str]:
+    """Directory the push in `command_str` will actually run in.
+
+    Hooks are a separate process whose own cwd is the session's project root,
+    which is NOT where the command runs once Claude is in a worktree or the
+    command starts with `cd <dir> && ...`. Resolving the wrong directory made
+    both hooks judge an unrelated branch: a worktree push carrying only `fix:`
+    commits was denied because the *project root's* branch had a `feat:`
+    commit and no UPDATE.json.
+
+    Precedence, most explicit first:
+      1. `git -C <dir> push` in the push fragment itself
+      2. the accumulated `cd <dir>` prefix of the same command chain
+      3. the `cwd` field of the hook payload (worktree root / after `cd`)
+      4. None, i.e. let the caller inherit the hook process's own cwd
+
+    Relative paths compose against whatever is current at that point.
+    """
+    base = payload_cwd or None
+    try:
+        fragments = _split_on_chain_operators(command_str)
+    except Exception:
+        return base
+
+    def _resolve(path: str, against: Optional[str]) -> str:
+        if os.path.isabs(path):
+            return os.path.normpath(path)
+        return os.path.normpath(os.path.join(against or os.getcwd(), path))
+
+    for frag in fragments:
+        frag = frag.strip()
+        if not frag:
+            continue
+        try:
+            tokens = shlex.split(frag)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        if _is_push_subcommand(tokens):
+            dash_c = _git_dash_c_target(tokens)
+            if dash_c:
+                return _resolve(dash_c, base)
+            return base
+        cd_to = _cd_target(tokens)
+        if cd_to:
+            base = _resolve(cd_to, base)
+    return base
+
+
 def _git(*args: str, cwd: Optional[str] = None, timeout: int = 10) -> Optional[str]:
     try:
         out = subprocess.check_output(
@@ -194,8 +289,11 @@ def main() -> None:
         _allow()
         return
 
-    # It IS a push / PR-create. Now check the branch state.
-    repo_root = _git("rev-parse", "--show-toplevel")
+    # It IS a push / PR-create. Resolve the directory the push runs in before
+    # asking git anything — the hook's own cwd is the project root, which is
+    # the wrong branch whenever the push comes from a worktree.
+    push_cwd = resolve_push_cwd(command, payload.get("cwd"))
+    repo_root = _git("rev-parse", "--show-toplevel", cwd=push_cwd)
     if not repo_root:
         _allow()
         return

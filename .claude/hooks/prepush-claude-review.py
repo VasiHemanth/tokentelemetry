@@ -177,7 +177,11 @@ def main() -> None:
     if os.environ.get("TT_PREPUSH_REVIEW_RUNNING"):
         _allow()
 
-    repo_root = _git("rev-parse", "--show-toplevel")
+    # Same worktree caveat as the sibling hook: resolve where the push actually
+    # runs before asking git anything.
+    _resolve_cwd = getattr(_SIB, "resolve_push_cwd", None)
+    push_cwd = _resolve_cwd(command, payload.get("cwd")) if _resolve_cwd else payload.get("cwd")
+    repo_root = _git("rev-parse", "--show-toplevel", cwd=push_cwd)
     if not repo_root:
         _allow()
 
