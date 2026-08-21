@@ -938,7 +938,7 @@ export default function SessionDetailPage() {
                   )}
                   <button
                     onClick={() => {navigator.clipboard?.writeText(id)
-                        .then(() => { setCopiedId(true); setTimeout(() => setCopiedId(false), 1500); })
+                        .then(() => { setCopiedId(true); setTimeout(() => setCopiedId(false), 1000); })
                         .catch(() => {});
                     }}
                     title="Copy session id"
@@ -1692,6 +1692,7 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
 }
 
 function ContextPanel({ ctx }: { ctx: any }) {
+  const [copiedId, setCopiedId] = useState(false);
   const Row = ({ k, v, mono = true }: { k: string; v?: any; mono?: boolean }) =>
     v ? (
       <div className="space-y-0.5">
@@ -1708,13 +1709,27 @@ function ContextPanel({ ctx }: { ctx: any }) {
       {ctx.sessionId && (
         <div className="space-y-1">
           <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Session ID</div>
-          <div className="flex items-center gap-1.5 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1.5">
-            <span className="text-[10px] font-mono text-[var(--tt-fg)] break-all flex-1" title={ctx.sessionId}>{ctx.sessionId}</span>
+          <div className={`flex items-center gap-1.5 bg-[var(--tt-sunken)] border rounded px-2 py-1.5 transition-colors ${
+            copiedId
+              ? "text-[var(--tt-success-fg)] border-[color:var(--tt-success)]/50"
+              : "border-[var(--tt-border)]"
+          }`}>
+            <span className={`text-[10px] font-mono break-all flex-1 ${copiedId ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sessionId}>
+              {copiedId ? "Copied" : ctx.sessionId}
+            </span>
             <button
-              onClick={() => { navigator.clipboard?.writeText(ctx.sessionId); }}
-              className="text-[9px] font-black uppercase text-[var(--tt-fg-dim)] hover:text-[var(--tt-brand)] transition-colors px-1"
-              title="Copy">
-              copy
+              onClick={() => {navigator.clipboard?.writeText(ctx.sessionId)
+                  .then(() => { setCopiedId(true); setTimeout(() => setCopiedId(false), 1000); })
+                  .catch(() => {});
+              }}
+              title="Copy session id"
+              className={`p-1 rounded transition-colors ${
+                copiedId
+                  ? "text-[var(--tt-success-fg)]"
+                  : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
+              }`}
+            >
+              {copiedId ? (<Check size={11} strokeWidth={3} className="text-[var(--tt-success-fg)]" />) : (<Copy size={11} className="opacity-60" />)}
             </button>
           </div>
           {ctx.agent && <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
