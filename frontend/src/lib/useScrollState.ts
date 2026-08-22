@@ -41,6 +41,8 @@ export function useScrollState(key: string, isReady: boolean = true) {
 
   const saveScrollPosition = useCallback((top: number) => {
     if (isRestoringRef.current) return;
+    // Ignore programmatic scrolls that fire before the initial restore runs
+    if (!restoredRef.current) return;
     sessionStorage.setItem(`scroll_${key}`, String(top));
   },[key]);
 

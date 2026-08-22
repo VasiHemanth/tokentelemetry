@@ -16,6 +16,7 @@ import {
 import { formatCost, formatTokens } from "@/lib/format";
 import { Badge, Button, Card, EmptyState, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
+import { useScrollState } from "@/lib/useScrollState";
 
 const PAGE_SIZE = 50;
 // The backend rejects page_size above 200, so that is the most rows this view can
@@ -88,6 +89,9 @@ export default function HermesSessionExplorer() {
     pollMs: 15_000,
     initial: { sessions: [], pagination: { page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 } },
   });
+
+  // Restore scroll position once session data is loaded.
+  useScrollState("key_hermes_sessions_page", !loading);
 
   const activeFilterCount = [query.project, query.source, query.model, query.search].filter(Boolean).length;
 
