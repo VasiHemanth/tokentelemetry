@@ -33,7 +33,7 @@ Replace `Asia/Kolkata` with your own [IANA timezone](https://en.wikipedia.org/wi
 
 On the first run, `make up` builds the backend and frontend images (this takes a few minutes). Subsequent runs reuse the built images and skip the build, so they start in seconds. Run `make` on its own to see every target with a short description.
 
-The frontend serves on host port **13000** and the backend on **18000**. Both are published to `127.0.0.1` only, so the dashboard is reachable from the same machine and nowhere else by default.
+The frontend serves on host port **13000**; FastAPI is internal-only and reached through the frontend's same-origin proxy. The dashboard is therefore reachable from the same machine and nowhere else by default.
 
 ## Make targets
 

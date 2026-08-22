@@ -6,23 +6,20 @@
 #   make down        # stop and remove containers
 #   make clean       # also remove images and the tt_data volume
 #
-# Host ports (override via env vars):
-#   TT_API_PORT  backend  default 18000  →  http://localhost:18000
-#   PORT         frontend default 13000  →  http://localhost:13000
+# Only the frontend is published: PORT defaults to 13000. It streams API
+# requests over the internal Compose network, so reverse proxies need one port.
 #
 # Both ports bind to 127.0.0.1 (loopback) by default.  For LAN/tailnet access
 # run with TT_AUTH_TOKEN set and publish on 0.0.0.0 in a local override file:
 #   TT_AUTH_TOKEN=<secret> make up
-#   ports: ["0.0.0.0:${TT_API_PORT:-18000}:8000"]
+#   ports: ["0.0.0.0:${PORT:-13000}:3000"]
 # TT_AUTH_TOKEN is forwarded from your shell below; unset (the default) leaves
 # the auth gate a no-op, which is why the loopback-only default is safe.
-# Note: inside a container the backend sees the bridge gateway as the client
-# address, never 127.0.0.1, so the middleware's loopback exemption never
-# applies here. Once a token is set, the local browser is prompted too.
+# The frontend marks non-loopback callers before proxying, so FastAPI never
+# mistakes its internal hop for a local, token-exempt request.
 #
 # Container-internal ports are always 8000 (backend) and 3000 (frontend).
-# NEXT_PUBLIC_API_PORT is baked into the Next.js client bundle at build time —
-# rebuild the frontend image if TT_API_PORT changes.
+# The frontend rewrite is built with the stable internal backend:8000 target.
 #
 # The backend reads agent log directories from the host as read-only mounts.
 # ~/.claude is enabled by default; uncomment any others you use.
@@ -33,8 +30,7 @@ services:
   backend:
     build:
       context: ./backend
-    ports:
-      - "127.0.0.1:${TT_API_PORT:-18000}:8000"
+
     environment:
       - TT_HOST=0.0.0.0
       - TT_API_PORT=8000
@@ -73,10 +69,12 @@ services:
     build:
       context: ./frontend
       args:
-        # Browser uses the host port to reach the API — must match TT_API_PORT above
-        NEXT_PUBLIC_API_PORT: ${TT_API_PORT:-18000}
+        TT_PROXY_API_URL: http://backend:8000
     ports:
       - "127.0.0.1:${PORT:-13000}:3000"
+    environment:
+      - TT_SINGLE_PORT_PROXY=1
+      - TT_PROXY_API_URL=http://backend:8000
     depends_on:
       backend:
         # service_started is intentional: service_healthy causes Podman's gvproxy

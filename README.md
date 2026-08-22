@@ -302,7 +302,7 @@ This pattern is common when your agents (and their logs) run on a remote VPS or 
 NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
 ```
 
-The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is inherited by the Next.js dev server.
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is baked into the frontend build, so setting, changing, or clearing it triggers a rebuild on the next `./start.sh`.
 
 **On your laptop:**
 
@@ -315,6 +315,22 @@ Then open **http://localhost:3000** on your laptop.
 Both the UI and all data fetches are forwarded over the single SSH connection. The old single-port example (`-L 3000:...` only) produced a page skeleton with no data because the frontend would try to reach the backend on the laptop's localhost instead of the remote.
 
 This method requires no firewall changes on the remote machine and reuses your existing SSH authentication.
+
+### Single-port SSH tunnel (new)
+
+For a one-port tunnel, start TokenTelemetry with the server-side proxy enabled:
+
+```bash
+./start.sh --single-port
+```
+
+Then forward only the dashboard port from your laptop:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 user@remote-host
+```
+
+The dashboard proxies `/_tt-api` requests to the local FastAPI service. The proxy streams responses and preserves request methods, bearer authentication, and `?token=` artifact URLs. SSH traffic reaches the dashboard over loopback and keeps the local exemption; non-loopback callers are stamped by the proxy and must authenticate.
 
 ---
 
