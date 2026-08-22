@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from tt_paths import data_dir
+from tt_paths import canonical_project, data_dir
 
 # Resolved once at import. The data dir is an install-time setting (exported via
 # TOKENTELEMETRY_DATA_DIR / TOKENTELEMETRY_HOME before the backend launches), so
@@ -118,16 +118,21 @@ def save_hidden(paths: Set[str]) -> None:
 
 def hide_project(path: str) -> Set[str]:
     current = load_hidden()
-    current.add(path)
+    # Store the canonical form so membership checks against canonicalised
+    # card paths match regardless of the separator style that was submitted.
+    current.add(canonical_project(path))
     save_hidden(current)
     return current
 
 
 def unhide_project(path: str) -> Set[str]:
-    current = load_hidden()
-    current.discard(path)
-    save_hidden(current)
-    return current
+    # Rebuild the set in canonical form while removing the target, so an
+    # entry saved under another separator style (pre-canonicalisation) is
+    # removed too instead of surviving as an unremovable stale entry.
+    target = canonical_project(path)
+    updated = {p for p in (canonical_project(c) for c in load_hidden()) if p != target}
+    save_hidden(updated)
+    return updated
 
 
 def load_preferences() -> Dict[str, Any]:

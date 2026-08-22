@@ -32,11 +32,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from tt_paths import data_dir
+from tt_paths import canonical_project, data_dir
 
 _log = logging.getLogger("tokentelemetry.history")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Sub-dicts folded into ``ecosystem_json`` and expanded back out on read. These
 # are the keys the analytics aggregation + delegation views consume beyond the
@@ -133,6 +133,28 @@ def _migrate(con: sqlite3.Connection) -> None:
             pass
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.commit()
+    if ver < 3:
+        # v3 folds separator variants of the same project folder into the
+        # canonical identity (see tt_paths.canonical_project). Sessions are
+        # canonicalised at scan time from now on; without this one-time pass,
+        # rows persisted before the change (especially pruned ones, which are
+        # never re-written) would stop matching filters and cards written
+        # against the new form. DISTINCT keeps it cheap; idempotent by nature.
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL"
+            ).fetchall()
+            for r in rows:
+                canon = canonical_project(r["project"])
+                if canon != r["project"]:
+                    con.execute(
+                        "UPDATE sessions SET project=? WHERE project=?",
+                        (canon, r["project"]),
+                    )
+            con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            con.commit()
+        except sqlite3.Error:
+            _log.exception("history migrate v3 (project canonicalisation) failed")
 
 
 # ── serialization helpers ────────────────────────────────────────────────────
@@ -341,6 +363,9 @@ def query(
         where.append("last_ts <= ?"); params.append(to)
     for col, vals in (("agent", agents), ("model", models), ("project", projects)):
         vals = [v for v in (vals or []) if v]
+        if col == "project" and vals:
+            # Rows store the canonical form; accept either separator style.
+            vals = [canonical_project(v) for v in vals]
         if vals:
             where.append(f"{col} IN ({','.join('?' * len(vals))})")
             params.extend(vals)
