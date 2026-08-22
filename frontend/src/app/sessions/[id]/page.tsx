@@ -857,6 +857,18 @@ export default function SessionDetailPage() {
     });
   };
 
+  const handlePlayback = (idx: number) => {
+    setPlaybackIndex(idx);
+    if (events.length === 0) return;
+    const targetIdx = idx > 0 ? idx - 1 : 0;
+    setActiveStep(targetIdx);
+    requestAnimationFrame(() => {
+      stepRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      stepIndexRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      waterfallRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
+
   // Sync active step and inspector on dialogue card click
   const handleStepCardClick = (e: React.MouseEvent, idx: number) => {
     if ((e.target as HTMLElement).closest("button, a, summary, input, textarea, select, [role='button']")) {
@@ -1066,7 +1078,7 @@ export default function SessionDetailPage() {
             <div className="bg-[var(--tt-sunken)] px-4 py-3 rounded-[var(--tt-radius)] border border-[var(--tt-border)] flex items-center gap-4">
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setPlaybackIndex(Math.max(0, playbackIndex - 1))}
+                  onClick={() => handlePlayback(Math.max(0, playbackIndex - 1))}
                   aria-label="Previous step"
                   className="h-8 w-8 grid place-items-center rounded-md text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors"
                 >
@@ -1080,7 +1092,7 @@ export default function SessionDetailPage() {
                   {isPlaying ? <Pause size={14} /> : <Play size={14} />}
                 </button>
                 <button
-                  onClick={() => setPlaybackIndex(Math.min(events.length, playbackIndex + 1))}
+                  onClick={() => handlePlayback(Math.min(events.length, playbackIndex + 1))}
                   aria-label="Next step"
                   className="h-8 w-8 grid place-items-center rounded-md text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors"
                 >
@@ -1093,7 +1105,7 @@ export default function SessionDetailPage() {
                   min="0"
                   max={events.length}
                   value={playbackIndex}
-                  onChange={(e) => setPlaybackIndex(parseInt(e.target.value))}
+                  onChange={(e) => handlePlayback(parseInt(e.target.value))}
                   className="w-full h-1 rounded-full appearance-none cursor-pointer accent-[var(--tt-brand)]"
                   style={{ background: `linear-gradient(to right, var(--tt-brand) 0%, var(--tt-brand) ${(playbackIndex / Math.max(1, events.length)) * 100}%, rgba(255,255,255,0.06) ${(playbackIndex / Math.max(1, events.length)) * 100}%, rgba(255,255,255,0.06) 100%)` }}
                 />
