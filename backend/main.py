@@ -21,7 +21,7 @@ from harness_config import (
     load_preferences, save_preferences,
 )
 import notifications as notif
-from tt_paths import data_dir
+from tt_paths import canonical_project, data_dir
 import scan_cache
 import codex_goals
 import hermes_telemetry as _ht
@@ -7445,6 +7445,13 @@ def _scan_sessions_sync():
     # loop session (raw facts were parsed above; liveness is never cached).
     _annotate_loop_lifecycle(sessions, datetime.now(timezone.utc))
 
+    # One folder, one identity: agent CLIs disagree on separator style
+    # (`C:\a\b` vs `C:/a/b`), which used to split real projects into duplicate
+    # /projects cards. Canonicalise once here so every consumer downstream
+    # (rollups, filters, durable history) sees the same string.
+    for s in sessions:
+        s["project"] = canonical_project(s["project"])
+
     # Global sort by timestamp descending
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
     return sessions
@@ -8945,7 +8952,10 @@ def canonical_repo(path: str) -> str:
     *dir* means the main checkout: the repo root and any plain subdirectory of it
     are left unchanged (they are the same working tree, not separate worktrees —
     folding every `frontend/`/`backend/` into the repo is not the intent here).
-    Returns `path` unchanged when no worktree is found. Memoised."""
+    Returns `path` unchanged when no worktree is found — in canonical form
+    (see `tt_paths.canonical_project`) either way, so callers can compare the
+    result against canonicalised card paths with startswith()/dict lookups.
+    Memoised."""
     if not path:
         return path
     cached = _canonical_repo_cache.get(path)
@@ -8974,6 +8984,10 @@ def canonical_repo(path: str) -> str:
                 result = path[:m.start()]
     except Exception:
         result = path
+    # `str(Path)` above yields native separators (`C:\repo` on Windows) while
+    # card paths are forward-slashed; emit both in one identity space or the
+    # worktree grouping below would synthesise duplicate repo cards.
+    result = canonical_project(result)
     _canonical_repo_cache[path] = result
     return result
 
@@ -9003,7 +9017,8 @@ def _repo_worktree_paths(repo: str) -> List[str]:
                 # gitdir points at <worktree>/.git — strip the trailing /.git
                 wp = _GITDIR_TAIL_RE.sub("", gd.read_text("utf-8", errors="ignore").strip())
                 if wp:
-                    paths.append(wp)
+                    # Canonical form: these keys are looked up with card paths.
+                    paths.append(canonical_project(wp))
     except Exception:
         pass
     _worktree_registry_cache[repo] = paths
@@ -9013,7 +9028,9 @@ def _repo_worktree_paths(repo: str) -> List[str]:
 @app.get("/projects")
 async def get_projects(include_hidden: bool = False):
     sessions = await get_sessions_cached(); projects = {}
-    hidden = load_hidden()
+    # Compare canonically: entries saved before project canonicalisation (or
+    # by hand) may use another separator style than the cards do now.
+    hidden = {canonical_project(p) for p in load_hidden()}
     for s in sessions:
         proj = s["project"]
         # The Antigravity "unassigned" sentinel isn't a real workspace — skip it
@@ -9742,7 +9759,10 @@ def _budget_window(period: str, now_local: datetime):
 def _session_matches_filters(s: Dict[str, Any], filters: Dict[str, str]) -> bool:
     """A session matches iff every present filter key equals the session's value.
     Empty filters ({}) match everything (global budget)."""
-    if "project" in filters and s.get("project") != filters["project"]:
+    if "project" in filters and \
+            canonical_project(s.get("project")) != canonical_project(filters["project"]):
+        # Canonical on both sides: budgets saved before project paths were
+        # canonicalised may use another separator style than sessions do now.
         return False
     if "agent" in filters and s.get("agent") != filters["agent"]:
         return False
