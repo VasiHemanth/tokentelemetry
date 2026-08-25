@@ -914,8 +914,10 @@ export default function SessionDetailPage() {
 
   // Categorize event parts for split view layouts (Dialogue vs Brain)
   const getEventProfile = (event: Event) => {
-    const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
-    const isTool = event.toolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call";
+    const hasThoughts = Array.isArray(event.thoughts) ? event.thoughts.length > 0 : Boolean(event.thoughts);
+    const hasToolCalls = Array.isArray(event.toolCalls) ? event.toolCalls.length > 0 : Boolean(event.toolCalls);
+    const isReasoning = event.type === "agent_reasoning" || hasThoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
+    const isTool = hasToolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call" || event.type === "tool_call" || event.type === "tool_result";
     const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
     const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: any) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) || 
                     (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: any) => c.text || c.input_text)) ||
@@ -1369,6 +1371,23 @@ export default function SessionDetailPage() {
                           {visibleEvents.map((event, idx) => {
                              if (!isFilterVisible(event)) return null;
                              const { hasDialogue, hasBrain } = getEventProfile(event);
+                             // Split mixed turns (Reasoning/Tools + Response) into sequential staggered rows
+                             if (hasBrain && hasDialogue) {
+                                return (
+                                   <React.Fragment key={idx}>
+                                      {/* 1. Reasoning & Tools first on the right */}
+                                      <div ref={(el) => { stepRefs.current[idx] = el; }} className="grid grid-cols-2 gap-8">
+                                         <div />
+                                         {renderCard(event, idx, "brain", false)}
+                                      </div>
+                                      {/* 2. Final response follows on the left */}
+                                      <div className="grid grid-cols-2 gap-8">
+                                         {renderCard(event, idx, "dialogue", false)}
+                                         <div />
+                                      </div>
+                                   </React.Fragment>
+                                );
+                             }
                              return (
                                 <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className="grid grid-cols-2 gap-8">
                                    {hasDialogue ? renderCard(event, idx, "dialogue", false) : <div />}
