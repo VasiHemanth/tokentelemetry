@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
@@ -482,6 +482,7 @@ export default function SessionDetailPage() {
 
   // Trace View States
   const [splitView, setSplitView] = useState(false);
+  const [splitCompact, setSplitCompact] = useState(true);
   const [playbackIndex, setPlaybackIndex] = useState(1000);
   // High-water mark of how much of the trace has been revealed. Playback
   // truncates the transcript to `playbackIndex`, but seeking BACK must not
@@ -911,6 +912,54 @@ export default function SessionDetailPage() {
     });
   };
 
+  // Categorize event parts for split view layouts (Dialogue vs Brain)
+  const getEventProfile = (event: Event) => {
+    const hasThoughts = Array.isArray(event.thoughts) ? event.thoughts.length > 0 : Boolean(event.thoughts);
+    const hasToolCalls = Array.isArray(event.toolCalls) ? event.toolCalls.length > 0 : Boolean(event.toolCalls);
+    const isReasoning = event.type === "agent_reasoning" || hasThoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
+    const isTool = hasToolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call" || event.type === "tool_call" || event.type === "tool_result";
+    const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
+    const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: any) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) || 
+                    (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: any) => c.text || c.input_text)) ||
+                    (event.type === "assistant" && Array.isArray(event.payload) && event.payload.some((p: any) => p.value && p.kind !== "thinking")) ||
+                    (event.type === "user" && (event.payload?.text || typeof event.payload === 'string')) ||
+                    (typeof event.content === 'string' && event.content.trim().length > 0);
+
+    const hasBrain = isReasoning || isTool || hasThinkingPart;
+    const hasDialogue = hasText || !hasBrain;
+    return { hasDialogue, hasBrain };
+  };
+
+  // Check whether the event matches current active step filters
+  const isFilterVisible = (event: Event) => {
+    if (selectedFilters.size === 0) return true;
+    const kind = eventKind(event);
+    const baseLabel = stepLabel(event, kind);
+    const filterKey = kind === "user" ? "User Prompt" : baseLabel;
+    return selectedFilters.has(filterKey);
+  };
+
+  // Render an event card wrapper with active highlight ring and optional ref binding
+  const renderCard = (event: Event, idx: number, mode: "dialogue" | "brain" | "all", setRef = true) => {
+    const kind = eventKind(event);
+    return (
+      <div
+        key={`${idx}-${mode}`}
+        ref={setRef ? (el) => { stepRefs.current[idx] = el; } : undefined}
+        onClick={(e) => handleStepCardClick(e, idx)}
+        className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}
+      >
+        <EventCard
+          event={event}
+          mode={mode}
+          agent={agent}
+          tokens={mode !== "brain" ? stepTokens[idx] : undefined}
+          reasoningEffort={mode !== "brain" ? stepReasoningEffort[idx] : undefined}
+        />
+      </div>
+    );
+  };
+
   // Waterfall Logic
   const waterfallData = useMemo(() => {
      const tools: any[] = [];
@@ -1252,13 +1301,13 @@ export default function SessionDetailPage() {
           </aside>
 
           {/* CENTER: Conversation */}
-          <section className="overflow-y-auto h-full p-8">
+          <section className="overflow-y-auto h-full p-4">
              {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
              {agent && (
-               <div className="mb-8">
-                 <SummaryPanel sessionId={id} agent={agent} />
-               </div>
-             )}
+                <div className="mb-8">
+                  <SummaryPanel sessionId={id} agent={agent} />
+                </div>
+              )}
              {/* Hermes session chain (compression / branched continuations) */}
              {agent === "hermes" && sessionInfo && allHermesSessions && (
                <HermesChainBanner current={sessionInfo} all={allHermesSessions} from={fromParam} />
@@ -1275,61 +1324,90 @@ export default function SessionDetailPage() {
              ))}
              {/* Delegated work — subagent spawns and what they actually cost */}
              {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
-             <div className={splitView ? "grid grid-cols-2 gap-8" : "space-y-8"}>
-                <div className="space-y-8">
-                   {splitView && <h3 className="text-[10px] font-black text-[var(--tt-fg-dim)] uppercase tracking-[0.2em] ml-2 mb-2 flex items-center gap-2"><User size={14}/> User & Agent Dialogue</h3>}
-                   {visibleEvents.map((event, idx) => {
-                      const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
-                      const isTool = event.toolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call";
-                      
-                      // Check for thinking inside Copilot assistant payload array
-                      const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
-                      
-                      // For Cursor/Claude/Codex/Copilot: If it's an message with BOTH text and tools/reasoning, 
-                      // we want the text to show up in the dialogue column.
-                      const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: any) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) || 
-                                      (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: any) => c.text || c.input_text)) ||
-                                      (event.type === "assistant" && Array.isArray(event.payload) && event.payload.some((p: any) => p.value && p.kind !== "thinking")) ||
-                                      (event.type === "user" && (event.payload?.text || typeof event.payload === 'string')) ||
-                                      (typeof event.content === 'string' && event.content.trim().length > 0);
-                      
-                      if (splitView && ((isReasoning || hasThinkingPart) && !hasText)) return null;
-                      const kind = eventKind(event);
-                      const baseLabel = stepLabel(event, kind);
-                      const filterKey = kind === "user" ? "User Prompt" : baseLabel;
-                      if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
+             {/* Split View Header & Boundary Gap Mode Controller */}
+             {splitView && (
+               <div className="relative grid grid-cols-2 gap-8 items-center mb-6 pb-2 border-b border-[var(--tt-border)]">
+                  <div className="text-[10px] font-black text-[var(--tt-fg-dim)] uppercase tracking-[0.2em] ml-2 flex items-center gap-2"><User size={14} /> User & Agent Dialogue</div>
+                  {/* Centered Timeline / Compact Mode Switch */}
+                  <button
+                     type="button"
+                     onClick={() => setSplitCompact(!splitCompact)}
+                     title={splitCompact ? "Timeline flow" : "Compact flow"}
+                     className={`absolute left-1/2 top-0 bottom-2 my-auto -translate-x-1/2 flex items-center justify-center p-1 rounded cursor-pointer transition-colors z-10 ${
+                        !splitCompact
+                           ? "bg-[var(--tt-brand-bg)] text-[var(--tt-brand)]"
+                           : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:bg-[var(--tt-panel-hover)]"
+                     }`}
+                  >
+                     {splitCompact ? <ListChevronsDownUp size={14} /> : <ListChevronsUpDown size={14} />}
+                  </button>
+                  <div className="text-[10px] font-black text-[var(--tt-success-fg)] uppercase tracking-[0.2em] pl-4 flex items-center gap-2"><Brain size={14} /> Internal Reasoning & Tools</div>
+               </div>
+             )}
+             {splitView ? (
+                 <div className="relative">
+                    {/* Always visible continuous center vertical divider */}
+                    <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-[var(--tt-border)] pointer-events-none" />
 
-                      return (
-                         <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
-                            <EventCard event={event} mode={splitView ? "dialogue" : "all"} agent={agent} tokens={stepTokens[idx]} reasoningEffort={stepReasoningEffort[idx]} />
-                         </div>
-                      );
-                   })}
-                </div>
-                {splitView && (
-                   <div className="space-y-8 border-l border-[var(--tt-border)] pl-8">
-                      <h3 className="text-[10px] font-black text-[var(--tt-success-fg)] uppercase tracking-[0.2em] mb-2 flex items-center gap-2"><Brain size={14}/> Internal Reasoning & Tools</h3>
-                      {visibleEvents.map((event, idx) => {
-                         const isReasoning = event.type === "agent_reasoning" || event.thoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
-                         const isTool = event.toolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call";
-                         
-                         const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
-
-                         if (!isReasoning && !isTool && !hasThinkingPart) return null;
-                         const kind = eventKind(event);
-                         const baseLabel = stepLabel(event, kind);
-                         const filterKey = kind === "user" ? "User Prompt" : baseLabel;
-                         if (selectedFilters.size > 0 && !selectedFilters.has(filterKey)) return null;
-                         return (
-                            <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} onClick={(e) => handleStepCardClick(e, idx)} className={activeStep === idx ? `${stepRingClass[kind]} rounded-[var(--tt-radius-lg)]` : ""}>
-                               <EventCard event={event} mode="brain" agent={agent} />
-                            </div>
-                         );
-                      })}
-                   </div>
-                )}
-             </div>
-          </section>
+                    {splitCompact ? (
+                       /* COMPACT MODE: All cards packed tightly in 2 independent columns (Default) */
+                       <div className="grid grid-cols-2 gap-8 relative z-0">
+                          <div className="space-y-8">
+                             {visibleEvents.map((event, idx) => {
+                                if (!isFilterVisible(event)) return null;
+                                return getEventProfile(event).hasDialogue ? renderCard(event, idx, "dialogue") : null;
+                             })}
+                          </div>
+                          <div className="space-y-8">
+                             {visibleEvents.map((event, idx) => {
+                                if (!isFilterVisible(event)) return null;
+                                return getEventProfile(event).hasBrain ? renderCard(event, idx, "brain") : null;
+                             })}
+                          </div>
+                       </div>
+                    ) : (
+                       /* TIMELINE MODE: Synchronized vertical flow (staggered across 2 columns) */
+                       <div className="space-y-8 relative z-0">
+                          {visibleEvents.map((event, idx) => {
+                             if (!isFilterVisible(event)) return null;
+                             const { hasDialogue, hasBrain } = getEventProfile(event);
+                             // Split mixed turns (Reasoning/Tools + Response) into sequential staggered rows
+                             if (hasBrain && hasDialogue) {
+                                return (
+                                   <React.Fragment key={idx}>
+                                      {/* 1. Reasoning & Tools first on the right */}
+                                      <div ref={(el) => { stepRefs.current[idx] = el; }} className="grid grid-cols-2 gap-8">
+                                         <div />
+                                         {renderCard(event, idx, "brain", false)}
+                                      </div>
+                                      {/* 2. Final response follows on the left */}
+                                      <div className="grid grid-cols-2 gap-8">
+                                         {renderCard(event, idx, "dialogue", false)}
+                                         <div />
+                                      </div>
+                                   </React.Fragment>
+                                );
+                             }
+                             return (
+                                <div key={idx} ref={(el) => { stepRefs.current[idx] = el; }} className="grid grid-cols-2 gap-8">
+                                   {hasDialogue ? renderCard(event, idx, "dialogue", false) : <div />}
+                                   {hasBrain ? renderCard(event, idx, "brain", false) : <div />}
+                                </div>
+                             );
+                          })}
+                       </div>
+                    )}
+                 </div>
+              ) : (
+                 /* UNIFIED MODE: Single full-width column */
+                 <div className="space-y-8">
+                    {visibleEvents.map((event, idx) => {
+                       if (!isFilterVisible(event)) return null;
+                       return renderCard(event, idx, "all");
+                    })}
+                 </div>
+              )}
+           </section>
 
           {/* RIGHT: Sidebar */}
           <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full">
