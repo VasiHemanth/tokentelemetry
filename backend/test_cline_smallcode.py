@@ -21,6 +21,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import main  # noqa: E402
+from tt_paths import canonical_project  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +165,9 @@ def test_smallcode_reuses_known_project_roots(scan_env, monkeypatch):
     smallcode = [s for s in sessions if s["agent"] == "smallcode"]
     assert len(smallcode) == 1
     assert smallcode[0]["id"] == "reuse-1"
-    assert smallcode[0]["project"] == str(proj)
+    # Scan output is canonicalised (tt_paths.canonical_project), so compare
+    # against the canonical form of the root, not its raw on-disk spelling.
+    assert smallcode[0]["project"] == canonical_project(str(proj))
 
 
 def test_smallcode_extra_roots_env(scan_env, monkeypatch):
@@ -178,7 +181,7 @@ def test_smallcode_extra_roots_env(scan_env, monkeypatch):
     smallcode = [s for s in sessions if s["agent"] == "smallcode"]
     assert len(smallcode) == 1
     assert smallcode[0]["id"] == "extra-1"
-    assert smallcode[0]["project"] == str(extra)
+    assert smallcode[0]["project"] == canonical_project(str(extra))
 
 
 def test_session_detail_smallcode(tmp_path, monkeypatch):

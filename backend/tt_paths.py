@@ -22,11 +22,39 @@ read never materialises an empty folder in the wrong place.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 # The conventional folder name appended under the user's home (or under
 # TOKENTELEMETRY_HOME). Not appended when TOKENTELEMETRY_DATA_DIR is used.
 DEFAULT_DIRNAME = ".tokentelemetry"
+
+# Windows-shaped path prefixes: a drive letter (`C:`) or a UNC root (`\\`).
+_WIN_PATH_RE = re.compile(r"^(?:[A-Za-z]:|\\\\)")
+
+
+def canonical_project(path: str | None) -> str | None:
+    """Fold separator variants of the same folder into one project identity.
+
+    Agent CLIs log cwd in their own style — some emit ``C:\\a\\b``, others
+    ``C:/a/b``, a few mix both — and grouping compared those strings verbatim,
+    so one real folder could surface as several project cards on Windows.
+    Windows-shaped paths (drive-letter or UNC prefix) are unified to forward
+    slashes; every path loses trailing separators. A backslash inside a POSIX
+    path is a legal filename character there, so it is never rewritten.
+
+    Not folded on purpose: letter case (``C:\\Repo`` vs ``c:/repo`` stay
+    distinct — folding would merge different directories on case-sensitive
+    filesystems). Non-path values ("unknown", agent sentinels, ``None``,
+    ``""``) pass through unchanged.
+    """
+    if not isinstance(path, str) or not path:
+        return path
+    if _WIN_PATH_RE.match(path):
+        path = path.replace("\\", "/")
+    trimmed = path.rstrip("/")
+    # A lone "/" or "//" must not collapse to "".
+    return trimmed if trimmed else path
 
 
 def data_dir() -> Path:
