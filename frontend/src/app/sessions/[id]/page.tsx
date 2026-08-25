@@ -483,6 +483,12 @@ export default function SessionDetailPage() {
   // Trace View States
   const [splitView, setSplitView] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(1000);
+  // High-water mark of how much of the trace has been revealed. Playback
+  // truncates the transcript to `playbackIndex`, but seeking BACK must not
+  // re-hide steps already on screen: if it did, the seek target would always
+  // be the last rendered card and the conversation would pin to the bottom
+  // with nothing below it. The visible slice is max(playbackIndex, this).
+  const [revealedCount, setRevealedCount] = useState(1000);
   const [isPlaying, setIsPlaying] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
@@ -493,6 +499,7 @@ export default function SessionDetailPage() {
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const waterfallRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const seekScrollRaf = useRef<number | null>(null);
 
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
@@ -550,6 +557,7 @@ export default function SessionDetailPage() {
           setRawEvents(rawList);
           setEvents(evts);
           setPlaybackIndex(evts.length);
+          setRevealedCount(evts.length);
           setLoading(false)
         })
         .catch((err) => {
@@ -612,14 +620,15 @@ export default function SessionDetailPage() {
   const togglePlay = () => {
     if (!isPlaying && playbackIndex >= events.length) {
       setPlaybackIndex(0);
+      setRevealedCount(0);
       setActiveStep(null);
     }
     setIsPlaying((v) => !v);
   };
 
   const visibleEvents = useMemo(() => {
-     return events.slice(0, playbackIndex);
-  }, [events, playbackIndex]);
+     return events.slice(0, Math.max(playbackIndex, revealedCount));
+  }, [events, playbackIndex, revealedCount]);
 
   // SAFE Helper to check content for a type (Fixes TypeError)
   const hasContentType = (event: Event, type: string) => {
@@ -859,15 +868,32 @@ export default function SessionDetailPage() {
 
   const handlePlayback = (idx: number) => {
     setPlaybackIndex(idx);
+    // Keep what's already revealed on screen (including anything an in-flight
+    // replay had reached) so seeking moves the playhead through the transcript
+    // rather than truncating it to the target.
+    setRevealedCount((r) => Math.max(r, playbackIndex, idx));
     if (events.length === 0) return;
-    const targetIdx = idx > 0 ? idx - 1 : 0;
+    // Step 0 reveals nothing, so no step is active — same reset togglePlay uses.
+    // Using 0 here would light up row 000 while it is also dimmed as "beyond".
+    const targetIdx = idx > 0 ? idx - 1 : null;
     setActiveStep(targetIdx);
-    requestAnimationFrame(() => {
-      stepRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "center" });
-      stepIndexRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      waterfallRefs.current[targetIdx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (targetIdx === null) return;
+    // A drag fires `input` on every pixel. A smooth scroll restarted on each
+    // one never arrives, so the pane appears frozen; seek instantly and keep at
+    // most one pending frame. Auto-play keeps `smooth` — one step per 600ms has
+    // room to animate.
+    if (seekScrollRaf.current !== null) cancelAnimationFrame(seekScrollRaf.current);
+    seekScrollRaf.current = requestAnimationFrame(() => {
+      seekScrollRaf.current = null;
+      stepRefs.current[targetIdx]?.scrollIntoView({ behavior: "auto", block: "center" });
+      stepIndexRefs.current[targetIdx]?.scrollIntoView({ behavior: "auto", block: "nearest" });
+      waterfallRefs.current[targetIdx]?.scrollIntoView({ behavior: "auto", block: "nearest" });
     });
   };
+
+  useEffect(() => () => {
+    if (seekScrollRaf.current !== null) cancelAnimationFrame(seekScrollRaf.current);
+  }, []);
 
   // Sync active step and inspector on dialogue card click
   const handleStepCardClick = (e: React.MouseEvent, idx: number) => {
