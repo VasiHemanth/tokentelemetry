@@ -371,18 +371,29 @@ function ensureBackend() {
 
 function ensureFrontend() {
   if (!which('npm')) die('npm is required but was not found in PATH.');
-  // Reinstall when package.json changed since the last install — not just when
-  // node_modules is missing. A bare existence check let stale installs linger:
-  // users who installed before a new dependency was declared (e.g. qrcode.react,
-  // issue #92) kept an old node_modules and hit "Module not found" at runtime.
-  // Mirrors ensureBackend()'s requirements.txt SHA stamp. A missing stamp (old
-  // install predating this check) hashes to a mismatch, so affected users
-  // self-heal on their next launch.
+  // Reinstall when the declared dependencies changed since the last install —
+  // not just when node_modules is missing. A bare existence check let stale
+  // installs linger: users who installed before a new dependency was declared
+  // (e.g. qrcode.react, issue #92) kept an old node_modules and hit
+  // "Module not found" at runtime. Mirrors ensureBackend()'s SHA stamp, which
+  // hashes the file it actually installs from. A missing stamp (old install
+  // predating this check) hashes to a mismatch, so affected users self-heal on
+  // their next launch.
   const nmDir = path.join(frontendDir, 'node_modules');
   const pkgPath = path.join(frontendDir, 'package.json');
   const lockPath = path.join(frontendDir, 'package-lock.json');
   const stampPath = path.join(nmDir, '.package-json.sha');
-  const currentSha = require('crypto').createHash('sha1').update(fs.readFileSync(pkgPath)).digest('hex');
+  // Hash the lockfile too, because `npm ci` below installs exactly what the lock
+  // pins — the lock, not package.json, decides what lands in node_modules.
+  // Stamping package.json alone meant a lockfile-only change was invisible here:
+  // a transitive security bump moves the lock while every declared range stays
+  // put, so existing installs kept the vulnerable versions until package.json
+  // happened to change for some unrelated reason. package.json stays in the
+  // hash to cover the `npm install` fallback path when no lock is present.
+  const stampInputs = fs.existsSync(lockPath) ? [pkgPath, lockPath] : [pkgPath];
+  const hash = require('crypto').createHash('sha1');
+  for (const input of stampInputs) hash.update(fs.readFileSync(input));
+  const currentSha = hash.digest('hex');
   let cachedSha = null;
   try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
   if (fs.existsSync(nmDir) && cachedSha === currentSha) return;
