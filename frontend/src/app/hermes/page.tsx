@@ -21,7 +21,7 @@ import {
 } from "@/lib/hermesTelemetry";
 import SourceBadge from "@/components/SourceBadge";
 import { formatCost } from "@/lib/format";
-import { profileColor, profileTint } from "@/lib/profileColor";
+import { profileColor } from "@/lib/profileColor";
 import { AgentLogo } from "@/components/icons/AgentLogo";
 import { trackEvent } from "@/lib/telemetry";
 

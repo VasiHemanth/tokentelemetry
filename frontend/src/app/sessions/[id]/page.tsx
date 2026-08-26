@@ -5,9 +5,8 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, Folder, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
 import Link from "next/link";
-import { format } from "date-fns";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
@@ -17,7 +16,11 @@ import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
-import { coerceReasoningText } from "@/lib/reasoning";
+
+// Harnesses emit different event schemas. Keep that compatibility boundary
+// explicit while the normalized Event shape remains intentionally permissive.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TraceValue = any;
 
 interface Artifact {
   name: string;
@@ -51,7 +54,7 @@ interface Session {
   mcp_tools: string[];
   subagents: string[];
   has_plan: boolean;
-  plans: any[];
+  plans: TraceValue[];
   model?: string;
   models_used?: string[];
   tokens?: { input: number; output: number; cached: number; total: number; cost?: number; source?: "usage" | "context" };
@@ -108,9 +111,9 @@ interface Session {
   /** Hermes-only: the raw end_reason behind `outcome`, null when there was none. */
   outcome_raw?: string | null;
   /** TRACE loop metadata; present only on loop sessions (see backend /sessions) */
-  loop?: any;
+  loop?: TraceValue;
   /** Goal Mode (`/goal`); a session can set several, so this is a list */
-  goals?: any[];
+  goals?: TraceValue[];
   /** Claude Code records that lack local usage and therefore cannot be priced. */
   untracked_background?: { recaps: number; titles: number; compactions: number; total: number };
 }
@@ -121,14 +124,14 @@ interface Event {
   role?: string;
   timestamp?: string;
   normalized_timestamp?: number;
-  payload?: any;
-  message?: any;
-  attachment?: any;
-  toolUseResult?: any;
+  payload?: TraceValue;
+  message?: TraceValue;
+  attachment?: TraceValue;
+  toolUseResult?: TraceValue;
   uuid?: string;
-  content?: any;
-  thoughts?: any[];
-  toolCalls?: any[];
+  content?: TraceValue;
+  thoughts?: TraceValue[];
+  toolCalls?: TraceValue[];
 }
 
 type StepKind = "user" | "assistant" | "reasoning" | "tool" | "tool_result" | "meta" | "other";
@@ -156,7 +159,7 @@ interface StepTokens {
      preceding event as `_tt_tokens` in normalizeTraceEvents;
    - OpenCode: `step-finish` parts carry usage — attached backend-side as
      `tokens` on the step's last event. */
-function eventTokens(evt: any): StepTokens | null {
+function eventTokens(evt: TraceValue): StepTokens | null {
   const u = evt.message?.usage || evt._tt_tokens;
   if (u && (u.input_tokens != null || u.output_tokens != null)) {
     return {
@@ -181,7 +184,7 @@ function eventTokens(evt: any): StepTokens | null {
 function eventKind(evt: Event): StepKind {
   const type = evt.type;
   const role = evt.role || evt.message?.role;
-  const payloadType = (evt.payload as any)?.type;
+  const payloadType = (evt.payload as TraceValue)?.type;
 
   // Codex event_msg sub-types
   if (type === "event_msg" && payloadType === "user_message") return "user";
@@ -194,17 +197,17 @@ function eventKind(evt: Event): StepKind {
   if (type === "session_meta" || type === "event_msg" || type === "turn_context") return "meta";
   if (type === "agent_reasoning" || evt.thoughts || payloadType === "reasoning" || type === "assistant_thinking") return "reasoning";
 
-  if (Array.isArray(evt.payload) && (evt.payload as any[]).some((p: any) => p.kind === "thinking" || p.type === "thinking")) return "reasoning";
-  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "thinking" || c.type === "thought")) return "reasoning";
+  if (Array.isArray(evt.payload) && (evt.payload as TraceValue[]).some((p: TraceValue) => p.kind === "thinking" || p.type === "thinking")) return "reasoning";
+  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: TraceValue) => c.type === "thinking" || c.type === "thought")) return "reasoning";
   if (evt.toolCalls || payloadType === "function_call" || payloadType === "tool_use") return "tool";
-  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_use")) return "tool";
-  if ((type === "user" || role === "user") && Array.isArray(evt.message?.content) && evt.message.content.some((c: any) => c.type === "tool_result")) return "tool_result";
+  if (role === "assistant" && Array.isArray(evt.message?.content) && evt.message.content.some((c: TraceValue) => c.type === "tool_use")) return "tool";
+  if ((type === "user" || role === "user") && Array.isArray(evt.message?.content) && evt.message.content.some((c: TraceValue) => c.type === "tool_result")) return "tool_result";
   if (type === "user" || role === "user" || (type === "response_item" && evt.payload?.role === "user") || type === "request_item") return "user";
   if (type === "assistant" || role === "assistant" || role === "model" || role === "gemini" || type === "model" || type === "gemini" || (type === "response_item" && evt.payload?.role === "assistant" && evt.payload?.type === "message")) return "assistant";
   return "other";
 }
 
-function codexVisibleSignatures(event: any): string[] {
+function codexVisibleSignatures(event: TraceValue): string[] {
   const payload = event?.payload;
   if (!payload || typeof payload !== "object") return [];
 
@@ -223,21 +226,21 @@ function codexVisibleSignatures(event: any): string[] {
   if (event.type !== "response_item") return [];
   if (payload.type === "reasoning") {
     return (payload.summary || [])
-      .filter((item: any) => item && typeof item === "object")
-      .map((item: any) => textSignature("reasoning", item.text))
+      .filter((item: TraceValue) => item && typeof item === "object")
+      .map((item: TraceValue) => textSignature("reasoning", item.text))
       .filter(Boolean) as string[];
   }
   if (payload.type !== "message" || !["user", "assistant"].includes(payload.role)) return [];
 
   const text = (payload.content || [])
-    .filter((item: any) => item && ["input_text", "output_text"].includes(item.type))
-    .map((item: any) => item.text || "")
+    .filter((item: TraceValue) => item && ["input_text", "output_text"].includes(item.type))
+    .map((item: TraceValue) => item.text || "")
     .join("");
   const signature = textSignature(payload.role, text);
   return signature ? [signature] : [];
 }
 
-function codexEventTimestamp(event: any): number | undefined {
+function codexEventTimestamp(event: TraceValue): number | undefined {
   if (typeof event?.normalized_timestamp === "number") return event.normalized_timestamp;
   if (event?.timestamp) {
     const timestamp = Date.parse(event.timestamp);
@@ -246,7 +249,7 @@ function codexEventTimestamp(event: any): number | undefined {
   return undefined;
 }
 
-function dedupeCodexMirrors(events: any[]): any[] {
+function dedupeCodexMirrors(events: TraceValue[]): TraceValue[] {
   const canonical = new Map<string, Array<{ index: number; timestamp?: number }>>();
   events.forEach((event, index) => {
     if (event.type !== "response_item") return;
@@ -270,8 +273,8 @@ function dedupeCodexMirrors(events: any[]): any[] {
   });
 }
 
-function collapseCodexReasoningSnapshots(events: any[]): any[] {
-  const collapsed: any[] = [];
+function collapseCodexReasoningSnapshots(events: TraceValue[]): TraceValue[] {
+  const collapsed: TraceValue[] = [];
   for (const event of events) {
     const isReasoning = event?.type === "response_item" && event?.payload?.type === "reasoning";
     if (!isReasoning) {
@@ -310,10 +313,10 @@ function collapseCodexReasoningSnapshots(events: any[]): any[] {
 /* Normalize a raw trace payload (session detail or subagent transcript) into
    renderable events — shared by the main trace fetch and the subagent
    drill-in viewer so both filter the same noise. */
-function normalizeTraceEvents(agent: string | null, data: any): Event[] {
-  let evts: any[] = [];
+function normalizeTraceEvents(agent: string | null, data: TraceValue): Event[] {
+  let evts: TraceValue[] = [];
   if (agent === "gemini" || agent === "antigravity") {
-    evts = (data?.messages || []).map((m: any) => ({
+    evts = (data?.messages || []).map((m: TraceValue) => ({
       ...m,
       type: m.type === "gemini" ? "assistant" : m.type,
     }));
@@ -326,8 +329,8 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
   if (agent === "codex") {
     // token_count events are filtered as noise, but they carry the turn's
     // usage — hand it to the preceding kept event for the per-step chip (#128).
-    let lastKept: any = null;
-    evts = evts.filter((e: any) => {
+    let lastKept: TraceValue = null;
+    evts = evts.filter((e: TraceValue) => {
       if (e.type === "turn_context") return false;
       if (e.type === "event_msg" && e.payload?.type === "token_count") {
         const u = e.payload?.info?.last_token_usage;
@@ -347,7 +350,7 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
       "last-prompt", "permission-mode", "ai-title", "file-history-snapshot",
       "queue-operation", "attachment", "system",
     ]);
-    evts = evts.filter((e: any) => {
+    evts = evts.filter((e: TraceValue) => {
       if (NOISE_TYPES.has(e.type)) return false;
       if (e.type === "user" && e.isMeta) return false;
       const c = e.message?.content;
@@ -364,9 +367,9 @@ function normalizeTraceEvents(agent: string | null, data: any): Event[] {
    record a discrete effort/level setting return []. The caller joins the result
    with " → " so a session that changed effort mid-run shows the progression.
    Only agents with a real signal are listed — see the reasoning-effort audit. */
-function reasoningEffortTimeline(agent: string | null, rawEvents: any[]): { ts: number; effort: string }[] {
+function reasoningEffortTimeline(agent: string | null, rawEvents: TraceValue[]): { ts: number; effort: string }[] {
   const pts: { ts: number; effort: string }[] = [];
-  const add = (e: any, v: any) => { if (typeof v === "string" && v) pts.push({ ts: normalizeTs(e) ?? 0, effort: v }); };
+  const add = (e: TraceValue, v: TraceValue) => { if (typeof v === "string" && v) pts.push({ ts: normalizeTs(e) ?? 0, effort: v }); };
   for (const e of rawEvents) {
     switch (agent) {
       case "codex": // per-turn turn_context; newer builds mirror under collaboration_mode
@@ -394,7 +397,7 @@ function reasoningEffortTimeline(agent: string | null, rawEvents: any[]): { ts: 
 
 /* Ordered-distinct effort values across the session (e.g. ["medium","xhigh"]),
    for the single context-panel row; the caller joins them with " → ". */
-function extractReasoningEfforts(agent: string | null, rawEvents: any[]): string[] {
+function extractReasoningEfforts(agent: string | null, rawEvents: TraceValue[]): string[] {
   const out: string[] = [];
   for (const { effort } of reasoningEffortTimeline(agent, rawEvents)) if (!out.includes(effort)) out.push(effort);
   return out;
@@ -432,14 +435,14 @@ const stepRingClass: Record<StepKind, string> = {
 function stepLabel(evt: Event, kind: StepKind): string {
   if (kind === "tool") {
     if (evt.toolCalls?.[0]) return displayText(evt.toolCalls[0].name) || "Tool call";
-    const tu = Array.isArray(evt.message?.content) ? evt.message.content.find((c: any) => c.type === "tool_use") : null;
+    const tu = Array.isArray(evt.message?.content) ? evt.message.content.find((c: TraceValue) => c.type === "tool_use") : null;
     if (tu) return displayText(tu.name) || "Tool call";
-    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return displayText((evt.payload as any).name) || "Tool call";
+    if (evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") return displayText((evt.payload as TraceValue).name) || "Tool call";
   }
   if (kind === "user") {
     // Codex event_msg user_message
-    if (evt.type === "event_msg" && (evt.payload as any)?.type === "user_message") {
-      return (displayText((evt.payload as any).message) || "User Query").slice(0, 40);
+    if (evt.type === "event_msg" && (evt.payload as TraceValue)?.type === "user_message") {
+      return (displayText((evt.payload as TraceValue).message) || "User Query").slice(0, 40);
     }
     const c = evt.message?.content || evt.payload?.content;
     const text = displayText(c);
@@ -469,16 +472,16 @@ export default function SessionDetailPage() {
   // (and token_count) for Codex so they don't clutter the step view, but the
   // Session Context panel still needs turn_context (sandbox / approval policy /
   // reasoning effort). Keep the raw array so the context reads survive.
-  const [rawEvents, setRawEvents] = useState<any[]>([]);
+  const [rawEvents, setRawEvents] = useState<TraceValue[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
-  const [hermesOverlay, setHermesOverlay] = useState<any | null>(null);
+  const [hermesOverlay, setHermesOverlay] = useState<TraceValue | null>(null);
   const [allHermesSessions, setAllHermesSessions] = useState<Session[] | null>(null);
-  const [grokForensics, setGrokForensics] = useState<any | null>(null);
-  const [delegation, setDelegation] = useState<any | null>(null);
+  const [grokForensics, setGrokForensics] = useState<TraceValue | null>(null);
+  const [delegation, setDelegation] = useState<TraceValue | null>(null);
   // Subagent drill-in: holds the spawn entry whose trace is open in the
   // slide-over viewer. Parent trace state (scrubber, tabs) stays untouched.
-  const [subagentView, setSubagentView] = useState<any | null>(null);
+  const [subagentView, setSubagentView] = useState<TraceValue | null>(null);
 
   // Trace View States
   const [splitView, setSplitView] = useState(false);
@@ -496,7 +499,7 @@ export default function SessionDetailPage() {
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [copiedId, setCopiedId] = useState(false);
-  const [projectConfig, setProjectConfig] = useState<any>(null);
+  const [projectConfig, setProjectConfig] = useState<TraceValue>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const stepIndexRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const waterfallRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -506,6 +509,10 @@ export default function SessionDetailPage() {
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
   const filterBtnRef = useRef<HTMLButtonElement | null>(null);
   const [filterAnchor, setFilterAnchor] = useState<{ top: number; right: number; listMaxH: number } | null>(null);
+  const updateFilterOpen = (open: boolean) => {
+    setFilterOpen(open);
+    if (!open) setFilterAnchor(null);
+  };
 
   // The filter panel is portalled to <body>: the session layout's backdrop-blur
   // ancestors break `position: fixed` inside the aside, and the aside's own
@@ -513,7 +520,7 @@ export default function SessionDetailPage() {
   // category list to the room actually left below it, so short viewports don't
   // push rows past the fold on a page that never scrolls.
   useEffect(() => {
-    if (!filterOpen) { setFilterAnchor(null); return; }
+    if (!filterOpen) return;
     const place = () => {
       const el = filterBtnRef.current;
       if (!el) return;
@@ -541,10 +548,10 @@ export default function SessionDetailPage() {
       apiFetch(`/sessions`)
         .then(res => res.json())
         .then(data => {
-           const info = data.find((s: any) => s.id === id);
+           const info = data.find((s: TraceValue) => s.id === id);
            if (info) setSessionInfo(info);
            if (agent === "hermes") {
-             setAllHermesSessions(data.filter((s: any) => s.agent === "hermes"));
+             setAllHermesSessions(data.filter((s: TraceValue) => s.agent === "hermes"));
            }
         })
         .catch(() => {});
@@ -635,7 +642,7 @@ export default function SessionDetailPage() {
   const hasContentType = (event: Event, type: string) => {
     const content = event.message?.content;
     if (Array.isArray(content)) {
-      return content.some((c: any) => c.type === type);
+      return content.some((c: TraceValue) => c.type === type);
     }
     return false;
   };
@@ -646,7 +653,7 @@ export default function SessionDetailPage() {
   const stepTokens = useMemo(() => {
     const out: (StepTokens | null)[] = new Array(events.length).fill(null);
     let lastMsgId: string | null = null;
-    events.forEach((e: any, i) => {
+    events.forEach((e: TraceValue, i) => {
       const t = eventTokens(e);
       if (!t) return;
       const msgId = e.message?.id;
@@ -739,7 +746,7 @@ export default function SessionDetailPage() {
         order.push(m);
       }
     };
-    events.forEach((e: any) => {
+    events.forEach((e: TraceValue) => {
       push(e.message?.model); // Claude per-message
       push(e.model); // some providers
       if (e.type === "session_meta") {
@@ -818,7 +825,7 @@ export default function SessionDetailPage() {
     const map = new Map<string, Event>();
     for (const e of events) {
       if (e.type === "user" && Array.isArray(e.message?.content)) {
-        for (const c of e.message.content as any[]) {
+        for (const c of e.message.content as TraceValue[]) {
           const rid = c?.tool_use_id;
           if (rid && !map.has(rid)) map.set(rid, e);
         }
@@ -830,10 +837,10 @@ export default function SessionDetailPage() {
   // Tool summary
   const toolSummary = useMemo(() => {
     const rows: { name: string; start: number; duration: number }[] = [];
-    events.forEach((evt, idx) => {
+    events.forEach((evt) => {
       const ts = normalizeTs(evt);
       if (evt.message?.role === "assistant" && Array.isArray(evt.message?.content)) {
-        const tu = evt.message.content.find((c: any) => c.type === "tool_use");
+        const tu = evt.message.content.find((c: TraceValue) => c.type === "tool_use");
         if (tu && ts) {
           const result = toolResultByUseId.get(tu.id);
           const end = (result && normalizeTs(result)) || ts + 200;
@@ -841,7 +848,7 @@ export default function SessionDetailPage() {
         }
       }
       if (evt.toolCalls && ts) {
-        evt.toolCalls.forEach((tc: any) => rows.push({ name: tc.name, start: ts, duration: 300 }));
+        evt.toolCalls.forEach((tc: TraceValue) => rows.push({ name: tc.name, start: ts, duration: 300 }));
       }
       if ((evt.payload?.type === "function_call" || evt.payload?.type === "tool_use") && ts) {
          rows.push({ name: evt.payload.name, start: ts, duration: 400 });
@@ -918,10 +925,10 @@ export default function SessionDetailPage() {
     const hasToolCalls = Array.isArray(event.toolCalls) ? event.toolCalls.length > 0 : Boolean(event.toolCalls);
     const isReasoning = event.type === "agent_reasoning" || hasThoughts || (event.message?.role === "assistant" && (hasContentType(event, "thinking") || hasContentType(event, "thought"))) || event.payload?.type === "reasoning" || event.type === "assistant_thinking";
     const isTool = hasToolCalls || (event.message?.role === "assistant" && hasContentType(event, "tool_use")) || (event.type === "user" && hasContentType(event, "tool_result")) || event.payload?.type === "function_call" || event.type === "tool_call" || event.type === "tool_result";
-    const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: any) => p.kind === "thinking" || p.type === "thinking");
-    const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: any) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) || 
-                    (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: any) => c.text || c.input_text)) ||
-                    (event.type === "assistant" && Array.isArray(event.payload) && event.payload.some((p: any) => p.value && p.kind !== "thinking")) ||
+    const hasThinkingPart = Array.isArray(event.payload) && event.payload.some((p: TraceValue) => p.kind === "thinking" || p.type === "thinking");
+    const hasText = (Array.isArray(event.message?.content) && event.message.content.some((c: TraceValue) => (c.type === "text" || c.type === "input_text") && (c.text || c.input_text))) ||
+                    (event.type === "response_item" && event.payload?.type === "message" && Array.isArray(event.payload.content) && event.payload.content.some((c: TraceValue) => c.text || c.input_text)) ||
+                    (event.type === "assistant" && Array.isArray(event.payload) && event.payload.some((p: TraceValue) => p.value && p.kind !== "thinking")) ||
                     (event.type === "user" && (event.payload?.text || typeof event.payload === 'string')) ||
                     (typeof event.content === 'string' && event.content.trim().length > 0);
 
@@ -962,14 +969,14 @@ export default function SessionDetailPage() {
 
   // Waterfall Logic
   const waterfallData = useMemo(() => {
-     const tools: any[] = [];
+     const tools: TraceValue[] = [];
      events.forEach((evt, idx) => {
         let toolName = "";
-        let startTime = evt.normalized_timestamp || (evt.timestamp ? new Date(evt.timestamp).getTime() : 0);
+        const startTime = evt.normalized_timestamp || (evt.timestamp ? new Date(evt.timestamp).getTime() : 0);
         
         // Claude Tool Call Detection
         if (evt.type === "assistant" && Array.isArray(evt.message?.content)) {
-           const tu = evt.message.content.find((c: any) => c.type === "tool_use");
+           const tu = evt.message.content.find((c: TraceValue) => c.type === "tool_use");
            if (tu) {
               toolName = tu.name;
               // Look ahead for tool_result from user
@@ -1232,7 +1239,7 @@ export default function SessionDetailPage() {
                 <div className="relative">
                    <button
                      ref={filterBtnRef}
-                     onClick={() => setFilterOpen(!filterOpen)}
+                     onClick={() => updateFilterOpen(!filterOpen)}
                      className={`p-1 rounded cursor-pointer transition-colors ${selectedFilters.size > 0 ? "bg-[var(--tt-brand-bg)] text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)] hover:bg-[var(--tt-panel-hover)]"}`}
                      title="Filter steps"
                    >
@@ -1252,7 +1259,7 @@ export default function SessionDetailPage() {
                          </button>
                          <button 
                            className="text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] p-0.5 rounded cursor-pointer"
-                           onClick={() => setFilterOpen(false)}
+                           onClick={() => updateFilterOpen(false)}
                            title="Close"
                          >
                            <X size={14} />
@@ -1305,7 +1312,7 @@ export default function SessionDetailPage() {
              {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
              {agent && (
                 <div className="mb-8">
-                  <SummaryPanel sessionId={id} agent={agent} />
+                  <SummaryPanel key={id} sessionId={id} agent={agent} />
                 </div>
               )}
              {/* Hermes session chain (compression / branched continuations) */}
@@ -1319,7 +1326,7 @@ export default function SessionDetailPage() {
              {/* Recurring loop (/loop, cron, self-perpetuating agent) — full detail */}
              {sessionInfo?.loop?.is_loop && <LoopCard loop={sessionInfo.loop} />}
              {/* Goal mode (/goal) — one card per goal; a session can set several */}
-             {Array.isArray(sessionInfo?.goals) && sessionInfo.goals.map((g: any, i: number) => (
+             {Array.isArray(sessionInfo?.goals) && sessionInfo.goals.map((g: TraceValue, i: number) => (
                <GoalCard key={g.goal_id || i} goal={g} sessionTokens={sessionInfo?.tokens?.total} />
              ))}
              {/* Delegated work — subagent spawns and what they actually cost */}
@@ -1439,7 +1446,7 @@ export default function SessionDetailPage() {
                 {sidebarTab === "context" && (
                   <>
                     {delegation && agent && ((delegation.subagents?.length ?? 0) > 0 || (delegation.child_session_ids?.length ?? 0) > 0) && (
-                      <SubagentsSidebar delegation={delegation} agent={agent} onOpen={setSubagentView} />
+                      <SubagentsSidebar delegation={delegation} onOpen={setSubagentView} />
                     )}
                     <ContextPanel ctx={context} />
                   </>
@@ -1447,8 +1454,8 @@ export default function SessionDetailPage() {
                 {sidebarTab === "tools" && <ToolsPanel summary={toolSummary} onJump={(name) => {
                    const idx = events.findIndex((e) => {
                       const mc = Array.isArray(e.message?.content) ? e.message.content : [];
-                      const tu = mc.find?.((c: any) => c.type === "tool_use" && c.name === name);
-                      return !!tu || !!e.toolCalls?.some?.((t: any) => t.name === name);
+                      const tu = mc.find?.((c: TraceValue) => c.type === "tool_use" && c.name === name);
+                      return !!tu || !!e.toolCalls?.some?.((t: TraceValue) => t.name === name);
                    });
                    if (idx >= 0) jumpTo(idx);
                 }} />}
@@ -1530,6 +1537,7 @@ export default function SessionDetailPage() {
           main session exactly where the user left it. */}
       {subagentView && agent && (
         <SubagentTraceModal
+          key={subagentView.agent_id || subagentView.child_session_id || subagentView.id}
           entry={subagentView}
           agent={agent}
           sessionId={id}
@@ -1542,8 +1550,8 @@ export default function SessionDetailPage() {
 
 /* Sidebar list of this session's subagents — the at-a-glance "what was
    delegated" context, one click from each child's full trace. */
-function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agent: string; onOpen: (entry: any) => void }) {
-  const entries: any[] = delegation.subagents?.length
+function SubagentsSidebar({ delegation, onOpen }: { delegation: TraceValue; onOpen: (entry: TraceValue) => void }) {
+  const entries: TraceValue[] = delegation.subagents?.length
     ? delegation.subagents
     : (delegation.child_session_ids || []).map((cid: string) => ({ child_session_id: cid }));
   if (entries.length === 0) return null;
@@ -1554,7 +1562,7 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
         <span className="tabular text-[var(--tt-fg-faint)]">{entries.length}</span>
       </div>
       <div className="space-y-1.5">
-        {entries.map((s: any, i: number) => (
+        {entries.map((s: TraceValue, i: number) => (
           <button
             key={s.agent_id ?? s.child_session_id ?? i}
             onClick={() => onOpen(s)}
@@ -1601,25 +1609,24 @@ function SubagentsSidebar({ delegation, agent, onOpen }: { delegation: any; agen
    inspect the child's full trace without losing your place in the parent.
    claude/cursor subagent transcripts come from the dedicated trace endpoint
    (they aren't sessions); everyone else's children are real sessions. */
-function SubagentTraceModal({ entry, agent, sessionId, onClose }: { entry: any; agent: string; sessionId: string; onClose: () => void }) {
+function SubagentTraceModal({ entry, agent, sessionId, onClose }: { entry: TraceValue; agent: string; sessionId: string; onClose: () => void }) {
   const [traceEvents, setTraceEvents] = useState<Event[] | null>(null);
 
   const isTranscript = entry.agent_id && (agent === "claude" || agent === "cursor" || agent === "muse");
   const childId: string | null = entry.child_session_id || null;
+  const traceUrl = isTranscript
+    ? `/sessions/${sessionId}/subagents/${entry.agent_id}/trace?agent=${agent}`
+    : childId
+    ? `/sessions/${childId}?agent=${agent}`
+    : null;
 
   useEffect(() => {
-    setTraceEvents(null);
-    const url = isTranscript
-      ? `/sessions/${sessionId}/subagents/${entry.agent_id}/trace?agent=${agent}`
-      : childId
-      ? `/sessions/${childId}?agent=${agent}`
-      : null;
-    if (!url) { setTraceEvents([]); return; }
-    apiFetch(url)
+    if (!traceUrl) return;
+    apiFetch(traceUrl)
       .then((r) => r.json())
       .then((d) => setTraceEvents(normalizeTraceEvents(agent, d)))
       .catch(() => setTraceEvents([]));
-  }, [entry, agent, sessionId, isTranscript, childId]);
+  }, [agent, traceUrl]);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -1671,18 +1678,18 @@ function SubagentTraceModal({ entry, agent, sessionId, onClose }: { entry: any; 
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {traceEvents === null ? (
+          {traceUrl && traceEvents === null ? (
             <div className="space-y-3">
               <Skeleton className="h-20 w-full" />
               <Skeleton className="h-20 w-full" />
               <Skeleton className="h-20 w-full" />
             </div>
-          ) : traceEvents.length === 0 ? (
+          ) : (traceEvents ?? []).length === 0 ? (
             <div className="text-[12px] text-[var(--tt-fg-dim)] italic py-8 text-center">
               No per-step trace recorded for this subagent.
             </div>
           ) : (
-            traceEvents.map((event, idx) => <EventCard key={idx} event={event} agent={agent} />)
+            (traceEvents ?? []).map((event, idx) => <EventCard key={idx} event={event} agent={agent} />)
           )}
         </div>
       </div>
@@ -1806,15 +1813,27 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
   );
 }
 
-function ContextPanel({ ctx }: { ctx: any }) {
+function ContextRow({ k, v, mono = true }: { k: string; v?: TraceValue; mono?: boolean }) {
+  if (!v) return null;
+  return (
+    <div className="space-y-0.5">
+      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">{k}</div>
+      <div className={`text-[var(--tt-fg)] break-all ${mono ? "font-mono text-[10px]" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
+    </div>
+  );
+}
+
+function DetailRow({ k, v, accent }: { k: string; v: React.ReactNode; accent?: string }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-[var(--tt-fg-dim)]">{k}</span>
+      <span className={accent || "text-[var(--tt-fg)]"}>{v}</span>
+    </div>
+  );
+}
+
+function ContextPanel({ ctx }: { ctx: TraceValue }) {
   const [copiedId, setCopiedId] = useState(false);
-  const Row = ({ k, v, mono = true }: { k: string; v?: any; mono?: boolean }) =>
-    v ? (
-      <div className="space-y-0.5">
-        <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">{k}</div>
-        <div className={`text-[var(--tt-fg)] break-all ${mono ? "font-mono text-[10px]" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
-      </div>
-    ) : null;
   const hasAny = ctx.model || ctx.cwd || ctx.systemPrompt || ctx.instructions || ctx.sandbox;
   return (
     <div className="space-y-4">
@@ -1850,8 +1869,8 @@ function ContextPanel({ ctx }: { ctx: any }) {
           {ctx.agent && <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
         </div>
       )}
-      <Row k="Model" v={ctx.model} />
-      <Row k="Provider" v={ctx.provider} />
+      <ContextRow k="Model" v={ctx.model} />
+      <ContextRow k="Provider" v={ctx.provider} />
       {ctx.modelsUsed && ctx.modelsUsed.length > 0 && (
         <div className="space-y-1">
           <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Models Used ({ctx.modelsUsed.length})</div>
@@ -1864,10 +1883,10 @@ function ContextPanel({ ctx }: { ctx: any }) {
           </div>
         </div>
       )}
-      <Row k="Sandbox" v={ctx.sandbox} />
-      <Row k="Approval Policy" v={ctx.approvalPolicy} />
-      <Row k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
-      <Row k="CWD" v={ctx.cwd} />
+      <ContextRow k="Sandbox" v={ctx.sandbox} />
+      <ContextRow k="Approval Policy" v={ctx.approvalPolicy} />
+      <ContextRow k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
+      <ContextRow k="CWD" v={ctx.cwd} />
 
       {ctx.projectConfig && (ctx.projectConfig.counts?.skills > 0 || ctx.projectConfig.counts?.mcps > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
@@ -1880,7 +1899,7 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 Skills ({ctx.projectConfig.counts.skills}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {ctx.projectConfig.skills.map((s: any, i: number) => (
+                {ctx.projectConfig.skills.map((s: TraceValue, i: number) => (
                   <span
                     key={i}
                     title={`${s.scope} · ${s.agent}${s.description ? "\n" + s.description : ""}`}
@@ -1898,7 +1917,7 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 MCP Servers ({ctx.projectConfig.counts.mcps}) ▸
               </summary>
               <div className="mt-2 space-y-1">
-                {ctx.projectConfig.mcps.map((m: any, i: number) => (
+                {ctx.projectConfig.mcps.map((m: TraceValue, i: number) => (
                   <div key={i} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
                     <span className="text-[var(--tt-fg)] truncate" title={m.command || m.url || ""}>{m.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m.agent}</span>
@@ -1924,7 +1943,7 @@ function ContextPanel({ ctx }: { ctx: any }) {
                 Skills Loaded ({ctx.dsh.skills_catalog.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {ctx.dsh.skills_catalog.map((s: any, i: number) => (
+                {ctx.dsh.skills_catalog.map((s: TraceValue, i: number) => (
                   <span
                     key={i}
                     title={s.description || ""}
@@ -1958,36 +1977,36 @@ function ContextPanel({ ctx }: { ctx: any }) {
               {/* Wall-clock split. Tool time routinely dwarfs model time, which
                   is invisible if you only look at total duration. */}
               {ctx.dsh.metrics.llm_ms != null && (
-                <Row k="LLM Time" v={`${(ctx.dsh.metrics.llm_ms / 1000).toFixed(1)}s`} />
+                <ContextRow k="LLM Time" v={`${(ctx.dsh.metrics.llm_ms / 1000).toFixed(1)}s`} />
               )}
               {ctx.dsh.metrics.tool_ms != null && (
-                <Row k="Tool Time" v={`${(ctx.dsh.metrics.tool_ms / 1000).toFixed(1)}s`} />
+                <ContextRow k="Tool Time" v={`${(ctx.dsh.metrics.tool_ms / 1000).toFixed(1)}s`} />
               )}
               {ctx.dsh.metrics.ttft_ms_avg != null && (
-                <Row k="TTFT (avg)" v={`${(ctx.dsh.metrics.ttft_ms_avg / 1000).toFixed(1)}s`} />
+                <ContextRow k="TTFT (avg)" v={`${(ctx.dsh.metrics.ttft_ms_avg / 1000).toFixed(1)}s`} />
               )}
               {ctx.dsh.metrics.output_tok_per_sec != null && (
-                <Row k="Throughput" v={`${ctx.dsh.metrics.output_tok_per_sec} tok/s`} />
+                <ContextRow k="Throughput" v={`${ctx.dsh.metrics.output_tok_per_sec} tok/s`} />
               )}
               {ctx.dsh.metrics.cache_hit_pct != null && (
-                <Row k="Cache Hit" v={`${ctx.dsh.metrics.cache_hit_pct}%`} />
+                <ContextRow k="Cache Hit" v={`${ctx.dsh.metrics.cache_hit_pct}%`} />
               )}
             </div>
           )}
           {ctx.dsh.sandbox?.mode && (
-            <Row
+            <ContextRow
               k="File Sandbox"
               v={ctx.dsh.sandbox.mode + (ctx.dsh.sandbox.mode_source === "delegation" ? " (inherited)" : "")}
             />
           )}
           {ctx.dsh.sandbox?.approval && (
-            <Row
+            <ContextRow
               k="Approval Policy"
               v={ctx.dsh.sandbox.approval + (ctx.dsh.sandbox.approval_source === "delegation" ? " (inherited)" : "")}
             />
           )}
           {ctx.dsh.agent_preset && (
-            <Row
+            <ContextRow
               k="Agent Preset"
               v={(ctx.dsh.preset_chain?.length ?? 0) > 1
                 ? `${ctx.dsh.preset_chain.join(" → ")} (switched mid-session)`
@@ -1995,7 +2014,7 @@ function ContextPanel({ ctx }: { ctx: any }) {
             />
           )}
           {(ctx.dsh.providers_used?.length ?? 0) > 0 && (
-            <Row k="Providers" v={ctx.dsh.providers_used.join(", ")} />
+            <ContextRow k="Providers" v={ctx.dsh.providers_used.join(", ")} />
           )}
         </div>
       )}
@@ -2131,6 +2150,7 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
                  </video>
                )}
                {a.type === 'image' && (
+                 // eslint-disable-next-line @next/next/no-img-element -- Dynamic local artifact preview.
                  <img
                     src={artifactUrl(`/artifacts?path=${encodeURIComponent(a.path)}`)}
                     alt={a.name}
@@ -2194,6 +2214,7 @@ function ArtifactModal({ artifact, onClose }: { artifact: Artifact; onClose: () 
       {/* Body */}
       <div className="flex-1 min-h-0 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
         {a.type === 'image' && (
+          // eslint-disable-next-line @next/next/no-img-element -- Dynamic local artifact preview.
           <img src={url} alt={a.name} className="max-w-full max-h-full object-contain rounded-lg" />
         )}
         {a.type === 'video' && (
@@ -2247,6 +2268,7 @@ function ArtifactViewer({ path }: { path: string }) {
             // Never emit <img src="">; render nothing for an empty/invalid src.
             img: ({ src, alt }) =>
               typeof src === "string" && src ? (
+                // eslint-disable-next-line @next/next/no-img-element -- Markdown image URLs are user-authored and dynamic.
                 <img
                   src={src}
                   alt={alt ?? ""}
@@ -2267,8 +2289,8 @@ function ArtifactViewer({ path }: { path: string }) {
   );
 }
 
-function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { event: any, mode?: "dialogue" | "brain" | "all", agent?: string | null, tokens?: StepTokens | null, reasoningEffort?: string }) {
-  const { type, timestamp, message, attachment, toolUseResult, payload, content, thoughts, toolCalls } = event;
+function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { event: TraceValue, mode?: "dialogue" | "brain" | "all", agent?: string | null, tokens?: StepTokens | null, reasoningEffort?: string }) {
+  const { type, timestamp, message, payload, content, thoughts, toolCalls } = event;
 
   // Small badge showing the model reasoning effort in effect for this reasoning
   // step, so a mid-session effort change is visible on the card where it happened
@@ -2299,9 +2321,9 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   };
 
   // Helper to extract text from content array (Used by Claude and Cursor)
-  const extractText = (contentArr: any[]) => {
+  const extractText = (contentArr: TraceValue[]) => {
     if (!Array.isArray(contentArr)) return "";
-    return contentArr.filter((c: any) => c.type === "text").map(displayText).filter(Boolean).join("\n");
+    return contentArr.filter((c: TraceValue) => c.type === "text").map(displayText).filter(Boolean).join("\n");
   };
 
   const parts: React.ReactNode[] = [];
@@ -2352,12 +2374,12 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
        );
     }
     if (type === "assistant" && Array.isArray(payload)) {
-       const thinkingParts = payload.filter((p: any) => p.kind === "thinking" || p.type === "thinking");
-       const textParts = payload.filter((p: any) => p.kind !== "thinking" && p.type !== "thinking" && (p.value || typeof p === 'string'));
-       const combinedText = textParts.map((p: any) => typeof p === 'string' ? p : (p.value || "")).join("");
+       const thinkingParts = payload.filter((p: TraceValue) => p.kind === "thinking" || p.type === "thinking");
+       const textParts = payload.filter((p: TraceValue) => p.kind !== "thinking" && p.type !== "thinking" && (p.value || typeof p === 'string'));
+       const combinedText = textParts.map((p: TraceValue) => typeof p === 'string' ? p : (p.value || "")).join("");
 
        if (thinkingParts.length > 0 && mode !== "dialogue") {
-         thinkingParts.forEach((p: any, i: number) => {
+         thinkingParts.forEach((p: TraceValue, i: number) => {
            parts.push(
              <div key={`copilot-think-${i}`} className="bg-indigo-500/5 border border-indigo-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-indigo-500/50 group">
                <div className="flex justify-between items-start mb-3">
@@ -2502,7 +2524,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
     const toolName = payload.tool || "";
     const content = payload.content || "";
     const isDelegate = toolName === "delegate_task";
-    let parsed: any = null;
+    let parsed: TraceValue = null;
     if (isDelegate && content) {
       try { parsed = JSON.parse(content); } catch { parsed = null; }
     }
@@ -2519,7 +2541,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
         </div>
         {results ? (
           <div className="space-y-3">
-            {results.map((r: any, i: number) => (
+            {results.map((r: TraceValue, i: number) => (
               <div key={i} className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-3">
                 <div className="flex items-center justify-between text-[10px] font-mono text-[var(--tt-fg-dim)] mb-1.5">
                   <span>child #{r.task_index ?? i + 1} · {r.model || "—"}</span>
@@ -2542,7 +2564,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
                   <details className="mt-2">
                     <summary className="text-[9px] font-mono text-[var(--tt-fg-dim)] cursor-pointer">tool trace · {r.tool_trace.length} call{r.tool_trace.length === 1 ? "" : "s"} ▸</summary>
                     <div className="mt-1 space-y-0.5">
-                      {r.tool_trace.map((t: any, j: number) => (
+                      {r.tool_trace.map((t: TraceValue, j: number) => (
                         <div key={j} className="text-[10px] font-mono text-[var(--tt-fg-muted)]">
                           {t.tool || "?"} <span className="text-[var(--tt-fg-dim)]">({t.status || "—"})</span>
                         </div>
@@ -2569,7 +2591,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   if (thoughts && Array.isArray(thoughts) && mode !== "dialogue") {
     parts.push(
       <div className="space-y-4">
-        {thoughts.map((thought: any, i: number) => (
+        {thoughts.map((thought: TraceValue, i: number) => (
           <div key={i} className="bg-cyan-500/5 border border-cyan-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-cyan-500/50 group">
             <div className="flex justify-between items-start mb-3">
               <div className="flex items-center gap-2 text-[var(--tt-cyan-fg)] font-bold text-xs uppercase tracking-widest">
@@ -2587,7 +2609,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   if (toolCalls && Array.isArray(toolCalls) && mode !== "dialogue") {
     parts.push(
       <div className="space-y-4">
-        {toolCalls.map((call: any, i: number) => (
+        {toolCalls.map((call: TraceValue, i: number) => (
           <div key={i} className="space-y-4">
             <div className="bg-blue-500/5 border border-blue-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-blue-500/50 group">
               <div className="flex justify-between items-start mb-4">
@@ -2620,7 +2642,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
   }
 
   if (type === "user" && content && (agent === "gemini" || agent === "antigravity")) {
-    const textContent = Array.isArray(content) ? content.map((c: any) => c.text).filter(Boolean).join("\n") : (typeof content === 'string' ? content : "");
+    const textContent = Array.isArray(content) ? content.map((c: TraceValue) => c.text).filter(Boolean).join("\n") : (typeof content === 'string' ? content : "");
     if (textContent) {
       parts.push(
         <div className="bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded-[var(--tt-radius-lg)] p-6 relative overflow-hidden group hover:border-[var(--tt-border-strong)] transition-all text-left">
@@ -2680,7 +2702,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
 
   // 8. CLAUDE / CURSOR (Multi-part support: thinkingArr + text + tool_result)
   if ((type === "user" || role === "user") && message?.role === "user") {
-    const toolResults = Array.isArray(message.content) ? message.content.filter((c: any) => c.type === "tool_result") : [];
+    const toolResults = Array.isArray(message.content) ? message.content.filter((c: TraceValue) => c.type === "tool_result") : [];
     if (toolResults.length > 0 && mode !== "dialogue") {
       parts.push(
         <div className="bg-[var(--tt-panel)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] p-5 ml-8 group hover:border-emerald-500/30 transition-all">
@@ -2690,7 +2712,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
             </div>
             {renderTimestamp()}
           </div>
-          {toolResults.map((c: any, i: number) => (
+          {toolResults.map((c: TraceValue, i: number) => (
             <div key={i} className="space-y-3 mb-6 last:mb-0">
                <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] bg-[var(--tt-sunken)] px-2 py-0.5 rounded border border-[var(--tt-border)] w-fit">ID: {c.tool_use_id}</div>
               <pre className="bg-[var(--tt-sunken)] text-[var(--tt-success-fg)] p-5 rounded-xl text-[11px] overflow-x-auto font-mono border border-[var(--tt-border)]">
@@ -2720,12 +2742,12 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
 
   if ((type === "assistant" || role === "assistant") && (message?.role === "assistant" || role === "assistant")) {
     const contentArr = Array.isArray(message?.content) ? message.content : [];
-    const toolCallsArr = contentArr.filter((c: any) => c.type === "tool_use");
-    const thinkingArr = contentArr.filter((c: any) => c.type === "thinking");
+    const toolCallsArr = contentArr.filter((c: TraceValue) => c.type === "tool_use");
+    const thinkingArr = contentArr.filter((c: TraceValue) => c.type === "thinking");
     const text = extractText(contentArr);
 
     if (thinkingArr.length > 0 && mode !== "dialogue") {
-       thinkingArr.forEach((t: any, i: number) => {
+       thinkingArr.forEach((t: TraceValue, i: number) => {
          const body = displayText(t.thinking || t.text || t.content);
          const isEncrypted = !body && (t.signature || t.type === "redacted_thinking");
          parts.push(
@@ -2765,7 +2787,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
     }
 
     if (toolCallsArr.length > 0 && mode !== "dialogue") {
-      toolCallsArr.forEach((toolUse: any, i: number) => {
+      toolCallsArr.forEach((toolUse: TraceValue, i: number) => {
         parts.push(
           <div key={`tool-${i}`} className="bg-blue-500/5 border border-blue-500/20 rounded-[var(--tt-radius)] p-6 ml-4 border-l-4 border-l-blue-500/50 group">
             <div className="flex justify-between items-start mb-4">
@@ -2828,7 +2850,7 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
        const content = payload.content;
        let text = "";
        if (Array.isArray(content)) {
-          text = content.map((c: any) => c.text || c.input_text).filter(Boolean).join("\n");
+          text = content.map((c: TraceValue) => c.text || c.input_text).filter(Boolean).join("\n");
        } else if (typeof content === 'string') {
           text = content;
        }
@@ -3078,7 +3100,8 @@ function ResponseBody({ text, tone = "default" }: { text: unknown; tone?: "defau
   );
 }
 
-function LoopCard({ loop }: { loop: any }) {
+function LoopCard({ loop }: { loop: TraceValue }) {
+  const [renderedAt] = useState(Date.now);
   const state: string = loop.state ?? "unknown";
   const tone =
     state === "active"    ? { ring: "border-emerald-500/40", dot: "bg-emerald-400",       text: "text-emerald-400" } :
@@ -3113,19 +3136,12 @@ function LoopCard({ loop }: { loop: any }) {
     if (!iso) return "";
     const t = new Date(iso).getTime();
     if (isNaN(t)) return "";
-    const diff = Date.now() - t, abs = Math.abs(diff);
+    const diff = renderedAt - t, abs = Math.abs(diff);
     const unit = abs >= 86400000 ? `${Math.round(abs / 86400000)}d`
       : abs >= 3600000 ? `${Math.round(abs / 3600000)}h`
       : `${Math.round(abs / 60000)}m`;
     return diff >= 0 ? `${unit} ago` : `in ${unit}`;
   };
-
-  const Row = ({ k, v, accent }: { k: string; v: React.ReactNode; accent?: string }) => (
-    <div className="flex justify-between gap-3">
-      <span className="text-[var(--tt-fg-dim)]">{k}</span>
-      <span className={accent || "text-[var(--tt-fg)]"}>{v}</span>
-    </div>
-  );
 
   return (
     <div className={`mb-8 bg-[var(--tt-panel)]/60 border ${tone.ring} rounded-[var(--tt-radius-lg)] p-5`}>
@@ -3153,19 +3169,19 @@ function LoopCard({ loop }: { loop: any }) {
       </div>
 
       <div className="space-y-1 text-[11px] font-mono text-[var(--tt-fg-muted)]">
-        <Row k="Cadence" v={loop.cadence || "—"} />
-        <Row k="Created" v={<>{fmt(loop.created_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.created_at)})</span></>} />
-        <Row k="Last fired" v={<>{fmt(loop.last_fired)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.last_fired)})</span></>} />
+        <DetailRow k="Cadence" v={loop.cadence || "—"} />
+        <DetailRow k="Created" v={<>{fmt(loop.created_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.created_at)})</span></>} />
+        <DetailRow k="Last fired" v={<>{fmt(loop.last_fired)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.last_fired)})</span></>} />
         {state === "active" && loop.next_fire_at && (
-          <Row k="Next fire" v={<>{fmt(loop.next_fire_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.next_fire_at)})</span></>} />
+          <DetailRow k="Next fire" v={<>{fmt(loop.next_fire_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.next_fire_at)})</span></>} />
         )}
         {loop.expires_at && (
-          <Row k={state === "expired" ? "Expired" : "Expires"} v={<>{fmt(loop.expires_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.expires_at)})</span></>} />
+          <DetailRow k={state === "expired" ? "Expired" : "Expires"} v={<>{fmt(loop.expires_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.expires_at)})</span></>} />
         )}
         {loop.cancelled_at && (
-          <Row k="Cancelled" v={<>{fmt(loop.cancelled_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.cancelled_at)})</span></>} />
+          <DetailRow k="Cancelled" v={<>{fmt(loop.cancelled_at)} <span className="text-[var(--tt-fg-dim)]">({rel(loop.cancelled_at)})</span></>} />
         )}
-        {loop.expired_reason && <Row k="Reason" v={reasonLabel(loop.expired_reason)} accent={tone.text} />}
+        {loop.expired_reason && <DetailRow k="Reason" v={reasonLabel(loop.expired_reason)} accent={tone.text} />}
       </div>
 
       {state === "active" && loop.recurring && (
@@ -3184,7 +3200,7 @@ function LoopCard({ loop }: { loop: any }) {
 // One card per `/goal` (Codex Goal Mode). Codex counts a goal's tokens and
 // wall-clock itself, so every number here is REPORTED by the agent, never
 // inferred by us — see docs/design/goal-telemetry.md.
-function GoalCard({ goal, sessionTokens }: { goal: any; sessionTokens?: number }) {
+function GoalCard({ goal, sessionTokens }: { goal: TraceValue; sessionTokens?: number }) {
   const state: string = goal.state ?? "unknown";
   const tone =
     state === "active"   ? { ring: "border-emerald-500/40", dot: "bg-emerald-400", text: "text-emerald-400" } :
@@ -3204,13 +3220,6 @@ function GoalCard({ goal, sessionTokens }: { goal: any; sessionTokens?: number }
     if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
     return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
   };
-
-  const Row = ({ k, v, accent }: { k: string; v: React.ReactNode; accent?: string }) => (
-    <div className="flex justify-between gap-3">
-      <span className="text-[var(--tt-fg-dim)]">{k}</span>
-      <span className={accent || "text-[var(--tt-fg)]"}>{v}</span>
-    </div>
-  );
 
   const tokens: number | null = goal.tokens ?? null;
   // The goal's tokens are a SHARE OF the session total, never an addition to
@@ -3279,13 +3288,13 @@ function GoalCard({ goal, sessionTokens }: { goal: any; sessionTokens?: number }
       </div>
 
       <div className="space-y-1 text-[11px] font-mono text-[var(--tt-fg-muted)]">
-        {goal.created_at && <Row k="Started" v={fmt(goal.created_at)} />}
-        {goal.updated_at && <Row k={basis === "attributed_turns" ? "Last block" : "Last update"} v={fmt(goal.updated_at)} />}
-        {goal.evidence?.status_raw && <Row k="Status (agent's own)" v={goal.evidence.status_raw} accent={tone.text} />}
-        {goal.evidence?.deferrals != null && <Row k="Continuation deferrals" v={goal.evidence.deferrals} />}
-        {bursts.length > 1 && <Row k="Block runs" v={bursts.join(" · ")} />}
-        {goal.evidence?.cap_hit && <Row k="Hit the block cap" v="yes (8 consecutive)" accent="text-amber-400" />}
-        {goal.goal_id && <Row k="Goal id" v={goal.goal_id} />}
+        {goal.created_at && <DetailRow k="Started" v={fmt(goal.created_at)} />}
+        {goal.updated_at && <DetailRow k={basis === "attributed_turns" ? "Last block" : "Last update"} v={fmt(goal.updated_at)} />}
+        {goal.evidence?.status_raw && <DetailRow k="Status (agent's own)" v={goal.evidence.status_raw} accent={tone.text} />}
+        {goal.evidence?.deferrals != null && <DetailRow k="Continuation deferrals" v={goal.evidence.deferrals} />}
+        {bursts.length > 1 && <DetailRow k="Block runs" v={bursts.join(" · ")} />}
+        {goal.evidence?.cap_hit && <DetailRow k="Hit the block cap" v="yes (8 consecutive)" accent="text-amber-400" />}
+        {goal.goal_id && <DetailRow k="Goal id" v={goal.goal_id} />}
       </div>
 
       <div className="mt-3 text-[10px] text-[var(--tt-fg-dim)] space-y-1">
@@ -3308,8 +3317,8 @@ function GoalCard({ goal, sessionTokens }: { goal: any; sessionTokens?: number }
 }
 
 
-function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: any; agent: string; sessionId: string; onOpenSubagent?: (entry: any) => void }) {
-  const subagents: any[] = delegation?.subagents || [];
+function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: TraceValue; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void }) {
+  const subagents: TraceValue[] = delegation?.subagents || [];
   const spawnCount: number = delegation?.spawn_count ?? 0;
   const children: string[] = delegation?.child_session_ids || [];
   const parentId: string | null = delegation?.parent_session_id || null;
@@ -3317,7 +3326,7 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
   if (spawnCount === 0 && children.length === 0 && !parentId) return null;
   const totals = delegation?.totals;
   // Children listed in subagent entries don't need a duplicate "Child session" row.
-  const inlineChildIds = new Set(subagents.map((s: any) => s.child_session_id).filter(Boolean));
+  const inlineChildIds = new Set(subagents.map((s: TraceValue) => s.child_session_id).filter(Boolean));
   const backTo = encodeURIComponent(`/sessions/${sessionId}?agent=${agent}`);
   return (
     <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
@@ -3341,7 +3350,7 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
       )}
       {subagents.length > 0 && (
         <div className="space-y-1">
-          {subagents.map((s: any, i: number) => (
+          {subagents.map((s: TraceValue, i: number) => (
             <div
               key={s.agent_id ?? s.child_session_id ?? i}
               onClick={() => onOpenSubagent?.(s)}
@@ -3386,7 +3395,7 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
       {/* Cursor: spawn count only — its transcripts carry no usage data and no descriptions */}
       {spawnCount > 0 && agent === "cursor" && (
         <div className="mt-2 text-[11px] text-[var(--tt-fg-muted)]">
-          Cursor's subagent transcripts contain no token usage, so their cost can't be attributed.
+          Cursor&apos;s subagent transcripts contain no token usage, so their cost can&apos;t be attributed.
         </div>
       )}
 
@@ -3416,7 +3425,7 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
   );
 }
 
-function HermesOverlayCard({ overlay }: { overlay: any }) {
+function HermesOverlayCard({ overlay }: { overlay: TraceValue }) {
   const perf = overlay?.performance;
   const journey: string[] = overlay?.model_journey || [];
   const mem = overlay?.memory_io;
@@ -3472,7 +3481,7 @@ function HermesOverlayCard({ overlay }: { overlay: any }) {
         <details>
           <summary className="text-[10px] font-mono text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">per-call breakdown · {apiCalls.length} call{apiCalls.length === 1 ? "" : "s"} ▸</summary>
           <div className="mt-2 space-y-1 max-h-64 overflow-y-auto">
-            {apiCalls.map((c: any, i: number) => (
+            {apiCalls.map((c: TraceValue, i: number) => (
               <div key={`${c.n ?? "x"}-${i}`} className="flex items-center justify-between text-[10px] font-mono text-[var(--tt-fg-muted)] py-1 px-2 hover:bg-[var(--tt-sunken)] rounded">
                 <span>#{c.n} · {c.model}</span>
                 <span className="flex items-center gap-3">
@@ -3493,7 +3502,7 @@ function HermesOverlayCard({ overlay }: { overlay: any }) {
   );
 }
 
-function GrokForensicsCard({ forensics, cost }: { forensics: any; cost?: number }) {
+function GrokForensicsCard({ forensics, cost }: { forensics: TraceValue; cost?: number }) {
   if (!forensics || forensics.error) return null;
 
   const summary = forensics.summary || {};
@@ -3635,7 +3644,7 @@ function GrokForensicsCard({ forensics, cost }: { forensics: any; cost?: number 
         <div className="mb-4">
           <div className="text-[10px] uppercase tracking-wider text-[var(--tt-fg-dim)] mb-1">Permission Decisions</div>
           <div className="space-y-1 text-[11px]">
-            {permEvents.slice(-6).map((p: any, i: number) => (
+            {permEvents.slice(-6).map((p: TraceValue, i: number) => (
               <div key={i} className="flex items-center gap-2 bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1">
                 <span className="font-mono text-[var(--tt-fg-muted)]">{p.tool_name}</span>
                 {p.decision && (
@@ -3661,7 +3670,7 @@ function GrokForensicsCard({ forensics, cost }: { forensics: any; cost?: number 
             Cumulative context observed during streaming — not billed input/output tokens.
           </div>
           <div className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded p-2 max-h-28 overflow-y-auto text-[10px] font-mono">
-            {tokenProg.slice(-12).map((t: any, i: number) => (
+            {tokenProg.slice(-12).map((t: TraceValue, i: number) => (
               <div key={i} className="flex justify-between py-0.5">
                 <span className="text-[var(--tt-fg-muted)]">{t.updateType || "update"}</span>
                 <span className="text-[var(--tt-fg)]">{Number(t.totalTokens || 0).toLocaleString()}</span>

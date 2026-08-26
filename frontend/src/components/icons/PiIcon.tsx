@@ -6,7 +6,7 @@ import type { LucideIcon, LucideProps } from "lucide-react";
 // (fill="currentColor") so it inherits the agent's accent color and stays solid
 // on the dark theme, matching GrokIcon. The brand's rounded #09090b container
 // square is intentionally dropped so it reads as an icon like the others.
-const PiIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, strokeWidth, ...props }, ref) => (
+const PiIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, ...props }, ref) => (
   <svg
     ref={ref}
     xmlns="http://www.w3.org/2000/svg"

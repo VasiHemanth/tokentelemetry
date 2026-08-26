@@ -9,7 +9,7 @@ import {
 
 import { apiFetch } from "@/lib/api";
 import {
-  Card, CardHeader, CardTitle, CardEyebrow, Section, Badge, AgentBadge,
+  Card, Section, Badge, AgentBadge,
   EmptyState, Skeleton,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -26,8 +26,8 @@ import {
 
 interface ConfigItem { name: string; agent: string; scope: "project" | "user"; description?: string; source?: string; pluginRef?: string; [k: string]: unknown }
 interface SubagentItem extends ConfigItem { model?: string; tools?: string }
-interface CommandItem extends ConfigItem {}
-interface SkillItem extends ConfigItem {}
+type CommandItem = ConfigItem;
+type SkillItem = ConfigItem;
 interface McpItem extends ConfigItem { command?: string; url?: string; type?: string }
 interface PluginItem extends ConfigItem { version?: string; marketplace?: string; enabled?: boolean; components?: string[] }
 interface MemoryItem extends ConfigItem { path?: string; preview?: string; truncated?: boolean }
@@ -56,9 +56,9 @@ export default function ConfigTab() {
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [renderedAt] = useState(Date.now);
 
   useEffect(() => {
-    setLoading(true);
     apiFetch(`/config?project=${encodeURIComponent(decodedPath)}`)
       .then((r) => r.json())
       .then(setConfig)
@@ -123,7 +123,7 @@ export default function ConfigTab() {
           scheduled to re-run itself (/loop, cron, self-pacing heartbeat).
           Sits with the rest of the project's configured surface; the Insights
           tab carries the token/cost breakdown. Self-hides when there are none. */}
-      <ProjectLoopsInventory rows={loops.rows} decodedPath={decodedPath} />
+      <ProjectLoopsInventory rows={loops.rows} decodedPath={decodedPath} renderedAt={renderedAt} />
       {/* Goals set in this project. Not schedules: each is a run that already
           happened, apart from a resumable Codex goal. */}
       <ProjectGoalsInventory rows={goals.rows} summary={goals.summary} decodedPath={decodedPath} />
@@ -412,7 +412,7 @@ function CountChip({ color, label, value }: { color: string; label: string; valu
 
 /* ─────────────────── Recurring loops (config inventory) ─────────────────── */
 
-function ProjectLoopsInventory({ rows, decodedPath }: { rows: LoopRow[]; decodedPath: string }) {
+function ProjectLoopsInventory({ rows, decodedPath, renderedAt }: { rows: LoopRow[]; decodedPath: string; renderedAt: number }) {
   if (rows.length === 0) return null;
   const active = rows.filter((r) => r.state === "active").length;
   return (
@@ -422,13 +422,13 @@ function ProjectLoopsInventory({ rows, decodedPath }: { rows: LoopRow[]; decoded
       actions={<Badge variant={active > 0 ? "success" : "neutral"} size="sm">{active} active · {rows.length} total</Badge>}
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {rows.map((r) => <LoopInventoryCard key={r.key} row={r} decodedPath={decodedPath} />)}
+        {rows.map((r) => <LoopInventoryCard key={r.key} row={r} decodedPath={decodedPath} renderedAt={renderedAt} />)}
       </div>
     </Section>
   );
 }
 
-function LoopInventoryCard({ row, decodedPath }: { row: LoopRow; decodedPath: string }) {
+function LoopInventoryCard({ row, decodedPath, renderedAt }: { row: LoopRow; decodedPath: string; renderedAt: number }) {
   const tone = loopStateTone(row.state);
   const href = `/sessions/${encodeURIComponent(row.sessionId)}?agent=${encodeURIComponent(row.agent)}&back=${encodeURIComponent(`/projects/${encodeURIComponent(decodedPath)}/config`)}`;
   return (
@@ -471,7 +471,7 @@ function LoopInventoryCard({ row, decodedPath }: { row: LoopRow; decodedPath: st
           {row.lastFired && <span>last fired {loopRel(row.lastFired)}</span>}
           {row.state === "active" && row.nextFireAt && (
             <span className="text-emerald-300">
-              next run {new Date(row.nextFireAt).getTime() <= Date.now() ? "due now" : loopRel(row.nextFireAt)}
+              next run {new Date(row.nextFireAt).getTime() <= renderedAt ? "due now" : loopRel(row.nextFireAt)}
             </span>
           )}
           {row.state === "active" && row.expiresAt && <span>expires {loopRel(row.expiresAt)}</span>}

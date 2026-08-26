@@ -7,7 +7,7 @@ import type { LucideIcon, LucideProps } from "lucide-react";
 // 23.16x17.04 — padded into a 23.16x23.16 square (vertical offset 3.06, half
 // the 6.12 gap) so it doesn't stretch next to the other square agent icons.
 // Rendered as a FILLED glyph (fill="currentColor"), matching GrokIcon/PiIcon.
-const DshIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, strokeWidth, ...props }, ref) => (
+const DshIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, ...props }, ref) => (
   <svg
     ref={ref}
     xmlns="http://www.w3.org/2000/svg"

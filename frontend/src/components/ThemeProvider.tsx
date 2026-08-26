@@ -28,6 +28,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   /* Sync state from the no-flash script's attribute on mount */
   useEffect(() => {
     const t = document.documentElement.getAttribute("data-theme");
+    // The pre-paint script owns the DOM value; state synchronizes after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (t === "light" || t === "dark") setThemeState(t);
   }, []);
 

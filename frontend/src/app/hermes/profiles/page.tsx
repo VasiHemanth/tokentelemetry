@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useResource } from "@/lib/api";
 import { PageHeader, Card, EmptyState, StatTile, Badge } from "@/components/ui";
 import { formatTokens, formatCost } from "@/lib/format";
@@ -58,6 +58,7 @@ interface Session {
 }
 
 export default function ProfilesPage() {
+  const budgetIdPrefix = useId().replace(/:/g, "");
   const { data, loading } = useResource<ProfilesResp>("/hermes/profiles", { pollMs: 60_000 });
   const sessionsRes = useResource<Session[]>("/sessions", { pollMs: 60_000, initial: [] });
   const profiles = data?.profiles || [];
@@ -101,7 +102,7 @@ export default function ProfilesPage() {
       all[idx] = { ...all[idx], limit_value: limit };
     } else {
       all.push({
-        id: `hermes-profile-${name}-${Date.now().toString(36)}`,
+        id: `hermes-profile-${name}-${budgetIdPrefix}`,
         filters: { agent: "hermes", hermes_profile: name },
         period: "monthly", limit_type: "usd", limit_value: limit,
         thresholds: [0.8, 1.0], enabled: true,
@@ -165,6 +166,20 @@ function compareColor(name: string): string {
   return profileColor(name) ?? "var(--tt-brand)";
 }
 
+function ProfileSelect({ profiles, value, onChange, exclude }: { profiles: Profile[]; value: string; onChange: (v: string) => void; exclude: string }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1 text-[11px] font-mono text-[var(--tt-fg)] focus:outline-none focus:border-[var(--tt-border-strong)]"
+    >
+      {profiles.filter((p) => p.name !== exclude).map((p) => (
+        <option key={p.name} value={p.name}>{p.name}</option>
+      ))}
+    </select>
+  );
+}
+
 function ComparePanel({ profiles, sessions }: { profiles: Profile[]; sessions: Session[] }) {
   // Default to the two biggest spenders — the comparison people actually want.
   const byCost = [...profiles].sort((x, y) => y.usage.cost - x.usage.cost);
@@ -212,18 +227,6 @@ function ComparePanel({ profiles, sessions }: { profiles: Profile[]; sessions: S
     cb: b.usage.daily[i]?.cost ?? 0,
   }));
 
-  const Select = ({ value, onChange, exclude }: { value: string; onChange: (v: string) => void; exclude: string }) => (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded px-2 py-1 text-[11px] font-mono text-[var(--tt-fg)] focus:outline-none focus:border-[var(--tt-border-strong)]"
-    >
-      {profiles.filter((p) => p.name !== exclude).map((p) => (
-        <option key={p.name} value={p.name}>{p.name}</option>
-      ))}
-    </select>
-  );
-
   return (
     <Card className="p-5 space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
@@ -231,9 +234,9 @@ function ComparePanel({ profiles, sessions }: { profiles: Profile[]; sessions: S
         <span className="text-[13px] font-semibold text-[var(--tt-fg)]">Compare profiles</span>
         {open ? (
           <>
-            <Select value={nameA} onChange={setNameA} exclude={nameB} />
+            <ProfileSelect profiles={profiles} value={nameA} onChange={setNameA} exclude={nameB} />
             <span className="text-[11px] text-[var(--tt-fg-dim)]">vs</span>
-            <Select value={nameB} onChange={setNameB} exclude={nameA} />
+            <ProfileSelect profiles={profiles} value={nameB} onChange={setNameB} exclude={nameA} />
             <button onClick={() => setOpen(false)} className="ml-auto text-[10px] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]">
               close
             </button>

@@ -24,6 +24,8 @@ function DashboardPreferencesToggle() {
   const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
+    // Preserve hydration by reading browser-only storage after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEnabled(localStorage.getItem("tt-show-local-dash") === "true");
   }, []);
 

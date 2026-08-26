@@ -85,6 +85,7 @@ export default function CreateScheduleModal({ open, onClose, onSaved, editingJob
   }, [open, onClose]);
 
   // Prefill on open: from `editingJob` in edit mode, otherwise reset.
+  /* eslint-disable react-hooks/set-state-in-effect -- Opening the modal intentionally resets its draft state from props. */
   useEffect(() => {
     if (!open) return;
     setError(null); setSubmitting(false);
@@ -116,6 +117,7 @@ export default function CreateScheduleModal({ open, onClose, onSaved, editingJob
       setRepeat(""); setWorkdir(""); setShowAdvanced(false);
     }
   }, [open, editingJob]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Lazy-load script + skill catalogs the first time the modal opens.
   useEffect(() => {

@@ -5,7 +5,7 @@ import type { LucideIcon, LucideProps } from "lucide-react";
 // stylized monogram. Rendered as a FILLED glyph (fill="currentColor") so it
 // inherits the agent's accent color and stays solid/visible on the dark theme.
 // Background container square is intentionally dropped so it reads as an icon.
-const GrokIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, strokeWidth, ...props }, ref) => (
+const GrokIcon = forwardRef<SVGSVGElement, LucideProps>(({ size, ...props }, ref) => (
   <svg
     ref={ref}
     xmlns="http://www.w3.org/2000/svg"
