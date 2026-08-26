@@ -13,6 +13,10 @@ export const metadata: Metadata = {
   description: "Local token + cost monitoring for Claude Code, Codex, Gemini CLI, and other coding agents.",
 };
 
+// This must be dynamic: TT_SINGLE_PORT_PROXY is a launch-time server setting,
+// not a NEXT_PUBLIC_* build setting.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
@@ -24,6 +28,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         {/* Sets data-theme before paint to avoid FOUC. beforeInteractive runs in <head>. */}
         <Script id="tt-theme-init" strategy="beforeInteractive">
           {NO_FLASH_SCRIPT}
+        </Script>
+        <Script id="tt-runtime-config" strategy="beforeInteractive">
+          {`window.__TT_SINGLE_PORT_PROXY__ = ${process.env.TT_SINGLE_PORT_PROXY === "1"};`}
         </Script>
       </head>
       <ThemeProvider>

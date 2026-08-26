@@ -228,13 +228,22 @@ def _presented_token(request: Request) -> str:
     return (request.query_params.get("token") or "").strip()
 
 
+def _is_proxied_request(request: Request) -> bool:
+    """Whether the trusted frontend marked a non-loopback caller.
+
+    This marker can only remove the backend's loopback trust; it never grants
+    access, so a client sending it directly cannot gain privilege.
+    """
+    return request.headers.get("X-TT-Proxied", "") == "1"
+
+
 class RemoteAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         token = os.environ.get("TT_AUTH_TOKEN", "").strip()
         if not token:
             return await call_next(request)  # gate disabled (local default)
         client = request.client.host if request.client else None
-        if _is_loopback(client):
+        if _is_loopback(client) and not _is_proxied_request(request):
             return await call_next(request)  # local is always exempt
         presented = _presented_token(request)
         if presented and hmac.compare_digest(presented, token):
@@ -7616,7 +7625,7 @@ async def get_remote_access(request: Request):
     be re-fetched over the network. Returns {enabled: false} when not exposed."""
     from fastapi import HTTPException
     client = request.client.host if request.client else None
-    if not _is_loopback(client):
+    if not _is_loopback(client) or _is_proxied_request(request):
         raise HTTPException(status_code=403, detail="Not available remotely.")
     url = os.environ.get("TT_REMOTE_CONNECT_URL", "").strip()
     token = os.environ.get("TT_AUTH_TOKEN", "").strip()

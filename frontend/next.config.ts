@@ -9,11 +9,20 @@ const allowedDevOrigins = (process.env.TT_ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// This destination is intentionally server-only. The browser chooses proxy mode
+// from a runtime value rendered by app/layout.tsx; the rewrite merely provides a
+// streaming path when it does. Native builds target their local FastAPI process;
+// the Compose image supplies http://backend:8000 at build time.
+const proxyApiUrl = (process.env.TT_PROXY_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+
 const nextConfig: NextConfig = {
   output: "standalone",
   devIndicators: false,
   // Empty array == default (no extra origins), so this is safe when unset.
   allowedDevOrigins,
+  async rewrites() {
+    return [{ source: "/_tt-api/:path*", destination: `${proxyApiUrl}/:path*` }];
+  },
 };
 
 export default nextConfig;
