@@ -223,8 +223,10 @@ function which(cmd) {
 }
 
 function checkNode() {
-  const major = parseInt(process.versions.node.split('.')[0], 10);
-  if (major < 18) die(`Node.js 18+ required (detected ${process.versions.node}).`);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 20 || (major === 20 && minor < 9)) {
+    die(`Node.js 20.9+ required (detected ${process.versions.node}).`);
+  }
 }
 
 function findPython() {
@@ -482,10 +484,14 @@ async function start() {
     },
   });
 
-  const frontend = spawn('npm', ['run', 'dev', '--', '--port', String(frontPort)], {
+  // Next dev otherwise listens on every interface even when the API is
+  // loopback-only. Bind both services to the same explicit host so the default
+  // launch is actually localhost-only and remote mode stays opt-in.
+  const npmCommand = isWindows ? 'npm.cmd' : 'npm';
+  const frontend = spawn(npmCommand, ['run', 'dev', '--', '--hostname', host, '--port', String(frontPort)], {
     cwd: frontendDir,
     stdio: 'inherit',
-    shell: true,
+    shell: false,
     detached: !isWindows,
     // The frontend derives its API base from window.location at runtime (see
     // frontend/src/lib/api.ts), so it only needs the API *port* — the host
