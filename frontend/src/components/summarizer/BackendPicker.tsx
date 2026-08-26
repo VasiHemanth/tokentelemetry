@@ -45,29 +45,25 @@ export function BackendPicker({
 }: BackendPickerProps) {
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[] | null>(null);
   const [ollamaErr, setOllamaErr] = useState<string | null>(null);
-  const [ollamaLoading, setOllamaLoading] = useState(false);
 
   const [codexModels, setCodexModels] = useState<CodexModel[] | null>(null);
   const [codexErr, setCodexErr] = useState<string | null>(null);
-  const [codexLoading, setCodexLoading] = useState(false);
+  const ollamaLoading = selected === "ollama" && ollamaModels === null && ollamaErr === null;
+  const codexLoading = selected === "codex" && codexModels === null && codexErr === null;
 
   // Lazy-load the model list for whichever backend the user picks.
   useEffect(() => {
-    if (selected === "ollama" && ollamaModels === null && !ollamaLoading) {
-      setOllamaLoading(true);
+    if (selected === "ollama" && ollamaModels === null) {
       listOllamaModels()
         .then(setOllamaModels)
-        .catch((e) => setOllamaErr(e instanceof Error ? e.message : String(e)))
-        .finally(() => setOllamaLoading(false));
+        .catch((e) => setOllamaErr(e instanceof Error ? e.message : String(e)));
     }
-    if (selected === "codex" && codexModels === null && !codexLoading) {
-      setCodexLoading(true);
+    if (selected === "codex" && codexModels === null) {
       listCodexModels()
         .then(setCodexModels)
-        .catch((e) => setCodexErr(e instanceof Error ? e.message : String(e)))
-        .finally(() => setCodexLoading(false));
+        .catch((e) => setCodexErr(e instanceof Error ? e.message : String(e)));
     }
-  }, [selected, ollamaModels, ollamaLoading, codexModels, codexLoading]);
+  }, [selected, ollamaModels, codexModels]);
 
   return (
     <div className="space-y-3">

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Wallet, Check, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { getAgent } from "@/lib/agents";
 import { AgentLogo } from "@/components/icons/AgentLogo";
-import { Card, CardHeader, CardTitle, Badge, Skeleton } from "@/components/ui";
+import { Card, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import {
   getBillingConfig, setBillingMode, MODE_LABEL,
   getBillingRouteConfig, setBillingPlan,

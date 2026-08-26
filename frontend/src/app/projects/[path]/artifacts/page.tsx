@@ -266,6 +266,8 @@ export default function ArtifactsTab() {
   const [view, setView] = useState<ViewMode>("cards");
   useEffect(() => {
     try {
+      // Keep the server/client first render stable, then hydrate the preference.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (window.localStorage.getItem(VIEW_KEY) === "list") setView("list");
     } catch { /* storage unavailable — keep default */ }
   }, []);

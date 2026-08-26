@@ -63,7 +63,6 @@ export default function Home() {
   });
   const availableAgents = agentsRes.data ?? [];
   const byModel = analyticsRes.data?.by_model ?? {};
-  const pricingUpdated = analyticsRes.data?.pricing_updated;
 
   const totalTokens = sessions.reduce((a, s) => a + (s.tokens?.total ?? 0), 0);
   const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0), 0);

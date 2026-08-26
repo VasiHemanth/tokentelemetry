@@ -33,14 +33,15 @@ const GIT_PULL = "git pull && ./start.sh";
 
 export default function WhatsNewBanner() {
   const [info, setInfo] = useState<VersionInfo | null>(null);
-  const [dismissedRelease, setDismissedRelease] = useState<string | null>(null);
+  const [dismissedRelease, setDismissedRelease] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try { return window.localStorage.getItem(STORAGE_KEY); }
+    catch { return null; }
+  });
   const [copied, setCopied] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
-    try { setDismissedRelease(window.localStorage.getItem(STORAGE_KEY)); }
-    catch { setDismissedRelease(null); }
-
     let cancelled = false;
     getVersion()
       .then((d) => { if (!cancelled) setInfo(d); })

@@ -192,7 +192,7 @@ Captured plan-mode outputs from Claude Code's `/plan` command and equivalent in 
 
 ## Requirements
 
-- **Node.js 18+**
+- **Node.js 20.9+**
 - **Python 3.9+**
 - **git**
 - Any supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)

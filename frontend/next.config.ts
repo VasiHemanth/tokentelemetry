@@ -12,6 +12,10 @@ const allowedDevOrigins = (process.env.TT_ALLOWED_ORIGINS || "")
 const nextConfig: NextConfig = {
   output: "standalone",
   devIndicators: false,
+  // This app has its own lockfile inside the repository's launcher package.
+  // Pin Turbopack here instead of letting it infer the parent or a user-level
+  // lockfile as the workspace root.
+  turbopack: { root: process.cwd() },
   // Empty array == default (no extra origins), so this is safe when unset.
   allowedDevOrigins,
 };

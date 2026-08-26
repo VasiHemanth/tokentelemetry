@@ -5,8 +5,24 @@ import { PageHeader, Card, Table, THead, TBody, TR, TH, TD, Badge, EmptyState } 
 import { Signal, Power } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
+interface GatewayPlatform {
+  name: string;
+  state?: string | null;
+  error_code?: string | null;
+}
+
+interface GatewayOverview {
+  gateway?: {
+    pid_alive: boolean;
+    pid?: number | null;
+    state?: string | null;
+    updated_at?: string | null;
+    platforms?: GatewayPlatform[];
+  };
+}
+
 export default function GatewayPage() {
-  const res = useResource<any>("/hermes/overview", { pollMs: 10000 });
+  const res = useResource<GatewayOverview>("/hermes/overview", { pollMs: 10000 });
   const loading = !res.data;
   const gateway = res.data?.gateway;
 
@@ -54,7 +70,7 @@ export default function GatewayPage() {
                 <TR><TH className="pl-4">Platform</TH><TH>Status</TH><TH>Error</TH></TR>
               </THead>
               <TBody>
-                {gateway.platforms?.map((p: any) => (
+                {gateway.platforms?.map((p) => (
                   <TR key={p.name}>
                     <TD className="pl-4 font-mono text-sm">{p.name}</TD>
                     <TD>

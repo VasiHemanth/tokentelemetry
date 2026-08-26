@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
-import { ArrowLeft, BookOpen, Search } from "lucide-react";
+import { BookOpen, Search } from "lucide-react";
 import { useResource } from "@/lib/api";
 import {
   PageHeader, Card, CardHeader, CardTitle, StatTile, EmptyState, Badge,

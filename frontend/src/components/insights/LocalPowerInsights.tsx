@@ -26,11 +26,11 @@ export default function LocalPowerInsights({ forceShow = false }: { forceShow?: 
 
   const loading = sessionsRes.loading || analyticsRes.loading;
   
-  const sessions = sessionsRes.data ?? [];
   const analytics = analyticsRes.data;
 
   const localModelsMap = useMemo(() => {
     const map = new Map<string, { session_count: number; total_tokens: number; output_tokens: number }>();
+    const sessions = sessionsRes.data ?? [];
     sessions.forEach(s => {
       const model = s.model || "unknown";
       if (isLocalSession(s.model, s.provider)) {
@@ -42,7 +42,7 @@ export default function LocalPowerInsights({ forceShow = false }: { forceShow?: 
       }
     });
     return map;
-  }, [sessions]);
+  }, [sessionsRes.data]);
 
   const hasLocalModels = localModelsMap.size > 0;
 
@@ -51,7 +51,7 @@ export default function LocalPowerInsights({ forceShow = false }: { forceShow?: 
   }
 
   let totalEnergyWh: number | undefined = analytics?.total?.energy_wh;
-  let savingsUsd: number | undefined = analytics?.total?.savings_usd;
+  const savingsUsd: number | undefined = analytics?.total?.savings_usd;
   let isEstimate = false;
 
   if (totalEnergyWh === undefined) {

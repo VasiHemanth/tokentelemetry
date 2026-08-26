@@ -18,6 +18,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get("sidebar");
     if (fromUrl === "collapsed" || fromUrl === "expanded") {
+      // Preserve hydration, then apply the browser-only URL preference.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsCollapsed(fromUrl === "collapsed");
       return;
     }

@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowLeft, Brain, User as UserIcon } from "lucide-react";
+import { Brain, User as UserIcon } from "lucide-react";
 import { useResource } from "@/lib/api";
 import {
   PageHeader, Card, CardHeader, CardTitle, EmptyState,

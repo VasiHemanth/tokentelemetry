@@ -37,7 +37,6 @@ export default function SummaryPanel({ sessionId, agent }: SummaryPanelProps) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     Promise.all([
       getCachedSummary(sessionId).catch(() => null),
       getSummarizerConfig().catch(() => null),

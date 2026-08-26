@@ -168,6 +168,8 @@ export default function AnalyticsPage() {
   const [allModels, setAllModels] = useState<string[]>([]);
   useEffect(() => {
     if (data?.by_model) {
+      // Preserve options that disappear from the filtered response.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAllModels(prev => {
         const next = new Set(prev);
         Object.keys(data.by_model!).forEach(m => next.add(m));
@@ -339,7 +341,7 @@ export default function AnalyticsPage() {
           <BarChart3 size={13} className="mt-0.5 shrink-0 text-[var(--tt-fg-dim)]" />
           <span>
             Durable history since <span className="text-[var(--tt-fg)]">{data.coverage.earliest.slice(0, 10)}</span>.
-            TokenTelemetry only records sessions present on disk from its first run — usage before then can't be
+            TokenTelemetry only records sessions present on disk from its first run — usage before then can&apos;t be
             recovered, and agents prune their own transcripts over time, so older entries may be summary-only
             (no transcript drill-in).
           </span>
@@ -423,7 +425,7 @@ export default function AnalyticsPage() {
                   contentStyle={ct.tooltipStyle}
                   itemStyle={ct.tooltipItem}
                   labelStyle={ct.tooltipLabel}
-                  formatter={(v: any) => [Number(v).toLocaleString(), "Tokens"]}
+                  formatter={(v) => [Number(v).toLocaleString(), "Tokens"]}
                   cursor={{ stroke: ct.axisStroke }}
                 />
                 <Area type="monotone" dataKey="total" stroke="#60a5fa" strokeWidth={2} fill="url(#ttArea)" />
@@ -447,7 +449,7 @@ export default function AnalyticsPage() {
                   <Tooltip
                     contentStyle={ct.tooltipStyle}
                     itemStyle={ct.tooltipItem}
-                    formatter={(v: any, _n, p: any) => [Number(v).toLocaleString(), p.payload.name]}
+                    formatter={(v, _n, p) => [Number(v).toLocaleString(), p.payload.name]}
                   />
                 </RePieChart>
               </ResponsiveContainer>
@@ -533,7 +535,7 @@ export default function AnalyticsPage() {
                       contentStyle={ct.tooltipStyle}
                       itemStyle={ct.tooltipItem}
                       cursor={{ fill: ct.grid }}
-                      formatter={(v: any) => [v.toLocaleString(), "Tokens"]}
+                      formatter={(v) => [Number(v).toLocaleString(), "Tokens"]}
                     />
                     <Bar dataKey="total" radius={[0, 6, 6, 0]} barSize={16}>
                       {modelData.map((m) => <Cell key={m.name} fill={m.color} />)}
@@ -557,7 +559,7 @@ export default function AnalyticsPage() {
                     <Tooltip
                       contentStyle={ct.tooltipStyle}
                       itemStyle={ct.tooltipItem}
-                      formatter={(v: any, _n, p: any) => [v.toLocaleString(), p.payload.name]}
+                      formatter={(v, _n, p) => [Number(v).toLocaleString(), p.payload.name]}
                     />
                   </RePieChart>
                 </ResponsiveContainer>
