@@ -359,7 +359,7 @@ def _disk() -> Optional[Dict[str, Any]]:
     }
 
 
-def build() -> Dict[str, Any]:
+def build(*, with_disk: bool = True) -> Dict[str, Any]:
     if not CODEX_DIR.is_dir():
         return not_installed("codex")
 
@@ -407,5 +407,5 @@ def build() -> Dict[str, Any]:
         not_available=not_avail,
         version=version,
         last_active=iso(last),
-        disk=safe(_disk, "codex disk"),
+        disk=safe(_disk, "codex disk") if with_disk else None,
     )

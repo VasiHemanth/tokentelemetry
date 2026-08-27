@@ -107,6 +107,26 @@ def test_meter_clamps_and_grades():
     assert base.meter("x", 95)["severity"] == "crit"
 
 
+def test_drop_empty_columns():
+    cols = ["Name", "Agent", "Steps", "Status"]
+    rows = [["a", "", 3, "—"], ["b", "", 5, ""]]
+    out_cols, out_rows = base.drop_empty_columns(cols, rows)
+    assert out_cols == ["Name", "Steps"]
+    assert out_rows == [["a", 3], ["b", 5]]
+
+
+def test_drop_empty_columns_honours_keep():
+    cols = ["Name", "Agent"]
+    rows = [["a", ""]]
+    out_cols, _ = base.drop_empty_columns(cols, rows, keep=("Agent",))
+    assert out_cols == ["Name", "Agent"]
+
+
+def test_drop_empty_columns_leaves_full_tables_alone():
+    cols, rows = ["A", "B"], [[1, 2]]
+    assert base.drop_empty_columns(cols, rows) == (cols, rows)
+
+
 def test_safe_swallows_failure():
     def boom():
         raise RuntimeError("nope")
@@ -635,14 +655,20 @@ def test_grok_unknown_status_counts_as_running(tmp_path, monkeypatch):
 
 # --- registry ---------------------------------------------------------------
 
-def test_unknown_agent_is_planned_not_missing():
-    doc = harness_panels.build_panel("qwen")
-    assert doc["installed"] is False and doc["planned"] is True
-
-
 def test_unsupported_agent_is_not_planned():
     doc = harness_panels.build_panel("definitely-not-an-agent")
     assert doc["installed"] is False and doc.get("planned") is False
+
+
+def test_planned_is_empty_now_that_every_agent_has_a_builder():
+    """`planned` marks a supported agent with no extractor yet. There are none.
+
+    Kept as a mechanism rather than deleted: the frontend renders
+    "no panel yet" differently from "not installed", and a newly supported agent
+    should land in PLANNED before it lands in BUILDERS.
+    """
+    assert harness_panels.PLANNED == ()
+    assert not (set(harness_panels.PLANNED) & set(harness_panels.BUILDERS))
 
 
 def test_hermes_is_excluded_from_panels():
@@ -652,7 +678,7 @@ def test_hermes_is_excluded_from_panels():
 
 
 def test_builder_exception_does_not_propagate(monkeypatch):
-    def boom():
+    def boom(**_kw):
         raise RuntimeError("extractor blew up")
     monkeypatch.setitem(harness_panels.BUILDERS, "codex", boom)
     harness_panels.invalidate()
@@ -664,7 +690,7 @@ def test_builder_exception_does_not_propagate(monkeypatch):
 def test_cache_returns_same_object(monkeypatch):
     calls = {"n": 0}
 
-    def counting():
+    def counting(**_kw):
         calls["n"] += 1
         return {"agent": "codex", "installed": True, "sections": [], "not_available": []}
 
@@ -675,4 +701,17 @@ def test_cache_returns_same_object(monkeypatch):
     assert calls["n"] == 1, "second read should be served from cache"
     harness_panels.build_panel("codex", fresh=True)
     assert calls["n"] == 2, "fresh=True must bypass the cache"
+    harness_panels.invalidate()
+
+
+def test_disk_and_nodisk_are_cached_separately(monkeypatch):
+    """A disk-less document must never be served to a page that renders disk."""
+    def stub(*, with_disk=True):
+        return {"agent": "codex", "installed": True, "sections": [],
+                "not_available": [], "disk": {"total_bytes": 1} if with_disk else None}
+
+    monkeypatch.setitem(harness_panels.BUILDERS, "codex", stub)
+    harness_panels.invalidate()
+    assert harness_panels.build_panel("codex", with_disk=False)["disk"] is None
+    assert harness_panels.build_panel("codex")["disk"] is not None
     harness_panels.invalidate()

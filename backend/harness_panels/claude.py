@@ -32,13 +32,6 @@ CLAUDE_JSON = HOME / ".claude.json"
 JOB_ROWS = 30
 WORKFLOW_ROWS = 15
 
-# Job dirs carry a multi-gigabyte `tmp/` scratch tree (git clones, node_modules)
-# that is not data. Sizing it on every page open would dominate the request, so
-# the disk section reports it as one reclaimable line without walking it.
-_JOB_STATE_KEYS = ("state", "detail", "tokens", "name", "intent", "cwd",
-                   "createdAt", "updatedAt", "children", "template", "fan")
-
-
 def _read_json(path: Path) -> Optional[Any]:
     if not path.exists():
         return None
@@ -304,7 +297,7 @@ def _disk() -> Optional[Dict[str, Any]]:
     }
 
 
-def build() -> Dict[str, Any]:
+def build(*, with_disk: bool = True) -> Dict[str, Any]:
     if not CLAUDE_DIR.is_dir():
         return not_installed("claude")
 
@@ -331,5 +324,5 @@ def build() -> Dict[str, Any]:
         "claude", CLAUDE_DIR,
         sections=sections, not_available=not_avail,
         version=version, last_active=iso(last),
-        disk=safe(_disk, "claude disk"),
+        disk=safe(_disk, "claude disk") if with_disk else None,
     )

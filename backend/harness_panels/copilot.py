@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import (
-    HOME, dir_size, field, human_bytes, iso, meter, newest_mtime, not_installed,
+    HOME, dir_size, field, human_bytes, iso, newest_mtime, not_installed,
     panel, preview, ro_sqlite, safe, section, table_exists, tilde, unavailable,
 )
 
@@ -227,7 +227,7 @@ def _disk() -> Optional[Dict[str, Any]]:
             "parts": parts[:8], "complete": complete}
 
 
-def build() -> Dict[str, Any]:
+def build(*, with_disk: bool = True) -> Dict[str, Any]:
     if not COPILOT_DIR.is_dir():
         return not_installed("copilot")
 
@@ -283,5 +283,5 @@ def build() -> Dict[str, Any]:
     return panel(
         "copilot", COPILOT_DIR,
         sections=sections, not_available=not_avail,
-        last_active=iso(last), disk=safe(_disk, "copilot disk"),
+        last_active=iso(last), disk=safe(_disk, "copilot disk") if with_disk else None,
     )

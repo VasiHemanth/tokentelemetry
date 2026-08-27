@@ -122,6 +122,31 @@ def preview(text: Any, limit: int = PREVIEW_CHARS) -> str:
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 
 
+def drop_empty_columns(columns: List[str], rows: List[List[Any]],
+                       keep: Optional[Sequence[str]] = None) -> tuple[List[str], List[List[Any]]]:
+    """Remove columns whose every value is empty.
+
+    Agents declare columns their schema supports but does not always populate —
+    Antigravity's `conversation_summaries` has `agent_name` and `status` columns
+    that are empty on every one of 131 rows. Rendering those as a wall of em
+    dashes suggests the data is missing rather than that the agent never fills
+    them in. `keep` pins columns that should survive even when empty.
+    """
+    if not rows:
+        return columns, rows
+    keep_set = set(keep or ())
+    live = [
+        i for i, name in enumerate(columns)
+        if name in keep_set or any(
+            r[i] not in (None, "", "—", 0, False) for r in rows if i < len(r)
+        )
+    ]
+    if len(live) == len(columns):
+        return columns, rows
+    return ([columns[i] for i in live],
+            [[r[i] for i in live if i < len(r)] for r in rows])
+
+
 def human_bytes(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024 or unit == "TB":
