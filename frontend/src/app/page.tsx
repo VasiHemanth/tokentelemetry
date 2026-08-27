@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
-  Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, Radio, Terminal,
+  Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, ArrowRight,
+  Radio, Terminal,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -20,6 +21,7 @@ import { formatTokens, formatCost } from "@/lib/format";
 import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import { projectBasename } from "@/lib/paths";
+import type { PanelSummary } from "@/lib/agentPanel";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
@@ -55,6 +57,10 @@ export default function Home() {
   const agentsRes   = useResource<string[]>("/agents", { pollMs: 30_000, initial: [] });
   const analyticsRes = useResource<AnalyticsResponse>("/analytics", { pollMs: 30_000 });
   const billingRes  = useResource<BillingConfig>("/config/billing", { pollMs: 60_000 });
+  // Section count per agent, so a tile can say "6 panels" and only link where
+  // there is something behind it. Not polled — harness config changes rarely,
+  // and the backend caches it anyway.
+  const panelsRes   = useResource<PanelSummary>("/agents/panels", { initial: {} });
 
   const sessions = (sessionsRes.data ?? []).slice().sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -62,6 +68,7 @@ export default function Home() {
     return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
   });
   const availableAgents = agentsRes.data ?? [];
+  const panelCounts = panelsRes.data ?? {};
   const byModel = analyticsRes.data?.by_model ?? {};
   const pricingUpdated = analyticsRes.data?.pricing_updated;
 
@@ -169,6 +176,9 @@ export default function Home() {
           const meta = AGENTS[k as AgentKey];
           if (!meta) return null;
           const count = sessions.filter((s) => s.agent === k).length;
+          // How many harness panels sit behind this tile. Hermes has its own page
+          // and is always linkable, so it doesn't need a count.
+          const panelCount = k === "hermes" ? 0 : (panelCounts[k] ?? 0);
           const inner = (
             <>
               <div
@@ -188,14 +198,28 @@ export default function Home() {
               <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[var(--tt-fg-muted)]">
                 {meta.label}
               </div>
+              {panelCount > 0 && (
+                <div className="mt-1 flex items-center gap-1 font-mono text-[10.5px] text-[var(--tt-brand)]">
+                  {panelCount} {panelCount === 1 ? "panel" : "panels"} <ArrowRight size={10} />
+                </div>
+              )}
             </>
           );
           const className =
             "group relative overflow-hidden rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] p-3 transition-colors hover:border-[var(--tt-border-strong)]";
-          // Hermes routes to its dedicated page; other agents stay non-interactive for now.
+          // Hermes keeps its own richer sub-dashboard. Every other agent links to
+          // /agents/<key> once the backend reports panels behind it; agents with
+          // nothing extra on disk stay inert rather than leading to an empty page.
           if (k === "hermes") {
             return (
               <Link key={k} href="/hermes" className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}>
+                {inner}
+              </Link>
+            );
+          }
+          if (panelCount > 0) {
+            return (
+              <Link key={k} href={`/agents/${k}`} className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}>
                 {inner}
               </Link>
             );

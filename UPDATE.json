@@ -1,6 +1,36 @@
 {
   "releases": [
     {
+      "tag": "2026-08-27",
+      "title": "Click an agent, see what it stores",
+      "highlights": [
+        {
+          "title": "Every agent tile now opens a page of its own",
+          "description": "Until now only Hermes had a dedicated page and the other tiles did nothing. Claude Code, Codex, Copilot and Grok each open a page built from what that harness keeps on your disk, and the tile tells you how many panels are behind it. Agents with nothing extra stored stay quiet instead of leading to an empty page.",
+          "href": "/agents/codex"
+        },
+        {
+          "title": "See how close you are to your limits",
+          "description": "Claude Code's 5-hour and 7-day subscription usage and Grok's weekly credit balance were already sitting on disk unread. Both now show as a meter with the reset time, and a figure whose window has already closed is greyed out and labelled stale rather than quietly presented as current.",
+          "href": "/agents/claude"
+        },
+        {
+          "title": "Codex schedules and how much access it has",
+          "description": "Codex can run on a cron or hourly heartbeat without you present; those automations now appear with their schedule in plain English, the model they use and the repo they run in. Alongside them sits its approval policy, sandbox mode and trusted-project count, so a setting like danger-full-access is visible rather than buried in a config file.",
+          "href": "/agents/codex"
+        },
+        {
+          "title": "Copilot's real billing units, not an estimate",
+          "description": "Copilot bills premium requests in AIU rather than tokens, which cannot be worked out from a transcript. Its own record of what each request cost is now shown per model, together with the time to first token and a true generation rate.",
+          "href": "/agents/copilot"
+        },
+        {
+          "title": "Background jobs and what they shipped",
+          "description": "Claude Code's background agents appear as a table with their state, tokens and the pull requests or issues each one produced, with the currently running ones marked. Grok's plugin jobs show the same way, including how many failed."
+        }
+      ]
+    },
+    {
       "tag": "2026-08-16",
       "title": "DeepSeek Harness support",
       "highlights": [

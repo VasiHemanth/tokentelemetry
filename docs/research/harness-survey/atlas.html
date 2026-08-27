@@ -429,7 +429,7 @@ ul.tight code{font-size:11.5px; background:var(--surface-3); padding:1px 4px; bo
 │   └── tmp/                      <span class="c">2.9G of disposable scratch in 2 dirs — NOT data</span>
 ├── projects/&lt;enc-cwd&gt;/           <span class="c">570M — 51 project dirs</span>
 │   ├── &lt;session&gt;.jsonl           <span class="c">transcript (covered)</span>
-│   ├── &lt;session&gt;/<span class="n">workflows/wf_*.json</span>   <span class="c">512 runs / 40 sessions</span>
+│   ├── &lt;session&gt;/<span class="n">workflows/wf_*.json</span>   <span class="c">45 runs / 19 sessions</span>
 │   ├── &lt;session&gt;/subagents/...   <span class="c">per-agent traces (covered)</span>
 │   └── <span class="n">bridge-pointer.json</span>        <span class="c">claude.ai cloud environment link (1 of 51)</span>
 ├── plugins/                      <span class="c">88M — cache/, marketplaces/</span>
@@ -457,7 +457,7 @@ ul.tight code{font-size:11.5px; background:var(--surface-3); padding:1px 4px; bo
     <tbody>
       <tr><td>jobs/&lt;id&gt;/state.json</td><td>Job table: name, state, tokens, cwd, linked PRs — 48 rows</td><td><span class="b b-new">New</span></td></tr>
       <tr><td>.claude.json cachedUsageUtilization</td><td>5h / 7d quota gauge with reset countdown</td><td><span class="b b-new">New</span></td></tr>
-      <tr><td>projects/**/workflows/wf_*.json</td><td>512 phased multi-agent runs: tokens, tool calls, duration</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>projects/**/workflows/wf_*.json</td><td>45 phased multi-agent runs: tokens, tool calls, duration</td><td><span class="b b-new">New</span></td></tr>
       <tr><td>file-history/&lt;session&gt;/</td><td>Checkpoint count + files touched per session</td><td><span class="b b-new">New</span></td></tr>
       <tr><td>stats-cache.json</td><td>Free cross-check against TT's transcript-derived totals</td><td><span class="b b-new">New</span></td></tr>
       <tr><td>skillUsage / pluginUsage</td><td>Feature adoption: top skills and plugins by use count</td><td><span class="b b-new">New</span></td></tr>
