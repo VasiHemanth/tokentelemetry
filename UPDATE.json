@@ -1,6 +1,32 @@
 {
   "releases": [
     {
+      "tag": "2026-08-27",
+      "title": "Faster, more accurate usage engine",
+      "highlights": [
+        {
+          "title": "Costs are priced from the vendor, not whichever reseller sorted first",
+          "description": "Pricing picked the alphabetically first provider publishing a model, so resellers beat the vendors who make them. gpt-5.6-luna was billed at $1.00/$6.00 instead of OpenAI's $0.20/$1.20 — a 5x overcharge that hid an 80% price cut. Measured against models.dev, 18% of models with a known first-party price were wrong, from 0.05x to 267x. Providers are now ranked so the vendor always wins.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Prices are dated, so a cut no longer reprices your history",
+          "description": "Rates carry the date they took effect and a call is priced at the rate in force when it happened, instead of every past session being silently repriced by today's snapshot. Long-context surcharges, per-provider cache-write rates and the batch tier's 50% discount are all applied too.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Repeated calls are no longer counted twice",
+          "description": "Resuming, forking or compacting a session copies earlier messages into the new transcript. Half of all Claude assistant messages on the test machine were such copies, and Codex forks replayed an entire parent conversation into each child. Both are now detected and counted once, which cut one day's reported Codex spend from $3,790 to $119.",
+          "href": "/"
+        },
+        {
+          "title": "Unknown models are reported as unpriced instead of guessed",
+          "description": "A model with no rate on file used to fall back to $2/$10 per million tokens, which billed 965 sessions of a free model $380. Unpriced usage is now excluded from the total and called out, so the headline figure only contains money we can actually account for.",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-16",
       "title": "DeepSeek Harness support",
       "highlights": [
