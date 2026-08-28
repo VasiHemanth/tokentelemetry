@@ -1,0 +1,1191 @@
+<title>Harness Data Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#EFF2F0; --surface:#FFFFFF; --surface-2:#F7F9F8; --surface-3:#E7ECE9;
+  --ink:#171C1A; --ink-2:#4E5B57; --ink-3:#7C8A85;
+  --rule:#D5DDD9; --rule-2:#C3CDC8;
+  --accent:#A8480F; --accent-soft:#FBF0E8;
+  --new:#A8480F; --new-bg:#F7E9DE;
+  --partial:#0F766E; --partial-bg:#E2EFED;
+  --covered:#77857F; --covered-bg:#E7ECE9;
+  --none:#B3BEB9;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#101413; --surface:#171C1A; --surface-2:#1E2523; --surface-3:#232B29;
+    --ink:#E8EDEA; --ink-2:#A3B0AB; --ink-3:#72807B;
+    --rule:#2B3431; --rule-2:#38433F;
+    --accent:#F0913F; --accent-soft:#2A1D12;
+    --new:#F0913F; --new-bg:#33220F;
+    --partial:#45C4B0; --partial-bg:#122E2A;
+    --covered:#78867F; --covered-bg:#232B29;
+    --none:#4A5652;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101413; --surface:#171C1A; --surface-2:#1E2523; --surface-3:#232B29;
+  --ink:#E8EDEA; --ink-2:#A3B0AB; --ink-3:#72807B;
+  --rule:#2B3431; --rule-2:#38433F;
+  --accent:#F0913F; --accent-soft:#2A1D12;
+  --new:#F0913F; --new-bg:#33220F;
+  --partial:#45C4B0; --partial-bg:#122E2A;
+  --covered:#78867F; --covered-bg:#232B29;
+  --none:#4A5652;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.6;
+  margin:0; -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent)}
+code,pre,.mono{font-family:var(--mono)}
+
+/* ---------- shell ---------- */
+.shell{display:grid; grid-template-columns:236px minmax(0,1fr); gap:0; max-width:1500px; margin:0 auto}
+@media(max-width:1000px){ .shell{grid-template-columns:1fr} }
+
+.rail{
+  position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
+  padding:34px 18px 40px 26px; border-right:1px solid var(--rule);
+}
+@media(max-width:1000px){ .rail{position:static; height:auto; border-right:none; border-bottom:1px solid var(--rule)} }
+.rail-brand{font-family:var(--mono); font-size:12px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--accent); margin-bottom:22px}
+.rail h4{font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3); margin:22px 0 8px}
+.rail a{display:block; font-family:var(--mono); font-size:12.5px; color:var(--ink-2); text-decoration:none; padding:3.5px 0 3.5px 10px; border-left:2px solid transparent}
+.rail a:hover{color:var(--accent); border-left-color:var(--accent)}
+.rail a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+main{padding:34px 40px 100px; min-width:0}
+@media(max-width:700px){ main{padding:26px 18px 70px} .rail{padding:22px 18px} }
+
+/* ---------- masthead ---------- */
+.mast{border-bottom:2px solid var(--ink); padding-bottom:26px; margin-bottom:32px}
+.eyebrow{font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.15em; text-transform:uppercase; color:var(--accent); margin:0 0 12px}
+h1{font-family:var(--mono); font-size:clamp(28px,4.4vw,44px); font-weight:600; line-height:1.1; letter-spacing:-.02em; margin:0 0 14px; text-wrap:balance}
+.lede{font-size:17px; color:var(--ink-2); max-width:66ch; margin:0}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:1px; background:var(--rule); border:1px solid var(--rule); margin:28px 0 0}
+.stat{background:var(--surface); padding:14px 16px}
+.stat b{display:block; font-family:var(--mono); font-size:24px; font-weight:600; line-height:1.15; letter-spacing:-.02em}
+.stat span{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3)}
+
+/* ---------- sections ---------- */
+section{margin:0 0 54px; scroll-margin-top:20px}
+h2{font-family:var(--mono); font-size:20px; font-weight:600; letter-spacing:-.01em; margin:0 0 6px; padding-bottom:9px; border-bottom:1px solid var(--rule-2); text-wrap:balance}
+h2 .path{color:var(--ink-3); font-weight:400; font-size:15px}
+h3{font-family:var(--mono); font-size:13px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin:26px 0 10px}
+p{max-width:72ch}
+.sub{color:var(--ink-2); font-size:14.5px; margin:10px 0 0}
+
+/* ---------- badges ---------- */
+.b{display:inline-block; font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; padding:2px 7px; border-radius:2px; white-space:nowrap; vertical-align:1px}
+.b-new{background:var(--new-bg); color:var(--new)}
+.b-part{background:var(--partial-bg); color:var(--partial)}
+.b-cov{background:var(--covered-bg); color:var(--covered)}
+.b-skip{background:transparent; color:var(--none); border:1px solid var(--none)}
+
+/* ---------- matrix ---------- */
+.scroll{overflow-x:auto; border:1px solid var(--rule); background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:13px}
+th,td{text-align:left; padding:7px 10px; border-bottom:1px solid var(--rule); vertical-align:top}
+thead th{
+  font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-3); background:var(--surface-2); position:sticky; top:0; white-space:nowrap;
+  border-bottom:1px solid var(--rule-2);
+}
+tbody tr:hover{background:var(--surface-2)}
+td.h{font-family:var(--mono); font-weight:500; white-space:nowrap; color:var(--ink)}
+.matrix td:not(.h){text-align:center; padding:7px 4px}
+.matrix th:not(:first-child){text-align:center}
+.cellwrap{min-width:1020px}
+.dot{display:inline-block; width:9px; height:9px; border-radius:50%}
+.d-new{background:var(--new); box-shadow:0 0 0 3px var(--new-bg)}
+.d-part{background:var(--partial); box-shadow:0 0 0 3px var(--partial-bg)}
+.d-cov{background:var(--covered)}
+.d-none{width:7px; height:1.5px; border-radius:0; background:var(--none)}
+.legend{display:flex; flex-wrap:wrap; gap:18px; margin:14px 0 0; font-family:var(--mono); font-size:11.5px; color:var(--ink-2)}
+.legend span{display:flex; align-items:center; gap:7px}
+
+/* ---------- data tables ---------- */
+.dt{font-size:12.5px}
+.dt td:first-child{font-family:var(--mono); font-size:11.5px; color:var(--ink)}
+.dt th:last-child, .dt td:last-child{text-align:right; white-space:nowrap}
+
+/* ---------- trees ---------- */
+pre{
+  font-family:var(--mono); font-size:11.5px; line-height:1.62; margin:0;
+  background:var(--surface-2); border:1px solid var(--rule); border-left:3px solid var(--accent);
+  padding:14px 16px; overflow-x:auto; color:var(--ink);
+}
+pre .c{color:var(--ink-3)}
+pre .n{color:var(--new); font-weight:500}
+
+/* ---------- finding cards ---------- */
+.finds{display:grid; grid-template-columns:repeat(auto-fit,minmax(310px,1fr)); gap:14px; margin-top:16px}
+.find{background:var(--surface); border:1px solid var(--rule); border-top:3px solid var(--accent); padding:16px 18px}
+.find .rank{font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.1em; color:var(--accent); text-transform:uppercase}
+.find h4{font-family:var(--mono); font-size:14px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em}
+.find .src{font-family:var(--mono); font-size:11px; color:var(--ink-3); word-break:break-all; margin:0 0 9px}
+.find p{font-size:13.5px; color:var(--ink-2); margin:0}
+
+/* ---------- callouts ---------- */
+.note{border-left:3px solid var(--partial); background:var(--partial-bg); padding:13px 16px; margin:16px 0; font-size:13.5px}
+.note.warn{border-left-color:var(--accent); background:var(--accent-soft)}
+.note b{font-family:var(--mono); font-size:11px; letter-spacing:.07em; text-transform:uppercase; display:block; margin-bottom:4px; color:var(--ink)}
+.note p{margin:0; max-width:70ch; color:var(--ink-2)}
+.note ul{margin:6px 0 0; padding-left:18px; color:var(--ink-2)}
+
+ul.tight{margin:8px 0 0; padding-left:19px; font-size:13.5px; color:var(--ink-2); max-width:72ch}
+ul.tight li{margin-bottom:5px}
+ul.tight code{font-size:11.5px; background:var(--surface-3); padding:1px 4px; border-radius:2px; color:var(--ink)}
+
+.hgroup{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:2px}
+.meta{font-family:var(--mono); font-size:11px; color:var(--ink-3); letter-spacing:.04em}
+</style>
+
+<div class="shell">
+<nav class="rail">
+  <div class="rail-brand">Harness Atlas</div>
+  <a href="#matrix">Coverage matrix</a>
+  <a href="#top">Top 12 finds</a>
+  <h4>Terminal agents</h4>
+  <a href="#claude">.claude</a>
+  <a href="#codex">.codex</a>
+  <a href="#grok">.grok</a>
+  <a href="#copilot">.copilot</a>
+  <a href="#cline">.cline</a>
+  <a href="#gemini">.gemini + antigravity</a>
+  <a href="#opencode">opencode</a>
+  <a href="#hermes">.hermes</a>
+  <a href="#omnigent">.omnigent</a>
+  <a href="#qwen">.qwen · .vibe · .openclaw</a>
+  <h4>Newly identified</h4>
+  <a href="#pi">.pi &mdash; xAI pi</a>
+  <a href="#prime">.prime &mdash; Prime Agent</a>
+  <a href="#dsh">.dsh &mdash; DeepSeek</a>
+  <h4>IDE surfaces</h4>
+  <a href="#cursor">Cursor CLI + IDE</a>
+  <a href="#vscode">VS Code</a>
+  <h4>Local runtimes</h4>
+  <a href="#ollama">Ollama</a>
+  <a href="#lmstudio">LM Studio</a>
+  <a href="#hf">HuggingFace cache</a>
+  <h4>Reference</h4>
+  <a href="#support">Support tools</a>
+  <a href="#skip">Skip list</a>
+  <a href="#security">Security rules</a>
+</nav>
+
+<main>
+
+<header class="mast">
+  <p class="eyebrow">Filesystem survey &middot; 2026-08-27</p>
+  <h1>What every coding agent<br>leaves on your disk</h1>
+  <p class="lede">A store-by-store map of 20 agent harnesses on this machine, graded against what TokenTelemetry
+  already reads. Built to answer one question: when a user clicks an agent on the dashboard, what can we show them?</p>
+  <p class="lede" style="font-size:14px;margin-top:12px;color:var(--ink-3)">Build scope is the 17 agents in
+  <span class="mono">supported-agents.mdx</span>. Omnigent, Kimi, OpenClaw, BrowserOS, promptfoo, reins and headroom are
+  surveyed here but out of scope. Ollama and LM Studio get no agent tile &mdash; their findings enrich <span class="mono">/local-models</span>.</p>
+  <div class="stats">
+    <div class="stat"><b>20</b><span>harnesses found</span></div>
+    <div class="stat"><b>17</b><span>supported by TT</span></div>
+    <div class="stat"><b>150</b><span>stores graded new</span></div>
+    <div class="stat"><b>~30 GB</b><span>agent data (ex-weights)</span></div>
+    <div class="stat"><b>167 GB</b><span>model weights</span></div>
+  </div>
+</header>
+
+<section id="matrix">
+  <h2>Coverage matrix</h2>
+  <p class="sub">Hermes is the only agent with a rich per-agent sub-dashboard today (<code>/hermes/kanban</code>,
+  <code>/hermes/soul</code>, <code>/hermes/cron</code>). This grid is the generalisation: every column is a panel
+  that could render for any agent that fills it. Amber cells are unmined.</p>
+
+  <div class="scroll"><div class="cellwrap">
+  <table class="matrix">
+    <thead><tr>
+      <th>Harness</th><th>Jobs</th><th>Cron</th><th>Memory</th><th>Todos</th><th>Ckpt</th>
+      <th>Plans</th><th>MCP</th><th>Quota</th><th>Perms</th><th>Sub&shy;agents</th><th>Hooks</th><th>Models</th><th>Work&shy;trees</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="h">Claude Code</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-cov"></i></td><td><i class="dot d-cov"></i></td><td><i class="dot d-cov"></i></td></tr>
+      <tr><td class="h">Codex</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-part"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-new"></i></td></tr>
+      <tr><td class="h">Grok</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td></tr>
+      <tr><td class="h">Copilot CLI</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Cline CLI</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Antigravity</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-part"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Gemini CLI</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">OpenCode</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-cov"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Hermes</td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-cov"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-cov"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Omnigent</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Cursor CLI</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-cov"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Cursor IDE</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">VS Code</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">pi (xAI)</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Prime Agent</td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">DSH</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Qwen Code</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-part"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Mistral Vibe</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">Ollama</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+      <tr><td class="h">LM Studio</td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td>
+        <td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-new"></i></td>
+        <td><i class="dot d-none"></i></td><td><i class="dot d-none"></i></td><td><i class="dot d-new"></i></td><td><i class="dot d-none"></i></td></tr>
+    </tbody>
+  </table>
+  </div></div>
+  <div class="legend">
+    <span><i class="dot d-new"></i> New &mdash; on disk, unread</span>
+    <span><i class="dot d-part"></i> Partial &mdash; store read, fields unused</span>
+    <span><i class="dot d-cov"></i> Covered</span>
+    <span><i class="dot d-none"></i> Not present</span>
+  </div>
+</section>
+
+<section id="top">
+  <h2>Top 12 finds</h2>
+  <p class="sub">Ranked by user value &times; extraction cost. Every one is a single file or a single SQL query.</p>
+  <div class="finds">
+
+    <div class="find"><div class="rank">01 &middot; Copilot CLI</div>
+      <h4>Ground-truth token &amp; billing table</h4>
+      <p class="src">~/.copilot/session-store.db &rarr; assistant_usage_events</p>
+      <p>Every token class split out, plus <code>total_nano_aiu</code> and <code>request_multiplier</code> &mdash;
+      Copilot's premium-request billing units, which TT cannot currently compute. Also carries
+      <code>time_to_first_token_ms</code> and <code>inter_token_latency_ms</code>, giving real tok/s for the power model.
+      Replaces the cache-token heuristic with recorded truth.</p></div>
+
+    <div class="find"><div class="rank">02 &middot; Codex</div>
+      <h4>Scheduled automations</h4>
+      <p class="src">~/.codex/automations/&lt;id&gt;/automation.toml</p>
+      <p>RFC-5545 <code>rrule</code>, <code>kind</code> of cron or heartbeat, status, model, reasoning effort,
+      target repo, plus an accumulating <code>memory.md</code> per automation. Two live here. This is the
+      "Codex stores schedules" hypothesis, confirmed and trivially parseable.</p></div>
+
+    <div class="find"><div class="rank">03 &middot; Claude Code</div>
+      <h4>Subscription rate-limit state</h4>
+      <p class="src">~/.claude.json &rarr; cachedUsageUtilization</p>
+      <p>Five-hour and seven-day utilisation percentages with reset timestamps and remaining dollars,
+      cached on disk. The single clearest answer to "how close am I to my limit," and it needs one key read.</p></div>
+
+    <div class="find"><div class="rank">04 &middot; Claude Code</div>
+      <h4>Background job fleet</h4>
+      <p class="src">~/.claude/jobs/&lt;id&gt;/state.json + daemon/roster.json</p>
+      <p>48 jobs with a real state machine (done/blocked/working/stopped), token counts, fan-out task lists,
+      and linked PR/issue children. Cross-reference <code>daemon/roster.json</code> and
+      <code>sessions/&lt;pid&gt;.json</code> for what is alive right now.</p></div>
+
+    <div class="find"><div class="rank">05 &middot; Cursor</div>
+      <h4>AI-authored code percentage</h4>
+      <p class="src">~/.cursor/ai-tracking/ai-code-tracking.db &rarr; scored_commits</p>
+      <p>Per-commit line counts split into tab-completion, composer, and human, resolving to
+      <code>v2AiPercentage</code>. Directly answers "how much of this repo did the agent write" &mdash;
+      a headline metric no other harness offers.</p></div>
+
+    <div class="find"><div class="rank">06 &middot; Hermes</div>
+      <h4>Recorded cost, estimated and actual</h4>
+      <p class="src">~/.hermes/state.db &rarr; session_model_usage</p>
+      <p>Per session and model: five token classes, <code>billing_provider</code>, <code>billing_mode</code>,
+      and both <code>estimated_cost_usd</code> and <code>actual_cost_usd</code> with a <code>cost_source</code>.
+      An independent oracle to validate TT's own cost math against. Verified unread by main.py.</p></div>
+
+    <div class="find"><div class="rank">07 &middot; Antigravity</div>
+      <h4>Conversation index without protobuf</h4>
+      <p class="src">antigravity-cli/conversation_summaries.db</p>
+      <p>131 rows carrying title, step_count, status, agent_name, workspace, <code>killed</code>,
+      <code>nesting_depth</code> and <code>parent_conversation_id</code>. Also <code>battle_id</code> and
+      <code>winning_conversation_id</code> &mdash; Antigravity runs competing attempts and records the winner.</p></div>
+
+    <div class="find"><div class="rank">08 &middot; Grok</div>
+      <h4>Credit balance, already in a parsed file</h4>
+      <p class="src">~/.grok/logs/unified.jsonl &rarr; "billing: fetched credits config"</p>
+      <p><code>creditUsagePercent</code>, <code>subscriptionTier</code>, and billing-period bounds sit in rows of a
+      log TT already opens for token aggregation. A new message-type filter, no new file read.</p></div>
+
+    <div class="find"><div class="rank">09 &middot; Codex</div>
+      <h4>Thread registry and spawn graph</h4>
+      <p class="src">~/.codex/state_5.sqlite</p>
+      <p><code>threads</code> gives tokens, model, reasoning effort, git branch/sha, sandbox policy and approval
+      mode per session. <code>thread_spawn_edges</code> has 60 parent&rarr;child rows, giving Codex delegation
+      parity with Claude for one query.</p></div>
+
+    <div class="find"><div class="rank">10 &middot; VS Code</div>
+      <h4>Agent permission and auto-merge config</h4>
+      <p class="src">Code/User/globalStorage/agent-host-config.json</p>
+      <p>Tool allow/deny lists plus <code>agentMerge.*</code> &mdash; whether VS Code will fix CI, resolve
+      conflicts, and merge a PR on its own. High-consequence settings a user should be able to see in one place.</p></div>
+
+    <div class="find"><div class="rank">11 &middot; LM Studio</div>
+      <h4>Parsed GGUF headers, free</h4>
+      <p class="src">~/.lmstudio/.internal/gguf-metadata-cache.json</p>
+      <p><code>contextLength</code>, <code>parameters</code>, <code>numLayers</code>, attention head counts &mdash;
+      already parsed and cached by path. Ollama's manifests do not carry context length at all, so this
+      is the cheapest route to a complete local-model inventory.</p></div>
+
+    <div class="find"><div class="rank">12 &middot; Prime Agent</div>
+      <h4>Live Python kernel state</h4>
+      <p class="src">~/.prime/agent/session-artifacts/&lt;id&gt;/kernel-state.json</p>
+      <p><code>savedNames</code> lists the variables persisted across turns in the agent's sandbox.
+      No other harness has an execution-state checkpoint. "N variables carried across M turns" is a
+      differentiator panel nothing else can render.</p></div>
+
+  </div>
+</section>
+
+<section id="claude">
+  <div class="hgroup"><h2>Claude Code <span class="path">~/.claude</span></h2></div>
+  <p class="meta">4.0 GB &middot; 182,500 files &middot; v2.1.243&ndash;246 &middot; active now</p>
+
+  <h3>Directory map</h3>
+<pre>~/.claude/
+├── jobs/&lt;id&gt;/                    <span class="c">3.3G — 48 background jobs</span>
+│   ├── <span class="n">state.json</span>                 <span class="c">state machine, tokens, PR/issue children, fan[]</span>
+│   ├── <span class="n">timeline.jsonl</span>             <span class="c">{at,state,detail,text} per transition</span>
+│   └── tmp/                      <span class="c">2.9G of disposable scratch in 2 dirs — NOT data</span>
+├── projects/&lt;enc-cwd&gt;/           <span class="c">570M — 51 project dirs</span>
+│   ├── &lt;session&gt;.jsonl           <span class="c">transcript (covered)</span>
+│   ├── &lt;session&gt;/<span class="n">workflows/wf_*.json</span>   <span class="c">45 runs / 19 sessions</span>
+│   ├── &lt;session&gt;/subagents/...   <span class="c">per-agent traces (covered)</span>
+│   └── <span class="n">bridge-pointer.json</span>        <span class="c">claude.ai cloud environment link (1 of 51)</span>
+├── plugins/                      <span class="c">88M — cache/, marketplaces/</span>
+│   └── <span class="n">data/&lt;plugin&gt;/state/&lt;slug&gt;/state.json</span>  <span class="c">per-plugin job list</span>
+├── <span class="n">file-history/&lt;session&gt;/&lt;hash&gt;@v&lt;N&gt;</span>  <span class="c">53M — checkpoint blobs, no manifest</span>
+├── <span class="n">stats-cache.json</span>               <span class="c">precomputed daily activity + model usage</span>
+├── <span class="n">daemon/roster.json</span>             <span class="c">live worker registry</span>
+├── <span class="n">sessions/&lt;pid&gt;.json</span>            <span class="c">live process registry (+ .key — never read)</span>
+├── <span class="n">todos/&lt;session&gt;-agent-&lt;id&gt;.json</span> <span class="c">TodoWrite state</span>
+├── <span class="n">gh-pr-status-cache.json</span>        <span class="c">cached PR checks/review state</span>
+├── <span class="n">mcp-needs-auth-cache.json</span>      <span class="c">MCP servers pending OAuth</span>
+├── uploads/  paste-cache/  debug/  session-env/  telemetry/  statsig/
+└── settings.json  CLAUDE.md  history.jsonl  shell-snapshots/  agents/  skills/
+
+~/.claude.json
+├── <span class="n">cachedUsageUtilization</span>        <span class="c">five_hour + seven_day utilisation %, resets_at</span>
+├── <span class="n">skillUsage / pluginUsage / agentLastUsed</span>  <span class="c">adoption counters</span>
+├── <span class="n">routineFiredWatermark</span>          <span class="c">cloud Routines watermark only</span>
+├── projects.&lt;path&gt;               <span class="c">last-session metrics (+ lastFps* — new)</span>
+└── oauthAccount / machineID      <span class="c">redacted, never read</span></pre>
+
+  <h3>Highest-value stores</h3>
+  <div class="scroll"><table class="dt">
+    <thead><tr><th>Store</th><th>What it gives the dashboard</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>jobs/&lt;id&gt;/state.json</td><td>Job table: name, state, tokens, cwd, linked PRs — 48 rows</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>.claude.json cachedUsageUtilization</td><td>5h / 7d quota gauge with reset countdown</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>projects/**/workflows/wf_*.json</td><td>45 phased multi-agent runs: tokens, tool calls, duration</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>file-history/&lt;session&gt;/</td><td>Checkpoint count + files touched per session</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>stats-cache.json</td><td>Free cross-check against TT's transcript-derived totals</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>skillUsage / pluginUsage</td><td>Feature adoption: top skills and plugins by use count</td><td><span class="b b-new">New</span></td></tr>
+      <tr><td>daemon/roster.json + sessions/*.json</td><td>"N Claude processes running right now"</td><td><span class="b b-new">New</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li>2.9 GB of the 3.3 GB in <code>jobs/</code> is disposable <code>tmp/</code> scratch inside two dirs. Job dir size is not data volume.</li>
+    <li>Session sidecar dirs only exist for sessions that used Workflows or spawned subagents &mdash; check <code>isdir</code>, do not assume.</li>
+    <li><code>stats-cache.json</code>'s <code>costUSD</code> was zero for the sampled model. Do not treat it as authoritative cost.</li>
+    <li>Cron is a dead end: only <code>routineFiredWatermark</code> is local, the schedules live server-side.</li>
+    <li><code>sessions/*.key</code> and <code>daemon/{control.key,rvAuth,ptyAuth}</code> are local-socket secrets. Never read.</li>
+    <li><code>~/.claudecode/</code> is an empty 0-byte decoy directory, unrelated to <code>~/.claude</code>.</li>
+  </ul></div>
+</section>
+
+<section id="codex">
+  <div class="hgroup"><h2>Codex <span class="path">~/.codex</span></h2></div>
+  <p class="meta">1.0 GB &middot; 9,477 files &middot; v0.146.0 &middot; Electron app + CLI sharing one dir</p>
+
+  <h3>Directory map</h3>
+<pre>~/.codex/
+├── sessions/YYYY/MM/DD/rollout-*.jsonl  <span class="c">289M, 133 files (covered)</span>
+├── plugins/cache/&lt;marketplace&gt;/&lt;plugin&gt;/ <span class="c">328M (covered)</span>
+├── <span class="n">state_5.sqlite</span>                    <span class="c">the thread registry — highest value</span>
+│   ├── threads (132)                 <span class="c">tokens_used, model, reasoning_effort, git_*,</span>
+│   │                                 <span class="c">sandbox_policy, approval_mode, agent_role, pinned</span>
+│   ├── thread_spawn_edges (60)       <span class="c">parent → child delegation</span>
+│   ├── thread_dynamic_tools (12)     <span class="c">per-thread tool defs + input_schema</span>
+│   └── remote_control_enrollments    <span class="c">remote pairing</span>
+├── <span class="n">thread_history_1.sqlite</span>           <span class="c">thread_turns: duration_ms, status, error_json</span>
+├── <span class="n">logs_2.sqlite</span>                     <span class="c">96M, 23,511 structured log rows, thread-scoped</span>
+├── <span class="n">goals_1.sqlite</span>                    <span class="c">thread_goals: token_budget, tokens_used,</span>
+│                                     <span class="c">status ∈ {…,usage_limited,budget_limited}</span>
+├── <span class="n">memories_1.sqlite</span>                 <span class="c">memory distillation pipeline + job queue</span>
+├── <span class="n">queue_1.sqlite</span>                    <span class="c">queued follow-up messages</span>
+├── <span class="n">automations/&lt;id&gt;/</span>
+│   ├── automation.toml               <span class="c">rrule, kind, status, model, cwds, target</span>
+│   └── memory.md                     <span class="c">accumulating notes across runs</span>
+├── <span class="n">browser/sessions/&lt;uuid&gt;.toml</span>      <span class="c">browser-tool session state</span>
+├── <span class="n">ambient-suggestions/&lt;sha1&gt;/</span>       <span class="c">proactive suggestions per project root</span>
+├── <span class="n">computer-use/</span>                     <span class="c">69M app bundle + config.json</span>
+├── <span class="n">worktrees/&lt;short-sha&gt;/</span>            <span class="c">agent-created worktrees</span>
+├── <span class="n">process_manager/chat_processes.json</span> <span class="c">live PIDs ("[]" when idle)</span>
+├── config.toml                       <span class="c">approval_policy, sandbox_mode,</span>
+│                                     <span class="n">[projects."&lt;path&gt;"] trust_level</span>
+├── skills/ (39)  rules/  vendor_imports/  cache/  visualizations/
+├── dictation-history/  transcription-history.jsonl  <span class="c">SENSITIVE: raw voice</span>
+└── auth.json  <span class="c">auth_mode only (covered); tokens never read</span></pre>
+
+  <h3>Automation schema — the schedules store</h3>
+<pre>version = 1
+id = "weekly-review"
+kind = "cron"                  <span class="c"># also: "heartbeat"</span>
+name = "Weekly review"
+prompt = "&lt;elided&gt;"
+status = "ACTIVE"
+rrule = "RRULE:FREQ=WEEKLY;BYHOUR=16;BYMINUTE=0;BYDAY=FR"
+model = "gpt-5.6-terra"
+reasoning_effort = "high"
+execution_environment = "local"
+target = { type = "project", project_id = "&lt;uuid&gt;" }
+cwds = ["&lt;repo path&gt;"]
+created_at = &lt;ms&gt;  updated_at = &lt;ms&gt;</pre>
+
+  <div class="note"><b>Security posture panel</b>
+  <p>This install runs <code>approval_policy = "never"</code> and <code>sandbox_mode = "danger-full-access"</code>,
+  with 15+ <code>[projects."&lt;path&gt;"] trust_level = "trusted"</code> entries. Nothing else on the machine surfaces
+  an agent's blast radius this plainly, and it is a genuinely useful thing to show a user.</p></div>
+
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li>All SQLite is sqlx-managed with live <code>-wal</code>/<code>-shm</code>. Open read-only; the Electron app holds them.</li>
+    <li><code>~/.codex/sqlite/*dev.db</code> are development duplicates. Skip them or you double-count.</li>
+    <li>Sessions are date-partitioned <code>YYYY/MM/DD</code>, not flat.</li>
+    <li>Timestamp columns mix seconds and <code>_ms</code>. Check per column.</li>
+    <li><code>transcription-history.jsonl</code> and <code>dictation-history/</code> hold raw voice transcripts. Count only.</li>
+  </ul></div>
+</section>
+
+<section id="grok">
+  <div class="hgroup"><h2>Grok Build <span class="path">~/.grok</span></h2></div>
+  <p class="meta">1.7 GB &middot; 7,642 files &middot; v1.0.5 &middot; active today</p>
+  <p class="sub">TT already reads six session files. The per-session tree holds roughly twenty more, and the
+  richest single item is a message type inside a log TT already parses.</p>
+
+  <h3>Per-session tree — everything below the six covered files</h3>
+<pre>~/.grok/sessions/&lt;url-encoded-cwd&gt;/&lt;session-uuid&gt;/
+├── summary.json  events.jsonl  updates.jsonl        <span class="c">covered</span>
+├── chat_history.jsonl  plan_mode.json  signals.json <span class="c">covered</span>
+├── <span class="n">rewind_points.jsonl</span>      <span class="c">CHECKPOINTS: full file snapshots per prompt</span>
+├── <span class="n">hunk_records.jsonl</span>       <span class="c">line-level edit provenance (975 rows sampled)</span>
+├── <span class="n">plan.json</span>                <span class="c">{"todos": …} — distinct from plan_mode.json</span>
+├── <span class="n">announcement_state.json</span>  <span class="c">MCP fingerprints + every skill name seen</span>
+├── <span class="n">resources_state.json</span>     <span class="c">effective per-tool timeouts + output caps</span>
+├── <span class="n">prompt_context.json</span>      <span class="c">which AGENTS.md/CLAUDE.md were loaded</span>
+├── <span class="n">subagents/&lt;id&gt;/output.json</span> <span class="c">the subagent's actual answer (meta.json covered)</span>
+├── <span class="n">compaction/{INDEX.md,segment_NNN.md}</span> <span class="c">human-readable session recaps</span>
+├── <span class="n">compaction_checkpoints/</span>   <span class="c">pre-compaction history snapshots</span>
+├── <span class="n">recap_requests/</span>          <span class="c">auto-recap request/response log</span>
+├── <span class="n">terminal/call-*.log</span>       <span class="c">raw stdout+stderr per Bash call</span>
+├── <span class="n">mcp/call-*.json</span>           <span class="c">raw MCP request/response</span>
+├── <span class="n">web_fetch/&lt;n&gt;.md</span>          <span class="c">cached page bodies + byte-budget ledger</span>
+├── <span class="n">prompts/prompt_&lt;n&gt;.txt</span>    <span class="c">SENSITIVE: raw user text per turn</span>
+└── <span class="n">system_prompt.txt</span>
+
+~/.grok/
+├── <span class="n">logs/unified.jsonl</span>        <span class="c">12,760 lines; TT parses ONLY shell.turn.inference_done</span>
+│   └── <span class="n">"billing: fetched credits config"</span> <span class="c">← creditUsagePercent, subscriptionTier</span>
+├── <span class="n">cc-plugin/jobs/&lt;group&gt;/job-&lt;id&gt;.{json,log}</span> <span class="c">grok:rescue background jobs</span>
+├── <span class="n">worktrees.db</span>              <span class="c">worktree lifecycle (schema ready, 0 rows)</span>
+├── <span class="n">sessions/session_search.sqlite</span> <span class="c">FTS5 index over session content</span>
+├── <span class="n">skills/&lt;name&gt;/SKILL.md</span>    <span class="c">user skills — TT never scans Grok for skills</span>
+├── <span class="n">projects/&lt;enc&gt;/mcps/&lt;server&gt;/tools/*.json</span> <span class="c">cached MCP tool schemas</span>
+├── <span class="n">trusted_folders.toml</span>  <span class="n">active_sessions.json</span>  <span class="n">models_cache.json</span>
+├── <span class="n">installed-plugins/registry.json</span>  <span class="n">slash-mru.json</span>
+└── downloads/  <span class="c">336M of cached self-update binaries — prunable</span></pre>
+
+  <div class="note"><b>Cheapest win on the whole machine</b>
+  <p><code>unified.jsonl</code> is already opened and parsed by <code>_grok_usage_from_unified_log</code>, which filters
+  for a single message type. Adding one more filter for <code>"billing: fetched credits config"</code> yields
+  <code>creditUsagePercent</code>, <code>subscriptionTier</code>, and the weekly period bounds &mdash; a full quota gauge
+  with no new file access.</p></div>
+
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li><code>GROK_HOME</code> relocates the entire root; <code>GROK_CONFIG_PATH</code> overrides config without touching the file.</li>
+    <li><code>rewind_points.jsonl</code> embeds full file contents. Surface counts and paths only, never content.</li>
+    <li><code>unified.jsonl</code> is one ever-growing global file. Reuse the existing mtime/size cache key or rescans get expensive.</li>
+    <li>Session dirs are URL-encoded cwds (<code>%2FUsers%2F…</code>). Globs need quoting and percent-decoding.</li>
+    <li><code>.lock</code> siblings sit next to nearly every mutable JSON. Skip them when globbing.</li>
+  </ul></div>
+</section>
+
+<section id="copilot">
+  <div class="hgroup"><h2>GitHub Copilot CLI <span class="path">~/.copilot</span></h2></div>
+  <p class="meta">4.3 MB &middot; 419 files &middot; active today</p>
+  <p class="sub">TT reads <code>session-state/</code>. The far richer <code>session-store.db</code> next to it is untouched.</p>
+
+<pre>~/.copilot/
+├── skills/                       <span class="c">2.4M, 9+ skill dirs</span>
+├── session-state/&lt;uuid&gt;/         <span class="c">checkpoints/ files/ research/ workspace.yaml</span>
+├── <span class="n">session-store.db</span>              <span class="c">the find — see schema</span>
+├── <span class="n">logs/process-&lt;epoch&gt;-&lt;pid&gt;.log</span>
+├── <span class="n">settings.json</span>                 <span class="c">{model, experimental}</span>
+├── <span class="n">config.json</span>                   <span class="c">NOT valid JSON — parse defensively</span>
+├── <span class="n">command-history-state.json</span>
+├── <span class="n">vscode.session.metadata.cache.json</span>
+└── <span class="n">ide/&lt;uuid&gt;.lock</span>               <span class="c">live IDE attach</span></pre>
+
+  <h3>session-store.db</h3>
+<pre>sessions(id, cwd, repository, host_type, branch, summary, created_at, updated_at)
+turns(id, session_id, turn_index, user_message, assistant_response, timestamp)
+
+<span class="n">checkpoints</span>(id, session_id, checkpoint_number, title, overview, history,
+            work_done, technical_details, important_files, next_steps, created_at)
+
+<span class="n">session_files</span>(id, session_id, file_path, tool_name, turn_index, first_seen_at)
+
+<span class="n">forge_trajectory_events</span>(id, session_id, tool_call_id, turn_index, event_type,
+            command, output, exit_code, event_key, event_value, created_at)
+
+<span class="n">assistant_usage_events</span>(
+  id, session_id, turn_index, <span class="n">agent_id</span>, <span class="n">parent_tool_call_id</span>, model,
+  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+  reasoning_tokens, <span class="n">total_nano_aiu</span>, <span class="n">request_multiplier</span>, duration_ms,
+  <span class="n">time_to_first_token_ms</span>, <span class="n">inter_token_latency_ms</span>, initiator, api_endpoint,
+  reasoning_effort, finish_reason, content_filter_triggered,
+  token_details_json, created_at)
+
+forge_skill_proposals   dynamic_context_items   search_index (FTS5)</pre>
+
+  <p class="sub">Row counts here: sessions 4, turns 13, assistant_usage_events 12, checkpoints 0.
+  Light usage, but the schema is complete and the billing fields exist nowhere else.</p>
+
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li><code>config.json</code> is not valid JSON. Wrap the parse.</li>
+    <li><code>session-store.db</code> overlaps <code>session-state/</code>. Prefer the DB and dedupe by session id.</li>
+    <li><code>total_nano_aiu</code> is nano-AIU: divide by 1e9 before display.</li>
+    <li>FTS5 shadow tables inflate the table list. Filter <code>name NOT LIKE 'search_index_%'</code>.</li>
+  </ul></div>
+</section>
+
+<section id="cline">
+  <div class="hgroup"><h2>Cline CLI <span class="path">~/.cline</span></h2></div>
+  <p class="meta">8.4 MB &middot; 21 files &middot; separate store from the VS Code extension</p>
+<pre>~/.cline/
+├── data/sessions/&lt;epochms&gt;_&lt;slug&gt;/
+│   ├── <span class="n">&lt;id&gt;.json</span>            <span class="c">session metadata — see keys below</span>
+│   └── &lt;id&gt;.messages.json  <span class="c">{version,updated_at,agent,sessionId,messages,system_prompt}</span>
+├── data/settings/<span class="n">providers.json</span>  <span class="c">{version,lastUsedProvider,providers}</span>
+├── data/cache/feature-flags.json
+├── data/locks/hub/
+└── <span class="n">cron/</span>                    <span class="c">EMPTY — the directory exists, feature is coming</span>
+
+session metadata keys:
+  version, session_id, source, pid, <span class="n">started_at</span>, <span class="n">ended_at</span>, <span class="n">exit_code</span>, <span class="n">status</span>,
+  interactive, provider, model, cwd, workspace_root,
+  <span class="n">team_name</span>, enable_tools, <span class="n">enable_spawn</span>, <span class="n">enable_teams</span>,
+  prompt, metadata, messages_path</pre>
+  <ul class="tight">
+    <li><b>Exit codes.</b> Cline is one of very few harnesses that records whether a run actually succeeded. Pair <code>exit_code</code> and <code>status</code> with the timestamps for a real success-rate panel.</li>
+    <li><b>Teams.</b> <code>enable_teams</code> / <code>enable_spawn</code> / <code>team_name</code> expose Cline's multi-agent mode; nothing else on disk shows it.</li>
+    <li><b>No token counts anywhere</b> in the CLI store &mdash; cost still has to come from the transcript.</li>
+    <li>Reuse the existing <code>TT_CLINE_DIR</code> / <code>TT_CLINE_VSCODE_DIR</code> env overrides.</li>
+  </ul>
+</section>
+
+<section id="gemini">
+  <div class="hgroup"><h2>Gemini CLI &amp; Antigravity <span class="path">~/.gemini</span></h2></div>
+  <p class="meta">13 GB &middot; 61,967 files &middot; three live surfaces plus a backup</p>
+
+  <div class="note warn"><b>Correction: 1.1 GB of the footprint is skippable</b>
+  <p><code>~/.antigravity</code> (553 MB) and <code>~/.antigravity-ide</code> (543 MB) are <em>not</em> agent data. Each holds
+  only VS Code&ndash;style <code>extensions/</code> plus <code>argv.json</code>. All real Antigravity data is under
+  <code>~/.gemini/</code>. Separately, <code>~/Library/Application Support/Antigravity</code> (512 MB) <em>is</em> a real
+  third location with an <code>antigravityUnifiedStateSync.trajectorySummaries</code> key &mdash; it needs its own pass.</p></div>
+
+<pre>~/.gemini/
+├── antigravity-browser-profile/  <span class="c">5.2G Chrome profile — reclaimable</span>
+├── antigravity/                  <span class="c">5.2G  the desktop app surface</span>
+├── antigravity-ide/              923M
+├── antigravity-backup/           <span class="c">922M — already excluded, keep it that way</span>
+├── antigravity-cli/              272M
+├── extensions/                   281M
+├── <span class="n">tmp/&lt;sha256-of-project-path&gt;/</span>
+│   ├── <span class="n">chats/session-&lt;ISO&gt;-&lt;short&gt;.json</span>  <span class="c">the real transcripts (50 project dirs)</span>
+│   └── logs.json                 <span class="c">covered — empty list here</span>
+├── <span class="n">history/&lt;project-slug&gt;/.project_root</span>  <span class="c">hash → real repo path resolver (33)</span>
+├── <span class="n">config/mcp_config.json</span> + config/plugins/
+├── <span class="n">trustedFolders.json</span>            <span class="c">per-folder trust decisions</span>
+├── GEMINI.md  settings.json  state.json  projects.json
+└── oauth_creds.json  google_accounts.json  <span class="c">credentials — existence only</span>
+
+each antigravity surface (app / ide / cli):
+├── brain/&lt;conversation-uuid&gt;/
+│   ├── task.md  implementation_plan.md  walkthrough.md  <span class="c">covered</span>
+│   ├── <span class="n">*.metadata.json</span>  <span class="n">*.resolved.N</span>       <span class="c">artifact versions</span>
+│   ├── <span class="n">ep&lt;NN&gt;_screenshot_&lt;ms&gt;.webp</span>        <span class="c">episodic screenshots</span>
+│   └── <span class="n">.tempmediaStorage/dom_*.txt</span>        <span class="c">SENSITIVE: full page DOM</span>
+├── conversations/&lt;uuid&gt;.pb        <span class="c">binary protobuf, no public schema</span>
+├── <span class="n">code_tracker/active/&lt;repo&gt;_&lt;sha&gt;/</span>  <span class="c">pre-edit file snapshots</span>
+├── <span class="n">browser_recordings/&lt;uuid&gt;/</span>     <span class="c">63M of real browser recordings</span>
+├── <span class="n">playground/&lt;codename&gt;/</span>          <span class="c">71M scaffolded scratch projects</span>
+├── <span class="n">implicit/&lt;uuid&gt;.pb</span>  <span class="n">annotations/&lt;uuid&gt;.pbtxt</span>
+├── <span class="n">daemon/ls_&lt;hex&gt;.{json,log}</span>     <span class="c">language-server daemon</span>
+└── <span class="n">antigravity_state.pbtxt</span>        <span class="c">text proto — safe to parse</span>
+
+antigravity-cli only:
+└── <span class="n">conversation_summaries.db</span>      <span class="c">131 rows — skip the protobuf entirely</span></pre>
+
+  <h3>conversation_summaries.db</h3>
+<pre>conversation_summaries(
+  conversation_id PK, title, preview, step_count, last_modified_time,
+  workspace_uris, status, source, project_id, agent_name,
+  <span class="n">parent_conversation_id</span>, <span class="n">nesting_depth</span>,
+  <span class="n">battle_id</span>, <span class="n">winning_conversation_id</span>,
+  <span class="n">not_fully_idle</span>, <span class="n">killed</span>,
+  last_user_input_time, last_user_input_step_index, app_data_dir)</pre>
+  <p class="sub"><b>Agent battles.</b> Grouping by <code>battle_id</code> and marking <code>winning_conversation_id</code>
+  shows Antigravity running competing attempts at the same task and picking a winner. No other harness records this.</p>
+
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li>Three surfaces share an identical layout. Dedupe by <code>installation_id</code> and label by surface, or sessions triple-count.</li>
+    <li><code>*.pb</code> is binary protobuf with no public schema; <code>*.pbtxt</code> is text format and safe. Prefer the summaries DB.</li>
+    <li><code>tmp/</code> dir names are a hash of the project path &mdash; resolve via <code>history/&lt;slug&gt;/.project_root</code>.</li>
+    <li>Gemini CLI was discontinued 2026-06-18. Weight it as legacy, Antigravity as live.</li>
+  </ul></div>
+</section>
+
+<section id="opencode">
+  <div class="hgroup"><h2>OpenCode <span class="path">~/.local/share/opencode</span></h2></div>
+  <div class="note warn"><b>Correction: <code>~/.opencode</code> holds no data at all</b>
+  <p>Its 160 MB is <code>bin/opencode</code> plus <code>node_modules/</code>. <code>~/.config/opencode</code> is also just
+  node_modules. Everything real lives in <code>~/.local/share/opencode/</code>, which moves with <code>XDG_DATA_HOME</code>.</p></div>
+<pre>~/.local/share/opencode/
+├── <span class="n">snapshot/&lt;sha1&gt;/&lt;sha1&gt;</span>     <span class="c">39M — git-like object store (checkpoints)</span>
+├── opencode.db               <span class="c">26M</span>
+│   ├── session 51  message 865  part 3987  todo 26   <span class="c">covered</span>
+│   └── project 6             <span class="n">sandboxes, commands, vcs</span> <span class="c">columns unread</span>
+├── <span class="n">storage/session_diff/&lt;ses_id&gt;.json</span>  <span class="c">5.0M — changed files per session</span>
+├── <span class="n">tool-output/tool_&lt;id&gt;</span>      <span class="c">spilled large tool outputs</span>
+├── <span class="n">log/&lt;ISO&gt;.log</span>
+└── auth.json                 <span class="c">credentials — existence only</span></pre>
+  <ul class="tight">
+    <li><b>Todo board.</b> 26 live todos. Besides Hermes, OpenCode is the only harness with a first-class todo table.</li>
+    <li><b>Session diffs.</b> <code>storage/session_diff/</code> gives changed-files-per-session without touching git.</li>
+    <li><code>message.data</code> and <code>part.data</code> are JSON blobs, not columns. Parse, do not index.</li>
+  </ul>
+</section>
+
+<section id="hermes">
+  <div class="hgroup"><h2>Hermes <span class="path">~/.hermes</span></h2></div>
+  <p class="meta">3.8 GB &middot; 156,432 files &middot; the only agent with a sub-dashboard today</p>
+  <p class="sub">Verified against main.py: it selects only from <code>sessions</code> and <code>messages</code> in
+  <code>state.db</code>. Every table below is unmined.</p>
+
+<pre>~/.hermes/state.db
+├── sessions  messages  messages_fts                <span class="c">covered</span>
+├── <span class="n">session_model_usage</span> (23)                     <span class="c">← the find</span>
+├── <span class="n">async_delegations</span> (0)   <span class="n">gateway_routing</span> (0)
+├── <span class="n">system_prompts</span> (24)     <span class="n">delivery_obligations</span>
+├── <span class="n">gateway_hygiene_state</span>   <span class="n">session_turn_leases</span>   compression_locks
+
+<span class="n">session_model_usage</span>(
+  session_id, model, billing_provider, billing_base_url, billing_mode, task,
+  api_call_count, input_tokens, output_tokens, cache_read_tokens,
+  cache_write_tokens, reasoning_tokens,
+  <span class="n">estimated_cost_usd</span>, <span class="n">actual_cost_usd</span>, <span class="n">cost_status</span>, <span class="n">cost_source</span>,
+  first_seen, last_seen)
+
+~/.hermes/
+├── hermes-agent/ 3.4G   hermes-office/ 859M   node/ 189M   bin/ 49M  <span class="c">RUNTIME — never walk</span>
+├── profiles/ 97M  skills/ 24M  kanban.db  cron.db              <span class="c">covered</span>
+├── <span class="n">projects.db</span>            <span class="c">projects, project_folders, project_meta — unread</span>
+├── <span class="n">models_dev_cache.json</span>  <span class="c">4.1M models.dev catalogue, local, no network</span>
+├── <span class="n">context_length_cache.yaml</span>  <span class="c">per-model context windows</span>
+├── <span class="n">state-snapshots/&lt;ts&gt;-pre-update/</span>  <span class="c">16M pre-upgrade backups</span>
+├── <span class="n">logs/</span>                  <span class="c">32M: agent.log(.1/.2), errors.log(.1/.2), curator/</span>
+└── auth.json  google_token.json  <span class="c">credentials — existence only</span></pre>
+
+  <div class="note"><b>A free correctness oracle</b>
+  <p><code>session_model_usage</code> carries both <code>estimated_cost_usd</code> and <code>actual_cost_usd</code> with a
+  <code>cost_source</code>. That satisfies the project's "independently recompute the number a different way"
+  rule for Hermes sessions without writing a throwaway script &mdash; Hermes already did the second computation.</p></div>
+</section>
+
+<section id="omnigent">
+  <div class="hgroup"><h2>Omnigent <span class="path">~/.omnigent</span></h2></div>
+  <p class="meta">612 MB &middot; 50 files &middot; 597 MB of it is logs</p>
+<pre>~/.omnigent/
+├── logs/                     <span class="c">597M — 97% of the dir. Stat only, never walk.</span>
+├── chat.db                   <span class="c">10M</span>
+│   ├── conversations 7   conversation_items 777 (+FTS5)
+│   ├── <span class="n">agents</span> 11             <span class="c">id, name, bundle_location, version, description</span>
+│   ├── <span class="n">conversation_labels</span> 39  <span class="c">free session tagging</span>
+│   ├── <span class="n">user_daily_cost</span> 1     <span class="c">per-user daily cost rollup</span>
+│   ├── <span class="n">policies</span> 0            <span class="c">matches backend/omnigent_policy.py</span>
+│   ├── users / session_permissions / hosts  <span class="c">multi-user — filter to local user</span>
+│   └── files / account_tokens / comments
+├── <span class="n">artifacts/ag_&lt;32hex&gt;/&lt;sha256&gt;</span>  <span class="c">content-addressed artifact store</span>
+├── <span class="n">daemons/</span>  local_server.{pid,sig,logpath}
+└── config.yaml</pre>
+  <ul class="tight">
+    <li><b>Agent bundle registry.</b> 11 named agents with versions and descriptions &mdash; a ready-made inventory panel.</li>
+    <li><code>users.password_hash</code> and <code>account_tokens</code> must never be read.</li>
+  </ul>
+</section>
+
+<section id="qwen">
+  <div class="hgroup"><h2>Qwen Code &middot; Mistral Vibe &middot; OpenClaw</h2></div>
+
+  <h3>Qwen Code <span class="path">~/.qwen</span> &mdash; 8.6 MB, dormant ~2 months</h3>
+<pre>~/.qwen/
+├── projects/&lt;enc-cwd&gt;/chats/&lt;uuid&gt;.jsonl   <span class="c">covered</span>
+├── <span class="n">todos/&lt;session-uuid&gt;.json</span>   <span class="c">{"todos":[{content,id,status}], sessionId}</span>
+├── <span class="n">tmp/&lt;sha256-of-cwd&gt;/logs.json</span>  <span class="c">SECOND, older transcript log</span>
+├── <span class="n">tmp/&lt;hash&gt;/shell_history</span>    <span class="c">raw command + stdout — sensitive</span>
+├── <span class="n">settings.json</span>               <span class="c">permissions.allow[] — Bash allowlist</span>
+├── <span class="n">ide/&lt;port&gt;.lock</span>             <span class="c">live VS Code attach (authToken — redact)</span>
+├── <span class="n">debug/&lt;uuid&gt;.txt</span>            <span class="c">confirms a hook registry exists (0 hooks here)</span>
+└── oauth_creds.json  installation_id  tip_history.json</pre>
+  <p class="sub"><b>Coverage gap.</b> Two independent transcript stores exist, keyed differently
+  (URL-encoded cwd vs. sha256 of cwd). Sessions from Dec 2025&ndash;Apr 2026 may only appear in the older
+  <code>tmp/</code> path and be invisible to the current scanner. Worth a one-time backfill check.</p>
+
+  <h3>Mistral Vibe <span class="path">~/.vibe</span> &mdash; 2.5 MB, dormant since April 2026</h3>
+  <div class="note warn"><b>Identification correction</b>
+  <p>This is <b>Mistral's Vibe CLI</b> (<code>mistralai/mistral-vibe</code>, devstral models), <em>not</em> vibe-kanban.
+  Confirmed from <code>config.toml</code>'s release-check URL and <code>api.mistral.ai</code> base URL.</p></div>
+  <ul class="tight">
+    <li><b>Tool-call outcomes.</b> <code>stats.tool_calls_agreed/rejected/failed/succeeded</code> sits in a file TT already
+      opens and currently discards &mdash; an approval and failure rate per session, nearly free.</li>
+    <li><b>Auth-health signal.</b> <code>vibe.log</code>'s last HTTP status reveals this install died on two 401s in April
+      and was never used again. "This agent stopped working because its key expired" is an insight a user would never notice.</li>
+    <li><b>Its own pricing.</b> <code>config.toml [[models]]</code> ships literal <code>input_price</code>/<code>output_price</code>
+      per million, and <code>stats.session_cost</code> is computed from it &mdash; a cross-check for devstral aliases TT may not price.</li>
+    <li><code>.env</code> holds a plaintext <code>MISTRAL_API_KEY</code> at the harness root, not under a credentials dir.
+      A filename-based secret-skip heuristic will miss it.</li>
+    <li>No MCP, subagents, hooks, checkpoints, or todos exist. Vibe is deliberately minimal.</li>
+  </ul>
+
+  <h3>OpenClaw <span class="path">~/.openclaw</span> &mdash; 2.4 MB, essentially unused</h3>
+  <ul class="tight">
+    <li>350 of 392 files are the same shared Cloudflare marketplace skill pack found byte-identical under
+      <code>.grok</code>, <code>.qwen</code>, <code>.vibe</code> and <code>.pi</code>. A scanner treating each copy as distinct
+      will quadruple-count it.</li>
+    <li>The only OpenClaw-specific artifact is <code>claw3d/settings.json</code>:
+      <code>{"adapter":"hermes","url":"ws://localhost:18789","token":""}</code> &mdash; a companion UI that bridges to Hermes.</li>
+    <li>Correct treatment: a "detected, not yet used" badge rather than a fabricated panel.</li>
+  </ul>
+</section>
+
+<section id="pi">
+  <div class="hgroup"><h2>pi <span class="path">~/.pi/agent</span></h2><span class="b b-new">Sessions scanned · stores unmined</span></div>
+  <p class="meta">238 MB &middot; 19,290 files &middot; xAI's second coding CLI &middot; active to 2026-07-14</p>
+  <p class="sub">Identified from <code>settings.json</code> (<code>defaultProvider: "xai-auth"</code>, <code>defaultModel: "grok-4.3"</code>)
+  and <code>pi-mcp-adapter</code> / <code>pi-xai-oauth</code> deps. A separate product from the <code>~/.grok</code> CLI.
+  28 sessions across 8 projects.</p>
+<pre>~/.pi/agent/
+├── npm/                    <span class="c">228M bundled node runtime — skip</span>
+├── bin/                    <span class="c">bundled fd, rg — skip</span>
+├── <span class="n">sessions/--Users-&lt;slugged-cwd&gt;--/&lt;ISO&gt;_&lt;uuidv7&gt;.jsonl</span>
+├── <span class="n">mcp.json</span>  <span class="n">mcp-cache.json</span>  <span class="n">mcp-npx-cache.json</span>
+├── <span class="n">trust.json</span>              <span class="c">{&lt;abs-project-path&gt;: true}</span>
+├── <span class="n">settings.json</span>           <span class="c">defaultProvider, defaultModel, defaultThinkingLevel</span>
+├── skills/                 <span class="c">the shared Cloudflare pack again</span>
+└── auth.json               <span class="c">xai-auth + cerebras blocks — redacted</span>
+
+session JSONL record types:
+  session                {type,version,id,timestamp,cwd}
+  model_change           {type,id,parentId,timestamp,provider,modelId}
+  thinking_level_change  {type,id,parentId,timestamp,thinkingLevel}
+  message                {type,id,parentId,timestamp,message:{role,content[]}}
+    content[] ∈ text | thinking | toolCall{id,name,arguments}</pre>
+  <div class="note warn"><b>No usage data</b>
+  <p>No <code>tool_result</code> or token-count events appear in these transcripts. Cost for <code>pi</code> is not locally
+  derivable &mdash; it would need a pricing table matched against <code>model_change.modelId</code> and turn counts.
+  Also note the dir-name encoding wraps in double dashes (<code>--Users-…--</code>), unlike Grok's, so a shared
+  regex will not work as-is.</p></div>
+</section>
+
+<section id="prime">
+  <div class="hgroup"><h2>Prime Agent <span class="path">~/.prime/agent</span></h2><span class="b b-new">Sessions scanned · stores unmined</span></div>
+  <p class="meta">268 MB &middot; 13,982 files &middot; active to 2026-08-08 &middot; only 2 sessions</p>
+  <p class="sub">Identified from <code>logs/agent.jsonl</code>: <code>"component":"coding-agent.daemon-supervisor"</code>,
+  <code>"Prime Agent daemon supervisor … listening on …/prime-agent-501/daemon.sock"</code>. Runs
+  <code>openai-codex</code> / <code>gpt-5.4</code>. Unique feature: a persistent daemon-hosted Python kernel per session.</p>
+<pre>~/.prime/agent/
+├── kernel-venv/            <span class="c">265M bundled Python venv — skip</span>
+├── <span class="n">sessions/&lt;uuidv7&gt;.jsonl</span>  <span class="c">flat, not per-cwd like pi</span>
+├── <span class="n">session-artifacts/&lt;session-id&gt;/</span>
+│   ├── kernel-state.json   <span class="c">{version,savedNames[],skipped,bytes,pythonVersion,timestamp}</span>
+│   ├── kernel-state.dill   <span class="c">pickled Python objects — NEVER unpickle</span>
+│   └── harness/harness_state.json  <span class="c">{schema,entries,refinements}</span>
+├── <span class="n">daemon-workers/&lt;worker-id&gt;/</span>  <span class="c">command-journal.jsonl, snapshot-cache/</span>
+├── session-leases/         <span class="c">empty unless a session is live</span>
+├── <span class="n">logs/agent.jsonl</span>        <span class="c">supervisor/worker lifecycle</span>
+└── settings.json  auth.json
+
+session record types: session, thinking_level_change, service_tier_change,
+  session_state, model_change, message, agent_status, custom
+  session      {…, cwd, <span class="n">rlmDepth</span>}          <span class="c">nested-agent depth</span>
+  agent_status {…, status:{summary, <span class="n">taskState</span>, basedOnMessageCount}}
+  custom       customType "prime-agent.refinement" →
+               {id, summary, rationale, expectedOutcome, appliedEdits, scope}</pre>
+  <ul class="tight">
+    <li><b>Live kernel badge.</b> <code>savedNames</code> shows what variables survive across turns in the sandbox.
+      The closest thing to a literal execution-state checkpoint anywhere in this survey.</li>
+    <li><b>Refinement journal.</b> The <code>custom</code> events are a structured "why I made this edit" log &mdash;
+      a plan artifact in all but name.</li>
+    <li><code>kernel-state.dill</code> is a dill pickle. Read only the JSON sidecar; never unpickle.</li>
+  </ul>
+</section>
+
+<section id="dsh">
+  <div class="hgroup"><h2>DeepSeek Harness <span class="path">~/.dsh</span></h2><span class="b b-part">Sessions covered, config not</span></div>
+  <p class="meta">Active to 2026-08-16 &middot; transcripts already scanned as zstd JSONL</p>
+<pre>~/.dsh/
+├── sessions/--Users-&lt;slug&gt;--/{session-&lt;uuid&gt;|&lt;uuid&gt;}/session.jsonl.zstd  <span class="c">covered</span>
+├── <span class="n">settings.yaml</span>            <span class="c">agent-default-model, per-provider apiKeyEnv</span>
+├── <span class="n">storages/workspace.json</span>  <span class="c">workspace registry: path, title, sessionIds[]</span>
+├── <span class="n">storages/session_projcache.json</span>
+├── <span class="n">profiles/&lt;name&gt;/cordis.yml + cordis.patch.yml</span>
+│                            <span class="c">sandbox environment-as-code presets (web, python-architect)</span>
+└── .credentials.yaml        <span class="c">redacted</span>
+
+session events NOT currently extracted:
+  session            {…, <span class="n">delegationDepth</span>, <span class="n">agentPreset</span>}
+  permission/preset  {…, data:{preset}}
+  sandbox/mode       {…, data:{mode}}
+  approval/policy    {…, data:{policy}}</pre>
+  <ul class="tight">
+    <li><b>Sandbox profiles</b> are DSH's environment-template feature &mdash; a genuine per-agent tab.</li>
+    <li><code>delegationDepth</code> and <code>agentPreset</code> are on the session header already being read; a low-effort enrichment rather than a new store.</li>
+    <li>Two session-id naming conventions coexist under one cwd slug (<code>session-&lt;uuid&gt;</code> and bare <code>&lt;uuid&gt;</code>). Handle both.</li>
+    <li><code>dsh_lifecycle.jsonl</code> is <em>not</em> in <code>~/.dsh</code> &mdash; TT's own plugin writes it into TT's data dir.</li>
+  </ul>
+</section>
+
+<section id="cursor">
+  <div class="hgroup"><h2>Cursor <span class="path">~/.cursor + Application Support/Cursor</span></h2></div>
+  <p class="meta">Both surfaces dormant since April 2026 &middot; two entirely separate stores</p>
+
+  <h3>Cursor CLI &mdash; ai-code-tracking.db</h3>
+<pre><span class="n">scored_commits</span>(commitHash, branchName, scoredAt,
+  linesAdded, linesDeleted, tabLinesAdded, tabLinesDeleted,
+  composerLinesAdded, composerLinesDeleted, humanLinesAdded, humanLinesDeleted,
+  blankLinesAdded, blankLinesDeleted, commitMessage, commitDate,
+  <span class="n">v1AiPercentage</span>, <span class="n">v2AiPercentage</span>)
+
+ai_code_hashes(hash, source, fileExtension, fileName, requestId,
+               conversationId, timestamp, model, createdAt)
+conversation_summaries(conversationId, title, tldr, overview, summaryBullets, model, mode, updatedAt)
+tracked_file_content(gitPath, content, conversationId, model, fileExtension, createdAt)
+ai_deleted_files(gitPath, composerId, conversationId, model, deletedAt)</pre>
+  <p class="sub">Cursor scores every commit for how much was AI-written, splitting tab-completion from composer
+  from human lines. Empty on this machine (CLI unused since April) but the schema is real and it is the best
+  net-new Cursor metric available.</p>
+
+  <h3>Cursor IDE &mdash; cursorDiskKV (839 rows)</h3>
+<pre>User/globalStorage/state.vscdb
+├── ItemTable      (108 rows)  <span class="c">settings + cursorAuth/* tokens — SAME TABLE, redact</span>
+└── cursorDiskKV   (839 rows)
+    ├── <span class="n">composerData:&lt;composerId&gt;</span>   (12)  <span class="c">chat-session container</span>
+    ├── <span class="n">bubbleId:&lt;composer&gt;:&lt;bubble&gt;</span> (244) <span class="c">one message each:</span>
+    │       <span class="n">tokenCount{inputTokens,outputTokens}</span>, <span class="n">thinkingDurationMs</span>,
+    │       <span class="n">todos</span>, <span class="n">mcpDescriptors</span>, toolResults, supportedTools,
+    │       gitDiffs, humanChanges, lints, attachedFolders …
+    ├── <span class="n">checkpointId:&lt;composer&gt;:&lt;ckpt&gt;</span> (6) <span class="c">file-state snapshot per message</span>
+    └── agentKv:blob:&lt;sha256&gt;      (577) <span class="c">RAW model I/O — never render</span></pre>
+  <div class="note warn"><b>Gotchas</b>
+  <ul>
+    <li>This is the <em>only</em> way to get Cursor IDE usage data. The IDE's chat never touches <code>~/.cursor/projects</code>, which is CLI-only.</li>
+    <li>composerId&rarr;project is indirect: find which workspace's <code>composer.composerData.selectedComposerIds</code> references it, then resolve the hash via <code>workspace.json</code>. Orphaned composers exist.</li>
+    <li><code>cursorAuth/accessToken</code> and <code>refreshToken</code> live in the same ItemTable as ordinary UI state. A naive dump captures live credentials.</li>
+    <li>WAL files present. Open read-only or copy first; the IDE holds a lock while running.</li>
+  </ul></div>
+</section>
+
+<section id="vscode">
+  <div class="hgroup"><h2>VS Code <span class="path">~/Library/Application Support/Code</span></h2></div>
+  <p class="meta">2.6 GB (mostly Electron cache) &middot; 17,151 files &middot; active 2 days ago</p>
+<pre>Code/User/globalStorage/
+├── <span class="n">agent-host-config.json</span>       <span class="c">permissions.allow/deny, agentMerge.*,</span>
+│                                <span class="c">codexAgentEnabled, claudeMultiRootEnabled…</span>
+├── <span class="n">agent-host.db</span>                <span class="c">121 rows: cross-provider session registry</span>
+│                                <span class="c">(all provider='claude', source='discovery')</span>
+├── github.copilot-chat/
+│   ├── <span class="n">session-store.db</span>          <span class="c">sessions/turns/checkpoints/session_files + FTS5</span>
+│   ├── <span class="n">{ask,plan,explore}-agent/*.agent.md</span>  <span class="c">built-in mode registry</span>
+│   └── <span class="n">vscode-sessions-&lt;uuid&gt;/</span>   <span class="c">shadow git index for cloud Copilot PRs</span>
+└── state.vscdb → <span class="n">chat.cachedLanguageModels</span>  <span class="c">available model catalogue</span>
+
+Code/User/workspaceStorage/&lt;hash&gt;/          <span class="c">109 workspaces</span>
+├── chatSessions/&lt;sid&gt;.json|.jsonl          <span class="c">covered</span>
+├── <span class="n">chatEditingSessions/&lt;sid&gt;/state.json</span>   <span class="c">{initialFileContents, linearHistory,</span>
+│   └── <span class="n">contents/&lt;sha1-prefix&gt;</span>              <span class="c">linearHistoryIndex, recentSnapshot}</span>
+└── <span class="n">GitHub.copilot-chat/workspace-chunks.db</span>  <span class="c">local embedding index</span>
+
+Code/<span class="n">agent-host/local-endpoint/metadata.json</span>  <span class="c">live windows + connectionToken (redact)</span>
+Code/<span class="n">agentSessionData/&lt;uuid&gt;/session.db</span>       <span class="c">121 files, schema real, 0 rows here:</span>
+    turns, file_edits(before/after BLOB, added/removed_lines),
+    <span class="n">turn_usage</span>(turn_id, usage JSON), local_turns, chat_drafts, reviewed_files</pre>
+  <ul class="tight">
+    <li><b>Auto-merge settings.</b> <code>agentMerge.{fixCI,resolveConflicts,mergePullRequest,addressReviews}</code> controls
+      whether VS Code merges PRs on its own. High consequence, one JSON file, nothing surfaces it today.</li>
+    <li><b>Agent modes.</b> The three <code>*.agent.md</code> files are Copilot's subagent registry, directly analogous to
+      <code>.claude/agents/*.md</code>. Parse the frontmatter.</li>
+    <li><b>Not installed here:</b> Cline, Roo, Continue, Codeium, Cody, Windsurf, Kilocode, Augment. Also no Windsurf,
+      Trae, Void, Zed, Positron, Kiro or PearAI app dirs at all.</li>
+    <li><b>Open question.</b> VS Code has no per-workspace <code>workspace.json</code> like Cursor. Hash&rarr;repo resolution
+      needs <code>storage.json</code>'s <code>backupWorkspaces.folders[].folderUri</code> &mdash; flagged, not confirmed.</li>
+  </ul>
+</section>
+
+<section id="ollama">
+  <div class="hgroup"><h2>Ollama <span class="path">~/.ollama</span></h2></div>
+  <p class="meta">149 GB &middot; 14 models &middot; v0.32.13&ndash;14 &middot; active today</p>
+<pre>~/.ollama/
+├── models/manifests/registry.ollama.ai/library/&lt;model&gt;/&lt;tag&gt;   <span class="n">← the inventory</span>
+├── models/blobs/                <span class="c">149G — NEVER traverse</span>
+├── <span class="n">logs/server.log</span> + server-1..5  <span class="c">env dump, GPU/VRAM, GIN access log</span>
+├── <span class="n">logs/app.log</span> + app-1..5
+├── <span class="n">history</span>                     <span class="c">CLI REPL prompts — sensitive, count only</span>
+├── config.json  backup/  cache/model-recommendations.json
+└── id_ed25519                   <span class="c">PRIVATE KEY — never read</span>
+
+GGUF manifest → 4 layers: .model | .template | .license | .params
+  real disk cost  = Σ layers[].size
+  quant / params  = fetch config.digest blob (~300–500 bytes):
+                    {model_type:"751.63M", file_type:"Q4_K_M", model_family:"qwen3"}
+
+MLX manifest → 737–1503 <span class="n">per-tensor</span> layers; config blob instead carries
+  renderer, parser, requires, <span class="n">capabilities[]</span> ∈ completion|vision|audio|tools|thinking
+
+cloud tags (e.g. deepseek-v4-flash:cloud) → <span class="n">layers: []</span>, zero disk</pre>
+  <div class="note warn"><b>Context length is not in the manifest tree</b>
+  <p>For GGUF models it must come from either the server log's global <code>OLLAMA_CONTEXT_LENGTH</code> /
+  runtime <code>default_num_ctx</code> (neither is per-model), or from parsing the GGUF header &mdash; the magic,
+  version, tensor count and KV count are the first 24 bytes of the blob, with the
+  <code>&lt;arch&gt;.context_length</code> KV immediately after. A bounded few-KB read of one blob is enough.
+  LM Studio already does exactly this, which proves it practical.</p></div>
+  <ul class="tight">
+    <li>Manifest sizes summed give 159.8 GB vs <code>du</code>'s 149 GB &mdash; shared layers are deduplicated on disk but counted once per manifest.</li>
+    <li>Logs rotate on app <b>restart</b>, keeping 6 generations. That was ~15 days here; a long-running daemon may have one file spanning months. Never assume a window.</li>
+    <li><code>OLLAMA_MODELS</code> relocates the whole models dir.</li>
+    <li>The Gin access line carries path, status and latency but <b>not</b> the model name &mdash; correlating a
+      <code>/api/chat</code> call to a model needs the nearest preceding <code>/api/show</code>.</li>
+  </ul>
+</section>
+
+<section id="lmstudio">
+  <div class="hgroup"><h2>LM Studio <span class="path">~/.lmstudio</span></h2></div>
+  <p class="meta">18 GB &middot; app codename "bionic" &middot; newest log 2026-08-18</p>
+  <div class="note warn"><b>The documented top-level paths are empty stubs</b>
+  <p><code>conversations/</code>, <code>config-presets/</code>, <code>server-logs/</code> and <code>user-files/</code> at the root
+  are empty in current versions. Live data moved under <code>apps/bionic/</code> and
+  <code>apps/bionic/projects/&lt;uuid&gt;/</code>. Detect by listing <code>apps/*</code> &mdash; the codename can change.</p></div>
+<pre>~/.lmstudio/.internal/
+├── <span class="n">gguf-metadata-cache.json</span>   <span class="c">PARSED GGUF headers keyed by path:</span>
+│     arch, name, parameters, <span class="n">contextLength</span>, numLayers,
+│     numAttentionHeads, numKeyValueHeads, embeddingLength,
+│     chatTemplate, supportsMtp, draftSpeculationVocab{…}
+├── <span class="n">model-data.json</span>            <span class="c">lastLoadedTimestamp / lastAttemptedToLoadTimestamp</span>
+├── <span class="n">cloud-account-usage.json</span>   <span class="c">requestCount, inputTokens, cachedInputTokens,</span>
+│                              <span class="c">outputTokens, spendMicrodollars, period</span>
+├── <span class="n">download-jobs-info.json</span>  <span class="n">backend-preferences-v1.json</span>
+└── ng-sessions.sqlite         <span class="c">app-level chat store (0 sessions here)</span>
+
+~/.lmstudio/apps/bionic/projects/&lt;uuid&gt;/.internal/<span class="n">ng-sessions.sqlite</span>
+├── sessions        <span class="c">modelSpecifier, inferenceConfig.reasoningLevel,</span>
+│                   <span class="c">ngModuleSpecifiers[] (tools/MCP), working_directory,</span>
+│                   <span class="c">sessionConfig.internalShellApprovalMode</span>
+├── chat_entries    <span class="c">DAG via previous_id/redirect_to_id; source.ngModule/handler</span>
+├── <span class="n">global_checkpoint_log</span>  <span class="c">type ∈ created|modified|deleted, path,</span>
+│                   <span class="c">file_sha256_base64, chat_entry_id, user_prompt, can_gc</span>
+└── file_references  resource_cleanup_queue</pre>
+  <ul class="tight">
+    <li><b>Free model metadata.</b> <code>gguf-metadata-cache.json</code> hands over context length and parameter count
+      already parsed &mdash; exactly the fields Ollama's manifests lack.</li>
+    <li><b>Structured last-run.</b> <code>model-data.json</code>'s <code>lastLoadedTimestamp</code> beats scraping Ollama's logs.</li>
+    <li><b>Per-turn file checkpoints.</b> <code>global_checkpoint_log</code> is a coding-agent undo trail tied to chat turns &mdash;
+      a capability only Claude Code otherwise has.</li>
+    <li>Both cache files are hand-rolled Map serialisations (<code>{json:[…], meta:{values:["map"]}}</code>).
+      A naive <code>json.load</code> yields pairs, not a dict.</li>
+    <li>Enumerate <code>projects/*/.internal/ng-sessions.sqlite</code> <em>and</em> the app-level DB. There is not just one.</li>
+  </ul>
+</section>
+
+<section id="hf">
+  <div class="hgroup"><h2>HuggingFace cache <span class="path">~/.cache/huggingface</span></h2></div>
+  <p class="meta">14 GB &middot; standard hub layout, confirmed unchanged</p>
+<pre>~/.cache/huggingface/
+├── hub/models--&lt;org&gt;--&lt;name&gt;/
+│   ├── refs/&lt;branch&gt;          <span class="c">plaintext commit sha</span>
+│   ├── blobs/&lt;sha&gt;             <span class="c">content-addressed — do not walk the whole tree</span>
+│   ├── snapshots/&lt;commit&gt;/     <span class="c">symlink farm → ../../blobs/&lt;sha&gt;</span>
+│   └── .no_exist/&lt;commit&gt;/     <span class="c">0-byte markers: filenames PROBED and absent</span>
+├── hub/.locks/models--*/       <span class="c">presence = interrupted download</span>
+├── modules/transformers_modules/&lt;repo&gt;/  <span class="c">trust_remote_code — security badge</span>
+├── xet/                        <span class="c">chunk-storage backend cache</span>
+└── token  stored_tokens        <span class="c">credentials — existence only</span>
+
+per-model config.json (inside a snapshot, small, safe):
+  <span class="n">max_position_embeddings</span> ← context length, plain JSON, no binary parsing
+  num_hidden_layers, hidden_size, num_attention_heads, torch_dtype, vocab_size</pre>
+  <p class="sub">The easiest of the three model formats to mine &mdash; architecture and context length are already
+  plain JSON. No usage log lives here; the HF cache is pure artifact storage.
+  <code>HF_HOME</code> relocates the tree. Symlinks in <code>snapshots/</code> are relative, so size checks must follow the target.</p>
+</section>
+
+<section id="support">
+  <h2>Support tools &mdash; not agents, but they hold real data</h2>
+  <div class="scroll"><table class="dt">
+    <thead><tr><th>Path</th><th>What it is</th><th>Worth showing</th></tr></thead>
+    <tbody>
+      <tr><td>~/.headroom/session_stats.jsonl</td><td>Context-compression middleware</td>
+        <td>Per-event <code>input_tokens</code>, <code>output_tokens</code>, <code>savings_percent</code>, <code>strategy</code>. "Saved you N tokens" with zero inference. 1 event here.</td></tr>
+      <tr><td>~/.promptfoo/promptfoo.db</td><td>LLM eval / red-team framework</td>
+        <td><code>eval_results</code> has per-row <code>cost</code>, <code>latency_ms</code>, <code>provider</code>, <code>success</code>, <code>score</code> — ready-made model comparison. 5 evals, 26 results.</td></tr>
+      <tr><td>~/.browseros/</td><td>Chromium AI browser agent</td>
+        <td><code>agent_definitions</code> (name, adapter, model_id, reasoning_effort, permission_mode), <code>produced_files</code> audit trail, a Hermes-style <code>SOUL.md</code>, 11 builtin skills. Installed, 0 rows.</td></tr>
+      <tr><td>~/.reins/</td><td>Browser automation bridge</td>
+        <td>Daemon up/down + last screenshot timestamp. No tokens or sessions of its own.</td></tr>
+      <tr><td>~/.agents/.skill-lock.json</td><td>Vercel cross-agent skill installer</td>
+        <td><code>lastSelectedAgents</code> lists 15 agents it can push skills to — cross-reference against what TT actually detects locally.</td></tr>
+      <tr><td>~/.mcp-auth/mcp-remote-&lt;ver&gt;/</td><td>MCP OAuth token cache</td>
+        <td>Count of cached sessions only. Never filenames, never contents.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="skip">
+  <h2>Skip list</h2>
+  <p class="sub">Directories that look like agent data and are not. Roughly 175 GB of the machine's footprint.</p>
+  <div class="scroll"><table class="dt">
+    <thead><tr><th>Path</th><th>Size</th><th>Why skip</th></tr></thead>
+    <tbody>
+      <tr><td>~/.ollama/models/blobs</td><td>149 GB</td><td>Model weights. Read manifests only.</td></tr>
+      <tr><td>~/.lmstudio/models</td><td>17 GB</td><td>Model weights.</td></tr>
+      <tr><td>~/.gemini/antigravity-browser-profile</td><td>5.2 GB</td><td>Chrome profile. Reclaimable disk, not data.</td></tr>
+      <tr><td>~/.hermes/{hermes-agent,hermes-office,node,bin}</td><td>4.5 GB</td><td>Bundled runtime.</td></tr>
+      <tr><td>~/.claude/jobs/*/tmp</td><td>2.9 GB</td><td>Disposable job scratch in 2 dirs.</td></tr>
+      <tr><td>~/.gemini/antigravity-backup</td><td>922 MB</td><td>Already excluded. Would duplicate sessions.</td></tr>
+      <tr><td>~/.omnigent/logs</td><td>597 MB</td><td>97% of the dir. Stat only.</td></tr>
+      <tr><td>~/.antigravity + ~/.antigravity-ide</td><td>1.1 GB</td><td>VS Code extension folders. No agent data.</td></tr>
+      <tr><td>~/.grok/downloads</td><td>336 MB</td><td>Cached self-update binaries.</td></tr>
+      <tr><td>~/.prime/agent/kernel-venv</td><td>265 MB</td><td>Bundled Python venv.</td></tr>
+      <tr><td>~/.pi/agent/npm</td><td>228 MB</td><td>Bundled node runtime.</td></tr>
+      <tr><td>~/.opencode/{bin,node_modules}</td><td>160 MB</td><td>Install dir. Data is in ~/.local/share.</td></tr>
+      <tr><td>Code/CachedExtensionVSIXs + WebStorage</td><td>1.0 GB</td><td>Electron cache. Worth naming in any "footprint" view so 2.6 GB does not alarm users.</td></tr>
+      <tr><td>~/.kimi-work, ~/.kimi-webbridge</td><td>146 MB</td><td>kimi-slides PPT tool + a webbridge binary. Not agents.</td></tr>
+      <tr><td>~/.claudecode, ~/.galileo, ~/.agent-harness</td><td>~0</td><td>Empty or vestigial. Flag as known-benign.</td></tr>
+      <tr><td>~/.hyperframes, ~/.devvit, ~/.cua-driver</td><td>~50 KB</td><td>Install markers for non-agent tools.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="security">
+  <h2>Handling rules</h2>
+  <p class="sub">Applied throughout this survey; they should carry into any scanner built from it.</p>
+  <ul class="tight">
+    <li><b>Never read credential values.</b> <code>auth.json</code> (codex, grok, pi, prime, hermes, opencode),
+      <code>oauth_creds.json</code> + <code>google_accounts.json</code> (gemini, qwen), <code>.credentials.json</code> (claude),
+      <code>cursorAuth/*</code> in Cursor's ItemTable, <code>~/.ollama/id_ed25519</code>, <code>~/.vibe/.env</code>,
+      <code>~/.mcp-auth/**</code>, <code>users.password_hash</code> (omnigent), <code>connectionToken</code> (VS Code),
+      <code>ide/*.lock</code> authTokens (qwen). Existence and key names only.</li>
+    <li><b>Never surface raw prompt or file content.</b> <code>rewind_points.jsonl</code> embeds whole files;
+      <code>agentKv:blob:*</code> is raw model I/O; <code>.tempmediaStorage/dom_*.txt</code> is full page DOM;
+      <code>transcription-history.jsonl</code> and <code>dictation-history/</code> are voice transcripts;
+      <code>prompts/prompt_N.txt</code>, <code>vibehistory</code>, <code>~/.ollama/history</code>,
+      <code>paste-cache/</code> and <code>last-copy.txt</code> are raw user text. Counts, paths and timestamps only.</li>
+    <li><b>Secrets are not always in a file named like one.</b> <code>~/.vibe/.env</code> sits at the harness root, and
+      Cursor keeps live tokens in the same key-value table as ordinary UI state. A filename heuristic misses both.</li>
+    <li><b>Read SQLite read-only.</b> Codex, Cursor, VS Code, LM Studio and Hermes all hold live WAL locks.</li>
+    <li><b>Filter FTS5 shadow tables</b> (<code>*_data</code>, <code>*_idx</code>, <code>*_content</code>, <code>*_docsize</code>,
+      <code>*_config</code>) or table counts inflate across Copilot, Omnigent, Hermes and Grok.</li>
+    <li><b>Honour relocation env vars:</b> <code>GROK_HOME</code>, <code>HERMES_HOME</code>, <code>OLLAMA_MODELS</code>,
+      <code>HF_HOME</code>, <code>XDG_DATA_HOME</code>, <code>TT_CLINE_DIR</code>.</li>
+    <li><b>Do not double-count the shared skill pack.</b> The same Cloudflare marketplace skills are byte-identical
+      under <code>.grok</code>, <code>.qwen</code>, <code>.vibe</code>, <code>.openclaw</code>, <code>.pi</code>, <code>.copilot</code> and <code>.claude</code>.</li>
+  </ul>
+</section>
+
+</main>
+</div>

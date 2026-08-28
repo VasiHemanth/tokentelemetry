@@ -1,6 +1,37 @@
 {
   "releases": [
     {
+      "tag": "2026-08-27",
+      "title": "Click an agent, see what it stores",
+      "highlights": [
+        {
+          "title": "Every agent tile now opens a page of its own",
+          "description": "Until now only Hermes had a dedicated page and the other tiles did nothing. All 17 supported agents now open a page built from what that harness keeps on your disk, and the tile tells you how many panels are behind it. Hermes has a tile like the rest: it shows what its own pages don't — its billing record per provider — and links straight on to the full Hermes dashboard. Agents with nothing extra stored stay quiet instead of leading to an empty page.",
+          "href": "/agents/codex"
+        },
+        {
+          "title": "Every agent, not just the big four",
+          "description": "Qwen and OpenCode show their todo boards, Cline its exit codes and team runs, Vibe whether its API key still works, Antigravity its conversation index and competing agent runs, Cursor how much of each commit it wrote, Prime the Python variables it keeps alive between turns, and DSH its sandbox profiles. Claude Code's background agents and Grok's plugin jobs each list what they produced, with the running ones marked.",
+          "href": "/agents/antigravity"
+        },
+        {
+          "title": "See how close you are to your limits",
+          "description": "Claude Code's 5-hour and 7-day subscription usage and Grok's weekly credit balance were already sitting on disk unread. Both now show as a meter with the reset time, and a figure whose window has already closed is greyed out and labelled stale rather than quietly presented as current.",
+          "href": "/agents/claude"
+        },
+        {
+          "title": "Codex schedules and how much access it has",
+          "description": "Codex can run on a cron or hourly heartbeat without you present; those automations now appear with their schedule in plain English, the model they use and the repo they run in. Alongside them sits its approval policy, sandbox mode and trusted-project count, so a setting like danger-full-access is visible rather than buried in a config file.",
+          "href": "/agents/codex"
+        },
+        {
+          "title": "Copilot's real billing units, not an estimate",
+          "description": "Copilot bills premium requests in AIU rather than tokens, which cannot be worked out from a transcript. Its own record of what each request cost is now shown per model, together with the time to first token and a true generation rate.",
+          "href": "/agents/copilot"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-16",
       "title": "DeepSeek Harness support",
       "highlights": [

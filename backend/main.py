@@ -23,6 +23,7 @@ from harness_config import (
 import notifications as notif
 from tt_paths import canonical_project, data_dir
 import scan_cache
+import harness_panels
 import codex_goals
 import hermes_telemetry as _ht
 import hashlib
@@ -2887,6 +2888,35 @@ def _list_available_agents() -> list:
 @app.get("/agents")
 async def get_available_agents():
     return _list_available_agents()
+
+
+@app.get("/agents/panels")
+async def get_agent_panel_summary():
+    """How many harness panels sit behind each agent tile.
+
+    Lets the dashboard link only the agents that have something to show, and put
+    a "6 panels" hint on the tile, without fetching every panel up front.
+    """
+    return harness_panels.panel_summary()
+
+
+@app.get("/agents/{agent}/panel")
+async def get_agent_panel(agent: str, fresh: bool = False):
+    """Everything THIS agent keeps on disk that the session scan doesn't show.
+
+    Codex's cron schedules, Claude's background-job fleet and subscription
+    quota, Copilot's premium-request billing units, Grok's credit balance — each
+    harness stores something the others don't, and none of it reaches the
+    dashboard today.
+
+    Built lazily on request (never during the session scan) and cached briefly,
+    because sizing a harness directory means walking up to ~180k files. Read-only
+    throughout: no credential values are read and no prompt or file content is
+    returned. An agent with no extractor reports `installed: false` with
+    `planned: true`, which the frontend renders as an inert tile rather than an
+    empty page.
+    """
+    return harness_panels.build_panel(agent, fresh=fresh)
 
 # @app.get("/local-runtime")
 # async def get_local_runtime():
@@ -7678,6 +7708,10 @@ async def invalidate_cache():
     """Drop the sessions cache so the next read triggers a fresh scan."""
     _sessions_cache["data"] = None
     _sessions_cache["at"] = 0.0
+    # Harness panels read the same agent directories, so a manual refresh should
+    # clear them too — otherwise a user who just changed a Codex automation
+    # refreshes and still sees the old schedule for up to a minute.
+    harness_panels.invalidate()
     return {"ok": True}
 
 

@@ -30,6 +30,42 @@ The dashboard polls the backend every 15 seconds. If an agent is actively runnin
 
 A split view below the KPI strip shows how your usage breaks down between **coding agents** (Claude Code, Codex, Gemini CLI, etc.) and **autonomous agents** (Hermes Agent). This makes it easy to see at a glance how much of your token budget is coming from interactive sessions vs automated workflows.
 
+## Agent panels
+
+Every agent stores things on your disk that a session transcript doesn't show: Codex keeps cron schedules, Claude Code keeps a fleet of background jobs, Copilot records what each request actually cost in its own billing units. Click an agent tile to open a page built from that harness's own files.
+
+A tile shows how many panels sit behind it. Agents that keep nothing beyond their transcripts stay quiet rather than opening an empty page.
+
+Hermes Agent works the same way as the rest, but its page is deliberately narrow: it carries only what the dedicated `/hermes` pages don't already show, and puts a button at the top that takes you to them.
+
+| Agent | What its page shows |
+| --- | --- |
+| **Codex** | Scheduled automations (cron and hourly heartbeat, with the schedule in plain English), approval policy and sandbox mode, its thread registry, and the parent→child delegation graph |
+| **Claude Code** | 5-hour and 7-day subscription usage, background jobs with the pull requests they produced, phased multi-agent workflow runs, edit checkpoints, and which skills and plugins you actually use |
+| **Copilot** | Premium request usage in AIU, plus per-request token classes, time to first token and generation rate |
+| **Grok Build** | Weekly credit usage and subscription tier, plugin jobs launched from Claude Code, trusted folders and installed skills |
+| **Antigravity** | Its conversation index, competing agent runs and which one won, plan and walkthrough artifacts, and the code tracker's pre-edit snapshots |
+| **Cursor** | How much of each commit was written by tab-completion, by composer, and by you |
+| **Gemini CLI** | Trusted folders, MCP servers, extensions, and the map from its hashed project directories back to real repositories |
+| **OpenCode** | Its todo board, projects and sandbox config, per-session diffs and the snapshot store |
+| **Qwen CLI** | Todos per session, the auto-approved command list, and any editor currently attached |
+| **Cline** | Exit code per run — few agents record whether a run actually succeeded — plus providers and team runs |
+| **Vibe** | Whether its API key still works, and the agreed/rejected/failed split of its tool calls |
+| **Muse Code** | Its session index: provider, model, branch, prompt count and status |
+| **Prime Agent** | The Python variables its kernel keeps alive between turns, and its daemon workers |
+| **Pi** | MCP servers, trusted directories and model configuration |
+| **DeepSeek Harness** | Sandbox profiles, the workspace registry with real titles, and the default model |
+| **SmallCode** | Traces, when `TT_SMALLCODE_ROOTS` points at the repositories holding them |
+| **Hermes Agent** | Its own billing record per provider and model — what Hermes says it was charged, not a price-list estimate — plus the processes it has registered. A button opens the full [Hermes dashboard](/docs/features/hermes). |
+
+Each panel names the file it came from, so any number can be checked against the source.
+
+<Callout title="Read-only, and no credentials">
+Panels never write to an agent's directory, and never read the contents of a credential file — only whether one exists. Bulk content stays out too: file snapshots, captured page DOM and voice transcripts are reported as counts and timestamps, never quoted. Databases are opened read-only, so a panel is safe to view while the agent is running.
+</Callout>
+
+Where an agent has a capability TokenTelemetry can't show, the page says so and why, rather than leaving a silent gap. Claude Code's Routines are scheduled in the cloud, for example, so there is no local schedule to list. A store that exists but is empty is labelled as empty, which is different from absent.
+
 ## Agent and model distribution
 
 Two distribution charts show:
