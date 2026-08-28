@@ -42,6 +42,8 @@ CURSOR_DIR = HOME / ".cursor"
 PI_DIR = HOME / ".pi" / "agent"
 DSH_DIR = _env_path("DSH_HOME") or (HOME / ".dsh")
 CLINE_DIR = _env_path("TT_CLINE_DIR") or (HOME / ".cline")
+# Same contract as main.py's HERMES_DIR.
+HERMES_DIR = _env_path("HERMES_HOME") or (HOME / ".hermes")
 
 MUSE_SESSIONS_DIR = _env_path("TT_MUSE_SESSIONS_DIR") or (_xdg_data() / "muse" / "sessions")
 MUSE_DIR = MUSE_SESSIONS_DIR.parent

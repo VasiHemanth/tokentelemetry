@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
-import { ArrowLeft, HardDrive } from "lucide-react";
+import { ArrowLeft, ArrowRight, HardDrive } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { AGENTS, type AgentKey } from "@/lib/agents";
 import { AgentLogo } from "@/components/icons/AgentLogo";
@@ -185,12 +185,32 @@ export default function AgentPanelPage() {
             )}
           </div>
         </div>
-        {data?.root && (
-          <code className="mt-1 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2.5 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-muted)]">
-            {data.root}
-          </code>
-        )}
+        <div className="mt-1 flex flex-wrap items-center gap-3">
+          {data?.root && (
+            <code className="rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2.5 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-muted)]">
+              {data.root}
+            </code>
+          )}
+          {/* Hermes keeps a whole sub-dashboard of its own. Rather than compete
+              with it, the panel advertises it and hands the reader across. */}
+          {data?.dashboard && (
+            <Link
+              href={data.dashboard.href}
+              title={data.dashboard.hint}
+              className="inline-flex items-center gap-2 rounded-[var(--tt-radius)] border border-[var(--tt-brand)] bg-[var(--tt-brand)]/10 px-3.5 py-2 text-[12.5px] font-medium text-[var(--tt-brand)] transition-colors hover:bg-[var(--tt-brand)]/20"
+            >
+              {data.dashboard.label}
+              <ArrowRight size={13} />
+            </Link>
+          )}
+        </div>
       </header>
+
+      {data?.dashboard?.hint && (
+        <p className="-mt-4 text-[12.5px] leading-relaxed text-[var(--tt-fg-muted)] max-w-[92ch]">
+          {data.dashboard.hint}
+        </p>
+      )}
 
       {loading && (
         <div className="space-y-5">

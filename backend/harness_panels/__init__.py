@@ -23,13 +23,13 @@ import logging
 import time
 from typing import Any, Callable, Dict
 
-from . import claude, clis, codex, copilot, grok, ides
+from . import claude, clis, codex, copilot, grok, hermes, ides
 from .base import not_installed
 
 logger = logging.getLogger("tokentelemetry.harness_panels")
 
 # agent key -> builder. Keys match frontend/src/lib/agents.ts, and cover every
-# agent in website/content/docs/supported-agents.mdx except Hermes.
+# agent in website/content/docs/supported-agents.mdx.
 BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "claude": claude.build,
     "codex": codex.build,
@@ -47,6 +47,7 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "pi": clis.build_pi,
     "dsh": clis.build_dsh,
     "smallcode": clis.build_smallcode,
+    "hermes": hermes.build_hermes,
 }
 
 # Every supported agent now has an extractor, so nothing is merely planned.
@@ -55,9 +56,10 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
 # "not installed", and a future agent should land here before it lands above.
 PLANNED: tuple[str, ...] = ()
 
-# Hermes already has its own richer sub-dashboard at /hermes/*; routing it here
-# would duplicate that work with a thinner view.
-EXCLUDED = ("hermes",)
+# Nothing is excluded. Hermes has a panel of its own now, but a narrow one:
+# it carries only what its /hermes/* pages do not already show, and links
+# out to them via the panel's `dashboard` field rather than restating them.
+EXCLUDED: tuple[str, ...] = ()
 
 
 def has_panel(agent: str) -> bool:

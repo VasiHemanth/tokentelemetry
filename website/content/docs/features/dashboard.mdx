@@ -36,6 +36,8 @@ Every agent stores things on your disk that a session transcript doesn't show: C
 
 A tile shows how many panels sit behind it. Agents that keep nothing beyond their transcripts stay quiet rather than opening an empty page.
 
+Hermes Agent works the same way as the rest, but its page is deliberately narrow: it carries only what the dedicated `/hermes` pages don't already show, and puts a button at the top that takes you to them.
+
 | Agent | What its page shows |
 | --- | --- |
 | **Codex** | Scheduled automations (cron and hourly heartbeat, with the schedule in plain English), approval policy and sandbox mode, its thread registry, and the parent→child delegation graph |
@@ -54,6 +56,7 @@ A tile shows how many panels sit behind it. Agents that keep nothing beyond thei
 | **Pi** | MCP servers, trusted directories and model configuration |
 | **DeepSeek Harness** | Sandbox profiles, the workspace registry with real titles, and the default model |
 | **SmallCode** | Traces, when `TT_SMALLCODE_ROOTS` points at the repositories holding them |
+| **Hermes Agent** | Its own billing record per provider and model — what Hermes says it was charged, not a price-list estimate — plus the processes it has registered. A button opens the full [Hermes dashboard](/docs/features/hermes). |
 
 Each panel names the file it came from, so any number can be checked against the source.
 

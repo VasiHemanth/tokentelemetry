@@ -92,8 +92,20 @@ export interface AgentPanel {
   last_active?: string | null;
   file_count?: number | null;
   disk?: PanelDisk | null;
+  /**
+   * A richer surface this agent already owns elsewhere in the app. Hermes is
+   * the only one today; the backend declares it so a second such agent needs
+   * no change here.
+   */
+  dashboard?: PanelDashboard | null;
   sections: PanelSection[];
   not_available: PanelUnavailable[];
+}
+
+export interface PanelDashboard {
+  href: string;
+  label: string;
+  hint?: string;
 }
 
 /** Section count per agent key, from GET /agents/panels. */

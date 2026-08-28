@@ -29,22 +29,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 import harness_panels
 from harness_panels import claude as claude_panel, clis, codex as codex_panel
 from harness_panels import copilot as copilot_panel, grok as grok_panel, ides
+from harness_panels import hermes as hermes_panel
 from harness_panels import paths as hp_paths
 
 
 def test_every_supported_agent_has_a_builder():
-    """Scope check: supported-agents.mdx minus Hermes, which has its own page."""
+    """Scope check: every agent in supported-agents.mdx, Hermes included."""
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh",
+        "prime", "dsh", "hermes",
     }
     assert supported == set(harness_panels.BUILDERS), (
         "every supported agent needs an extractor; "
         f"missing={supported - set(harness_panels.BUILDERS)} "
         f"unexpected={set(harness_panels.BUILDERS) - supported}"
     )
-    assert "hermes" in harness_panels.EXCLUDED
+    assert harness_panels.EXCLUDED == ()
 
 
 # --- Qwen -------------------------------------------------------------------
@@ -502,7 +503,7 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     absent = tmp_path / "absent"
     for name in ("CLAUDE_DIR", "CODEX_DIR", "COPILOT_DIR", "GROK_DIR", "GEMINI_DIR",
                  "QWEN_DIR", "VIBE_DIR", "CURSOR_DIR", "PI_DIR", "DSH_DIR",
-                 "CLINE_DIR", "MUSE_DIR", "PRIME_DIR"):
+                 "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR"):
         monkeypatch.setattr(hp_paths, name, absent, raising=False)
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)
@@ -518,3 +519,56 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     doc = harness_panels.BUILDERS[agent]()
     assert doc["installed"] is False
     assert doc["sections"] == []
+
+
+# --- Hermes -----------------------------------------------------------------
+
+def test_hermes_billing_processes_and_dashboard_link(tmp_path, monkeypatch):
+    """Hermes carries only what /hermes/* doesn't, and hands off to it."""
+    root = tmp_path / ".hermes"
+    root.mkdir(parents=True)
+    con = sqlite3.connect(root / "state.db")
+    con.execute(
+        "CREATE TABLE session_model_usage (session_id TEXT, model TEXT, "
+        "billing_provider TEXT, billing_mode TEXT, api_call_count INT, "
+        "input_tokens INT, output_tokens INT, cache_read_tokens INT, "
+        "cache_write_tokens INT, reasoning_tokens INT, "
+        "estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT)")
+    con.executemany(
+        "INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("s1", "gpt-5.4", "openai-codex", "subscription_included",
+             10, 100, 20, 400, 0, 7, 0.0, 0.0, "included"),
+            # An empty billing_mode is how Hermes records "not stated"; it must
+            # not render as a blank cell.
+            ("s2", "grok-4.3", "xai-oauth", "",
+             5, 50, 10, 0, 0, 0, 0.0, 0.0, "unknown"),
+        ])
+    con.commit()
+    con.close()
+
+    (root / "spawn-ledger.json").write_text(json.dumps([
+        {"pid": 4242, "purpose": "serve", "install": "abc123",
+         "create_time": 1787748401.8,
+         "argv": "/Users/dev/.hermes/hermes-agent/main.py serve"},
+    ]), encoding="utf-8")
+    (root / "auth.json").write_text("{}", encoding="utf-8")
+    (root / ".env").write_text("KEY=sk-should-never-be-read", encoding="utf-8")
+
+    monkeypatch.setattr(hp_paths, "HERMES_DIR", root)
+    doc = hermes_panel.build_hermes(with_disk=False)
+    flat = json.dumps(doc)
+
+    assert doc["dashboard"]["href"] == "/hermes", "must hand off to its own page"
+
+    bill = next(s for s in doc["sections"] if s["title"] == "Billing by provider")
+    assert "not stated" in {r[1] for r in bill["rows"]}
+    assert "$0.00" in bill["note"], "a fully subscription-routed install says so"
+
+    procs = next(s for s in doc["sections"] if s["title"] == "Registered processes")
+    assert procs["rows"][0][1] == 4242
+    assert "argv" not in flat and "hermes-agent/main.py" not in flat, \
+        "command lines carry absolute paths and must not be surfaced"
+
+    sec = next(s for s in doc["sections"] if s["title"] == "Credential stores")
+    assert "auth.json" in json.dumps(sec) and ".env" in json.dumps(sec)
+    assert "sk-should-never-be-read" not in flat, "credential values are never read"

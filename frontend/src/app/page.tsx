@@ -176,9 +176,8 @@ export default function Home() {
           const meta = AGENTS[k as AgentKey];
           if (!meta) return null;
           const count = sessions.filter((s) => s.agent === k).length;
-          // How many harness panels sit behind this tile. Hermes has its own page
-          // and is always linkable, so it doesn't need a count.
-          const panelCount = k === "hermes" ? 0 : (panelCounts[k] ?? 0);
+          // How many harness panels sit behind this tile.
+          const panelCount = panelCounts[k] ?? 0;
           const inner = (
             <>
               <div
@@ -207,16 +206,11 @@ export default function Home() {
           );
           const className =
             "group relative overflow-hidden rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] p-3 transition-colors hover:border-[var(--tt-border-strong)]";
-          // Hermes keeps its own richer sub-dashboard. Every other agent links to
-          // /agents/<key> once the backend reports panels behind it; agents with
-          // nothing extra on disk stay inert rather than leading to an empty page.
-          if (k === "hermes") {
-            return (
-              <Link key={k} href="/hermes" className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}>
-                {inner}
-              </Link>
-            );
-          }
+          // One rule for every agent: link to /agents/<key> once the backend
+          // reports panels behind it, and stay inert otherwise rather than
+          // leading to an empty page. Hermes used to jump straight to its own
+          // sub-dashboard; it now has a tile like the rest, and its page links
+          // on to /hermes through the panel's `dashboard` field.
           if (panelCount > 0) {
             return (
               <Link key={k} href={`/agents/${k}`} className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}>

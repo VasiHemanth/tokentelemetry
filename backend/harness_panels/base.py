@@ -351,8 +351,15 @@ def panel(
     last_active: Optional[str] = None,
     disk: Optional[Dict[str, Any]] = None,
     file_count: Optional[int] = None,
+    dashboard: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Assemble the panel document returned by GET /agents/{agent}/panel."""
+    """Assemble the panel document returned by GET /agents/{agent}/panel.
+
+    `dashboard` is an optional {href, label, hint} pointing at a richer surface
+    the agent already has elsewhere in the app — Hermes is the only one today.
+    Declaring it here rather than special-casing the route in the frontend means
+    a second such agent needs no UI change.
+    """
     return {
         "agent": agent,
         "installed": True,
@@ -361,6 +368,7 @@ def panel(
         "last_active": last_active,
         "disk": disk,
         "file_count": file_count,
+        "dashboard": dashboard,
         "sections": [s for s in sections if s],
         "not_available": not_available or [],
     }

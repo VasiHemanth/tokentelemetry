@@ -671,10 +671,17 @@ def test_planned_is_empty_now_that_every_agent_has_a_builder():
     assert not (set(harness_panels.PLANNED) & set(harness_panels.BUILDERS))
 
 
-def test_hermes_is_excluded_from_panels():
-    """Hermes has its own richer /hermes/* dashboard."""
-    assert not harness_panels.has_panel("hermes")
+def test_hermes_has_a_panel_that_defers_to_its_own_dashboard():
+    """Hermes gets a panel, but a deliberately narrow one.
+
+    It was excluded outright while /hermes/* was the only surface. It now has a
+    tile like every other agent; the panel carries only what those pages don't
+    already show, and advertises them through `dashboard` so the page hands the
+    reader on rather than competing with them.
+    """
+    assert harness_panels.has_panel("hermes")
     assert "hermes" not in harness_panels.PLANNED
+    assert harness_panels.EXCLUDED == ()
 
 
 def test_builder_exception_does_not_propagate(monkeypatch):

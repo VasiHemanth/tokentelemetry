@@ -6,7 +6,7 @@
       "highlights": [
         {
           "title": "Every agent tile now opens a page of its own",
-          "description": "Until now only Hermes had a dedicated page and the other tiles did nothing. All 16 supported coding agents now open a page built from what that harness keeps on your disk, and the tile tells you how many panels are behind it. Agents with nothing extra stored stay quiet instead of leading to an empty page.",
+          "description": "Until now only Hermes had a dedicated page and the other tiles did nothing. All 17 supported agents now open a page built from what that harness keeps on your disk, and the tile tells you how many panels are behind it. Hermes has a tile like the rest: it shows what its own pages don't — its billing record per provider — and links straight on to the full Hermes dashboard. Agents with nothing extra stored stay quiet instead of leading to an empty page.",
           "href": "/agents/codex"
         },
         {
