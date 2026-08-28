@@ -35,6 +35,19 @@ function relative(value: unknown): string {
   return formatDistanceToNow(d, { addSuffix: true });
 }
 
+/**
+ * A timestamp is worth rendering as a timestamp even when its column isn't
+ * named like one. Vibe keys a session by its start time, so the column is
+ * "session" and the value is a raw `2026-04-08T00:29:49.155009` — and its
+ * "log last written" field wrapped onto two lines in the rail. Matching the
+ * value rather than the column heading catches both.
+ */
+const ISO_LIKE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+function looksIso(value: unknown): value is string {
+  return typeof value === "string" && ISO_LIKE.test(value);
+}
+
 /** "source ~/.codex/config.toml" — always shown, so a claim can be checked. */
 function SourceLine({ source }: { source: string }) {
   return (
@@ -109,9 +122,12 @@ function Fields({ section }: { section: Section }) {
           <dt className="font-mono text-[10.5px] uppercase tracking-[0.09em] text-[var(--tt-fg-muted)] whitespace-nowrap pt-0.5">
             {f.label}
           </dt>
-          <dd className="flex flex-col items-end gap-1 text-right">
-            <span className="flex items-center gap-2 font-mono text-[12.5px] text-[var(--tt-fg)]">
-              {cellText(f.value)}
+          <dd className="flex flex-col items-end gap-1 text-right min-w-0">
+            <span
+              className="flex items-center gap-2 font-mono text-[12.5px] text-[var(--tt-fg)]"
+              title={looksIso(f.value) ? String(f.value) : undefined}
+            >
+              {looksIso(f.value) ? relative(f.value) : cellText(f.value)}
               {f.severity && (
                 <Badge variant={SEVERITY_VARIANT[f.severity]}>
                   {f.severity === "crit" ? "risk" : f.severity}
@@ -138,34 +154,90 @@ function Chips({ section }: { section: Section }) {
   );
 }
 
+/**
+ * Codex titles a spawned thread with the message that spawned it, so a parent
+ * that fanned out six children renders six byte-identical rows. Collapsing
+ * repeats into one row with a count says the same thing and reads as
+ * deliberate, where the repeat read as a render bug.
+ */
+function foldChildren(children: { label: string; status?: string | null }[]) {
+  const order: { label: string; status?: string | null; n: number }[] = [];
+  const seen = new Map<string, { n: number }>();
+  for (const c of children) {
+    // The backend already renders an absent title as an em dash, so testing
+    // for an empty string alone leaves rows reading "— ×5".
+    const raw = String(c.label ?? "").trim();
+    const label = !raw || raw === "—" || raw === "-" ? "untitled" : raw;
+    const key = `${label}\u0000${c.status ?? ""}`;
+    const hit = seen.get(key);
+    if (hit) {
+      hit.n += 1;
+      continue;
+    }
+    const row = { label, status: c.status, n: 1 };
+    seen.set(key, row);
+    order.push(row);
+  }
+  return order;
+}
+
 function Tree({ section }: { section: Section }) {
   return (
-    <div className="font-mono text-[12px] leading-[1.85] overflow-x-auto">
-      {(section.tree ?? []).map((node, i) => (
-        <div key={i} className={i > 0 ? "mt-3" : undefined}>
-          <div className="text-[var(--tt-fg)]">{node.label}</div>
-          {(node.children ?? []).map((c, j, arr) => (
-            <div key={j} className="text-[var(--tt-fg-muted)] whitespace-nowrap">
-              <span className="opacity-40">{j === arr.length - 1 ? "└─ " : "├─ "}</span>
-              {c.label}
-              {c.status && <span className="opacity-50"> · {c.status}</span>}
-            </div>
-          ))}
-        </div>
-      ))}
+    <div className="font-mono text-[12px] leading-[1.85]">
+      {(section.tree ?? []).map((node, i) => {
+        const kids = foldChildren(node.children ?? []);
+        return (
+          <div key={i} className={i > 0 ? "mt-3" : undefined}>
+            <div className="text-[var(--tt-fg)] truncate" title={node.label}>{node.label}</div>
+            {kids.map((c, j) => (
+              <div
+                key={j}
+                className="flex items-baseline gap-1.5 text-[var(--tt-fg-muted)]"
+              >
+                <span className="opacity-40 shrink-0">
+                  {j === kids.length - 1 ? "└─" : "├─"}
+                </span>
+                <span className="truncate" title={c.label}>{c.label}</span>
+                {c.n > 1 && (
+                  <span className="shrink-0 tabular text-[var(--tt-fg)] opacity-80">×{c.n}</span>
+                )}
+                {c.status && <span className="shrink-0 opacity-50">· {c.status}</span>}
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function Rows({ section }: { section: Section }) {
   const cols = section.columns ?? [];
+
+  // Without this every column shares the width equally, so OpenCode's four
+  // short columns (name / vcs / sandboxes / updated) spread across the whole
+  // card with a hand-span of dead air between each one. Let the first label
+  // column absorb the slack and make the rest shrink to their content: `w-px`
+  // plus `whitespace-nowrap` is the standard trick — the browser treats the
+  // 1px as a floor and grows the cell only as far as the text needs.
+  const growIdx = Math.max(
+    0,
+    cols.findIndex((c) => !isNumericColumn(c) && !isDateColumn(c)),
+  );
+  const widthFor = (i: number) => (i === growIdx ? "w-full" : "w-px whitespace-nowrap");
+
   return (
-    <div className="-mx-5 overflow-x-auto">
+    <div className="-mx-5 overflow-x-auto [&_th:first-child]:pl-5 [&_td:first-child]:pl-5 [&_th:last-child]:pr-5 [&_td:last-child]:pr-5">
       <Table>
         <THead>
           <TR>
-            {cols.map((c) => (
-              <TH key={c} className={isNumericColumn(c) ? "text-right" : undefined}>{c}</TH>
+            {cols.map((c, i) => (
+              <TH
+                key={c}
+                className={`${widthFor(i)}${isNumericColumn(c) ? " text-right" : ""}`}
+              >
+                {c}
+              </TH>
             ))}
           </TR>
         </THead>
@@ -179,7 +251,7 @@ function Rows({ section }: { section: Section }) {
                 // so they read better as a pill than as the word "Yes".
                 if (typeof cell === "boolean") {
                   return (
-                    <TD key={j}>
+                    <TD key={j} className={widthFor(j)}>
                       {cell ? <Badge variant="success">yes</Badge>
                             : <span className="text-[var(--tt-fg-muted)]">—</span>}
                     </TD>
@@ -189,13 +261,18 @@ function Rows({ section }: { section: Section }) {
                   <TD
                     key={j}
                     className={
-                      numeric
-                        ? "tabular text-right font-mono text-[12px]"
-                        : "font-mono text-[12px] max-w-[280px] truncate"
+                      j === growIdx
+                        ? "font-mono text-[12px] max-w-[560px] truncate"
+                        : numeric
+                          ? "w-px whitespace-nowrap tabular text-right font-mono text-[12px]"
+                          // Capped, not nowrap: Claude's "links" cell can hold
+                          // four PR references, and left to run it pushed the
+                          // last column clean off the right edge of the card.
+                          : "w-px max-w-[240px] truncate font-mono text-[12px] text-[var(--tt-fg-muted)]"
                     }
                     title={typeof cell === "string" ? cell : undefined}
                   >
-                    {isDateColumn(col) ? relative(cell) : cellText(cell)}
+                    {isDateColumn(col) || looksIso(cell) ? relative(cell) : cellText(cell)}
                   </TD>
                 );
               })}

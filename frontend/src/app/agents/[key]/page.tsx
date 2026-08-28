@@ -5,31 +5,54 @@ import { useParams } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { ArrowLeft, HardDrive } from "lucide-react";
 import { useResource } from "@/lib/api";
-import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
+import { AGENTS, type AgentKey } from "@/lib/agents";
 import { AgentLogo } from "@/components/icons/AgentLogo";
-import { Card, CardHeader, CardTitle, EmptyState, Skeleton, Badge } from "@/components/ui";
+import { Card, CardHeader, CardTitle, EmptyState, Skeleton } from "@/components/ui";
 import { PanelSection } from "@/components/agents/PanelSection";
-import { AgentPanel, humanBytes } from "@/lib/agentPanel";
+import { AgentPanel, PanelSection as Section, humanBytes } from "@/lib/agentPanel";
 
 /**
  * One adaptive page per agent.
  *
  * Sections come back in value order and simply don't render when an agent lacks
- * them — Codex shows five or six cards, Vibe two. That's why this is a single
- * page rather than a tab bar: most agents would have too few sections to fill
- * tabs, and empty tabs read as broken.
+ * them — Codex shows five cards, Vibe two. That's why this is a single page
+ * rather than a tab bar: most agents would have too few sections to fill tabs,
+ * and empty tabs read as broken.
  */
 
-/** Palette for the disk bar. Neutral ramp, not semantic — size isn't a verdict. */
+/**
+ * Compact kinds go in the right rail; anything with a table or a tree takes the
+ * main column.
+ *
+ * The first cut laid every section into one `grid-cols-2` and gave wide kinds
+ * `col-span-2`. That guarantees holes — a narrow card followed by a wide one
+ * leaves half a row empty, and Codex hit it on the very first section pair.
+ * Two independent stacks cannot produce a gap.
+ */
+const RAIL_KINDS = new Set(["meter", "quota", "fields", "permissions", "chips", "tools"]);
+
+/** Disk-bar ramp. Distinct hues so segments stay tellable apart, all from tokens. */
 const DISK_COLORS = [
   "var(--tt-brand)",
-  "var(--tt-fg-muted)",
-  "var(--tt-info-fg)",
+  "var(--tt-violet-fg)",
+  "var(--tt-cyan-fg)",
   "var(--tt-success-fg)",
   "var(--tt-warn-fg)",
-  "var(--tt-border-strong)",
+  "var(--tt-info-fg)",
 ];
 
+function SourceLine({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-4 pt-3 border-t border-[var(--tt-border)] font-mono text-[10px] text-[var(--tt-fg-muted)] break-all">
+      <span className="opacity-50">source&nbsp;&nbsp;</span>{children}
+    </div>
+  );
+}
+
+/**
+ * Sits above the section grid: it's the one figure every agent reports, which
+ * makes it the anchor a reader can carry from one agent's page to the next.
+ */
 function DiskCard({ disk }: { disk: NonNullable<AgentPanel["disk"]> }) {
   const parts = disk.parts ?? [];
   const total = disk.total_bytes || 1;
@@ -40,54 +63,64 @@ function DiskCard({ disk }: { disk: NonNullable<AgentPanel["disk"]> }) {
     <Card padding="md">
       <CardHeader>
         <CardTitle><HardDrive size={13} /> Disk footprint</CardTitle>
-        <span className="tabular font-mono text-[11px] text-[var(--tt-fg-muted)]">
-          {disk.total_human}
-          {disk.complete === false && <span className="opacity-60"> or more</span>}
-        </span>
-      </CardHeader>
-
-      <div className="flex h-5 rounded-md overflow-hidden bg-[var(--tt-sunken)]">
-        {parts.map((p, i) => (
-          <div
-            key={p.label}
-            style={{ width: `${(p.bytes / total) * 100}%`, background: DISK_COLORS[i % DISK_COLORS.length] }}
-            title={`${p.label} — ${humanBytes(p.bytes)}`}
-          />
-        ))}
-        {other > 0 && <div style={{ width: `${(other / total) * 100}%` }} />}
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 font-mono text-[10.5px] text-[var(--tt-fg-muted)]">
-        {parts.map((p, i) => (
-          <span key={p.label} className="flex items-center gap-1.5">
-            <i
-              className="block h-2 w-2 rounded-[2px]"
-              style={{ background: DISK_COLORS[i % DISK_COLORS.length] }}
-            />
-            {p.label} {humanBytes(p.bytes)}
-          </span>
-        ))}
-      </div>
-
-      {!!disk.reclaimable_bytes && (
-        <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--tt-fg-muted)]">
-          <span className="text-[var(--tt-warn-fg)] font-medium">
+        {!!disk.reclaimable_bytes && (
+          <span className="tabular font-mono text-[11px] text-[var(--tt-warn-fg)]">
             {humanBytes(disk.reclaimable_bytes)} reclaimable
           </span>
-          {disk.reclaimable_note ? ` — ${disk.reclaimable_note}` : null}
-        </p>
-      )}
+        )}
+      </CardHeader>
 
-      {disk.complete === false && (
-        <p className="mt-2 text-[11px] text-[var(--tt-fg-muted)]">
-          This directory is large enough that the scan stopped early, so the total is a floor.
-        </p>
-      )}
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:gap-8">
+        <div className="shrink-0 lg:w-[170px]">
+          <div className="tabular text-[30px] leading-none font-semibold tracking-[-0.02em] text-[var(--tt-fg)]">
+            {disk.total_human}
+          </div>
+          <div className="mt-1.5 text-[11px] leading-snug text-[var(--tt-fg-dim)]">
+            {disk.complete === false
+              ? "at least — the directory was big enough that the scan stopped early"
+              : "on disk"}
+          </div>
+        </div>
 
-      <div className="mt-3 pt-3 border-t border-[var(--tt-border)] font-mono text-[10px] text-[var(--tt-fg-muted)]">
-        <span className="opacity-50">source&nbsp;&nbsp;</span>
-        apparent file sizes, symlinks not followed — reads slightly under <code>du</code>
+        <div className="min-w-0 flex-1">
+          <div className="flex h-6 rounded-md overflow-hidden bg-[var(--tt-sunken)]">
+            {parts.map((p, i) => (
+              <div
+                key={p.label}
+                style={{
+                  width: `${(p.bytes / total) * 100}%`,
+                  background: DISK_COLORS[i % DISK_COLORS.length],
+                }}
+                title={`${p.label} — ${humanBytes(p.bytes)}`}
+              />
+            ))}
+            {other > 0 && <div style={{ width: `${(other / total) * 100}%` }} />}
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[10.5px] text-[var(--tt-fg-muted)]">
+            {parts.map((p, i) => (
+              <span key={p.label} className="flex items-center gap-1.5">
+                <i
+                  className="block h-2 w-2 rounded-[2px] shrink-0"
+                  style={{ background: DISK_COLORS[i % DISK_COLORS.length] }}
+                />
+                {p.label}
+                <span className="tabular text-[var(--tt-fg)]">{humanBytes(p.bytes)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
+
+      {!!disk.reclaimable_bytes && disk.reclaimable_note && (
+        <p className="mt-4 text-[11.5px] leading-relaxed text-[var(--tt-fg-muted)]">
+          {disk.reclaimable_note}
+        </p>
+      )}
+
+      <SourceLine>
+        apparent file sizes, symlinks not followed — reads slightly under <code>du</code>
+      </SourceLine>
     </Card>
   );
 }
@@ -102,52 +135,67 @@ export default function AgentPanelPage() {
   );
 
   const label = meta?.label ?? key;
+  const hex = meta?.hex ?? "#888888";
+
+  const sections: Section[] = data?.sections ?? [];
+  const rail = sections.filter((s) => RAIL_KINDS.has(s.kind));
+  const main = sections.filter((s) => !RAIL_KINDS.has(s.kind));
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 font-mono text-[11.5px] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
-        >
-          <ArrowLeft size={12} /> Agents
-        </Link>
-      </div>
-
-      <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--tt-border)]">
-        <div>
-          <div className="flex items-center gap-3">
-            <span
-              className="grid h-8 w-8 place-items-center rounded-md"
-              style={{ backgroundColor: `${meta?.hex ?? "#888"}14`, color: meta?.hex ?? "#888" }}
-            >
-              <AgentLogo agent={key} size={17} />
-            </span>
-            <h1 className="text-[22px] font-semibold tracking-tight text-[var(--tt-fg)]">{label}</h1>
-          </div>
-          {data?.installed && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-[var(--tt-fg-muted)]">
-              {data.version && <span>v{data.version}</span>}
-              {data.version && data.last_active && <span className="opacity-40">·</span>}
-              {data.last_active && (
-                <span>active {formatDistanceToNow(new Date(data.last_active), { addSuffix: true })}</span>
-              )}
-              {data.disk && <span className="opacity-40">·</span>}
-              {data.disk && <span>{data.disk.total_human}</span>}
+    <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-8 pb-20">
+      <header className="flex flex-wrap items-start justify-between gap-6 pb-6 border-b border-[var(--tt-border)]">
+        <div className="flex items-start gap-4 min-w-0">
+          <Link
+            href="/"
+            title="Back to agents"
+            aria-label="Back to agents"
+            className="mt-1 h-9 w-9 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0"
+          >
+            <ArrowLeft size={16} />
+          </Link>
+          <span
+            className="mt-0.5 grid h-10 w-10 place-items-center rounded-[var(--tt-radius)] border shrink-0"
+            style={{ backgroundColor: `${hex}14`, borderColor: `${hex}33`, color: hex }}
+          >
+            <AgentLogo agent={key} size={20} />
+          </span>
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)] mb-1.5">
+              Coding agent
             </div>
-          )}
+            <h1 className="text-[28px] leading-[1.05] font-semibold tracking-[-0.02em] text-[var(--tt-fg)]">
+              {label}
+            </h1>
+            {data?.installed && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11.5px] text-[var(--tt-fg-muted)]">
+                {data.version && <span>v{data.version}</span>}
+                {data.version && data.last_active && <span className="opacity-40">·</span>}
+                {data.last_active && (
+                  <span>
+                    active {formatDistanceToNow(new Date(data.last_active), { addSuffix: true })}
+                  </span>
+                )}
+                {sections.length > 0 && <span className="opacity-40">·</span>}
+                {sections.length > 0 && (
+                  <span>
+                    {sections.length} {sections.length === 1 ? "panel" : "panels"}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         {data?.root && (
-          <code className="rounded bg-[var(--tt-sunken)] px-2 py-1 font-mono text-[11.5px] text-[var(--tt-fg-muted)]">
+          <code className="mt-1 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2.5 py-1.5 font-mono text-[11.5px] text-[var(--tt-fg-muted)]">
             {data.root}
           </code>
         )}
-      </div>
+      </header>
 
       {loading && (
-        <div className="space-y-4">
-          <Skeleton className="h-28 w-full" />
-          <Skeleton className="h-40 w-full" />
+        <div className="space-y-5">
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-64 w-full" />
         </div>
       )}
 
@@ -171,25 +219,41 @@ export default function AgentPanelPage() {
 
       {data?.installed && (
         <>
-          {/* min-w-0 on every grid child is load-bearing: grid items default to
-              min-width:auto, so one wide table (Threads has eight columns) would
-              stretch the whole grid past the viewport and push field values off
-              the right edge instead of scrolling inside its own card. */}
-          <div className="grid gap-4 lg:grid-cols-2">
-            {data.sections.map((s, i) => {
-              // Tables and trees earn the full width; compact cards pair up.
-              const wide = ["schedules", "jobs", "table", "checkpoints", "todos", "plans", "models"]
-                .includes(s.kind);
-              return (
-                <div key={`${s.kind}-${i}`} className={wide ? "lg:col-span-2 min-w-0" : "min-w-0"}>
+          {data.disk && <DiskCard disk={data.disk} />}
+
+          {/* Three shapes, so a sparse agent never leaves an empty column: both
+              stacks (the common case), main only, or the rail cards spread
+              across the full width when there's no table for them to sit beside. */}
+          {main.length > 0 && rail.length > 0 ? (
+            <div className="grid gap-5 items-start lg:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="min-w-0 space-y-5">
+                {main.map((s, i) => (
+                  <PanelSection key={`m-${s.kind}-${i}`} section={s} />
+                ))}
+              </div>
+              <div className="min-w-0 space-y-5">
+                {rail.map((s, i) => (
+                  <PanelSection key={`r-${s.kind}-${i}`} section={s} />
+                ))}
+              </div>
+            </div>
+          ) : main.length > 0 ? (
+            <div className="space-y-5">
+              {main.map((s, i) => (
+                <PanelSection key={`m-${s.kind}-${i}`} section={s} />
+              ))}
+            </div>
+          ) : rail.length > 0 ? (
+            <div className="grid gap-5 items-start sm:grid-cols-2 xl:grid-cols-3">
+              {rail.map((s, i) => (
+                <div key={`r-${s.kind}-${i}`} className="min-w-0">
                   <PanelSection section={s} />
                 </div>
-              );
-            })}
-            {data.disk && <div className="min-w-0"><DiskCard disk={data.disk} /></div>}
-          </div>
+              ))}
+            </div>
+          ) : null}
 
-          {data.sections.length === 0 && (
+          {sections.length === 0 && (
             <EmptyState
               title={`Nothing extra on disk for ${label}`}
               description="This agent is installed, but keeps nothing beyond the session transcripts already shown in traces."
@@ -197,15 +261,19 @@ export default function AgentPanelPage() {
           )}
 
           {data.not_available.length > 0 && (
-            <div className="rounded-[var(--tt-radius-lg)] border border-dashed border-[var(--tt-border-strong)] p-4">
-              <h2 className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.11em] text-[var(--tt-fg-muted)]">
+            <div className="rounded-[var(--tt-radius-lg)] border border-dashed border-[var(--tt-border-strong)] p-5">
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)]">
                 Not available for {label}
               </h2>
-              <ul className="mt-2.5 space-y-1.5">
+              <ul className="mt-3 space-y-2.5">
                 {data.not_available.map((na) => (
-                  <li key={na.kind} className="text-[12.5px] leading-relaxed text-[var(--tt-fg-muted)]">
+                  <li
+                    key={na.kind}
+                    className="text-[12.5px] leading-relaxed text-[var(--tt-fg-muted)] max-w-[92ch]"
+                  >
                     <span className="font-mono text-[12px] text-[var(--tt-fg)]">{na.kind}</span>
-                    {" — "}{na.reason}
+                    {" — "}
+                    {na.reason}
                   </li>
                 ))}
               </ul>
