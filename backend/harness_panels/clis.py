@@ -638,8 +638,28 @@ def build_dsh(*, with_disk: bool = True) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # DSH is the one harness whose transcripts need a third-party codec, and
+    # the scanner skips them silently when it's absent. The visible result is a
+    # contradiction with nothing on screen to explain it: the agent reports
+    # hundreds of megabytes of sessions on disk and zero sessions counted. Name
+    # the cause rather than leaving the gap unexplained.
+    not_avail: List[Dict[str, Any]] = []
+    try:
+        import zstandard  # noqa: F401
+    except ImportError:
+        sess_dir = root / "sessions"
+        found = (len(list(sess_dir.glob("*/*/session.jsonl.zstd")))
+                 if sess_dir.is_dir() else 0)
+        not_avail.append(unavailable(
+            "sessions",
+            f"DSH compresses transcripts with zstd, and the `zstandard` package "
+            f"is missing from this backend's environment. {found} session file"
+            f"{'' if found == 1 else 's'} on disk cannot be read, so DSH counts "
+            f"zero sessions everywhere in TokenTelemetry. Reinstalling backend "
+            f"dependencies (./start.sh) restores them."))
+
     return panel(
-        "dsh", root, sections=sections,
+        "dsh", root, sections=sections, not_available=not_avail,
         last_active=iso(newest_mtime([root / "sessions"])),
         disk=safe(lambda: _simple_disk(root), "dsh disk") if with_disk else None,
     )

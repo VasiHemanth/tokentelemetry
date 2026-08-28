@@ -16,6 +16,7 @@ instead of raising.
 """
 from __future__ import annotations
 
+import builtins
 import json
 import sqlite3
 import sys
@@ -262,6 +263,37 @@ def test_dsh_profiles_and_workspaces(tmp_path, monkeypatch):
     assert "node_modules" not in names, "bundled deps are not a sandbox profile"
     ws = next(s for s in doc["sections"] if s["title"] == "Workspaces")
     assert ws["rows"][0][0] == "My repo" and ws["rows"][0][1] == 2
+    # zstandard is a declared dependency, so nothing should be flagged missing.
+    assert not [n for n in doc["not_available"] if n["kind"] == "sessions"]
+
+
+def test_dsh_explains_zero_sessions_without_zstandard(tmp_path, monkeypatch):
+    """A missing codec must name itself, not just yield zero.
+
+    Without `zstandard` the scanner skips DSH transcripts silently, so the agent
+    shows sessions on disk and none counted. Nothing on screen explained the
+    gap; this pins that it now does, and quotes the real file count.
+    """
+    root = tmp_path / ".dsh"
+    sess = root / "sessions" / "slug" / "session-1"
+    sess.mkdir(parents=True)
+    (sess / "session.jsonl.zstd").write_bytes(b"\x28\xb5\x2f\xfd")
+    monkeypatch.setattr(hp_paths, "DSH_DIR", root)
+
+    real_import = builtins.__import__
+
+    def no_zstd(name, *a, **kw):
+        if name == "zstandard":
+            raise ImportError("No module named 'zstandard'")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_zstd)
+    doc = clis.build_dsh()
+
+    note = next(n for n in doc["not_available"] if n["kind"] == "sessions")
+    assert "zstandard" in note["reason"]
+    assert "1 session file " in note["reason"], "singular, and the real count"
+    assert "start.sh" in note["reason"], "tell the user what to actually do"
 
 
 # --- Gemini -----------------------------------------------------------------
