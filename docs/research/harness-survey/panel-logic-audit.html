@@ -1,0 +1,616 @@
+<title>When Was This True?</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#F3F5F6;
+  --panel:#FFFFFF;
+  --sunken:#E7EBEC;
+  --ink:#14181A;
+  --ink-2:#434B4F;
+  --ink-3:#737C81;
+  --rule:#D6DBDD;
+  --rule-2:#B9C1C4;
+  --accent:#0E7C86;
+  --accent-soft:#0E7C8614;
+  --live:#2C7A58;
+  --live-soft:#2C7A5816;
+  --stale:#AC5426;
+  --stale-soft:#AC542618;
+  --wrong:#8C2F39;
+  --wrong-soft:#8C2F3916;
+  --shadow:0 1px 2px rgba(20,24,26,.05), 0 8px 24px -16px rgba(20,24,26,.25);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0D1114;
+    --panel:#151B1F;
+    --sunken:#101619;
+    --ink:#E3E8EA;
+    --ink-2:#A4AEB3;
+    --ink-3:#6F787D;
+    --rule:#232C31;
+    --rule-2:#334047;
+    --accent:#3FB6BF;
+    --accent-soft:#3FB6BF1C;
+    --live:#57B98C;
+    --live-soft:#57B98C1C;
+    --stale:#D98B4A;
+    --stale-soft:#D98B4A1C;
+    --wrong:#D2646E;
+    --wrong-soft:#D2646E1C;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 32px -20px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0D1114;
+  --panel:#151B1F;
+  --sunken:#101619;
+  --ink:#E3E8EA;
+  --ink-2:#A4AEB3;
+  --ink-3:#6F787D;
+  --rule:#232C31;
+  --rule-2:#334047;
+  --accent:#3FB6BF;
+  --accent-soft:#3FB6BF1C;
+  --live:#57B98C;
+  --live-soft:#57B98C1C;
+  --stale:#D98B4A;
+  --stale-soft:#D98B4A1C;
+  --wrong:#D2646E;
+  --wrong-soft:#D2646E1C;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 32px -20px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:"Source Serif 4",Georgia,serif;
+  font-size:17px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 120px}
+.measure{max-width:68ch}
+
+h1,h2,h3,.dsp{font-family:"Familjen Grotesk",system-ui,sans-serif;font-weight:600;letter-spacing:-.015em}
+h1{font-size:clamp(38px,6vw,62px);line-height:1.02;margin:0 0 18px;text-wrap:balance;letter-spacing:-.03em}
+h2{font-size:clamp(24px,3vw,31px);line-height:1.12;margin:0 0 14px;text-wrap:balance}
+h3{font-size:19px;line-height:1.25;margin:0 0 10px}
+p{margin:0 0 18px}
+a{color:var(--accent)}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.86em}
+code{background:var(--sunken);padding:.12em .38em;border-radius:4px;border:1px solid var(--rule)}
+
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.18em;color:var(--ink-3);
+}
+
+header.hero{padding:96px 0 46px;border-bottom:1px solid var(--rule)}
+.lede{font-size:21px;line-height:1.5;color:var(--ink-2);max-width:62ch;margin:0}
+.byline{margin-top:30px;display:flex;flex-wrap:wrap;gap:10px 24px;align-items:center}
+
+section{padding:56px 0;border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:0}
+.snum{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.16em;
+  color:var(--accent);display:block;margin-bottom:10px;font-weight:600;
+}
+
+/* ---- the contradiction: two facing claims ---- */
+.clash{display:grid;gap:16px;grid-template-columns:1fr;margin:30px 0 8px}
+@media(min-width:820px){.clash{grid-template-columns:1fr auto 1fr;align-items:stretch}}
+.claim{
+  background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:20px 22px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:6px;min-width:0;
+}
+.claim .src{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-3);letter-spacing:.04em}
+.claim .big{font-family:"Familjen Grotesk",sans-serif;font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.claim .sub{font-size:14.5px;color:var(--ink-2);line-height:1.45}
+.claim.a{border-left:3px solid var(--live)}
+.claim.b{border-left:3px solid var(--stale)}
+.versus{
+  display:grid;place-items:center;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;letter-spacing:.16em;color:var(--wrong);text-transform:uppercase;
+  padding:8px 4px;
+}
+
+/* ---- tables ---- */
+.scroll{overflow-x:auto;margin:26px 0;border:1px solid var(--rule);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-family:"IBM Plex Mono",monospace;font-size:13px}
+caption{
+  text-align:left;padding:16px 20px 0;font-family:"Familjen Grotesk",sans-serif;
+  font-size:13.5px;font-weight:600;color:var(--ink);letter-spacing:0;
+}
+caption span{display:block;font-family:"Source Serif 4",serif;font-weight:400;font-size:13.5px;color:var(--ink-3);margin-top:3px;line-height:1.45}
+th{
+  text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.13em;
+  color:var(--ink-3);padding:14px 16px 9px;border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+td{padding:9px 16px;border-bottom:1px solid var(--rule);color:var(--ink-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td strong{color:var(--ink);font-weight:600}
+
+.pill{
+  display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.09em;padding:2px 7px;border-radius:20px;white-space:nowrap;
+}
+.p-live{background:var(--live-soft);color:var(--live);border:1px solid var(--live)}
+.p-stale{background:var(--stale-soft);color:var(--stale);border:1px solid var(--stale)}
+.p-wrong{background:var(--wrong-soft);color:var(--wrong);border:1px solid var(--wrong)}
+.p-flat{background:var(--sunken);color:var(--ink-3);border:1px solid var(--rule-2)}
+
+/* ---- timeline ---- */
+.tl{margin:30px 0 10px;display:flex;flex-direction:column;gap:26px}
+.tl-row{display:grid;gap:8px}
+.tl-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.tl-name{font-family:"Familjen Grotesk",sans-serif;font-weight:600;font-size:15px}
+.tl-verdict{font-family:"IBM Plex Mono",monospace;font-size:11px}
+.track{
+  position:relative;height:44px;background:var(--sunken);border:1px solid var(--rule);
+  border-radius:8px;overflow:hidden;
+}
+.win{position:absolute;top:0;bottom:0;background:var(--accent-soft);border-left:2px solid var(--accent);border-right:2px solid var(--accent)}
+.obs{position:absolute;top:0;bottom:0;background:var(--live-soft)}
+.blind{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,transparent 0 5px,var(--stale-soft) 5px 10px)}
+.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--ink)}
+.mark.read{background:var(--live)}
+.mark.now{background:var(--wrong)}
+.mtag{
+  position:absolute;top:5px;transform:translateX(-50%);font-family:"IBM Plex Mono",monospace;
+  font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);white-space:nowrap;
+  background:var(--panel);padding:1px 5px;border-radius:4px;border:1px solid var(--rule);
+}
+.tl-legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-3)}
+.tl-legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+/* ---- quadrant ---- */
+.quad-wrap{margin:30px 0 6px}
+.quad{
+  display:grid;grid-template-columns:1fr 1fr;gap:2px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:12px;overflow:hidden;
+}
+.qc{background:var(--panel);padding:20px 20px 22px;min-height:150px;display:flex;flex-direction:column;gap:7px}
+.qc .qt{font-family:"IBM Plex Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.13em;color:var(--ink-3)}
+.qc .qh{font-family:"Familjen Grotesk",sans-serif;font-weight:600;font-size:17px;line-height:1.2}
+.qc .qd{font-size:14.5px;color:var(--ink-2);line-height:1.45}
+.qc.ok{box-shadow:inset 3px 0 0 var(--live)}
+.qc.bad{box-shadow:inset 3px 0 0 var(--wrong)}
+.qc.meh{box-shadow:inset 3px 0 0 var(--stale)}
+.qaxis{font-family:"IBM Plex Mono",monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:.13em;color:var(--ink-3);margin:10px 0 0}
+
+/* ---- callout ---- */
+.note{
+  background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:10px;padding:18px 22px;margin:26px 0;box-shadow:var(--shadow);
+}
+.note.warn{border-left-color:var(--stale)}
+.note p:last-child{margin-bottom:0}
+.note .nh{font-family:"Familjen Grotesk",sans-serif;font-weight:600;font-size:14px;margin-bottom:6px;display:block}
+
+/* ---- proposals ---- */
+.props{display:grid;gap:16px;margin:30px 0 0}
+@media(min-width:760px){.props{grid-template-columns:1fr 1fr}}
+.prop{
+  background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:22px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:9px;min-width:0;
+}
+.prop .ph{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.prop h3{margin:0}
+.prop .now{font-size:14.5px;color:var(--ink-2)}
+.prop .then{font-size:14.5px;color:var(--ink)}
+.prop .lbl{font-family:"IBM Plex Mono",monospace;font-size:9.5px;text-transform:uppercase;letter-spacing:.13em;color:var(--ink-3);display:block;margin-bottom:2px}
+
+/* ---- disk demo ---- */
+.demo{
+  background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:26px;
+  box-shadow:var(--shadow);margin:28px 0;
+}
+.demo-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.demo-total{font-family:"Familjen Grotesk",sans-serif;font-size:32px;font-weight:600;letter-spacing:-.02em;line-height:1}
+.bar{display:flex;height:34px;border-radius:8px;overflow:hidden;background:var(--sunken);cursor:crosshair}
+.seg{border:0;padding:0;transition:filter .14s ease, transform .14s ease;position:relative}
+.seg:hover,.seg:focus-visible{filter:brightness(1.16);outline:none;z-index:2}
+.seg:focus-visible{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--accent)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+.hovercard{
+  margin-top:20px;border:1px solid var(--rule-2);border-radius:12px;background:var(--sunken);
+  padding:20px 22px;min-height:188px;
+}
+.hc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.hc-name{font-family:"IBM Plex Mono",monospace;font-size:15px;font-weight:600;color:var(--ink)}
+.hc-size{font-family:"Familjen Grotesk",sans-serif;font-size:23px;font-weight:600;letter-spacing:-.02em}
+.hc-what{margin:12px 0 0;font-size:15px;color:var(--ink-2);line-height:1.5}
+.hc-verdict{margin:12px 0 0;font-size:15px;line-height:1.5}
+.hc-shares{display:grid;gap:12px;margin-top:16px;padding-top:15px;border-top:1px solid var(--rule-2)}
+@media(min-width:620px){.hc-shares{grid-template-columns:1fr 1fr}}
+.share .sl{font-family:"IBM Plex Mono",monospace;font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:var(--ink-3);display:flex;justify-content:space-between;gap:8px}
+.share .sbar{height:6px;border-radius:4px;background:var(--rule);margin-top:6px;overflow:hidden}
+.share .sfill{height:100%;border-radius:4px;background:var(--accent)}
+.hint{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-3);margin-top:10px}
+
+ul.tight{margin:0 0 18px;padding-left:20px}
+ul.tight li{margin-bottom:7px}
+ol.rank{margin:24px 0 0;padding-left:0;list-style:none;counter-reset:r}
+ol.rank li{
+  counter-increment:r;position:relative;padding:16px 0 16px 46px;border-top:1px solid var(--rule);
+}
+ol.rank li:last-child{border-bottom:1px solid var(--rule)}
+ol.rank li::before{
+  content:counter(r);position:absolute;left:0;top:16px;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;font-weight:600;color:var(--accent);border:1px solid var(--rule-2);
+  width:26px;height:26px;display:grid;place-items:center;border-radius:50%;
+}
+ol.rank .rh{font-family:"Familjen Grotesk",sans-serif;font-weight:600;font-size:16.5px;display:block;margin-bottom:3px}
+ol.rank .rd{font-size:15px;color:var(--ink-2);line-height:1.5}
+
+footer{padding:44px 0 0;color:var(--ink-3);font-size:14px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <span class="eyebrow">TokenTelemetry · agent panel audit</span>
+  <h1>When was this true?</h1>
+  <p class="lede">Every panel shows numbers. Almost none of them say which moment they describe. Three of the four defects below are the same defect wearing different clothes — and one of them is currently rendering a 44-hour-old figure with a live countdown beside it.</p>
+  <div class="byline">
+    <span class="pill p-flat">15 agents audited</span>
+    <span class="pill p-flat">measured on this machine</span>
+    <span class="pill p-wrong">2 contradictions</span>
+    <span class="pill p-stale">1 uncaught</span>
+  </div>
+</header>
+
+<section>
+  <span class="snum">01 — THE CONTRADICTION</span>
+  <h2>Two claims, same page, same second</h2>
+  <div class="measure">
+    <p>The Claude Code panel puts these side by side. Both are read from disk at request time, so they describe the same instant.</p>
+  </div>
+
+  <div class="clash">
+    <div class="claim a">
+      <span class="src">Background jobs · jobs/&lt;id&gt;/state.json</span>
+      <span class="big" style="color:var(--live)">1 min ago</span>
+      <span class="sub">Most recent Claude session TokenTelemetry holds. Six jobs marked <span class="mono">LIVE</span>, the newest updated 11 minutes ago. The agent is unambiguously talking to the API right now.</span>
+    </div>
+    <div class="versus">cannot<br>both</div>
+    <div class="claim b">
+      <span class="src">Subscription usage · cachedUsageUtilization</span>
+      <span class="big" style="color:var(--stale)">94.9 h ago</span>
+      <span class="sub">Age of the quota reading. Both windows it describes have since closed — the 5-hour one 91 hours ago, the 7-day one 23 hours ago.</span>
+    </div>
+  </div>
+
+  <div class="measure">
+    <p>The intuition that these can't both be right is correct, and it points at a real thing. The resolution is not what you'd expect.</p>
+  </div>
+
+  <div class="note">
+    <span class="nh">The file is fresh. The field is not.</span>
+    <p><code>~/.claude.json</code> was last written <strong>11 minutes ago</strong>. Inside it, <code>cachedUsageUtilization.fetchedAtMs</code> is <strong>94.9 hours old</strong>. Claude Code is actively writing that file and deliberately not refreshing that block.</p>
+    <p style="margin-top:12px">So the quota is not stale because the agent is idle. It is stale because <strong>ordinary API traffic does not refresh it</strong> — the block is written only when something explicitly asks the server for usage. A panel that reads it gets whatever the last such request returned, however long ago that was.</p>
+  </div>
+
+  <div class="measure">
+    <p>That makes the current display honest but nearly useless: it greys the meters and says the figure is stale, which is true, and then offers no number that isn't. For a subscription account it can't even offer a denominator — <code>limit_dollars</code>, <code>used_dollars</code> and <code>remaining_dollars</code> are all <code>null</code>, so the <span class="mono">$X of $Y used</span> line the code builds never renders for this account at all.</p>
+  </div>
+</section>
+
+<section>
+  <span class="snum">02 — THE MODEL</span>
+  <h2>Freshness has two axes, and the code only checks one</h2>
+  <div class="measure">
+    <p>The current test is <code>resets_at &lt; now</code> — has the window ended. That collapses two independent questions into one, and the collapse is where the real bug hides.</p>
+  </div>
+
+  <div class="quad-wrap">
+    <div class="quad">
+      <div class="qc ok">
+        <span class="qt">window open · reading fresh</span>
+        <span class="qh">Trustworthy</span>
+        <span class="qd">Show it plainly. The number describes a window still running, and it was read recently enough to still be roughly true.</span>
+      </div>
+      <div class="qc bad">
+        <span class="qt">window open · reading old</span>
+        <span class="qh">The dangerous one</span>
+        <span class="qd">Renders with a live countdown and no warning, because the window really is open. Nothing in the current code can catch this. <strong>Grok sits here.</strong></span>
+      </div>
+      <div class="qc meh">
+        <span class="qt">window closed · reading fresh</span>
+        <span class="qh">History</span>
+        <span class="qd">A complete, final record of a window that ended. Worth keeping as a past-period figure, not as status.</span>
+      </div>
+      <div class="qc meh">
+        <span class="qt">window closed · reading old</span>
+        <span class="qh">Caught today</span>
+        <span class="qd">Greyed and labelled stale. <strong>Claude sits here</strong> — and the current one-axis test happens to get it right, for the wrong reason.</span>
+      </div>
+    </div>
+    <p class="qaxis">columns: reading age &nbsp;·&nbsp; rows: window state</p>
+  </div>
+
+  <div class="measure">
+    <p>The proposed rule replaces "has the window ended" with a ratio: <strong>a reading is current when its age is small relative to the window it describes.</strong> Forty-four hours into a seven-day window means a quarter of that window went unobserved, whether or not the window is still open.</p>
+  </div>
+
+  <div class="tl">
+    <div class="tl-row">
+      <div class="tl-head">
+        <span class="tl-name">Grok — weekly credits</span>
+        <span class="tl-verdict" style="color:var(--wrong)">rendered as live · 26% of the window unobserved</span>
+      </div>
+      <div class="track">
+        <div class="win" style="left:2%;right:2%"></div>
+        <div class="obs" style="left:2%;width:70%"></div>
+        <div class="blind" style="left:72%;width:19%"></div>
+        <div class="mark read" style="left:72%"></div><span class="mtag" style="left:72%">read 44h ago</span>
+        <div class="mark now" style="left:91%"></div><span class="mtag" style="left:91%;top:24px">now</span>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-head">
+        <span class="tl-name">Claude — 7-day window</span>
+        <span class="tl-verdict" style="color:var(--stale)">greyed correctly · window ended before the page loaded</span>
+      </div>
+      <div class="track">
+        <div class="win" style="left:2%;width:80%"></div>
+        <div class="obs" style="left:2%;width:23%"></div>
+        <div class="blind" style="left:25%;width:57%"></div>
+        <div class="mark read" style="left:25%"></div><span class="mtag" style="left:25%">read 95h ago</span>
+        <div class="mark now" style="left:93%"></div><span class="mtag" style="left:93%;top:24px">now</span>
+      </div>
+    </div>
+    <div class="tl-legend">
+      <span><i style="background:var(--accent-soft);border:1px solid var(--accent)"></i>the window the % describes</span>
+      <span><i style="background:var(--live-soft)"></i>observed before the reading</span>
+      <span><i style="background:repeating-linear-gradient(135deg,transparent 0 4px,var(--stale-soft) 4px 8px);border:1px solid var(--rule-2)"></i>elapsed but unobserved</span>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="nh">Grok is the case that ships today with no warning at all</span>
+    <p>Its meter carries <code>severity: "ok"</code> and a <code>resets_at</code> 12.8 hours in the future, so the UI renders <em>"resets in 13 hours"</em> — the visual language of a live gauge. The only trace of the reading's age is a sentence of prose in the card's footnote. The percentage is a floor, not a level: real usage is 52% <em>or more</em>.</p>
+  </div>
+</section>
+
+<section>
+  <span class="snum">03 — THE SAME DISEASE, EVERYWHERE</span>
+  <h2>“Active 26 days ago” is measuring a file, not you</h2>
+  <div class="measure">
+    <p>Every panel header renders <span class="mono">active {time} ago</span>. A reader takes that to mean "when I last used this agent". It doesn't mean that consistently — for some agents it's a config file's mtime, for others a log write, for others a real session. Cross-checking each panel's <code>last_active</code> against the newest session TokenTelemetry independently holds for that agent:</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <caption>Panel header vs. TokenTelemetry's own session record
+        <span>Positive gap = the header claims more recent activity than any session supports.</span>
+      </caption>
+      <thead>
+        <tr><th>Agent</th><th class="num">Header says</th><th class="num">Newest real session</th><th class="num">Overstates by</th><th>Reading</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Gemini CLI</strong></td><td class="num">621 h</td><td class="num">1,886 h</td><td class="num" style="color:var(--wrong)">53 days</td><td><span class="pill p-wrong">config mtime</span></td></tr>
+        <tr><td><strong>Vibe</strong></td><td class="num">1,040 h</td><td class="num">3,411 h</td><td class="num" style="color:var(--wrong)">99 days</td><td><span class="pill p-wrong">log write</span></td></tr>
+        <tr><td><strong>Copilot</strong></td><td class="num">38 h</td><td class="num">621 h</td><td class="num" style="color:var(--wrong)">24 days</td><td><span class="pill p-wrong">store mtime</span></td></tr>
+        <tr><td><strong>Pi</strong></td><td class="num">981 h</td><td class="num">1,082 h</td><td class="num" style="color:var(--stale)">4 days</td><td><span class="pill p-stale">mixed</span></td></tr>
+        <tr><td><strong>Cursor</strong></td><td class="num">2,913 h</td><td class="num">2,989 h</td><td class="num" style="color:var(--stale)">3 days</td><td><span class="pill p-stale">mixed</span></td></tr>
+        <tr><td><strong>Muse</strong></td><td class="num">478 h</td><td class="num">402 h</td><td class="num" style="color:var(--stale)">−3 days</td><td><span class="pill p-stale">understates</span></td></tr>
+        <tr><td><strong>OpenCode</strong></td><td class="num">15 h</td><td class="num">9 h</td><td class="num" style="color:var(--stale)">−5 h</td><td><span class="pill p-stale">understates</span></td></tr>
+        <tr><td>Claude, Codex, Grok, Qwen, Antigravity, Cline</td><td class="num">—</td><td class="num">—</td><td class="num">≈0</td><td><span class="pill p-live">agrees</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="measure">
+    <p>Six agents agree, seven don't, and two are wrong by more than seven weeks. The fix is not to hunt for better mtimes — it's to stop letting one label stand for seven different events. Either derive <span class="mono">last_active</span> from the session record TokenTelemetry already owns, which is the same for every agent, or name the event: <span class="mono">config touched 26 days ago</span> is honest where <span class="mono">active 26 days ago</span> is not.</p>
+    <p>This is the quota defect again at a different scale. In both cases a timestamp is shown without saying what it measures, and in both cases the reader supplies the most flattering interpretation.</p>
+  </div>
+</section>
+
+<section>
+  <span class="snum">04 — THE FIX WE ALREADY OWN</span>
+  <h2>TokenTelemetry can measure the window itself</h2>
+  <div class="measure">
+    <p>The reason the quota card has nothing fresh to fall back on is that it only ever looks at the agent's cache. But the rolling windows are computable from session data already held — every session carries a timestamp and a token count, which is all a 5-hour or 7-day window needs.</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <caption>Recomputed from the session record, at the moment of the audit
+        <span>No new scanning, no network. This number cannot go stale while the agent is running, because it is derived from the runs themselves.</span>
+      </caption>
+      <thead><tr><th>Agent</th><th>Window</th><th class="num">Sessions</th><th class="num">Tokens</th><th class="num">API-equiv.</th><th>Freshness</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Claude Code</strong></td><td>last 5 h</td><td class="num">2</td><td class="num">1,599,947</td><td class="num">$120.53</td><td><span class="pill p-live">live</span></td></tr>
+        <tr><td><strong>Claude Code</strong></td><td>last 7 d</td><td class="num">19</td><td class="num">3,877,383</td><td class="num">$255.25</td><td><span class="pill p-live">live</span></td></tr>
+        <tr><td><strong>Grok</strong></td><td>last 7 d</td><td class="num">52</td><td class="num">150,629,866</td><td class="num">$157.90</td><td><span class="pill p-live">live</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="nh">What this can and cannot replace</span>
+    <p>It gives <strong>observed usage in the window</strong>, always current. It cannot give <strong>percent of subscription limit</strong> — the limit fields come back <code>null</code> for subscription accounts, so no local computation can recover the denominator.</p>
+    <p style="margin-top:12px">So the card becomes two rows rather than one: the official percentage stamped with its age, and beneath it the measured consumption that is always true. When the official figure is hours old, the measured row is the one carrying the information.</p>
+  </div>
+</section>
+
+<section>
+  <span class="snum">05 — WHAT TO CLUB TOGETHER</span>
+  <h2>Five questions no single agent page can answer</h2>
+  <div class="measure">
+    <p>The panels are organised by agent because the data is. But the questions worth asking cut across agents, and right now answering any of them means opening fifteen pages and adding up by hand.</p>
+  </div>
+
+  <div class="props">
+    <div class="prop">
+      <div class="ph"><h3>Trust &amp; capability</h3><span class="pill p-wrong">highest value</span></div>
+      <div><span class="lbl">today</span><span class="now">Four agents report trusted paths under four different labels — <span class="mono">trusted projects</span>, <span class="mono">trusted folders</span> (twice), <span class="mono">trusted directories</span> — plus auto-approved commands and sandbox profiles elsewhere. Only Codex carries a risk flag; the other five are plain counts.</span></div>
+      <div><span class="lbl">instead</span><span class="then">One table: agent, paths trusted, approval mode, sandbox, MCP reach. It answers <em>“what may run unattended on this machine”</em> — <strong>36 trusted locations across four agents</strong>, a number that appears nowhere in the product today.</span></div>
+    </div>
+
+    <div class="prop">
+      <div class="ph"><h3>Fleet disk</h3><span class="pill p-stale">easy win</span></div>
+      <div><span class="lbl">today</span><span class="now">Fifteen separate footprint cards. No total exists anywhere, and reclaimable is detected for only 3 of 15 agents even though cache-shaped stores (<span class="mono">.tmp</span>, <span class="mono">marketplace-cache</span>, <span class="mono">downloads</span>, <span class="mono">npm</span>, <span class="mono">vendor</span>) appear across many more.</span></div>
+      <div><span class="lbl">instead</span><span class="then"><strong>20.86 GB</strong> across the fleet, <strong>~9.9 GB reclaimable</strong>, one agent holding <strong>59%</strong> of it. That is a dashboard headline, not fifteen footnotes.</span></div>
+    </div>
+
+    <div class="prop">
+      <div class="ph"><h3>MCP inventory</h3><span class="pill p-flat">small</span></div>
+      <div><span class="lbl">today</span><span class="now">MCP servers listed on three separate pages, seven entries total, with no way to see whether the same server is wired into several agents.</span></div>
+      <div><span class="lbl">instead</span><span class="then">One list keyed by server, with the agents that can reach it as a column. Duplication becomes visible, which is the point of an inventory.</span></div>
+    </div>
+
+    <div class="prop">
+      <div class="ph"><h3>Skills, de-duplicated</h3><span class="pill p-flat">small</span></div>
+      <div><span class="lbl">today</span><span class="now">Skills counted per agent — 12, 9, 4, 1 and more — with no dedup. The survey already found one byte-identical skill pack installed under six different agent directories, counted six times.</span></div>
+      <div><span class="lbl">instead</span><span class="then">Group by content hash. Show a skill once, with the agents carrying it, and the disk cost of the duplication.</span></div>
+    </div>
+
+    <div class="prop" style="grid-column:1/-1">
+      <div class="ph"><h3>One limits strip</h3><span class="pill p-stale">depends on §02</span></div>
+      <div><span class="lbl">today</span><span class="now">Three agents expose a consumption limit in three different currencies — Claude a subscription percentage, Grok weekly credits, Copilot premium requests billed in AIU — on three pages, in three visual languages, with three unrelated freshness stories.</span></div>
+      <div><span class="lbl">instead</span><span class="then">One strip on the dashboard. Each meter carries its unit and, per §02, a freshness stamp expressed as a fraction of its own window. Different currencies are fine; a gauge that hides its age is not.</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <span class="snum">06 — DISK FOOTPRINT</span>
+  <h2>The tooltip should answer “can I delete this?”</h2>
+  <div class="measure">
+    <p>Today hovering a segment yields a native browser tooltip reading <span class="mono">snapshot — 38.3 MB</span>. That restates the legend directly beneath it. The label and the size are the two things already on screen; the tooltip spends its one moment of attention repeating them.</p>
+    <p>Nobody hovers a disk chart to learn a filename. They hover it because something is large and they want to know what it is, whether it will come back, and what breaks if it goes. Hover a segment below.</p>
+  </div>
+
+  <div class="demo">
+    <div class="demo-head">
+      <div>
+        <span class="eyebrow">OpenCode · proposed hover card</span>
+        <div class="demo-total" id="dtotal">75.3 MB</div>
+      </div>
+      <span class="mono" style="color:var(--ink-3);font-size:11px">real figures from this machine</span>
+    </div>
+    <div class="bar" id="dbar" role="group" aria-label="Disk footprint segments"></div>
+    <div class="legend" id="dlegend"></div>
+    <div class="hovercard" id="dcard" aria-live="polite"></div>
+    <p class="hint">Keyboard: tab to a segment. The card holds the last segment you touched rather than emptying on mouse-out, so it can be read.</p>
+  </div>
+
+  <div class="measure">
+    <h3>What changed, and why each part earns its space</h3>
+    <ul class="tight">
+      <li><strong>A classification, not a name.</strong> <span class="mono">Primary data</span> / <span class="mono">Rebuildable</span> / <span class="mono">Transient</span> is the first thing a person needs, and it is derivable from the part label the backend already emits.</li>
+      <li><strong>The consequence, stated plainly.</strong> "Deleting this loses your edit history" and "this rebuilds on next run" are different answers, and the difference is the entire reason someone opened the tooltip.</li>
+      <li><strong>Two denominators.</strong> A segment's share of its agent says whether it dominates that agent; its share of the 20.86 GB fleet says whether it's worth your attention at all. 38.3 MB is half of OpenCode and 0.2% of the fleet — both facts matter, and neither is on screen today.</li>
+      <li><strong>One stat call short.</strong> The one thing a person also wants is <em>when this was last written</em> — a cache untouched for three months is a different proposition from one written this morning. The backend already walks these directories; carrying the max mtime out of that walk costs nothing extra.</li>
+    </ul>
+    <p>The same card shape works for every agent, because the classification comes from the part label rather than from bespoke per-agent copy. Roughly forty distinct labels appear across the fleet and they fall into a handful of buckets.</p>
+  </div>
+</section>
+
+<section>
+  <span class="snum">07 — ORDER OF WORK</span>
+  <h2>Ranked by damage per hour of effort</h2>
+  <ol class="rank">
+    <li><span class="rh">Stamp every meter with its reading age</span><span class="rd">Grok currently renders a 44-hour-old number with a live countdown. Until the age is visible next to the value, the gauge is misleading in exactly the situation it matters. Smallest change on this page, largest correction.</span></li>
+    <li><span class="rh">Make <span class="mono">last_active</span> mean one thing</span><span class="rd">Two agents overstate recency by more than seven weeks. Derive it from the session record for every agent, or rename the label per source. Header-level, so it is read on every visit.</span></li>
+    <li><span class="rh">Add the measured-usage row</span><span class="rd">Gives the quota card a number that cannot go stale, using data already held. Turns a card that only ever apologises into one that informs.</span></li>
+    <li><span class="rh">The disk hover card</span><span class="rd">Prototyped above. Needs a label→class map and one extra mtime per part.</span></li>
+    <li><span class="rh">Fleet disk total on the dashboard</span><span class="rd">20.86 GB and 9.9 GB reclaimable are already computed per agent; only the summing and a place to put it are missing.</span></li>
+    <li><span class="rh">The cross-agent trust table</span><span class="rd">Highest value of anything here and the most work: six labels for one concept, and severity currently applied to one agent out of six that warrant it.</span></li>
+  </ol>
+</section>
+
+<footer>
+  <p>Measured against the live panels on one machine, at one moment. Session counts, disk figures and timestamps are that machine's; paths, project names and prompt text are deliberately omitted. Every figure is reproducible from <code>/agents/&lt;agent&gt;/panel</code> and <code>/sessions</code>.</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var FLEET = 20.86 * 1024; // MB
+  var AGENT = 75.3;
+  var SEG = [
+    { label:"snapshot", mb:38.3, color:"var(--accent)", cls:"Rebuildable",
+      what:"A content-addressed object store OpenCode writes before it edits files, so a change can be rolled back.",
+      verdict:"Safe to delete once you no longer care about rewinding past sessions. It rebuilds as you work — but the history already in it is gone for good.",
+      tone:"stale" },
+    { label:"opencode.db", mb:27.6, color:"var(--live)", cls:"Primary data",
+      what:"The main database: sessions, the todo board, project registry and sandbox config.",
+      verdict:"Do not delete. This is the agent's memory of what you have done, and nothing regenerates it.",
+      tone:"wrong" },
+    { label:"storage", mb:5.0, color:"var(--stale)", cls:"Primary data",
+      what:"Per-session file diffs, recorded by OpenCode itself rather than derived from git.",
+      verdict:"Deleting loses the record of what changed in each session. It cannot be reconstructed from the repository.",
+      tone:"wrong" },
+    { label:"opencode.db-wal", mb:2.3, color:"var(--wrong)", cls:"Transient",
+      what:"SQLite write-ahead log. It holds committed pages not yet folded back into the main database file.",
+      verdict:"Never delete by hand, but it collapses on its own when the agent closes cleanly. A large WAL means a session ended abruptly.",
+      tone:"stale" },
+    { label:"log", mb:1.5, color:"var(--ink-3)", cls:"Rebuildable",
+      what:"Run logs.",
+      verdict:"Safe to delete. Regenerated on the next run, and nothing reads them after the fact.",
+      tone:"live" }
+  ];
+
+  var bar = document.getElementById("dbar");
+  var leg = document.getElementById("dlegend");
+  var card = document.getElementById("dcard");
+  if(!bar) return;
+
+  SEG.forEach(function(s, i){
+    var b = document.createElement("button");
+    b.className = "seg";
+    b.style.width = (s.mb / AGENT * 100) + "%";
+    b.style.background = s.color;
+    b.setAttribute("aria-label", s.label + ", " + s.mb + " megabytes");
+    b.addEventListener("mouseenter", function(){ show(i); });
+    b.addEventListener("focus", function(){ show(i); });
+    bar.appendChild(b);
+
+    var l = document.createElement("span");
+    l.innerHTML = '<i style="background:' + s.color + '"></i>' + s.label + ' ' + s.mb + ' MB';
+    leg.appendChild(l);
+  });
+
+  function esc(t){ return String(t).replace(/[&<>]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); }
+
+  function show(i){
+    var s = SEG[i];
+    var ofAgent = s.mb / AGENT * 100;
+    var ofFleet = s.mb / FLEET * 100;
+    card.innerHTML =
+      '<div class="hc-top">' +
+        '<div><span class="hc-name">' + esc(s.label) + '</span>' +
+        ' <span class="pill p-' + s.tone + '" style="margin-left:8px">' + esc(s.cls) + '</span></div>' +
+        '<span class="hc-size">' + s.mb + ' MB</span>' +
+      '</div>' +
+      '<p class="hc-what">' + esc(s.what) + '</p>' +
+      '<p class="hc-verdict"><strong style="color:var(--ink)">If you delete it &nbsp;·&nbsp; </strong>' + esc(s.verdict) + '</p>' +
+      '<div class="hc-shares">' +
+        share("share of OpenCode", ofAgent, ofAgent) +
+        share("share of all agents (20.9 GB)", ofFleet, Math.min(100, ofFleet * 12)) +
+      '</div>';
+  }
+
+  function share(label, pct, width){
+    var shown = pct < 1 ? pct.toFixed(2) : pct.toFixed(1);
+    return '<div class="share"><span class="sl"><span>' + label + '</span><span>' + shown + '%</span></span>' +
+           '<span class="sbar"><span class="sfill" style="width:' + Math.max(1.5, width) + '%"></span></span></div>';
+  }
+
+  show(0);
+})();
+</script>
