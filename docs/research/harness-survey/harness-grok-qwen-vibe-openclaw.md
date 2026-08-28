@@ -10,7 +10,7 @@ relevant dir/filename constants) so nothing already wired up gets re-reported as
 **Agent identity / still active?** Grok Build / `grok` CLI, xAI's terminal coding agent (README: "A
 terminal-based AI coding assistant and agentic harness"). Version 1.0.5 (`version.json`,
 `.metadata_version`), auto-update on. Actively used: an `active_sessions.json` entry is live as of
-today (2026-08-26, pid still running against `/Users/hemanthvasi/Documents/antigravity/quirky-borg`),
+today (2026-08-26, pid still running against `/Users/dev/Documents/antigravity/quirky-borg`),
 and `logs/unified.jsonl` has entries from the same timestamp.
 
 ### Directory map

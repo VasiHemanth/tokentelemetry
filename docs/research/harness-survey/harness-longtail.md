@@ -72,7 +72,7 @@ No `tool_result`/usage/token-count events were observed in sampled sessions — 
 - No jobs/schedules, no memory file, no todos/plan artifacts, no checkpoint/rewind system observed.
 
 ### Gotchas
-- Session directory names are the cwd with `/` → `-` and wrapped in leading/trailing `--` (e.g. `--Users-hemanthvasi-Documents-Developer-tokentelemetry--`) — same encoding scheme as `~/.grok/sessions`, but note the wrapping dashes differ slightly (Grok doesn't double-wrap) — a shared regex won't work as-is.
+- Session directory names are the cwd with `/` → `-` and wrapped in leading/trailing `--` (e.g. `--Users-dev-Documents-Developer-tokentelemetry--`) — same encoding scheme as `~/.grok/sessions`, but note the wrapping dashes differ slightly (Grok doesn't double-wrap) — a shared regex won't work as-is.
 - No token/cost data in transcripts; if TokenTelemetry wants cost for `pi`, it needs its own pricing table matched against `model_change.modelId` and turn counts, not extracted usage numbers.
 - `npm/` (228M) is a bundled Node runtime + `pi-mcp-adapter`/`pi-xai-oauth` — pure bundled deps, skip entirely.
 
