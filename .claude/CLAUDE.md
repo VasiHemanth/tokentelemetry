@@ -62,6 +62,9 @@ This is enforced by `.claude/hooks/enforce-update-json.py`, wired up via
 
 1. Detects `git push` / `gh pr create` invocations (via proper shell
    tokenisation — not substring matching, so `echo "git push"` is fine).
+   Then resolves **which directory the push runs in** — following a
+   `cd <dir> &&` prefix or `git -C <dir>` — because the hook process's own
+   cwd is the session's project directory, not the worktree being pushed.
 2. Skips enforcement if we're on `main` itself.
 3. Scans `git log origin/main..HEAD` for Conventional Commit subjects
    matching `feat:` / `feat(scope):` / `feat!:` etc.
@@ -131,6 +134,7 @@ The hook is intentionally narrow. Cases:
 2. **Mixed branch with one `feat:` + several `fix:` commits**: hook still requires UPDATE.json — write an entry for the feature, fixes get a free ride.
 3. **`feat:` branch where the feature genuinely isn't user-visible** (e.g. internal refactor mis-labeled `feat:`): re-label the commit to `refactor:` / `chore:` and amend, OR add a UPDATE.json note explaining what you shipped to users.
 4. **Pushing main itself** (rebase, force-push for cleanup): hook skips automatically.
+   Same for a detached HEAD.
 5. **Repo without `origin/main`**: hook allows through (assumes you know your setup).
 6. **Last resort**: `claude --no-hooks` for that session — but if you find yourself reaching for this often, the rule is mis-tuned and worth revisiting.
 
@@ -147,7 +151,8 @@ fast remote-access ship), every change destined for `main` passes two gates:
    explicit high-confidence `block` verdict**. It **fails open**: missing
    `claude` CLI, empty/huge diff, timeout, or unparseable output all ALLOW the
    push — a flaky reviewer never blocks legit work. Reuses the push-detection
-   helpers from `enforce-update-json.py` (imported, not duplicated). Skips
+   **and push-directory** helpers from `enforce-update-json.py` (imported, not
+   duplicated), so both hooks agree on what a push is and where it happens. Skips
    docs/asset-only pushes. Bypass with `--no-hooks`.
 2. **`.github/workflows/security-audit.yml`** (CI, deterministic). Runs
    `npm audit --omit=dev --audit-level=high` across root / `frontend` / `website`

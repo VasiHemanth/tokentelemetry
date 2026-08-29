@@ -89,6 +89,22 @@ def _deny(reason: str) -> None:
     sys.exit(0)
 
 
+def _resolve_push_cwd(command_str: str, base: str) -> str:
+    """Directory the push runs in — see enforce_update_json.resolve_push_cwd.
+
+    Reused rather than duplicated so both hooks agree on where a push happens,
+    the same way they already share what counts AS a push. If the sibling can't
+    be imported, fall back to ``base``: that is the pre-fix behaviour, and this
+    hook fails open by design.
+    """
+    if _SIB is not None and hasattr(_SIB, "resolve_push_cwd"):
+        try:
+            return _SIB.resolve_push_cwd(command_str, base)
+        except Exception:
+            return base
+    return base
+
+
 def _git(*args: str, cwd: Optional[str] = None, timeout: int = 10) -> Optional[str]:
     if _SIB is not None:
         return _SIB._git(*args, cwd=cwd, timeout=timeout)
@@ -177,7 +193,10 @@ def main() -> None:
     if os.environ.get("TT_PREPUSH_REVIEW_RUNNING"):
         _allow()
 
-    repo_root = _git("rev-parse", "--show-toplevel")
+    # Review the branch actually being pushed: for a worktree push that is not
+    # this process's cwd, which sits in the session's project directory.
+    push_cwd = _resolve_push_cwd(command, (payload.get("cwd") or os.getcwd()))
+    repo_root = _git("rev-parse", "--show-toplevel", cwd=push_cwd)
     if not repo_root:
         _allow()
 
