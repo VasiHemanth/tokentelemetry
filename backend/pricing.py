@@ -131,15 +131,16 @@ PRICING = {
     "grok-4.5":                     {"in": 2.00,  "out": 6.00,  "cached_read": 0.30},
     "grok-4.3":                     {"in": 1.25,  "out": 2.50,  "cached_read": 0.20},
     "grok-4.3-latest":              {"in": 1.25,  "out": 2.50,  "cached_read": 0.20},
-    # Grok Build — xAI's agentic coding CLI. Sessions record the model id as the
-    # generic "grok-build"; the underlying model is grok-build-0.1 (256K context;
-    # grok-code-fast-1 requests route here after 2026-05-15). These are
-    # grok-build-0.1's own rates, not grok-code-fast-1's; the two differ, and
-    # the id we bill under is grok-build-0.1.
-    # https://docs.x.ai/developers/models/grok-build-0.1
-    "grok-build":                   {"in": 1.00,  "out": 2.00,  "cached_read": 0.20},
+    # Grok Build is powered by Grok 4.6 today. Older generic Build sessions
+    # used Build 0.1; _XAI_BANDS keeps those historical costs intact.
+    # https://docs.x.ai/build/overview
+    "grok-build":                   {"in": 2.00,  "out": 6.00,  "cached_read": 0.50},
     "grok-build-0.1":               {"in": 1.00,  "out": 2.00,  "cached_read": 0.20},
-    "grok-code-fast-1":             {"in": 0.20,  "out": 1.50,  "cached_read": None},
+    # The retired grok-code-fast-1 alias routes to Build 0.1. Its pre-retirement
+    # prices are in _XAI_BANDS, so historical sessions are not reassigned this
+    # current rate.
+    # https://docs.x.ai/developers/migration/may-15-retirement
+    "grok-code-fast-1":             {"in": 1.00,  "out": 2.00,  "cached_read": 0.20},
     "grok-code-fast":               {"in": 0.20,  "out": 1.50,  "cached_read": None},
 
     # --- Moonshot (Kimi, direct) ---
@@ -418,7 +419,27 @@ _GPT56_BANDS = {
     ],
 }
 
-PRICING_HISTORY: dict = {**_DEEPSEEK_BANDS, **_GPT56_BANDS}
+_XAI_BANDS = {
+    # grok-code-fast-1 was retired at 12:00 PT (19:00 UTC) on 2026-05-15 and
+    # redirected to grok-build-0.1. The old cached-read rate is calculated from
+    # its historical $0.20 input rate, matching calculate_cost's former fallback.
+    # https://docs.x.ai/developers/migration/may-15-retirement
+    "grok-code-fast-1": [
+        ("2000-01-01T00:00:00Z", {"in": 0.20, "out": 1.50, "cached_read": 0.02}),
+        ("2026-05-15T19:00:00Z", {"in": 1.00, "out": 2.00, "cached_read": 0.20}),
+    ],
+    # Grok 4.6 became available in Grok Build on 2026-08-12. xAI published a
+    # date but not a time, so this follows the repository convention of a
+    # midnight-UTC boundary for date-only announcements. A session on that date
+    # may therefore be off by up to a day, but older Build 0.1 sessions retain
+    # their documented $1/$2/$0.20 rate. https://x.ai/news/grok-4-6
+    "grok-build": [
+        ("2000-01-01T00:00:00Z", {"in": 1.00, "out": 2.00, "cached_read": 0.20}),
+        ("2026-08-12T00:00:00Z", {"in": 2.00, "out": 6.00, "cached_read": 0.50}),
+    ],
+}
+
+PRICING_HISTORY: dict = {**_DEEPSEEK_BANDS, **_GPT56_BANDS, **_XAI_BANDS}
 
 # Same bands, keyed by (provider, model) so a provider-qualified lookup gets the
 # historical rate too. Built from the same source so the two can never disagree.
@@ -427,6 +448,8 @@ for _m, _b in _DEEPSEEK_BANDS.items():
     PRICING_BY_PROVIDER_HISTORY[("deepseek", _m)] = _b
 for _m, _b in _GPT56_BANDS.items():
     PRICING_BY_PROVIDER_HISTORY[("openai", _m)] = _b
+for _m, _b in _XAI_BANDS.items():
+    PRICING_BY_PROVIDER_HISTORY[("xai", _m)] = _b
 
 
 def _as_utc(at) -> Optional[datetime]:
@@ -652,18 +675,20 @@ def calculate_xai_turn_cost(
     prompt_tokens: int,
     completion_tokens: int,
     cached_tokens: int = 0,
+    at=None,
 ) -> float:
     """Price one xAI request, applying the 200k-prompt 2x cliff.
 
     ``prompt_tokens`` is the full prompt (cached + uncached). Uncached input is
     ``prompt − cached``. The 2x multiplier applies to the whole request when
-    the prompt reaches ``XAI_LONG_PROMPT_THRESHOLD``.
+    the prompt reaches ``XAI_LONG_PROMPT_THRESHOLD``. ``at`` is forwarded to
+    calculate_cost so a recorded turn uses the xAI rate in force at that time.
     """
     prompt = max(int(prompt_tokens or 0), 0)
     cached = min(max(int(cached_tokens or 0), 0), prompt)
     uncached = prompt - cached
     completion = max(int(completion_tokens or 0), 0)
-    cost = calculate_cost(model_name, uncached, completion, cached)
+    cost = calculate_cost(model_name, uncached, completion, cached, at=at)
     if prompt >= XAI_LONG_PROMPT_THRESHOLD:
         return cost * 2.0
     return cost

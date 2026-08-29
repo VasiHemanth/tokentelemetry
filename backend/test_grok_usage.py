@@ -13,7 +13,7 @@ SID = "01a0test-0000-0000-0000-000000000001"
 SID_NO_LOG = "01a0test-0000-0000-0000-000000000002"
 
 
-def _inference(sid, prompt, cached, completion, reasoning=0):
+def _inference(sid, prompt, cached, completion, reasoning=0, ts=None):
     return {
         "msg": "shell.turn.inference_done",
         "sid": sid,
@@ -23,7 +23,7 @@ def _inference(sid, prompt, cached, completion, reasoning=0):
             "completion_tokens": completion,
             "reasoning_tokens": reasoning,
         },
-    }
+    } | ({"ts": ts} if ts else {})
 
 
 def _write_log(path: Path, rows):
@@ -31,13 +31,19 @@ def _write_log(path: Path, rows):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
-def _make_session(root: Path, sid: str, ctx: int, model="grok-4.6"):
+def _make_session(
+    root: Path,
+    sid: str,
+    ctx: int,
+    model="grok-4.6",
+    updated_at="2026-08-21T00:01:00Z",
+):
     bucket = root / "%2Ftmp%2Fx"
     d = bucket / sid
     d.mkdir(parents=True)
     (d / "summary.json").write_text(json.dumps({
-        "created_at": "2026-08-21T00:00:00Z",
-        "updated_at": "2026-08-21T00:01:00Z",
+        "created_at": updated_at,
+        "updated_at": updated_at,
         "generated_title": f"sess {sid[:8]}",
         "current_model_id": model,
         "info": {"cwd": "/tmp/x"},
@@ -64,7 +70,7 @@ def test_parse_unified_log_aggregates_turns(tmp_path):
     assert row["cached"] == 20 + 200_000
     assert row["output"] == 10 + 50
     assert row["reasoning"] == 47
-    assert row["turns"] == [(100, 20, 10), (250_000, 200_000, 50)]
+    assert row["turns"] == [(100, 20, 10, None), (250_000, 200_000, 50, None)]
     assert "other" in by_sid
 
 
@@ -140,19 +146,53 @@ def test_xai_turn_cost_short_vs_long():
     assert long > short * 2
 
 
-def test_grok_build_uses_grok_build_0_1_rates():
-    # grok-build sessions bill under grok-build-0.1, not grok-code-fast-1.
-    # https://docs.x.ai/developers/models/grok-build-0.1
-    for key in ("grok-build", "grok-build-0.1"):
-        rates = PRICING[key]
-        assert rates["in"] == 1.00, key
-        assert rates["out"] == 2.00, key
-        assert rates["cached_read"] == 0.20, key
-    assert calculate_cost("grok-build", 1_000_000, 0, 0) == pytest.approx(1.00)
-    assert calculate_cost("grok-build", 0, 1_000_000, 0) == pytest.approx(2.00)
-    assert calculate_cost("grok-build", 0, 0, 1_000_000) == pytest.approx(0.20)
-    # grok-code-fast-1 is a different model and keeps its own rates.
-    assert calculate_cost("grok-code-fast-1", 1_000_000, 0, 0) == pytest.approx(0.20)
+def test_grok_build_and_code_fast_follow_xai_cutovers():
+    """Retired aliases and generic Build sessions retain their actual rates."""
+    # grok-code-fast-1 was retired at noon PT (19:00 UTC) on 2026-05-15 and
+    # routed to Grok Build 0.1. https://docs.x.ai/developers/migration/may-15-retirement
+    assert calculate_cost(
+        "grok-code-fast-1", 1_000_000, 0, 0, at="2026-05-15T18:59:59Z"
+    ) == pytest.approx(0.20)
+    assert calculate_cost(
+        "grok-code-fast-1", 1_000_000, 0, 0, at="2026-05-15T19:00:00Z"
+    ) == pytest.approx(1.00)
+
+    # Grok 4.6 became the Grok Build model on 2026-08-12. xAI announced only
+    # the date, so pricing bands consistently start at midnight UTC.
+    # https://x.ai/news/grok-4-6
+    assert calculate_cost("grok-build", 1_000_000, 0, 0, at="2026-08-11T23:59:59Z") == pytest.approx(1.00)
+    assert calculate_cost("grok-build", 1_000_000, 0, 0, at="2026-08-12T00:00:00Z") == pytest.approx(2.00)
+    assert PRICING["grok-build"] == {"in": 2.00, "out": 6.00, "cached_read": 0.50}
+    assert PRICING["grok-build-0.1"] == {"in": 1.00, "out": 2.00, "cached_read": 0.20}
+    assert PRICING["grok-code-fast-1"] == {"in": 1.00, "out": 2.00, "cached_read": 0.20}
+    # The migration notice names only grok-code-fast-1; don't silently reroute
+    # the distinct grok-code-fast alias without a source proving that change.
+    assert calculate_cost("grok-code-fast", 1_000_000, 0, 0, at="2026-08-30T00:00:00Z") == pytest.approx(0.20)
+
+
+def test_scan_prices_each_generic_grok_build_turn_at_its_log_timestamp(tmp_path, monkeypatch):
+    sessions = tmp_path / "sessions"
+    log = tmp_path / "unified.jsonl"
+    _make_session(
+        sessions,
+        SID,
+        ctx=0,
+        model="grok-build",
+        updated_at="2026-08-12T00:01:00Z",
+    )
+    _write_log(log, [
+        _inference(SID, 100_000, 10_000, 1_000, ts="2026-08-11T23:59:59Z"),
+        _inference(SID, 100_000, 10_000, 1_000, ts="2026-08-12T00:00:00Z"),
+    ])
+    monkeypatch.setattr(main, "GROK_SESSIONS_DIR", sessions)
+    monkeypatch.setattr(main, "GROK_UNIFIED_LOG", log)
+    monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
+
+    sess = {s["id"]: s for s in main._scan_grok_sessions()}[SID]
+    assert sess["tokens"]["cost"] == pytest.approx(
+        calculate_xai_turn_cost("grok-build", 100_000, 1_000, 10_000, at="2026-08-11T23:59:59Z")
+        + calculate_xai_turn_cost("grok-build", 100_000, 1_000, 10_000, at="2026-08-12T00:00:00Z")
+    )
 
 
 def test_model_resolved_before_pricing(tmp_path, monkeypatch):
@@ -163,7 +203,7 @@ def test_model_resolved_before_pricing(tmp_path, monkeypatch):
     """
     sessions = tmp_path / "sessions"
     log = tmp_path / "unified.jsonl"
-    d = _make_session(sessions, SID, ctx=9_999, model="grok-4.6")
+    d = _make_session(sessions, SID, ctx=9_999, model="grok-4.5")
     summary = json.loads((d / "summary.json").read_text(encoding="utf-8"))
     del summary["current_model_id"]
     (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
@@ -173,9 +213,9 @@ def test_model_resolved_before_pricing(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
 
     sess = {s["id"]: s for s in main._scan_grok_sessions()}[SID]
-    assert sess["model"] == "grok-4.6"
+    assert sess["model"] == "grok-4.5"
     assert sess["tokens"]["cost"] == pytest.approx(
-        calculate_xai_turn_cost("grok-4.6", 100, 10, 20)
+        calculate_xai_turn_cost("grok-4.5", 100, 10, 20)
     )
     # grok-build's rates would give a different figure; the two must not agree.
     assert sess["tokens"]["cost"] != pytest.approx(

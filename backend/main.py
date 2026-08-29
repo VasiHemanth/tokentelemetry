@@ -3124,7 +3124,8 @@ def _grok_usage_from_unified_log(path: Optional[Path] = None) -> Dict[str, Dict[
       input  = prompt_tokens − cached_prompt_tokens
       cached = cached_prompt_tokens
       output = completion_tokens
-    Turns are kept so cost can apply xAI's per-request 200k long-context 2×.
+    Turns retain their log timestamp so cost can apply both xAI's per-request
+    200k long-context 2× and any price cutover that occurs mid-session.
     Missing / unreadable log → {}.
     """
     log_path = path if path is not None else GROK_UNIFIED_LOG
@@ -3164,6 +3165,14 @@ def _grok_usage_from_unified_log(path: Optional[Path] = None) -> Dict[str, Dict[
                 if prompt < 0 or cached < 0 or completion < 0:
                     continue
                 cached = min(cached, prompt)
+                turn_ts = rec.get("ts")
+                if not isinstance(turn_ts, str):
+                    turn_ts = None
+                else:
+                    try:
+                        datetime.fromisoformat(turn_ts.replace("Z", "+00:00"))
+                    except ValueError:
+                        turn_ts = None
                 row = by_sid.get(sid)
                 if row is None:
                     row = {
@@ -3178,7 +3187,7 @@ def _grok_usage_from_unified_log(path: Optional[Path] = None) -> Dict[str, Dict[
                 row["output"] += completion
                 row["cached"] += cached
                 row["reasoning"] += max(reasoning, 0)
-                row["turns"].append((prompt, cached, completion))
+                row["turns"].append((prompt, cached, completion, turn_ts))
     except OSError:
         return {}
 
@@ -3187,11 +3196,15 @@ def _grok_usage_from_unified_log(path: Optional[Path] = None) -> Dict[str, Dict[
     return by_sid
 
 
-def _grok_price_turns(model: str, turns: List[Tuple[int, int, int]]) -> float:
-    """Sum per-request xAI cost (applies the 200k-prompt 2× cliff per turn)."""
+def _grok_price_turns(model: str, turns, at=None) -> float:
+    """Sum per-request xAI cost, using each log timestamp when it exists."""
     from pricing import calculate_xai_turn_cost
-    return sum(calculate_xai_turn_cost(model, prompt, completion, cached)
-               for prompt, cached, completion in turns)
+    total = 0.0
+    for turn in turns:
+        prompt, cached, completion = turn[:3]
+        turn_at = turn[3] if len(turn) > 3 and turn[3] else at
+        total += calculate_xai_turn_cost(model, prompt, completion, cached, at=turn_at)
+    return total
 
 
 def _scan_grok_sessions() -> List[Dict[str, Any]]:
@@ -3282,7 +3295,7 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                 tokens["cached"] = usage["cached"]
                 tokens["total"] = usage["input"] + usage["output"] + usage["cached"]
                 tokens["source"] = "usage"
-                tokens["cost"] = _grok_price_turns(model, usage["turns"])
+                tokens["cost"] = _grok_price_turns(model, usage["turns"], at=ts)
             else:
                 ctx_used = signals.get("contextTokensUsed")
                 if isinstance(ctx_used, (int, float)) and ctx_used > 0:
