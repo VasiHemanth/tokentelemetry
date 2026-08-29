@@ -617,7 +617,7 @@ def _scan_muse_sessions() -> List[Dict[str, Any]]:
         tokens = summary["tokens"]
         total = sum(tokens.values())
         tokens["total"] = total
-        tokens["cost"] = calculate_cost(summary["model"], tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens["cache_creation"])
+        tokens["cost"] = calculate_cost(summary["model"], tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens["cache_creation"], at=summary["timestamp"])
         subagents = []
         delegated = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0}
         root = path.parent.resolve()
@@ -637,7 +637,7 @@ def _scan_muse_sessions() -> List[Dict[str, Any]]:
                 "agent_type": "muse-subagent",
                 "model": child["model"],
                 "tokens": {**child_tokens, "total": sum(child_tokens.values())},
-                "cost": calculate_cost(child["model"], child_tokens["input"], child_tokens["output"], child_tokens["cached"], cache_creation_tokens=child_tokens["cache_creation"]),
+                "cost": calculate_cost(child["model"], child_tokens["input"], child_tokens["output"], child_tokens["cached"], cache_creation_tokens=child_tokens["cache_creation"], at=summary["timestamp"]),
             })
         delegated_total = sum(delegated.values())
         delegation = {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
@@ -3311,7 +3311,7 @@ def _scan_grok_sessions() -> List[Dict[str, Any]]:
                 tokens["output"] = 0
                 tokens["cached"] = 0
                 tokens["source"] = "context"
-                tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0))
+                tokens["cost"] = calculate_cost(model, tokens.get("input", 0), tokens.get("output", 0), tokens.get("cached", 0), at=ts)
 
             # Prefer signals.modelsUsed for the model when available.
             models_used = signals.get("modelsUsed")
@@ -3663,7 +3663,7 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
                 "input": input_tokens, "output": output_tokens, "cached": 0,
                 "total": input_tokens + output_tokens, "cost": 0.0,
             }
-            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
 
             prompt = trace.get("prompt") or ""
             mcp_tools: List[str] = []
@@ -3891,7 +3891,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
             if not is_parent and isinstance(meta_cost, (int, float)) and meta_cost > 0:
                 tokens["cost"] = float(meta_cost)
             else:
-                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
 
             display = (row["prompt"] or metadata.get("title") or "")[:120]
 
@@ -3969,7 +3969,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 if isinstance(total_cost, (int, float)) and total_cost > 0:
                     tokens["cost"] = float(total_cost)
                 else:
-                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
 
                 transcript_path = CLINE_VSCODE_DIR / "tasks" / sid / "api_conversation_history.json"
                 artifacts: List[Dict[str, Any]] = []
@@ -4397,6 +4397,16 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
                 last_provider, last_model = msg_provider, msg_model
 
     tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0, "total": 0}
+    # Resolve the session timestamp BEFORE the cost loop: calculate_cost prices
+    # date-banded models by when the tokens were generated, and `ts` used to be
+    # computed further down, after this loop had already run.
+    if last_ts:
+        ts = _aware(datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc))
+    elif isinstance(header.get("createdAt"), (int, float)) and header["createdAt"] > 0:
+        ts = _aware(datetime.fromtimestamp(header["createdAt"] / 1000, tz=timezone.utc))
+    else:
+        ts = _file_mtime_utc(path)
+
     cost = 0.0
     models_used: List[str] = []
     for u in usage_by_step.values():
@@ -4413,7 +4423,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
         model = u.get("model")
         if model and model not in models_used:
             models_used.append(model)
-        cost += calculate_cost(model, in_t, out_t, cr, cache_creation_tokens=cw, provider=u.get("provider"))
+        cost += calculate_cost(model, in_t, out_t, cr, cache_creation_tokens=cw, provider=u.get("provider"), at=ts)
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
 
     # --- latency breakdown (formulas noted where the inputs are collected)
@@ -4441,13 +4451,6 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     # reports "Input 16.5K" for an 8.3K + 8.2K split. Mirror it so the two agree.
     billed_input = tokens["input"] + tokens["cached"]
     metrics["cache_hit_pct"] = round(tokens["cached"] / billed_input * 100, 1) if billed_input else None
-
-    if last_ts:
-        ts = _aware(datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc))
-    elif isinstance(header.get("createdAt"), (int, float)) and header["createdAt"] > 0:
-        ts = _aware(datetime.fromtimestamp(header["createdAt"] / 1000, tz=timezone.utc))
-    else:
-        ts = _file_mtime_utc(path)
 
     return {
         "id": sid,
@@ -5942,7 +5945,7 @@ def _scan_sessions_sync():
                                             gu["cache_creation"] += cc
                                             gu["cache_creation_1h"] += cc_1h
                                     sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
-                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]), cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0))
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]), cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0), at=sess["timestamp"])
                                     for item in msg.get("content", []):
                                         if item.get("type") == "tool_use":
                                             tool = item.get("name")
@@ -6352,7 +6355,7 @@ def _scan_sessions_sync():
                                     sess["tokens"]["output"] = max(sess["tokens"]["output"], output_billable)
                                     sess["tokens"]["total"]  = sess["tokens"]["input"] + sess["tokens"]["cached"] + sess["tokens"]["output"]
                                     # Codex/OpenAI usage has no cache-write field (only cached read); nothing to pass.
-                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"])
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], at=sess["timestamp"])
                             if data.get("type") == "response_item":
                                 if data.get("payload", {}).get("type") == "function_call":
                                     tool = data["payload"].get("name")
@@ -6390,7 +6393,13 @@ def _scan_sessions_sync():
                         "cached": dc,
                         "output": do,
                         "total": net_in + dc + do,
-                        "cost": calculate_cost(model_for_cost, net_in, do, dc)
+                        # `day` (not the session timestamp) is the right instant here:
+                        # a session spanning a repricing gets each day at that day's
+                        # rate. Caveat: "YYYY-MM-DD" parses as 00:00 UTC while
+                        # DeepSeek's cutover was 16:00 UTC, so the cutover day bills
+                        # entirely at the old rate. Deliberate: a day bucket has no
+                        # finer timestamp to offer.
+                        "cost": calculate_cost(model_for_cost, net_in, do, dc, at=day)
                     }
                 sess["tokens_by_day"] = tbd
 
@@ -6561,7 +6570,7 @@ def _scan_sessions_sync():
                             except Exception: pass
 
                             # Antigravity/Gemini token records expose no cache-write field; nothing to pass.
-                            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
                             if sid in _seen_antigravity: continue
                             _seen_antigravity.add(sid)
                             _g_sess = {"id": sid, "agent": effective_agent, "project": project_path, "timestamp": ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "antigravity_source": _ag_surface.get(sid), "cost": tokens["cost"]}
@@ -6796,7 +6805,7 @@ def _scan_sessions_sync():
                                                     plans.append({"session_id": sid, "agent": "qwen", "timestamp": last_ts, "content": t_text})
                                 except Exception: continue
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]), cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0))
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]), cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0), at=last_ts)
                         _q_sess = {"id": sid, "agent": "qwen", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans, "model": model, "artifacts": artifacts, "cost": tokens["cost"]}
                         _attach_tool_usage(_q_sess, tool_counts, q_skill_counts)
                         sessions.append(_q_sess)
@@ -6816,7 +6825,7 @@ def _scan_sessions_sync():
                     model = meta.get("agent_config", {}).get("active_model")
                     project_path = apply_alias(meta.get("environment", {}).get("working_directory", "unknown"))
                     # Vibe stats expose no cache-write field; nothing to pass.
-                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
                     sessions.append({"id": sid, "agent": "vibe", "project": project_path, "timestamp": ts, "display": f"Vibe Session {sid[:8]}", "tokens": tokens, "mcp_tools": list(set(mcp_tools)), "has_plan": False, "plans": [], "model": model, "artifacts": [], "cost": tokens["cost"]})
             except Exception: continue
 
@@ -6912,7 +6921,7 @@ def _scan_sessions_sync():
                                                         has_plan = True
                                                         plans.append({"session_id": sid, "agent": "cursor", "timestamp": mtime, "content": t_text})
                                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]), cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0))
+                                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens.get("_cached_sum", tokens["cached"]), cache_creation_tokens=tokens.get("cache_creation", 0), cache_creation_1h_tokens=tokens.get("cache_creation_1h", 0), at=mtime)
                                 # Cursor writes subagent transcripts to <sid>/subagents/
                                 # but they carry NO usage fields (verified), so we can
                                 # only count spawns — never estimate their tokens.
@@ -6985,7 +6994,7 @@ def _scan_sessions_sync():
                                 for part in req["response"]: tokens["output"] += part.get("tokens", 0) or 0
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                         # Copilot (VS Code) chat records expose no cache-write field; nothing to pass.
-                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"])
+                        tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=last_ts)
                         sessions.append({"id": sid, "agent": "copilot", "project": project_path, "timestamp": last_ts, "display": first_msg[:100], "tokens": tokens, "mcp_tools": [], "has_plan": len(plans) > 0, "plans": plans, "model": model, "artifacts": [], "copilot_source": "vscode", "cost": tokens["cost"]})
                     except Exception: continue
             except Exception: continue
@@ -7042,7 +7051,7 @@ def _scan_sessions_sync():
                     tokens["output"] = out_tokens
                 tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                 tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
-                                                cache_creation_tokens=tokens.get("cache_creation", 0))
+                                                cache_creation_tokens=tokens.get("cache_creation", 0), at=ts)
                 if model and model not in models_used: models_used.insert(0, model)
                 ts = last_ts or start_ts or _file_mtime_utc(ev_file)
                 sessions.append({
@@ -7185,7 +7194,7 @@ def _scan_sessions_sync():
                             # cache writes ARE billed per event → cumulative; priced at 1.25x input.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + cache_write
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), provider=provider_id)
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), provider=provider_id, at=ts)
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
@@ -7347,7 +7356,7 @@ def _scan_sessions_sync():
                         except Exception:
                             _measured_tps = None
                         cost = calculate_cost(
-                            model, in_t, out_t, cached,
+                            model, in_t, out_t, cached, at=ts,
                             provider=srow["billing_provider"],
                             cache_creation_tokens=cache_write,
                             endpoint=srow["billing_base_url"],
@@ -7496,7 +7505,7 @@ def _scan_sessions_sync():
 # and asyncio.to_thread keeps the event loop free while we scan.
 import asyncio as _asyncio
 import time as _time
-from pricing import calculate_cost, PRICING, PRICING_UPDATED
+from pricing import calculate_cost, PRICING, PRICING_UPDATED, PRICING_OVERLAY_UPDATED
 import logging as _logging
 
 _log = _logging.getLogger("tokentelemetry.cache")
@@ -7633,8 +7642,18 @@ async def get_sessions(fresh: bool = False):
 
 @app.get("/pricing")
 async def get_pricing():
-    """Return the static pricing table and the date it was last refreshed."""
-    return {"updated": PRICING_UPDATED, "models": PRICING}
+    """Return the static pricing table and the dates its two layers were refreshed.
+
+    ``updated`` is the curated inline table; ``overlay_updated`` is the bundled
+    models.dev snapshot. They move independently, and the curated table is the
+    one that wins on conflict, so reporting only the (usually newer) overlay
+    date would overstate how fresh the authoritative rates are.
+    """
+    return {
+        "updated": PRICING_UPDATED,
+        "overlay_updated": PRICING_OVERLAY_UPDATED,
+        "models": PRICING,
+    }
 
 
 @app.get("/remote-access")
@@ -10347,6 +10366,7 @@ async def get_analytics(
         "coverage": history_store.coverage(),
         "granularity": granularity,
         "pricing_updated": PRICING_UPDATED,
+        "pricing_overlay_updated": PRICING_OVERLAY_UPDATED,
     }
 
 def _parse_skill_md(p: Path):

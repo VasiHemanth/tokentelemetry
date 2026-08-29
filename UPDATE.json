@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-29",
+      "title": "DeepSeek costs corrected",
+      "highlights": [
+        {
+          "title": "DeepSeek V4 sessions were billed at under half their real cost",
+          "description": "DeepSeek raised its prices on 16 August and our tables still carried the old ones, so every direct DeepSeek session showed roughly 45% of what it actually cost. Flash and Pro now use the current published rates, and deepseek-v4-flash-vision-exp has an entry of its own instead of borrowing Flash's. Peak-hours sessions still read low, because DeepSeek charges double between 01:00-04:00 and 06:00-10:00 UTC and a session cost carries one rate. Thanks to Pauliehedron for reporting this (issue #303).",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-27",
       "title": "Click an agent, see what it stores",
       "highlights": [

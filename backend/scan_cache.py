@@ -34,7 +34,7 @@ logger = logging.getLogger("tokentelemetry.scan_cache")
 # update that affects cached costs. `_mtime` only detects source-transcript
 # changes; this detects code changes. A mismatch is a miss, so stale entries
 # are transparently reparsed and rewritten — never migrated in place.
-CACHE_VERSION = 8  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata
+CACHE_VERSION = 9  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them
 
 
 def _require_safe_component(candidate: str) -> str:

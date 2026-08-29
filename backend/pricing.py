@@ -9,7 +9,7 @@
 #      treated as canonical.
 #
 # Same model on different providers can cost very different things. Example:
-#   deepseek-v4-pro on DeepSeek direct: $1.74 in / $3.48 out
+#   deepseek-v4-pro on DeepSeek direct: $0.66 in / $1.98 out (off-peak)
 #   deepseek-v4-pro on Together:        $2.10 in / $4.40 out
 #   deepseek-v4-pro on Fireworks:       $1.74 in / $3.48 out
 # Don't flatten — keep provider-keyed entries where they conflict.
@@ -18,9 +18,16 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-PRICING_UPDATED = "2026-05-17"
+# Date the CURATED inline tables below were last hand-checked against provider
+# price lists. This is deliberately NOT overwritten by the bundled overlay:
+# the two move independently, and reporting the overlay's date for the inline
+# table hid a three-month-stale DeepSeek rate behind a fresh-looking timestamp.
+PRICING_UPDATED = "2026-08-29"
+# Date of the bundled models.dev snapshot. Set by _load_bundled_pricing().
+PRICING_OVERLAY_UPDATED = None
 
 # Build-time pricing dataset (models.dev), refreshed maintainer/CI-side and
 # committed alongside this module — see pricing_sync.py. We read ONLY this
@@ -54,6 +61,16 @@ PRICING = {
     "claude-3.5-haiku":  {"in": 0.80, "out": 4.00,  "cached_read": 0.08},
 
     # --- OpenAI (GPT-5 series) ---
+    # --- GPT-5.6 (Sol / Terra / Luna) ---
+    # Current rates. Both cuts are date-banded in PRICING_HISTORY below, so a
+    # session from before a cut is still priced at what it actually cost.
+    # Sol's $4/$20 is promotional and guaranteed only through 2026-11-21; if it
+    # reverts, that becomes a third band rather than an edit to these numbers.
+    "gpt-5.6-sol":       {"in": 4.00,  "out": 20.00, "cached_read": 0.40},
+    "gpt-5.6-terra":     {"in": 2.00,  "out": 12.00, "cached_read": 0.20},
+    "gpt-5.6-luna":      {"in": 0.20,  "out": 1.20,  "cached_read": 0.02},
+    "gpt-5.6":           {"in": 4.00,  "out": 20.00, "cached_read": 0.40},
+
     "gpt-5.5":           {"in": 5.00,  "out": 30.00, "cached_read": 0.50},
     "gpt-5-5":           {"in": 5.00,  "out": 30.00, "cached_read": 0.50},
     "gpt-5.5-pro":       {"in": 30.00, "out": 180.00, "cached_read": 3.00},
@@ -84,10 +101,26 @@ PRICING = {
     "gemini":                       {"in": 1.25,  "out": 5.00,  "cached_read": 0.125},
 
     # --- DeepSeek (direct) ---
-    "deepseek-v4-flash":            {"in": 0.14,  "out": 0.28,  "cached_read": 0.0028},
-    "deepseek-chat":                {"in": 0.14,  "out": 0.28,  "cached_read": 0.0028},
-    "deepseek-reasoner":            {"in": 0.14,  "out": 0.28,  "cached_read": 0.0028},
-    "deepseek-v4-pro":              {"in": 1.74,  "out": 3.48,  "cached_read": 0.0145},
+    # OFF-PEAK rates, per DeepSeek's 2026-08-16 repricing.
+    # https://api-docs.deepseek.com/quick_start/pricing
+    #
+    # DeepSeek bills two rates by clock time: peak (01:00-04:00 and 06:00-10:00
+    # UTC, Mon-Fri) costs exactly 2x off-peak. calculate_cost carries ONE rate
+    # per model and takes no timestamp, and a session routinely spans both
+    # windows anyway, so a single rate is the only thing this schema can express.
+    # We bill off-peak because that is the list price the docs lead with; a
+    # session that ran entirely in peak hours is therefore understated 2x.
+    # Don't "fix" this by halving/doubling — plumb a timestamp or leave it.
+    #
+    # vision-exp is listed explicitly rather than left to the fuzzy prefix
+    # matcher. It happens to share flash's rates today, but _fuzzy_key_matches
+    # would silently price ANY deepseek-v4-flash-* variant at flash's rate,
+    # including a future one that costs something else.
+    "deepseek-v4-flash":            {"in": 0.22,  "out": 0.66,  "cached_read": 0.007},
+    "deepseek-v4-flash-vision-exp": {"in": 0.22,  "out": 0.66,  "cached_read": 0.007},
+    "deepseek-chat":                {"in": 0.22,  "out": 0.66,  "cached_read": 0.007},
+    "deepseek-reasoner":            {"in": 0.22,  "out": 0.66,  "cached_read": 0.007},
+    "deepseek-v4-pro":              {"in": 0.66,  "out": 1.98,  "cached_read": 0.022},
 
     # --- xAI (Grok) ---
     # List prices are the <200k-prompt band. Requests whose prompt reaches
@@ -157,6 +190,30 @@ PRICING = {
 # we use this when available to capture markup/discount on aggregator providers.
 # Key: (provider_lower, model_id_lower)
 PRICING_BY_PROVIDER = {
+    # --- DeepSeek (direct) ---
+    # These MUST exist even though they duplicate the flat table above.
+    # models.dev ships ("deepseek", "deepseek-v4-pro") at $0.435/$0.87 — a rate
+    # that predates the 2026-08-16 repricing and is ~2.3x under list. The
+    # bundled overlay only skips a key when an inline entry already claims it
+    # (see _load_bundled_pricing), so without these tuples the overlay wins for
+    # any caller that passes provider="deepseek" and the same model prices 4x
+    # apart depending on whether the scanner happened to supply a provider.
+    ("deepseek", "deepseek-v4-flash"):               {"in": 0.22, "out": 0.66,  "cached_read": 0.007},
+    ("deepseek", "deepseek-v4-flash-vision-exp"):    {"in": 0.22, "out": 0.66,  "cached_read": 0.007},
+    ("deepseek", "deepseek-chat"):                   {"in": 0.22, "out": 0.66,  "cached_read": 0.007},
+    ("deepseek", "deepseek-reasoner"):               {"in": 0.22, "out": 0.66,  "cached_read": 0.007},
+    ("deepseek", "deepseek-v4-pro"):                 {"in": 0.66, "out": 1.98,  "cached_read": 0.022},
+
+    # --- OpenAI (direct) ---
+    # The overlay disagrees with itself on this family: its flat gpt-5.6-luna is
+    # the pre-cut $1.00/$6.00 while its openai-keyed one is the current
+    # $0.20/$1.20. Pin the direct rates so the lookup is not decided by which
+    # table happened to be consulted.
+    ("openai", "gpt-5.6-sol"):                       {"in": 4.00, "out": 20.00, "cached_read": 0.40},
+    ("openai", "gpt-5.6-terra"):                     {"in": 2.00, "out": 12.00, "cached_read": 0.20},
+    ("openai", "gpt-5.6-luna"):                      {"in": 0.20, "out": 1.20,  "cached_read": 0.02},
+    ("openai", "gpt-5.6"):                           {"in": 4.00, "out": 20.00, "cached_read": 0.40},
+
     # --- Together AI (aggregator markup) ---
     ("together", "glm-5.1"):                         {"in": 1.40, "out": 4.40,  "cached_read": None},
     ("together", "glm-5"):                           {"in": 1.00, "out": 3.20,  "cached_read": None},
@@ -269,11 +326,154 @@ def _load_bundled_pricing() -> None:
 
     updated = data.get("updated")
     if isinstance(updated, str) and updated.strip():
-        global PRICING_UPDATED
-        PRICING_UPDATED = updated.strip()
+        global PRICING_OVERLAY_UPDATED
+        PRICING_OVERLAY_UPDATED = updated.strip()
 
 
 _load_bundled_pricing()
+
+
+# ---------------------------------------------------------------------------
+# Historical rates
+# ---------------------------------------------------------------------------
+# A provider that reprices does not reprice the past. Tokens generated in July
+# were billed at July's rate, and re-costing an old session at today's rate
+# makes a user's spend history silently wrong — which is exactly what correcting
+# the DeepSeek tables did before these bands existed (#303).
+#
+# Each entry is a list of (effective_from, rates) ascending. A band applies from
+# its instant until the next band starts; a timestamp older than the first band
+# uses the first band. The LAST band must equal the model's entry in the tables
+# above — test_pricing_history.py asserts this, so the two can't drift.
+#
+# Only models whose price actually MOVED belong here. Everything else resolves
+# through the normal tables and is unaffected, so this stays small.
+#
+# Timestamps are UTC. DeepSeek's cutover has a published time (16:00 UTC); the
+# OpenAI cuts were announced by date only, so those bands start at 00:00 UTC and
+# a session on the cut date itself may be off by up to a day. Recorded here
+# rather than hidden, because it is the one imprecise thing in this table.
+_DEEPSEEK_BANDS = {
+    # https://api-docs.deepseek.com/quick_start/pricing — V4 repricing, and the
+    # point peak/off-peak was introduced. Post-cut rates are OFF-PEAK; see the
+    # note on the DeepSeek block above.
+    #
+    # V4-Pro's pre-cut band is $0.435/$0.87, NOT the $1.74/$3.48 list price. Pro
+    # launched at list in April 2026 under a 75% promotion that was extended past
+    # its stated 31 May deadline and remained the effective price until the
+    # repricing. Billing the list price would overstate every pre-August Pro
+    # session by 4x.
+    "deepseek-v4-flash": [
+        ("2000-01-01T00:00:00Z", {"in": 0.14, "out": 0.28, "cached_read": 0.0028}),
+        ("2026-08-16T16:00:00Z", {"in": 0.22, "out": 0.66, "cached_read": 0.007}),
+    ],
+    "deepseek-v4-flash-vision-exp": [
+        ("2000-01-01T00:00:00Z", {"in": 0.14, "out": 0.28, "cached_read": 0.0028}),
+        ("2026-08-16T16:00:00Z", {"in": 0.22, "out": 0.66, "cached_read": 0.007}),
+    ],
+    # deepseek-chat / deepseek-reasoner are DeepSeek's own API aliases and moved
+    # with the same repricing. Their PRE-cut band is the $0.14/$0.28 this repo's
+    # curated table recorded at its 2026-05-17 hand-check, not models.dev's
+    # $0.29/$0.43 — that figure is an aggregator's rate for the same name, and
+    # these bands describe DeepSeek direct. Flagged because it is the one band
+    # here taken from a prior hand-check rather than the provider's price list.
+    "deepseek-chat": [
+        ("2000-01-01T00:00:00Z", {"in": 0.14, "out": 0.28, "cached_read": 0.0028}),
+        ("2026-08-16T16:00:00Z", {"in": 0.22, "out": 0.66, "cached_read": 0.007}),
+    ],
+    "deepseek-reasoner": [
+        ("2000-01-01T00:00:00Z", {"in": 0.14, "out": 0.28, "cached_read": 0.0028}),
+        ("2026-08-16T16:00:00Z", {"in": 0.22, "out": 0.66, "cached_read": 0.007}),
+    ],
+    "deepseek-v4-pro": [
+        ("2000-01-01T00:00:00Z", {"in": 0.435, "out": 0.87, "cached_read": 0.003625}),
+        ("2026-08-16T16:00:00Z", {"in": 0.66,  "out": 1.98, "cached_read": 0.022}),
+    ],
+}
+
+_GPT56_BANDS = {
+    # 2026-07-30: Terra cut 20%, Luna cut 80%, Sol unchanged.
+    # 2026-08-22: Sol cut to $4/$20 from $5/$30 (promotional, held to 2026-11-21).
+    # Pre-cut cached-read rates are 10% of input, the ratio every published
+    # GPT-5.6 rate uses and the value the models.dev snapshot carries for the
+    # pre-cut prices.
+    "gpt-5.6-sol": [
+        ("2000-01-01T00:00:00Z", {"in": 5.00, "out": 30.00, "cached_read": 0.50}),
+        ("2026-08-22T00:00:00Z", {"in": 4.00, "out": 20.00, "cached_read": 0.40}),
+    ],
+    "gpt-5.6": [
+        ("2000-01-01T00:00:00Z", {"in": 5.00, "out": 30.00, "cached_read": 0.50}),
+        ("2026-08-22T00:00:00Z", {"in": 4.00, "out": 20.00, "cached_read": 0.40}),
+    ],
+    "gpt-5.6-terra": [
+        ("2000-01-01T00:00:00Z", {"in": 2.50, "out": 15.00, "cached_read": 0.25}),
+        ("2026-07-30T00:00:00Z", {"in": 2.00, "out": 12.00, "cached_read": 0.20}),
+    ],
+    "gpt-5.6-luna": [
+        ("2000-01-01T00:00:00Z", {"in": 1.00, "out": 6.00,  "cached_read": 0.10}),
+        ("2026-07-30T00:00:00Z", {"in": 0.20, "out": 1.20,  "cached_read": 0.02}),
+    ],
+}
+
+PRICING_HISTORY: dict = {**_DEEPSEEK_BANDS, **_GPT56_BANDS}
+
+# Same bands, keyed by (provider, model) so a provider-qualified lookup gets the
+# historical rate too. Built from the same source so the two can never disagree.
+PRICING_BY_PROVIDER_HISTORY: dict = {}
+for _m, _b in _DEEPSEEK_BANDS.items():
+    PRICING_BY_PROVIDER_HISTORY[("deepseek", _m)] = _b
+for _m, _b in _GPT56_BANDS.items():
+    PRICING_BY_PROVIDER_HISTORY[("openai", _m)] = _b
+
+
+def _as_utc(at) -> Optional[datetime]:
+    """Coerce a datetime or ISO-8601 string to an aware UTC datetime.
+
+    A naive datetime is assumed UTC rather than local: session timestamps reach
+    us from a dozen harnesses and guessing a local zone would shift a session
+    across a repricing boundary by hours. Unparseable input returns None, which
+    makes the caller fall back to current rates.
+    """
+    if at is None:
+        return None
+    if isinstance(at, str):
+        txt = at.strip()
+        if not txt:
+            return None
+        try:
+            at = datetime.fromisoformat(txt.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(at, datetime):
+        return None
+    if at.tzinfo is None:
+        return at.replace(tzinfo=timezone.utc)
+    return at.astimezone(timezone.utc)
+
+
+def _rates_at(bands, at: datetime) -> Dict[str, Any]:
+    """The band in force at ``at``. Older than every band → the earliest one."""
+    chosen = bands[0][1]
+    for start, rates in bands:
+        if at >= _as_utc(start):
+            chosen = rates
+        else:
+            break
+    return chosen
+
+
+def rates_for(model: str, provider: Optional[str] = None, at=None) -> Optional[Dict[str, Any]]:
+    """Historical rates for a model at a point in time, or None if not banded."""
+    when = _as_utc(at)
+    if when is None or not model:
+        return None
+    m = _normalize_model_id(str(model))
+    if provider:
+        bands = PRICING_BY_PROVIDER_HISTORY.get((str(provider).lower().strip(), m))
+        if bands:
+            return _rates_at(bands, when)
+    bands = PRICING_HISTORY.get(m)
+    return _rates_at(bands, when) if bands else None
 
 
 # xAI long-context cliff: a request whose prompt reaches this many tokens is
@@ -320,6 +520,7 @@ def calculate_cost(
     endpoint: Optional[str] = None,
     tok_per_sec: Optional[float] = None,
     billing_mode: Optional[str] = None,
+    at=None,
 ) -> float:
     """Estimate cost in USD. Prefer (provider, model) when provider is known.
 
@@ -328,6 +529,12 @@ def calculate_cost(
     rate — distinct from ``cached_tokens`` (cache READ), billed at the much
     cheaper ``cached_read`` rate. Defaults to 0 so existing positional callers
     are unaffected.
+
+    ``at`` is when the tokens were generated (datetime or ISO string). Models
+    whose price changed on a known date are listed in PRICING_HISTORY; passing
+    ``at`` prices those at the rate in force THEN rather than now, so correcting
+    a table doesn't silently rewrite a user's spend history. Omitting it keeps
+    the previous behaviour exactly: current rates for everything.
 
     ``endpoint`` and ``tok_per_sec`` are optional and only affect the
     local/subscription branches: if the session was served by a flat-subscription
@@ -382,8 +589,10 @@ def calculate_cost(
         config = PRICING["_default"]
     else:
         m_norm = _normalize_model_id(str(model_name))
-        config = None
-        if provider:
+        # A dated rate beats both tables: the tables hold today's price, and for
+        # a session that predates a repricing today's price is the wrong answer.
+        config = rates_for(m_norm, provider, at)
+        if provider and not config:
             config = PRICING_BY_PROVIDER.get((provider.lower(), m_norm))
         if not config:
             config = PRICING.get(m_norm)
