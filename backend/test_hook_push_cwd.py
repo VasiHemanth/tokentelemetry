@@ -9,8 +9,10 @@ reviewed that unrelated diff.
 """
 
 import importlib.util
+import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -35,6 +37,66 @@ def _dirs():
     os.makedirs(base)
     os.makedirs(wt)
     return base, wt
+
+
+def _git(*args: str, cwd: Path) -> str:
+    """Run git in an isolated test repository."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _run_hook(command: str, payload_cwd: Path, hook_cwd: Path) -> str:
+    """Invoke the guard exactly as Claude Code's PreToolUse hook does."""
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "cwd": str(payload_cwd),
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    result = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps(payload),
+        cwd=hook_cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return "allow"
+    return json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    """Create the branch shape that used to mislead the guard hook."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    root = tmp_path / "work"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    for key, value in (
+        ("user.email", "t@example.com"),
+        ("user.name", "t"),
+        ("commit.gpgsign", "false"),
+    ):
+        _git("config", key, value, cwd=root)
+    (root / "UPDATE.json").write_text('{"releases": []}\n')
+    (root / "app.py").write_text("x = 1\n")
+    _git("add", "-A", cwd=root)
+    _git("commit", "-qm", "chore: base", cwd=root)
+    _git("remote", "add", "origin", str(origin), cwd=root)
+    _git("push", "-q", "origin", "main", cwd=root)
+
+    # The session directory is deliberately on a feature branch that should
+    # be denied; worktree tests prove its state is not accidentally reused.
+    _git("checkout", "-qb", "feat/noisy", cwd=root)
+    (root / "app.py").write_text("x = 2\n")
+    _git("commit", "-qam", "feat: something user facing", cwd=root)
+    return root
 
 
 def test_cd_prefix_is_followed():
@@ -88,49 +150,63 @@ def test_unparseable_command_falls_back_to_base():
     assert H.resolve_push_cwd('cd "unterminated && git push', base) == base
 
 
-def test_end_to_end_worktree_push_is_allowed(tmp_path):
-    """The exact case that was denied: a fix-only worktree branch, pushed while
-    the session's directory sits on a feat: branch with no UPDATE.json."""
-    def git(*a, cwd):
-        subprocess.run(["git", *a], cwd=cwd, check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def test_push_detection_unchanged():
+    assert H._command_contains_push("git push")
+    assert H._command_contains_push("cd /x && git push -u origin branch")
+    assert H._command_contains_push("gh pr create --fill")
+    assert not H._command_contains_push('echo "git push"')
+    assert not H._command_contains_push("git status")
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git("init", "-q", "-b", "main", cwd=repo)
-    git("config", "user.email", "t@e.st", cwd=repo)
-    git("config", "user.name", "t", cwd=repo)
-    (repo / "UPDATE.json").write_text("{}")
-    git("add", "-A", cwd=repo)
-    git("commit", "-qm", "chore: init", cwd=repo)
-    # Stand in for origin/main.
-    git("branch", "origin/main", cwd=repo)
 
-    # Session directory sits on a feat: branch that never touched UPDATE.json.
-    git("checkout", "-q", "-b", "feat/session", cwd=repo)
-    (repo / "other.txt").write_text("x")
-    git("add", "-A", cwd=repo)
-    git("commit", "-qm", "feat: something user facing", cwd=repo)
+def test_denies_feature_branch_without_update_json():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _make_repo(Path(tmp))
+        assert _run_hook("git push", repo, repo) == "deny"
 
-    # The worktree we actually push: fix: only.
-    wt = tmp_path / "wt"
-    git("worktree", "add", "-q", "-b", "fix/thing", str(wt), "origin/main", cwd=repo)
-    (wt / "f.txt").write_text("y")
-    git("add", "-A", cwd=wt)
-    git("commit", "-qm", "fix: a bug", cwd=wt)
 
-    # Resolution picks the worktree...
-    assert H.resolve_push_cwd(f"cd {wt} && git push", str(repo)) == str(wt)
-    # ...and that branch carries no feat:, so the hook's own rule allows it.
-    log = H._git("log", "origin/main..HEAD", "--pretty=format:%s", cwd=str(wt)) or ""
-    assert "feat:" not in log
-    # The session branch, judged by mistake before, does carry one.
-    log_session = H._git("log", "origin/main..HEAD", "--pretty=format:%s", cwd=str(repo)) or ""
-    assert "feat:" in log_session
+def test_allows_feature_branch_when_update_json_changed():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _make_repo(Path(tmp))
+        (repo / "UPDATE.json").write_text('{"releases": [{"tag": "2026-08-22"}]}\n')
+        _git("commit", "-am", "feat: with release note", cwd=repo)
+        assert _run_hook("git push", repo, repo) == "allow"
+
+
+def test_worktree_fix_branch_is_judged_on_its_own_branch():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _make_repo(Path(tmp))
+        worktree = Path(tmp) / "fix-worktree"
+        _git("worktree", "add", "-q", "-b", "fix/only", str(worktree), "main", cwd=repo)
+        (worktree / "app.py").write_text("x = 3\n")
+        _git("commit", "-am", "fix: a fix-only branch", cwd=worktree)
+
+        assert _run_hook(f"cd {worktree} && git push", repo, repo) == "allow"
+        assert _run_hook(f"git -C {worktree} push", repo, repo) == "allow"
+        assert _run_hook("git push", worktree, repo) == "allow"
+
+
+def test_worktree_feature_branch_without_update_json_is_denied():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _make_repo(Path(tmp))
+        worktree = Path(tmp) / "feature-worktree"
+        _git("worktree", "add", "-q", "-b", "feat/real", str(worktree), "main", cwd=repo)
+        (worktree / "app.py").write_text("x = 4\n")
+        _git("commit", "-am", "feat: shipped something", cwd=worktree)
+
+        assert _run_hook(f"cd {worktree} && git push", repo, repo) == "deny"
+
+
+def test_main_worktree_is_always_allowed():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _make_repo(Path(tmp))
+        worktree = Path(tmp) / "main-worktree"
+        _git("worktree", "add", "-q", str(worktree), "main", cwd=repo)
+
+        assert _run_hook(f"cd {worktree} && git push", repo, repo) == "allow"
 
 
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
-        if name.startswith("test_") and callable(fn) and "tmp_path" not in fn.__code__.co_varnames:
+        if name.startswith("test_") and callable(fn):
             fn()
     print("All tests passed!")
