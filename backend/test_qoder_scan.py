@@ -335,6 +335,67 @@ def test_display_falls_back_when_the_ide_database_is_absent(qoder):
     assert sess["display"] == "summarise the migration plan"
 
 
+def _write_ide_db(path, rows):
+    """A minimal stand-in for the IDE's mirror database."""
+    import sqlite3
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE chat_sessions (session_id TEXT PRIMARY KEY, title TEXT, "
+                 "session_kind TEXT, product_mode TEXT, archived INTEGER, deleted_at TIMESTAMP)")
+    conn.execute("CREATE TABLE chat_session_messages (session_id TEXT, message_id TEXT, "
+                 "payload_json TEXT)")
+    for sid, title in rows:
+        conn.execute("INSERT INTO chat_sessions VALUES (?,?,'standard','coding',0,NULL)",
+                     (sid, title))
+        conn.execute("INSERT INTO chat_session_messages VALUES (?,?,?)",
+                     (sid, "m1", json.dumps({"role": "assistant", "durationMs": 1234})))
+    conn.commit()
+    conn.close()
+
+
+def test_ide_database_supplies_the_session_title(tmp_path, monkeypatch):
+    """The IDE mirrors the same sessions and is the only source of a real
+    title; the JSONL has nothing but the first prompt."""
+    root = tmp_path / ".qoder"
+    projects = root / "projects"
+    projects.mkdir(parents=True)
+    ide = tmp_path / "ide"
+    monkeypatch.setattr(main, "QODER_DIR", root)
+    monkeypatch.setattr(main, "QODER_PROJECTS_DIR", projects)
+    monkeypatch.setattr(main, "QODER_IDE_DIR", ide)
+
+    _write_session(projects, "-Users-dev-repo", "SID", [
+        _user("a very long rambling first prompt nobody would pick as a title"),
+        _assistant(1.0)])
+    _write_ide_db(ide / "main.sqlite", [("SID", "Fix the flaky test")])
+
+    (sess,) = main._scan_qoder_sessions()
+    assert sess["display"] == "Fix the flaky test"
+    assert sess["qoder"]["duration_ms"] == 1234
+    assert sess["qoder"]["turn_count"] == 1
+    assert sess["qoder"]["session_kind"] == "standard"
+
+
+def test_ide_database_never_adds_sessions_of_its_own(tmp_path, monkeypatch):
+    """The DB is a projection of the same sessions. A row with no transcript
+    must not become a session, or every session would be counted twice the
+    day Qoder changes how it writes them."""
+    root = tmp_path / ".qoder"
+    projects = root / "projects"
+    projects.mkdir(parents=True)
+    ide = tmp_path / "ide"
+    monkeypatch.setattr(main, "QODER_DIR", root)
+    monkeypatch.setattr(main, "QODER_PROJECTS_DIR", projects)
+    monkeypatch.setattr(main, "QODER_IDE_DIR", ide)
+
+    _write_session(projects, "-Users-dev-repo", "SID", [_assistant(1.0)])
+    _write_ide_db(ide / "main.sqlite",
+                  [("SID", "Real one"), ("GHOST", "No transcript")])
+
+    sessions = main._scan_qoder_sessions()
+    assert [s["id"] for s in sessions] == ["SID"]
+
+
 def test_long_first_prompt_is_truncated_for_the_title(qoder):
     """Qoder titles a thread with the user's whole first message."""
     _write_session(qoder, "-Users-dev-repo", "SID", [

@@ -74,6 +74,15 @@ interface Session {
    *  session, read back from its own log. DSH loads skills/plugins dynamically,
    *  so this legitimately differs between sessions in the same workspace and
    *  must never be substituted with a scan of what is installed on disk. */
+  /** Qoder records no token counts — every usage block it writes has zeroed
+   *  counters — and bills in credits instead. The trace header shows these
+   *  rather than a row of zeros that reads like a failed scan. */
+  qoder?: {
+    credits?: number;
+    delegated_credits?: number;
+    total_credits?: number;
+    cli_version?: string;
+  };
   dsh?: {
     agent_preset?: string;
     /** Presets the session ran under, in order; >1 means it hot-swapped. */
@@ -1104,7 +1113,35 @@ export default function SessionDetailPage() {
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
-                  {agent === "grok" && sessionInfo.tokens.source !== "usage" ? (
+                  {agent === "qoder" ? (
+                    // Qoder writes a usage block with every token counter at
+                    // zero and bills in credits. Showing Input/Output/Cached
+                    // as 0 would read as a failed scan, which is exactly how
+                    // DSH's missing codec was misread — so show what Qoder
+                    // actually recorded, and say why the tokens are absent.
+                    <div
+                      className="flex items-center gap-3"
+                      title="Qoder records no token counts — its usage block reports zeros and it bills in credits instead. The $0.00 is a real subscription figure, not a missing value."
+                    >
+                      <TokenStat
+                        label="Credits"
+                        value={(sessionInfo.qoder?.credits ?? 0).toFixed(2)}
+                        accent="text-[var(--tt-brand)]"
+                      />
+                      {!!sessionInfo.qoder?.delegated_credits && (
+                        <>
+                          <span className="w-px h-5 bg-[var(--tt-border)]" />
+                          <TokenStat
+                            label="Delegated"
+                            value={`+${sessionInfo.qoder.delegated_credits.toFixed(2)}`}
+                            accent="text-[var(--tt-violet-fg)]"
+                          />
+                        </>
+                      )}
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Tokens" value="not recorded" />
+                    </div>
+                  ) : agent === "grok" && sessionInfo.tokens.source !== "usage" ? (
                     // Session files only record a context-window footprint.
                     // When unified.jsonl has billed usage, source === "usage"
                     // and we fall through to the Input/Output/Cached row.

@@ -111,9 +111,16 @@ What the DB adds that the JSONL lacks:
 - `session_kind` ∈ {`standard`, `sideChat`, `automationExecution`} and
   `product_mode` ∈ {`coding`, `general`}
 
-Both surveyed rows are `standard`; whether `sideChat` and `automationExecution`
-also reach the JSONL is untested here, so a scanner should union and dedupe by
-`session_id` rather than assume the JSONL is complete.
+Both surveyed rows are `standard`, and the two `chat_sessions.session_id`
+values are exactly the two transcript ids — no IDE-only session exists on this
+install.
+
+**Known limitation.** TokenTelemetry therefore takes sessions from the JSONL
+alone and uses the DB only for titles. If `sideChat` or `automationExecution`
+sessions turn out not to write a transcript, they would be invisible. That
+cannot be observed here, so the union-and-dedupe that would cover it is
+deliberately not built rather than written against a shape nobody has seen.
+Re-check this the first time a Qoder side chat or scheduled automation runs.
 
 ### `main.sqlite` tables worth knowing about
 

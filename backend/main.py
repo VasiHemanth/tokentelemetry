@@ -4872,6 +4872,12 @@ def _qoder_ide_sessions() -> Dict[str, Dict[str, Any]]:
     Best-effort by design: opened read-only, and a missing, locked or
     schema-changed database degrades to CLI-only data rather than failing the
     scan. Credential tables are never touched.
+
+    Known limitation: `session_kind` also admits `sideChat` and
+    `automationExecution`. Every observed row is `standard` and its id matches a
+    transcript, so there is no evidence either kind skips the JSONL -- but if
+    one does, it would be invisible here. Unioning on session_id would cover it;
+    that is deliberately not built against a shape nobody has seen yet.
     """
     db = QODER_IDE_DIR / "main.sqlite"
     if not db.exists():
