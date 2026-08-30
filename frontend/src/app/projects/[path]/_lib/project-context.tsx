@@ -10,11 +10,12 @@ export interface PlanSnippet {
 }
 
 /* A user-facing artifact an agent produced as a deliverable. kind "page" is a
-   hosted claude.ai page from Claude Code's Artifact tool (has url); kind
-   "document" is a local doc like Antigravity's task/plan/walkthrough (has
-   path, served via /artifacts?path=). Extracted by the backend scan. */
+   hosted claude.ai page from Claude Code's Artifact tool; kind "site" is a
+   deployed Codex Site; kind "document" is a local doc like Antigravity's
+   task/plan/walkthrough (has path, served via /artifacts?path=). Extracted by
+   the backend scan. */
 export interface PublishedArtifact {
-  kind?: "page" | "document";
+  kind?: "page" | "site" | "document";
   url?: string | null;
   path?: string | null;
   title?: string | null;
