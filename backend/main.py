@@ -3925,7 +3925,12 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
             if not is_parent and isinstance(meta_cost, (int, float)) and meta_cost > 0:
                 tokens["cost"] = float(meta_cost)
             else:
-                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
+                # sessions.db carries a `provider` column and no endpoint, so the
+                # provider is the only routing signal available here. Passing it
+                # reaches PRICING_BY_PROVIDER, the local-provider branch (ollama
+                # and friends price by electricity, not cloud rates), and the
+                # subscriptionProviders branch (cline-pass is flat monthly).
+                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], provider=row["provider"], at=ts)
 
             display = (row["prompt"] or metadata.get("title") or "")[:120]
 
@@ -4003,6 +4008,9 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 if isinstance(total_cost, (int, float)) and total_cost > 0:
                     tokens["cost"] = float(total_cost)
                 else:
+                    # No provider here, unlike the CLI path above: taskHistory.json
+                    # HistoryItems carry no provider or endpoint field, so there is
+                    # nothing to pass. Left per-token deliberately.
                     tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
 
                 transcript_path = CLINE_VSCODE_DIR / "tasks" / sid / "api_conversation_history.json"
@@ -6917,7 +6925,11 @@ def _scan_sessions_sync():
                                     sess["tokens"]["output"] = max(sess["tokens"]["output"], output_billable)
                                     sess["tokens"]["total"]  = sess["tokens"]["input"] + sess["tokens"]["cached"] + sess["tokens"]["output"]
                                     # Codex/OpenAI usage has no cache-write field (only cached read); nothing to pass.
-                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], at=sess["timestamp"])
+                                    # _provider comes from the rollout's session_meta (model_provider).
+                                    # Without it the lookup can't reach PRICING_BY_PROVIDER, so a Codex
+                                    # session routed to a non-OpenAI provider was priced off the flat
+                                    # table — or by _default when the model id was unknown there.
+                                    sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], provider=sess.get("_provider"), at=sess["timestamp"])
                             if data.get("type") == "response_item":
                                 if data.get("payload", {}).get("type") == "function_call":
                                     tool = data["payload"].get("name")
@@ -6944,7 +6956,11 @@ def _scan_sessions_sync():
             if day_snap:
                 tbd = {}
                 pg = pc = po = 0
-                model_for_cost = sess.get("model") or sess.get("_provider")
+                # NB: no `or sess.get("_provider")` fallback here. That put a
+                # provider id ("openai", "deepseek") into the MODEL slot, where it
+                # either matched nothing and fell to _default anyway, or fuzzy-hit
+                # an unrelated key. An unknown model should reach _default plainly.
+                model_for_cost = sess.get("model")
                 for day in sorted(day_snap.keys()):
                     g, c, o = day_snap[day]
                     dg, dc, do = max(0, g - pg), max(0, c - pc), max(0, o - po)
@@ -6961,7 +6977,7 @@ def _scan_sessions_sync():
                         # DeepSeek's cutover was 16:00 UTC, so the cutover day bills
                         # entirely at the old rate. Deliberate: a day bucket has no
                         # finer timestamp to offer.
-                        "cost": calculate_cost(model_for_cost, net_in, do, dc, at=day)
+                        "cost": calculate_cost(model_for_cost, net_in, do, dc, provider=sess.get("_provider"), at=day)
                     }
                 sess["tokens_by_day"] = tbd
 

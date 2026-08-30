@@ -60,6 +60,12 @@ DEFAULT_SUBSCRIPTION_ENDPOINTS: List[str] = []
 # endpoint served them (one proxy can front both subscription and pay-per-token
 # models). Opt-in; empty by default. Matched by exact case-insensitive model id.
 DEFAULT_SUBSCRIPTION_MODELS: List[str] = []
+# Provider ids billed under a flat monthly subscription. Needed alongside
+# subscriptionEndpoints because some harnesses record only a provider id and no
+# endpoint URL — Cline's sessions.db has a `provider` column and nothing to
+# derive a base URL from, so its `cline-pass` subscription routing is
+# unmatchable by endpoint. Opt-in; empty by default. Exact, case-insensitive.
+DEFAULT_SUBSCRIPTION_PROVIDERS: List[str] = []
 # Extra endpoints (beyond loopback) the user runs models on locally, e.g. a LAN
 # box at http://192.168.1.50:11434. Loopback is always treated as local.
 DEFAULT_LOCAL_ENDPOINTS: List[str] = []
@@ -70,6 +76,7 @@ DEFAULTS: Dict[str, Any] = {
     "gridCarbonIntensity": DEFAULT_CARBON_INTENSITY,
     "subscriptionEndpoints": list(DEFAULT_SUBSCRIPTION_ENDPOINTS),
     "subscriptionModels": list(DEFAULT_SUBSCRIPTION_MODELS),
+    "subscriptionProviders": list(DEFAULT_SUBSCRIPTION_PROVIDERS),
     "localEndpoints": list(DEFAULT_LOCAL_ENDPOINTS),
     "referenceCloudModel": "claude-sonnet-4-6",
 }
@@ -171,6 +178,7 @@ def load_power_config() -> Dict[str, Any]:
     config = dict(DEFAULTS)
     config["subscriptionEndpoints"] = list(DEFAULT_SUBSCRIPTION_ENDPOINTS)
     config["subscriptionModels"] = list(DEFAULT_SUBSCRIPTION_MODELS)
+    config["subscriptionProviders"] = list(DEFAULT_SUBSCRIPTION_PROVIDERS)
     # Baseline wattage is device-aware (chip estimate) — an explicit value in
     # power.json below still overrides it.
     config["loadWatts"] = device_default_watts()
@@ -208,6 +216,12 @@ def load_power_config() -> Dict[str, Any]:
     if isinstance(sms, list):
         config["subscriptionModels"] = [
             m.strip() for m in sms if isinstance(m, str) and m.strip()
+        ]
+
+    sps = raw.get("subscriptionProviders")
+    if isinstance(sps, list):
+        config["subscriptionProviders"] = [
+            pv.strip() for pv in sps if isinstance(pv, str) and pv.strip()
         ]
 
     leps = raw.get("localEndpoints")
@@ -253,6 +267,12 @@ def save_power_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(sms, list):
         config["subscriptionModels"] = [
             m.strip() for m in sms if isinstance(m, str) and m.strip()
+        ]
+
+    sps = updates.get("subscriptionProviders")
+    if isinstance(sps, list):
+        config["subscriptionProviders"] = [
+            pv.strip() for pv in sps if isinstance(pv, str) and pv.strip()
         ]
 
     leps = updates.get("localEndpoints")
@@ -307,6 +327,24 @@ def is_subscription_model(
         config = load_power_config()
     m = str(model_name).lower().strip()
     return any(m == s.lower().strip() for s in config.get("subscriptionModels", []) if s and s.strip())
+
+
+def is_subscription_provider(
+    provider: Optional[str], config: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True if ``provider`` exactly matches a configured flat-subscription provider.
+
+    Exact match, not substring: provider ids are short and collide easily
+    (``cline`` would otherwise swallow ``cline-pass`` and vice-versa), unlike
+    endpoints where substring matching lets a configured host match a fuller
+    request URL.
+    """
+    if not provider:
+        return False
+    if config is None:
+        config = load_power_config()
+    pv = str(provider).lower().strip()
+    return any(pv == s.lower().strip() for s in config.get("subscriptionProviders", []) if s and s.strip())
 
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")

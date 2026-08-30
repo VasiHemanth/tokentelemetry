@@ -592,6 +592,18 @@ def calculate_cost(
     except Exception:
         pass
 
+    # Provider-level flat subscription. Same idea as the endpoint branch above,
+    # keyed on the provider id instead — some harnesses record a provider and no
+    # endpoint at all (Cline's sessions.db has a `provider` column and no base
+    # URL), so routing like `cline-pass` is unreachable by endpoint matching.
+    # Opt-in via power.json subscriptionProviders; empty by default.
+    try:
+        from power_config import is_subscription_provider
+        if is_subscription_provider(provider):
+            return 0.0
+    except Exception:
+        pass
+
     # Confirmed-local sessions (loopback/local endpoint, a local provider id, or
     # the agent set to `local` billing mode) are priced by electricity and WIN
     # over the pricing table — so a local llama-3.3-70b isn't billed at cloud
