@@ -93,7 +93,7 @@ export default function OpenGraphImage() {
           </div>
           <div style={{ display: "flex", fontSize: "28px", color: "#94a3b8", fontWeight: 500 }}>
             <span style={{ color: "#93a9ff", fontWeight: 600 }}>DeepSeek Harness</span>
-            <span style={{ display: "flex", color: "#94a3b8" }}>&nbsp;· Hermes · Claude · Codex · Gemini · Cursor · Copilot · and 10 more.</span>
+            <span style={{ display: "flex", color: "#94a3b8" }}>&nbsp;· Hermes · Claude · Codex · Gemini · Cursor · Copilot · and 11 more.</span>
           </div>
         </div>
 
