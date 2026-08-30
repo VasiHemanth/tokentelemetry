@@ -6481,8 +6481,23 @@ def _scan_sessions_sync():
                                         message_id = msg.get("id")
                                         if message_id:
                                             if message_id in seen_assistant_message_ids:
-                                                continue
-                                            seen_assistant_message_ids.add(message_id)
+                                                # Claude splits ONE assistant message across several
+                                                # records — text first, then the tool_use blocks —
+                                                # and every one of them repeats the same id and the
+                                                # same cumulative usage. Count that usage once.
+                                                #
+                                                # This used to `continue`, which skipped the whole
+                                                # record: the tool_use loop below never ran for a
+                                                # continuation record, so its Skill/ExitPlanMode/
+                                                # CronCreate/Artifact blocks were invisible. A
+                                                # published artifact whose Artifact call landed in
+                                                # a continuation was silently dropped from the
+                                                # project's Artifacts tab. Drop the usage, keep
+                                                # reading the record.
+                                                usage = {}
+                                            else:
+                                                seen_assistant_message_ids.add(message_id)
+                                    if usage:
                                         cr = usage.get("cache_read_input_tokens", 0) or 0
                                         cc = usage.get("cache_creation_input_tokens", 0) or 0
                                         cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0

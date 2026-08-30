@@ -328,3 +328,76 @@ def test_project_artifact_keys_are_unique(scan_env, monkeypatch):
         keys = [a.get("url") or a.get("path") for a in proj.get("artifacts", [])]
         assert len(keys) == len(set(keys)), (
             "duplicate React key in %s: %s" % (proj.get("name"), keys))
+# --- a split assistant message must not swallow its tool_use ----------------
+
+def _assistant_split(msg_id, ts, blocks, usage=True):
+    """One record of an assistant message that Claude wrote across several.
+
+    Every record of the same message repeats the same `message.id` and the same
+    cumulative `usage`, which is why the scan counts usage only for the first —
+    but the tool_use blocks live in the LATER records.
+    """
+    msg = {"id": msg_id, "model": "claude-opus-4-8", "content": blocks}
+    if usage:
+        msg["usage"] = {"input_tokens": 100, "output_tokens": 50}
+    return _jl(type="assistant", timestamp=ts, message=msg)
+
+
+def test_artifact_in_a_continuation_record_is_still_found(scan_env):
+    """Regression: the usage-dedupe used to `continue` past the whole record.
+
+    An Artifact call that landed in the second record of a split assistant
+    message was therefore never registered, so its tool_result found no
+    matching call and the publish vanished from the project's Artifacts tab —
+    with no error anywhere.
+    """
+    MID = "msg_split_0001"
+    _write_session(scan_env / ".claude", [
+        # First record of the message: prose only. Usage counted here.
+        _assistant_split(MID, "2026-07-20T10:01:00Z",
+                         [{"type": "text", "text": "Publishing the page now."}]),
+        # Second record, SAME id and SAME usage: this is where the call lives.
+        _assistant_split(MID, "2026-07-20T10:01:01Z",
+                         [{"type": "tool_use", "id": "t1", "name": "Artifact",
+                           "input": {"file_path": "/tmp/a.html", "title": "A"}}]),
+        _artifact_result("t1", "2026-07-20T10:01:05Z", f"Published a at {URL1}"),
+    ])
+    sess = _claude_session(scan_env)
+
+    arts = sess.get("published_artifacts") or []
+    assert [a["url"] for a in arts] == [URL1], (
+        "the publish was dropped because its call sat in a continuation record")
+
+    # ...and the repeated usage is still counted exactly once.
+    assert sess["tokens"]["input"] == 100
+    assert sess["tokens"]["output"] == 50
+
+
+def test_repeated_usage_is_never_double_counted(scan_env):
+    """The dedupe still has to do its original job: three records of one
+    message carry the same cumulative usage, and it counts once."""
+    MID = "msg_split_0002"
+    _write_session(scan_env / ".claude", [
+        _assistant_split(MID, "2026-07-20T10:01:00Z", [{"type": "text", "text": "one"}]),
+        _assistant_split(MID, "2026-07-20T10:01:01Z", [{"type": "text", "text": "two"}]),
+        _assistant_split(MID, "2026-07-20T10:01:02Z", [{"type": "text", "text": "three"}]),
+    ])
+    sess = _claude_session(scan_env)
+    assert sess["tokens"]["input"] == 100
+    assert sess["tokens"]["output"] == 50
+
+
+def test_tools_in_a_continuation_record_are_counted(scan_env):
+    """Artifacts were the visible symptom; every tool_use in a continuation
+    record was invisible, including Skill and ExitPlanMode."""
+    MID = "msg_split_0003"
+    _write_session(scan_env / ".claude", [
+        _assistant_split(MID, "2026-07-20T10:01:00Z", [{"type": "text", "text": "working"}]),
+        _assistant_split(MID, "2026-07-20T10:01:01Z", [
+            {"type": "tool_use", "id": "p1", "name": "ExitPlanMode",
+             "input": {"plan": "step one, then step two"}},
+        ]),
+    ])
+    sess = _claude_session(scan_env)
+    assert sess["has_plan"] is True
+    assert any("step one" in p["content"] for p in sess["plans"])

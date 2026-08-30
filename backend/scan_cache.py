@@ -34,7 +34,7 @@ logger = logging.getLogger("tokentelemetry.scan_cache")
 # update that affects cached costs. `_mtime` only detects source-transcript
 # changes; this detects code changes. A mismatch is a miss, so stale entries
 # are transparently reparsed and rewritten — never migrated in place.
-CACHE_VERSION = 10  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250) — cached sessions store a computed cost, so a rate change must invalidate them
+CACHE_VERSION = 11  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250) — cached sessions store a computed cost, so a rate change must invalidate them; v11: the assistant usage-dedupe no longer discards the whole record, so continuation records now yield their tool_use blocks — cached sessions are missing the Artifact publishes, skills and tool counts that lived in them
 
 
 def _require_safe_component(candidate: str) -> str:
