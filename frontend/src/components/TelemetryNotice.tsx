@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { BarChart3, X } from "lucide-react";
-import { trackEvent, routeOf, getTelemetry, setTelemetry, ackTelemetryNotice } from "@/lib/telemetry";
+import { trackEvent, routeOf, agentOf, getTelemetry, setTelemetry, ackTelemetryNotice } from "@/lib/telemetry";
 
 const SEEN_KEY = "tt-telemetry-notice";
 
@@ -32,9 +32,13 @@ export default function TelemetryNotice() {
   useEffect(() => {
     if (!pathname) return;
     const route = routeOf(pathname);
-    if (route === lastRoute.current) return;
-    lastRoute.current = route;
-    trackEvent("page.viewed", { route });
+    const agent = agentOf(pathname);
+    // Dedupe on route *and* agent, or moving between two harness panels would
+    // look like one view of "agent-panel".
+    const key = agent ? `${route}:${agent}` : route;
+    if (key === lastRoute.current) return;
+    lastRoute.current = key;
+    trackEvent("page.viewed", agent ? { route, agent } : { route });
   }, [pathname]);
 
   // 2. First-run notice — the server `notice_ack` flag (local preferences DB) is

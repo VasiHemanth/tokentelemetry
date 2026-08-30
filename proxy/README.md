@@ -90,6 +90,41 @@ editor); `events` for `budget-set` is the configure count (the "clicks").
 sessionId resets every launch and isn't linkable, so this is a usage floor, not
 a unique-user count.
 
+#### Is a newly added harness actually working?
+
+`harness.scanned` fires once per launch for each agent detected on the machine,
+carrying that agent (`blob17`) and how many sessions its reader returned as an
+order-of-magnitude bucket (`blob18`) — never a raw count. A row with
+`blob18 = '0'` is the interesting one: the harness is installed and we found
+nothing, which is the shape of a broken reader.
+
+```sql
+SELECT blob17 AS agent,
+       blob18 AS sessions,
+       count(DISTINCT blob2) AS launches   -- blob2 = per-launch session id
+FROM tt_telemetry
+WHERE blob1 = 'harness.scanned'
+  AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY agent, sessions
+ORDER BY agent, sessions
+```
+
+An agent whose launches sit overwhelmingly in the `0` bucket is failing in the
+field even though it detects fine. That is the exact state DeepSeek Harness
+shipped in, and it took a bug report to find.
+
+To ask the narrower question — do people ever *open* a given harness panel —
+use `page.viewed`, which is gated behind a real browser interaction and so is
+far less bot-contaminated than anything hanging off launch:
+
+```sql
+SELECT blob17 AS agent, count() AS views, count(DISTINCT blob2) AS launches
+FROM tt_telemetry
+WHERE blob1 = 'page.viewed' AND blob7 = 'agent-panel'
+  AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY agent ORDER BY views DESC
+```
+
 ### 2. Grafana (the "holistic picture")
 Install the official **Cloudflare Analytics Engine** Grafana data-source plugin,
 point it at the SQL API with the same token, and build panels (DAU, top routes,
@@ -108,7 +143,13 @@ agent mix, summary outcomes). This is the recommended long-term dashboard.
 | `blob6` | appVersion | `blob14` | summarizer_backend (context) |
 | `blob7` | route (`page.viewed`) | `blob15` | country (edge, no IP) |
 | `blob8` | feature name (`feature.used`) | `blob16` | sdkVersion |
+| `blob17` | agent — a *single* harness | `blob18` | volume (bucketed count) |
 | `double1` | agent_count | `double2` | isDebug (0/1) |
+
+Note `blob13` and `blob17` are different things: `blob13` is the whole detected
+set as a CSV (context, on every event), `blob17` is one harness — the subject of
+a `harness.scanned`, or the panel being viewed on a `page.viewed`. Positions are
+append-only; renumbering silently re-labels every historical row.
 
 Plus the automatic `timestamp` and `_sample_interval` columns.
 

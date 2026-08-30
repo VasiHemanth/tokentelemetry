@@ -53,6 +53,7 @@ const MAX_BODY = 8 * 1024; // events are tiny; reject anything bigger as abuse.
 const ALLOWED_EVENTS = new Set([
   "app.launched", "page.viewed", "trace.summarized",
   "analytics.filtered", "feature.used", "retention.opted_in",
+  "harness.scanned",
 ]);
 
 // Cheap, stateless validation. This is NOT anti-spoof (an open-source client
@@ -125,10 +126,17 @@ export default {
           blob(p.backend),            // blob10
           blob(p.outcome),            // blob11
           blob(p.tier),               // blob12
-          blob(p.agents, 120),        // blob13
+          blob(p.agents, 256),        // blob13
           blob(p.summarizer_backend), // blob14
           blob(country, 8),           // blob15
           blob(s.sdkVersion),         // blob16
+          // Appended, never renumbered -- blob positions are the schema that
+          // saved SQL/Grafana queries read by index.
+          blob(p.agent),              // blob17 -- ONE harness (harness.scanned,
+                                      //   or the agent panel on page.viewed).
+                                      //   Distinct from blob13 `agents`, which
+                                      //   is the full detected set.
+          blob(p.volume),             // blob18 -- bucketed session count
         ],
         doubles: [
           num(p.agent_count),         // double1

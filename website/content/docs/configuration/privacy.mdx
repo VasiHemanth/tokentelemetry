@@ -35,7 +35,9 @@ export TT_NO_UPDATE_CHECK=1
 
 TokenTelemetry optionally sends anonymous, content-free feature-usage events to help the maintainer understand which features are used and prioritize development. This is distinct from the update check.
 
-**What is sent:** Event names only (e.g. "opened Analytics page", "generated summary"). No session content, no tokens, no costs, no file paths, no identifiers that could link events to a person or machine.
+**What is sent:** An event name plus a handful of values drawn from fixed lists — which page you opened (including which coding agent's panel), which feature you used, whether a summary succeeded, and for each coding agent detected on your machine whether its sessions could be read at all, as a size band rather than a count. No session content, no tokens, no costs, no file paths, no identifiers that could link events to a person or machine.
+
+Anything outside those fixed lists is replaced with `other` before sending, so an unexpected value cannot ride along. Settings → *Anonymous usage stats* → **Show exactly what we send** lists every event and every permitted value, generated from the same allowlist the app validates against — so it is always current rather than a description someone remembered to update.
 
 **What is not sent:** Anything from your agent sessions.
 
@@ -43,7 +45,7 @@ Telemetry is **on by default** (opt-out). It is automatically disabled in CI env
 
 ### Disabling product telemetry
 
-**In the app:** Settings → *Updates & privacy* → toggle off *Share anonymous usage data*.
+**In the app:** Settings → *Updates & privacy* → toggle off *Anonymous usage stats*.
 
 **Via environment variable:** Set `TT_NO_TELEMETRY=1` before launching. Like `TT_NO_UPDATE_CHECK`, this wins over the in-app toggle:
 
