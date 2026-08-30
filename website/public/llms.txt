@@ -4,7 +4,7 @@
 
 ## What is TokenTelemetry?
 
-TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, and Nous Research's Hermes Agent.
+TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, and Nous Research's Hermes Agent.
 
 It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:3000.
 
@@ -40,6 +40,7 @@ It reads session logs and SQLite state directly from the filesystem (no SDK, no 
 - Meta Muse Code
 - Prime Agent
 - DeepSeek Harness (DeepSeek AI)
+- Qoder (Alibaba)
 
 ### Autonomous agents (1)
 
@@ -62,7 +63,7 @@ Hermes Agent is structurally different from coding agents — it runs across CLI
 
 ## Hermes Dashboard Plugin
 
-TokenTelemetry ships a plugin for Hermes Agent's own web dashboard (port 9119). After a one-command install, a "TokenTelemetry" tab appears inside Hermes Dashboard with deep-link cards that open TT pages (Hermes Overview, Skills, Memory, Analytics, Projects, All Agents) in a new browser tab. Important: the plugin is a launcher, not the engine — TokenTelemetry itself must be installed and running for the launcher to do anything. When TT isn't running, the plugin shows an onboarding card explaining what TokenTelemetry is (a local observability dashboard for Hermes Agent and 16 coding agents) with a copy-paste install command.
+TokenTelemetry ships a plugin for Hermes Agent's own web dashboard (port 9119). After a one-command install, a "TokenTelemetry" tab appears inside Hermes Dashboard with deep-link cards that open TT pages (Hermes Overview, Skills, Memory, Analytics, Projects, All Agents) in a new browser tab. Important: the plugin is a launcher, not the engine — TokenTelemetry itself must be installed and running for the launcher to do anything. When TT isn't running, the plugin shows an onboarding card explaining what TokenTelemetry is (a local observability dashboard for Hermes Agent and 17 coding agents) with a copy-paste install command.
 
 Install (recommended, via Hermes's own plugin manager):
 
@@ -158,7 +159,7 @@ Full docs site: https://tokentelemetry.com/docs
 - [Introduction](https://tokentelemetry.com/docs): What TokenTelemetry is and who it's for.
 - [Installation](https://tokentelemetry.com/docs/installation): One-line curl install, Windows PowerShell script, or clone from source.
 - [Quick Start](https://tokentelemetry.com/docs/quick-start): First launch, agent auto-detection, and opening the dashboard.
-- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 16 coding agents and Hermes, how each is detected, and what data each captures.
+- [Supported Agents](https://tokentelemetry.com/docs/supported-agents): The 17 coding agents and Hermes, how each is detected, and what data each captures.
 
 ### Features
 

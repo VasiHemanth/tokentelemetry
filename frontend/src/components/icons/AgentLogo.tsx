@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import {
   Antigravity, ClaudeCode, Cline, Codex, Copilot, Cursor, GeminiCLI, Grok,
-  HermesAgent, OpenCode, Qwen,
+  HermesAgent, OpenCode, Qoder, Qwen,
 } from "@lobehub/icons";
 import { getAgent, type AgentKey } from "@/lib/agents";
 
@@ -37,6 +37,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className }: Lo
     case "hermes": return <HermesAgent {...props} />;
     case "grok": return <Grok {...props} />;
     case "cline": return <Cline {...props} />;
+    case "qoder": return <Qoder {...props} />;
     default: {
       const Fallback = meta.icon;
       return <Fallback {...props} color={meta.hex} />;
