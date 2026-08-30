@@ -44,6 +44,19 @@ _PROVIDER_SEP = "\x00"
 # Direct first-party pricing — used as the flat-fallback when provider unknown.
 PRICING = {
     # --- Anthropic (Claude) ---
+    # The Claude 5 generation was resolving entirely through the models.dev
+    # overlay, and the overlay contradicts itself on Sonnet 5: its flat entry
+    # said $3.00/$15.00 (Sonnet 4.6's price, carried forward) while its
+    # anthropic-keyed entry said the correct $2.00/$10.00. So the same model
+    # cost 1.5x more when the scanner did not happen to know the provider.
+    # Curated here so both paths agree and a future overlay refresh cannot
+    # move them. Rates: https://docs.claude.com/en/docs/about-claude/pricing
+    "claude-fable-5":    {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    "claude-mythos-5":   {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    "claude-opus-5":     {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    "claude-opus-4-8":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    "claude-sonnet-5":   {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
+
     "claude-opus-4-7":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-6":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-5":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
@@ -194,6 +207,18 @@ PRICING = {
 # we use this when available to capture markup/discount on aggregator providers.
 # Key: (provider_lower, model_id_lower)
 PRICING_BY_PROVIDER = {
+    # --- Anthropic (direct) ---
+    # Pinned for the same reason as the DeepSeek block below: the overlay only
+    # yields to an inline entry, so without these tuples a provider-qualified
+    # lookup keeps resolving through models.dev. Today its anthropic-keyed
+    # Sonnet 5 rate is right and its flat one is wrong; nothing stops the next
+    # refresh from breaking the half we are not pinning.
+    ("anthropic", "claude-fable-5"):                 {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    ("anthropic", "claude-mythos-5"):                {"in": 10.00, "out": 50.00, "cached_read": 1.00},
+    ("anthropic", "claude-opus-5"):                  {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    ("anthropic", "claude-opus-4-8"):                {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
+    ("anthropic", "claude-sonnet-5"):                {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
+
     # --- DeepSeek (direct) ---
     # These MUST exist even though they duplicate the flat table above.
     # models.dev ships ("deepseek", "deepseek-v4-pro") at $0.435/$0.87 — a rate

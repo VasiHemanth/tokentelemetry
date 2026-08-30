@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-08-30",
+      "title": "Claude Sonnet 5 costs corrected",
+      "highlights": [
+        {
+          "title": "Sonnet 5 sessions read 50% higher than they cost",
+          "description": "Claude Sonnet 5 was priced at Sonnet 4.6's rate, $3 and $15 per million tokens instead of $2 and $10, so every Sonnet 5 session showed half again what it actually cost. Opus 5, Opus 4.8 and Fable 5 were already right but are now written down explicitly rather than read from an external table, so a refresh of that table cannot move them. Existing sessions reprice on the next scan. Thanks to mariadb-KyleHutchinson for spotting this (PR #250).",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-29",
       "title": "Qoder is now tracked",
       "highlights": [
