@@ -28,6 +28,17 @@ function rawFileUrl(path: string): string {
    pointer events — it's a thumbnail, not an embed; clicking opens the hosted
    url. Mounted lazily (IntersectionObserver) and only after a HEAD check
    confirms the source file still exists — it may have been deleted since. */
+/* React key for one artifact row/card.
+ *
+ * The backend collapses artifacts that share an identity (hosted url for a
+ * page, file path for a document), so in practice this is unique on the first
+ * term. The index is a backstop: a duplicate key makes React omit or duplicate
+ * children silently, which is a worse failure than a key that is merely
+ * position-dependent, and this list is re-rendered whole on every fetch. */
+function artifactKey(a: PublishedArtifact, i: number): string {
+  return `${a.url || a.path || "artifact"}::${i}`;
+}
+
 const FRAME_W = 1280;
 const PREVIEW_H = 200;
 
@@ -322,15 +333,15 @@ export default function ArtifactsTab() {
 
       {view === "cards" ? (
         <div className="space-y-5">
-          {artifacts.map((a) => (
-            <ArtifactCard key={a.url || a.path} a={a} sessionHref={sessionHrefFor(a)} />
+          {artifacts.map((a, i) => (
+            <ArtifactCard key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} />
           ))}
         </div>
       ) : (
         <Card padding="none">
           <div className="divide-y divide-[var(--tt-border)]">
-            {artifacts.map((a) => (
-              <ArtifactRow key={a.url || a.path} a={a} sessionHref={sessionHrefFor(a)} />
+            {artifacts.map((a, i) => (
+              <ArtifactRow key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} />
             ))}
           </div>
         </Card>

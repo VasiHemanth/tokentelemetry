@@ -242,3 +242,89 @@ def test_projects_rollup(scan_env, monkeypatch):
     assert len(proj["artifacts"]) == 1
     assert proj["artifacts"][0]["url"] == URL1
     assert proj["artifacts"][0]["session_id"] == SID
+
+
+# --- one artifact, one card -------------------------------------------------
+
+SID2 = "ffffffff-1111-2222-3333-444444444444"
+
+
+def _write_session_as(claude_dir, sid, lines):
+    """Same project, a different session file — what a resume or fork produces."""
+    p_dir = claude_dir / "projects" / PROJ_DIR
+    p_dir.mkdir(parents=True, exist_ok=True)
+    (p_dir / f"{sid}.jsonl").write_text(
+        _jl(type="user", timestamp="2026-07-20T10:00:00Z", cwd="/tmp/proj",
+            message={"content": "make me a page"}) + "".join(lines),
+        encoding="utf-8",
+    )
+
+
+def test_dedupe_artifacts_keeps_first_and_never_drops_keyless():
+    items = [
+        {"url": "u1", "title": "newest"},
+        {"url": "u1", "title": "older copy"},
+        {"path": "/p/a", "title": "doc"},
+        {"title": "no identity at all"},
+        {"title": "also no identity"},
+    ]
+    out = main._dedupe_artifacts(items)
+    assert [a["title"] for a in out] == [
+        "newest", "doc", "no identity at all", "also no identity"]
+
+
+def test_url_beats_path_as_identity():
+    """A page's identity is its url even when two records disagree on path —
+    a redeploy from a different file still targets the same artifact."""
+    items = [{"url": "u1", "path": "/a.html"}, {"url": "u1", "path": "/b.html"}]
+    assert len(main._dedupe_artifacts(items)) == 1
+
+
+def test_same_publish_in_two_sessions_is_one_artifact(scan_env, monkeypatch):
+    """The bug: a resumed/forked session replays the original publish record, so
+    the project rolled the same artifact up once per session carrying it. That
+    rendered duplicate cards and, because the UI keys on the same identity,
+    duplicate React keys."""
+    records = [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path="/tmp/a.html", title="A"),
+        _artifact_result("t1", "2026-07-20T10:01:05Z", f"Published a at {URL1}"),
+    ]
+    _write_session_as(scan_env / ".claude", SID, records)
+    _write_session_as(scan_env / ".claude", SID2, records)   # the replay
+
+    sessions = main._scan_sessions_sync()
+
+    async def fake_cached(fresh=False):
+        return sessions
+    monkeypatch.setattr(main, "get_sessions_cached", fake_cached)
+    monkeypatch.setattr(main, "load_hidden", lambda: set())
+    projects = asyncio.run(main.get_projects())
+    proj = next(p for p in projects if p["path"] == "/tmp/proj")
+
+    # Both sessions really do carry the publish...
+    carriers = [s for s in sessions if s.get("published_artifacts")]
+    assert len(carriers) == 2, "fixture should reproduce the replay"
+    # ...but the project shows it once.
+    assert len(proj["artifacts"]) == 1
+    assert proj["artifacts"][0]["url"] == URL1
+
+
+def test_project_artifact_keys_are_unique(scan_env, monkeypatch):
+    """Guards the React key directly: the UI keys on `url || path`, so that
+    expression has to be unique across a project's artifacts."""
+    records = [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path="/tmp/a.html", title="A"),
+        _artifact_result("t1", "2026-07-20T10:01:05Z", f"Published a at {URL1}"),
+    ]
+    _write_session_as(scan_env / ".claude", SID, records)
+    _write_session_as(scan_env / ".claude", SID2, records)
+    sessions = main._scan_sessions_sync()
+
+    async def fake_cached(fresh=False):
+        return sessions
+    monkeypatch.setattr(main, "get_sessions_cached", fake_cached)
+    monkeypatch.setattr(main, "load_hidden", lambda: set())
+    for proj in asyncio.run(main.get_projects()):
+        keys = [a.get("url") or a.get("path") for a in proj.get("artifacts", [])]
+        assert len(keys) == len(set(keys)), (
+            "duplicate React key in %s: %s" % (proj.get("name"), keys))

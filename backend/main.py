@@ -9726,7 +9726,15 @@ async def get_projects(include_hidden: bool = False):
         p["agents"] = list(p["agents"])
         p["mcp_tools"] = list(p["mcp_tools"])
         p["plans"] = sorted(p["plans"], key=lambda x: str(x["timestamp"]), reverse=True)
-        p["artifacts"] = sorted(p["artifacts"], key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        # One artifact, one card. `published_artifacts` is deduped by url
+        # *within* a session, but a project sums several sessions and a resumed
+        # or forked session replays the original publish record verbatim — same
+        # url, same path, same timestamp, only a different session_id. Extending
+        # without a dedupe therefore surfaced one publish once per session that
+        # carried it, which rendered as duplicate cards (and duplicate React
+        # keys, since the UI keys on the same identity).
+        p["artifacts"] = _dedupe_artifacts(
+            sorted(p["artifacts"], key=lambda x: str(x.get("timestamp") or ""), reverse=True))
         # Status: is this project folder still on disk?
         try:
             p["status"] = "active" if Path(p["path"]).exists() else "missing"
@@ -9859,20 +9867,50 @@ async def get_projects(include_hidden: bool = False):
         # publishes usually happen from worktree sessions but belong to the repo.
         # Identity is the hosted url for "page" artifacts, the file path for
         # "document" ones.
-        seen_keys = {a.get("url") or a.get("path") for a in parent.get("artifacts", [])}
+        seen_keys = {_artifact_key(a) for a in parent.get("artifacts", [])}
         for c in children:
             for a in c.get("artifacts", []):
-                key = a.get("url") or a.get("path")
+                key = _artifact_key(a)
                 if key and key not in seen_keys:
                     parent.setdefault("artifacts", []).append(a)
                     seen_keys.add(key)
-        parent["artifacts"] = sorted(parent.get("artifacts", []),
-                                     key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        parent["artifacts"] = _dedupe_artifacts(
+            sorted(parent.get("artifacts", []),
+                   key=lambda x: str(x.get("timestamp") or ""), reverse=True))
         for c in children:
             c["parent_path"] = repo
             c["parent_name"] = parent["name"]
 
     out.extend(synthesized)
+    return out
+
+
+def _artifact_key(a: Dict[str, Any]) -> Optional[str]:
+    """Identity of one artifact: the hosted url for a published page, the file
+    path for a document. Two records sharing this are the same artifact, not two
+    of them — a redeploy reuses the url by design."""
+    return a.get("url") or a.get("path")
+
+
+def _dedupe_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse artifacts that share an identity, keeping the first seen.
+
+    Callers pass a list already sorted newest-first, so "first" is the most
+    recent record and therefore the freshest title/description a later redeploy
+    may have changed. Records with no identity at all are kept as-is rather than
+    silently dropped.
+    """
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for a in items:
+        key = _artifact_key(a)
+        if key is None:
+            out.append(a)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
     return out
 
 
