@@ -2,6 +2,17 @@
   "releases": [
     {
       "tag": "2026-08-30",
+      "title": "Codex Sites appear with your artifacts",
+      "highlights": [
+        {
+          "title": "Published Codex Sites now show in every project",
+          "description": "When Codex deploys a Site, TokenTelemetry records its title and live link as a project artifact alongside Claude Code pages and local documents. The card is labelled Codex Site and opens the deployed page. Only confirmed results from the Sites connector are recorded, never a link merely mentioned in a conversation.",
+          "href": "/projects"
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-30",
       "title": "Telemetry you can read line by line",
       "highlights": [
         {

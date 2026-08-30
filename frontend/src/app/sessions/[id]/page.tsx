@@ -29,12 +29,12 @@ interface Artifact {
 }
 
 /* A deliverable artifact from this session. kind "page" is a hosted claude.ai
-   page published by Claude Code's Artifact tool (has url); kind "document" is
-   a local doc like Antigravity's task/plan/walkthrough (has path) — those
-   already render in the local-files list, so the Published Pages section only
-   shows url-bearing entries. */
+   page published by Claude Code's Artifact tool; kind "site" is a deployed
+   Codex Site; kind "document" is a local doc like Antigravity's
+   task/plan/walkthrough (has path) — those already render in the local-files
+   list, so this panel only shows url-bearing entries. */
 interface PublishedArtifact {
-  kind?: "page" | "document";
+  kind?: "page" | "site" | "document";
   url?: string | null;
   path?: string | null;
   title?: string | null;
@@ -2183,7 +2183,7 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
       {published.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
-            <Globe size={12} /> Published Pages
+            <Globe size={12} /> Published Deliverables
           </div>
           {published.map((p) => (
             <a
@@ -2197,6 +2197,11 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
                 <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
                   {p.title || p.file_name || "Untitled artifact"}
                 </span>
+                {p.kind === "site" && (
+                  <span className="shrink-0 rounded bg-[var(--tt-brand-bg)] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-[var(--tt-brand)]">
+                    Codex Site
+                  </span>
+                )}
                 <ExternalLink size={10} className="shrink-0 text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-brand)] transition-colors" />
               </div>
               {p.description && (

@@ -1368,11 +1368,12 @@ class Artifact(BaseModel):
 
 class PublishedArtifact(BaseModel):
     """A user-facing artifact an agent produced as a deliverable, shown on the
-    project Artifacts tab. Two kinds: "page" — a hosted claude.ai page from
-    Claude Code's Artifact tool (has `url`); "document" — a local doc like
-    Antigravity's task/plan/walkthrough (has `path`, served via
-    /artifacts?path=). Unlike `Artifact`, entries carry display metadata
-    (title/description) mined from the transcript or metadata sidecars."""
+    project Artifacts tab. Kinds: "page" — a hosted claude.ai page from
+    Claude Code's Artifact tool; "site" — a deployed Codex Site; and
+    "document" — a local doc like Antigravity's task/plan/walkthrough (has
+    `path`, served via /artifacts?path=). Unlike `Artifact`, entries carry
+    display metadata (title/description) mined from the transcript or metadata
+    sidecars."""
     kind: str = "page"
     url: Optional[str] = None
     path: Optional[str] = None
@@ -5962,6 +5963,84 @@ _LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
 # ("Published <path> at https://claude.ai/code/artifact/<uuid>").
 _ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/code/artifact/[0-9a-f-]{36}")
 
+# A Codex Site is only a session artifact when a Codex Sites tool produced its
+# deployed URL. Do not mine arbitrary chatgpt.site strings from user prompts or
+# assistant prose: a session may discuss a Site it did not create.
+_CODEX_SITES_TOOL_RE = re.compile(
+    r"(?:mcp__codex_apps__)?sites_(?:create_site|save_site_version|"
+    r"deploy_(?:private_)?site_version|get_deployment_status|get_site)",
+    re.IGNORECASE,
+)
+_CODEX_SITE_URL_RE = re.compile(
+    r"https://[a-z0-9][a-z0-9.-]*\.chatgpt\.site(?:/[^\s<>\"']*)?",
+    re.IGNORECASE,
+)
+_CODEX_SITE_FIELD_RE = {
+    key: re.compile(rf"[\"']?{key}[\"']?\s*:\s*[\"']([^\"']{{1,240}})[\"']", re.IGNORECASE)
+    for key in ("title", "description", "slug")
+}
+
+
+def _codex_site_metadata(value: Any) -> Dict[str, str]:
+    """Return safe display fields from a Codex Sites call or its result.
+
+    Site transport records can be direct function-call JSON or a custom
+    `functions.exec` program. This extracts only bounded presentation fields;
+    credentials, project IDs, raw output, and arbitrary tool arguments never
+    leave the scanner.
+    """
+    parsed: Any = value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("structuredContent"), dict):
+        parsed = parsed["structuredContent"]
+    result: Dict[str, str] = {}
+    if isinstance(parsed, dict):
+        for key in ("title", "description", "slug"):
+            field = parsed.get(key)
+            if isinstance(field, str) and field.strip():
+                result[key] = field.strip()[:240]
+    if result or not isinstance(value, str):
+        return result
+    for key, pattern in _CODEX_SITE_FIELD_RE.items():
+        match = pattern.search(value)
+        if match:
+            result[key] = match.group(1).strip()[:240]
+    return result
+
+
+def _codex_site_output_text(value: Any, limit: int = 16_000) -> str:
+    """Flatten a structured tool result without retaining it in session data."""
+    if isinstance(value, str):
+        return value[:limit]
+    if isinstance(value, list):
+        parts = [_codex_site_output_text(item, limit) for item in value]
+        return "\n".join(part for part in parts if part)[:limit]
+    if isinstance(value, dict):
+        # These are the only result fields that may contain a deployed URL.
+        # In particular, do not stringify whole MCP results: they can include
+        # opaque connector metadata that is neither needed nor safe to retain.
+        for key in ("url", "current_live_url", "current_preview_url", "structuredContent", "text", "output", "content"):
+            if key in value:
+                return _codex_site_output_text(value[key], limit)
+    return ""
+
+
+def _codex_site_urls(value: Any) -> List[str]:
+    """Extract HTTPS Sites URLs from a confirmed Sites tool output only."""
+    text = _codex_site_output_text(value)
+    seen: Set[str] = set()
+    urls: List[str] = []
+    for match in _CODEX_SITE_URL_RE.finditer(text):
+        url = match.group(0).rstrip(".,;:)")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
 
 def _loop_parse_ts(ts: Any) -> Optional[datetime]:
     if not ts or not isinstance(ts, str):
@@ -6255,7 +6334,7 @@ def _apply_claude_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> Non
 _CODEX_CACHE_FIELDS = (
     "tokens", "model", "models_used", "_provider", "cost", "mcp_tools", "has_plan", "plans",
     "text", "tokens_by_day", "tool_counts", "_skill_counts",
-    "parent_session_id", "subagent_info", "_raw_cwd",
+    "parent_session_id", "subagent_info", "_raw_cwd", "published_artifacts",
 )
 
 
@@ -6481,8 +6560,23 @@ def _scan_sessions_sync():
                                         message_id = msg.get("id")
                                         if message_id:
                                             if message_id in seen_assistant_message_ids:
-                                                continue
-                                            seen_assistant_message_ids.add(message_id)
+                                                # Claude splits ONE assistant message across several
+                                                # records — text first, then the tool_use blocks —
+                                                # and every one of them repeats the same id and the
+                                                # same cumulative usage. Count that usage once.
+                                                #
+                                                # This used to `continue`, which skipped the whole
+                                                # record: the tool_use loop below never ran for a
+                                                # continuation record, so its Skill/ExitPlanMode/
+                                                # CronCreate/Artifact blocks were invisible. A
+                                                # published artifact whose Artifact call landed in
+                                                # a continuation was silently dropped from the
+                                                # project's Artifacts tab. Drop the usage, keep
+                                                # reading the record.
+                                                usage = {}
+                                            else:
+                                                seen_assistant_message_ids.add(message_id)
+                                    if usage:
                                         cr = usage.get("cache_read_input_tokens", 0) or 0
                                         cc = usage.get("cache_creation_input_tokens", 0) or 0
                                         cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
@@ -6832,6 +6926,9 @@ def _scan_sessions_sync():
                 continue
 
             day_snap = {}
+            codex_site_calls: Dict[str, Dict[str, str]] = {}
+            codex_site_meta: Dict[str, str] = {}
+            published_sites: Dict[str, Dict[str, Any]] = {}
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -6844,6 +6941,23 @@ def _scan_sessions_sync():
                 # Codex logs model changes as later turn-context/settings events.
                 # The current model is the final observed model, not its provider.
                 sess["model"] = model_id
+
+            def record_codex_site_output(call_meta: Dict[str, str], output: Any, timestamp: Any) -> None:
+                """Project a confirmed Sites result into a compact artifact."""
+                output_meta = _codex_site_metadata(output)
+                if output_meta:
+                    codex_site_meta.update(output_meta)
+                for site_url in _codex_site_urls(output):
+                    existing = published_sites.get(site_url, {})
+                    published_sites[site_url] = {
+                        "kind": "site",
+                        "url": site_url,
+                        "title": call_meta.get("title") or codex_site_meta.get("title") or existing.get("title") or "Codex Site",
+                        "description": call_meta.get("description") or codex_site_meta.get("description") or existing.get("description"),
+                        "session_id": sid,
+                        "agent": "codex",
+                        "timestamp": timestamp or existing.get("timestamp"),
+                    }
 
             for rollout_file in rollout_files:
                 try:
@@ -6884,6 +6998,23 @@ def _scan_sessions_sync():
                                     settings = event_payload.get("thread_settings") or {}
                                     if isinstance(settings, dict):
                                         record_codex_model(settings.get("model"))
+                                # Current Codex records connected-app calls as
+                                # event messages, not response_item function calls.
+                                # Accept only the first-party Sites connector and
+                                # its known lifecycle tools, then project its result.
+                                if event_payload.get("type") == "item_completed":
+                                    item = event_payload.get("item") or {}
+                                    tool_name = item.get("tool")
+                                    normalized_tool = tool_name.replace(".", "_") if isinstance(tool_name, str) else ""
+                                    if (
+                                        item.get("type") == "McpToolCall"
+                                        and str(item.get("appName") or "").lower() == "sites"
+                                        and _CODEX_SITES_TOOL_RE.search(normalized_tool)
+                                    ):
+                                        call_meta = _codex_site_metadata(item.get("arguments"))
+                                        if call_meta:
+                                            codex_site_meta.update(call_meta)
+                                        record_codex_site_output(call_meta, item.get("result"), data.get("timestamp"))
                                 ts_str = data.get("timestamp")
                                 event_day = None
                                 if ts_str:
@@ -6931,8 +7062,38 @@ def _scan_sessions_sync():
                                     # table — or by _default when the model id was unknown there.
                                     sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"]["cached"], provider=sess.get("_provider"), at=sess["timestamp"])
                             if data.get("type") == "response_item":
-                                if data.get("payload", {}).get("type") == "function_call":
-                                    tool = data["payload"].get("name")
+                                response = data.get("payload") or {}
+                                response_type = response.get("type")
+
+                                # Sites calls appear either as native function calls or
+                                # nested inside Codex's `functions.exec` custom tool.
+                                # Track their call IDs and only inspect the matching
+                                # output; this prevents a URL merely mentioned in chat
+                                # from turning into a published artifact.
+                                if response_type in ("function_call", "custom_tool_call"):
+                                    call_name = response.get("name")
+                                    call_input = response.get("arguments") if response_type == "function_call" else response.get("input")
+                                    is_sites_call = (
+                                        isinstance(call_name, str) and bool(_CODEX_SITES_TOOL_RE.search(call_name))
+                                    ) or (
+                                        isinstance(call_input, str) and bool(_CODEX_SITES_TOOL_RE.search(call_input))
+                                    )
+                                    if is_sites_call:
+                                        call_meta = _codex_site_metadata(call_input)
+                                        if call_meta:
+                                            codex_site_meta.update(call_meta)
+                                        call_id = response.get("call_id") or response.get("id")
+                                        if isinstance(call_id, str):
+                                            codex_site_calls[call_id] = call_meta
+
+                                if response_type in ("function_call_output", "custom_tool_call_output"):
+                                    call_id = response.get("call_id")
+                                    call_meta = codex_site_calls.get(call_id) if isinstance(call_id, str) else None
+                                    if call_meta is not None:
+                                        record_codex_site_output(call_meta, response.get("output"), data.get("timestamp"))
+
+                                if response_type == "function_call":
+                                    tool = response.get("name")
                                     if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                     _count_tool(sess.setdefault("tool_counts", {}), tool)
                                     # Skill activation breadcrumb: the agent reads
@@ -6942,7 +7103,7 @@ def _scan_sessions_sync():
                                         _sc[_skm.group(1)] = _sc.get(_skm.group(1), 0) + 1
                                     if tool == "update_plan":
                                         try:
-                                            args = json.loads(data["payload"].get("arguments") or "{}")
+                                            args = json.loads(response.get("arguments") or "{}")
                                             steps = args.get("plan") or []
                                             if steps:
                                                 content = (args.get("explanation") or "") + "\n\n" + "\n".join(
@@ -6952,6 +7113,10 @@ def _scan_sessions_sync():
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
                 except Exception: pass
+
+            if published_sites:
+                sess["published_artifacts"] = sorted(
+                    published_sites.values(), key=lambda a: str(a.get("timestamp") or ""), reverse=True)
             
             if day_snap:
                 tbd = {}

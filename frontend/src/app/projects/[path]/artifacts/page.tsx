@@ -159,6 +159,7 @@ function DocumentPreview({ path }: { path: string }) {
 
 function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: string | null }) {
   const isPage = !!a.url;
+  const isSite = a.kind === "site";
   return (
     <Card padding="none" className="overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
@@ -168,6 +169,11 @@ function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: s
           <CardTitle className="!text-[13px] truncate" title={a.title || a.url || a.file_name || undefined}>
             {a.title || a.file_name || "Untitled artifact"}
           </CardTitle>
+          {isSite && (
+            <span className="shrink-0 rounded bg-[var(--tt-brand-bg)] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-[var(--tt-brand)]">
+              Codex Site
+            </span>
+          )}
         </div>
         {a.timestamp && (
           <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] shrink-0">
@@ -219,6 +225,7 @@ function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: s
 
 function ArtifactRow({ a, sessionHref }: { a: PublishedArtifact; sessionHref: string | null }) {
   const isPage = !!a.url;
+  const isSite = a.kind === "site";
   const openHref = a.url || (a.path ? rawFileUrl(a.path) : null);
   return (
     <div className="flex items-center gap-3 px-5 py-2.5">
@@ -230,6 +237,11 @@ function ArtifactRow({ a, sessionHref }: { a: PublishedArtifact; sessionHref: st
       >
         {a.title || a.file_name || "Untitled artifact"}
       </span>
+      {isSite && (
+        <span className="shrink-0 rounded bg-[var(--tt-brand-bg)] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-[var(--tt-brand)]">
+          Site
+        </span>
+      )}
       {a.timestamp && (
         <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] shrink-0 text-right">
           {format(new Date(a.timestamp), "MMM d, HH:mm")}
