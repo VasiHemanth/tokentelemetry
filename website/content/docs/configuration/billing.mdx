@@ -38,9 +38,20 @@ TokenTelemetry detects the billing mode for each agent automatically:
 | Antigravity | `api` |
 | Grok Build | `api` |
 | DeepSeek Harness | `api` (bring-your-own-key; a session can route to several providers) |
+| Qoder | `subscription` (credit-metered; see below) |
 | Hermes Agent | `api` or `local` depending on provider config |
 
 Detection is best-effort. If the agent's auth configuration can't be read, the mode defaults to `unknown`.
+
+## Qoder bills in credits, not tokens
+
+Qoder is the one agent that records no token counts at all. Every turn it writes carries a usage block whose input, output and cache counters are all zero, and puts the real figure in `credits` — its own billing unit.
+
+That is not a gap TokenTelemetry can fill. The context ratio Qoder reports has no denominator anywhere on disk, and its model catalogue is encrypted at rest, so neither the token counts nor a real model name can be recovered offline.
+
+So a Qoder session shows **0 tokens and $0.00**, which under `subscription` is the correct reading rather than a missing value, and the credits it actually spent are shown instead: on the agent's page, and in the trace header as `CREDITS`, with `DELEGATED` alongside it when subagents did part of the work. Qoder publishes no credit-to-currency rate locally, so TokenTelemetry does not convert credits to dollars rather than guess a rate.
+
+Because Qoder contributes zero to fleet-wide token and cost totals, cross-agent comparisons understate it. That is accurate, but worth knowing before reading a leaderboard.
 
 ## Manual override
 

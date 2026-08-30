@@ -2,6 +2,17 @@
   "releases": [
     {
       "tag": "2026-08-30",
+      "title": "Telemetry you can read line by line",
+      "highlights": [
+        {
+          "title": "See exactly what the usage stats send",
+          "description": "Settings now lists every event, property and permitted value that can leave your machine, generated from the app's own allowlist so it cannot fall out of date, with your actual current values shown next to it. It covers one new signal too: whether each coding agent found on your machine could be read at all, as a size band and never a count, so a broken agent integration shows up without you having to report it.",
+          "href": "/settings#usage-privacy"
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-30",
       "title": "Claude Sonnet 5 costs corrected",
       "highlights": [
         {

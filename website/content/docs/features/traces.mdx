@@ -95,7 +95,7 @@ The **Split brain** toggle in the header splits the trace into two synchronized 
 
 ## Delegation & sub-agents
 
-Many agents farm work out to sub-agents — Claude Code's `Task` tool, Hermes' `delegate_task`, DeepSeek Harness' `subagent` and `subagent_fork`, and similar. When a session spawns sub-agents, the trace attributes their token spend and cost back to the parent and lets you drill into each child's own trace.
+Many agents farm work out to sub-agents — Claude Code's `Task` tool, Hermes' `delegate_task`, DeepSeek Harness' `subagent` and `subagent_fork`, and similar. When a session spawns sub-agents, the trace attributes their token spend and cost back to the parent and lets you drill into each child's own trace. Qoder is the exception to the "token spend" part: its children's work is real but denominated in credits, so the delegation block says `tokens not recorded by qoder` and shows the delegated credits instead.
 
 ![Delegated work and the sub-agent inspector in a session trace](/screenshots/trace-delegated-work.png)
 
@@ -122,6 +122,14 @@ DeepSeek Harness resolves its skills, tools, and providers at run time, so the i
 Below that sit **File Sandbox** and **Approval Policy**: the sandbox mode (for example `workspace-write`) and the approval policy (for example `ask`). A delegated sub-agent inherits both from its parent and can end up more permissive than it, so an inherited value is marked as inherited on the child.
 
 The latency rows report **LLM Time** and **Tool Time** separately, alongside **TTFT (avg)**, **Throughput** in tok/s, and **Cache Hit**. These match the figures DSH prints in its own UI footer.
+
+## Qoder sessions
+
+A Qoder trace header reads **CREDITS** where other agents read input/output/cached, plus **DELEGATED** when sub-agents did part of the work, and **TOKENS: not recorded**. Qoder writes a usage block with every token counter at zero and bills in credits, so the zeros are what Qoder reports rather than a failed scan. See [Billing modes](/docs/configuration/billing) for why they cannot be reconstructed.
+
+Like DeepSeek Harness, Qoder resolves its capabilities at run time, so the **Context** tab shows a **Runtime Capabilities** panel read from that session's own log — the skills and MCP servers *that run* was offered, not a scan of what is installed now. Entries provided by a plugin keep their prefix and are tinted (`better-harness:better-harness`, `qoder-qmind:qmind`), so a harness-provided capability is distinguishable from a user-level skill.
+
+Model names stay internal (`qmodel_38max`, `qfmodel`). Qoder's model catalogue is encrypted at rest, so there is no offline mapping to a real model, and the agent page lists that as unavailable with the reason rather than guessing.
 
 ## Tips
 

@@ -8165,6 +8165,50 @@ def _persist_history_async(data: List[Dict[str, Any]]) -> None:
         _work()
 
 
+_harness_scan_reported = False
+
+
+def _report_harness_scan(data: List[Dict[str, Any]]) -> None:
+    """Emit one anonymous `harness.scanned` per detected agent, once per process.
+
+    The `agents` context prop already says which harnesses are *installed*.
+    Nothing said whether their readers actually returned anything, so a reader
+    that silently found nothing on someone else's machine stayed invisible until
+    a bug report arrived -- which is exactly how DeepSeek Harness shipped
+    reporting zero sessions.
+
+    Emitted after the first successful scan (the counts are free at that point)
+    and never again: the scan re-runs on a 30s TTL and clients poll it, so a
+    per-scan emit would be a firehose. Volume is an order-of-magnitude bucket,
+    never a raw count. Best-effort throughout -- telemetry must never affect the
+    scan's result.
+    """
+    global _harness_scan_reported
+    if _harness_scan_reported:
+        return
+    _harness_scan_reported = True
+    try:
+        from collections import Counter
+        counts = Counter(s.get("agent") for s in data)
+        # The union of "detected on disk" and "actually produced sessions", not
+        # just the former. The two disagree in both directions and each
+        # disagreement is the signal:
+        #   detected, 0 sessions -> the reader is broken (the DSH case);
+        #   sessions, not detected -> the detector is broken. SmallCode is
+        #     exactly this today: its traces are project-local, so
+        #     _list_available_agents() only sees it via an env-configured extra
+        #     root even while the scanner is finding its sessions.
+        agents = {a for a in counts if isinstance(a, str) and a}
+        agents.update(_list_available_agents())
+        for agent in sorted(agents):
+            _telemetry.emit("harness.scanned", {
+                "agent": agent,
+                "volume": _telemetry.volume_bucket(counts.get(agent, 0)),
+            })
+    except Exception:
+        pass
+
+
 async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
     """Cached, non-blocking access to the session list.
 
@@ -8195,6 +8239,7 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             _sessions_cache["data"] = data
             _sessions_cache["at"] = _time.monotonic()
             _log.info("sessions scan: %d entries in %.0fms", len(data), (_time.monotonic() - t0) * 1000)
+            _report_harness_scan(data)
             # Durable rollup: persist a tiny summary of each session so history
             # outlives the agents' own transcript pruning. Fire-and-forget on a
             # worker thread — a store failure must never break a request, and the
@@ -10095,6 +10140,10 @@ async def post_retention(payload: dict = Body(...)):
     if not isinstance(enabled, bool):
         raise HTTPException(status_code=400, detail="'enabled' must be a boolean")
     flags = agent_retention.set_archive(agent, enabled)
+    # `tier` is the resulting retention level, so a turn-off is reported as
+    # "rollup" rather than going unrecorded. Only the tier rides along -- never
+    # which agent, and never any count.
+    _telemetry.emit("retention.opted_in", {"tier": "full" if enabled else "rollup"})
     return {"ok": True, "archive": flags}
 
 

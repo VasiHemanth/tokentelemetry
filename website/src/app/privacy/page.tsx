@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
-const UPDATED = "June 15, 2026";
+const UPDATED = "August 30, 2026";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -42,7 +42,7 @@ export default function PrivacyPage() {
       <Section title="What we collect">
         <p>Anonymous usage signals only — nothing about your code, prompts, or work:</p>
         <ul className="list-disc pl-5 space-y-2 mt-2">
-          <li>Which pages you open in the app</li>
+          <li>Which pages you open in the app, including which coding agent&apos;s panel</li>
           <li>Which features you use (e.g. trace summaries, analytics filters, the Hermes dashboard)</li>
           <li>Whether a summary succeeded or failed, and which summarizer engine was used</li>
           <li>Your OS family, CPU architecture, and the app version</li>
@@ -51,6 +51,13 @@ export default function PrivacyPage() {
             IP (we never receive or store your IP)
           </li>
           <li>Which AI agents are detected on your machine (e.g. Claude, Codex), as a generic list</li>
+          <li>
+            For each detected agent, whether TokenTelemetry could read any sessions from it — as a
+            size band (&ldquo;0&rdquo;, &ldquo;10-99&rdquo;), never the real number. Support for an
+            agent can break silently on machines we cannot test on; this is how we find out without
+            waiting for someone to report it
+          </li>
+          <li>When you turn full transcript retention on or off — the setting only, never which agent</li>
           <li>
             A random session id that is regenerated every launch and is never linked to you across
             sessions

@@ -118,11 +118,17 @@ def _record_send(status: str, code: Optional[int] = None,
 # Per-event: the ONLY prop keys that may be sent. Anything else is dropped.
 _EVENT_PROPS: Dict[str, set] = {
     "app.launched":       set(),
-    "page.viewed":        {"route"},
+    "page.viewed":        {"route", "agent"},
     "trace.summarized":   {"backend", "outcome"},
     "analytics.filtered": {"dimension"},
     "feature.used":       {"name"},
     "retention.opted_in": {"tier"},
+    # One per *detected* harness, once per process, after the first successful
+    # scan. The `agents` context prop says which harnesses are installed; this
+    # says whether their readers actually returned anything. Without it a broken
+    # reader is invisible until someone files a bug -- which is how DeepSeek
+    # Harness shipped reporting zero sessions.
+    "harness.scanned":    {"agent", "volume"},
 }
 
 # Enum-controlled values. A value outside its set becomes "other" — never the
@@ -130,7 +136,8 @@ _EVENT_PROPS: Dict[str, set] = {
 _ENUMS: Dict[str, set] = {
     "route": {
         "dashboard", "analytics", "traces", "projects", "project-detail",
-        "hermes", "artifacts", "local-models", "settings", "sessions", "other",
+        "hermes", "artifacts", "local-models", "settings", "sessions",
+        "agent-panel", "other",
     },
     "dimension": {"agent", "model", "local-only", "day", "other"},
     "outcome": {"ok", "error", "empty", "unavailable", "other"},
@@ -147,6 +154,9 @@ _ENUMS: Dict[str, set] = {
         "other",
     },
     "tier": {"full", "rollup", "other"},
+    # Order-of-magnitude bucket, never a raw count -- enough to separate a
+    # reader that found one session from one that found four hundred.
+    "volume": {"0", "1-9", "10-99", "100-999", "1000-plus", "other"},
 }
 
 # Detected-agent names we recognise — must match _list_available_agents() in
@@ -157,6 +167,48 @@ _KNOWN_AGENTS = {
     "cursor", "copilot", "opencode", "hermes", "grok",
     "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder",
 }
+
+# `agent` rides on harness.scanned and on page.viewed for an agent panel. It is
+# the same closed set as the context list, so it adds no new privacy surface.
+# Off-list values collapse to the sanitizer's generic "other"; the context
+# `agents` list keeps its own "other-agent" spelling so it stays comparable with
+# data already collected.
+_ENUMS["agent"] = _KNOWN_AGENTS | {"other"}
+
+# Cap on the joined `agents` context string. Every recognised agent plus the
+# "other-agent" bucket has to fit, and a test asserts it -- so adding a harness
+# fails CI here rather than silently truncating the field in production.
+_AGENTS_FIELD_MAX = 256
+
+
+def _join_capped(names: List[str], limit: int = _AGENTS_FIELD_MAX) -> str:
+    """Join on commas without ever cutting a name in half.
+
+    A plain ``",".join(...)[:limit]`` slices mid-token: at 18 agents the string
+    was 117 of the old 120 characters, so one more harness would have ended it
+    on "small" -- inventing an agent that does not exist. Drop whole names
+    instead, so every value present in the field is a real one.
+    """
+    out = ""
+    for name in names:
+        candidate = f"{out},{name}" if out else name
+        if len(candidate) > limit:
+            break
+        out = candidate
+    return out
+
+
+def volume_bucket(n: int) -> str:
+    """Bucket a count for the `volume` enum. Never emit the raw number."""
+    if n <= 0:
+        return "0"
+    if n < 10:
+        return "1-9"
+    if n < 100:
+        return "10-99"
+    if n < 1000:
+        return "100-999"
+    return "1000-plus"
 
 
 def _safe_scalar(v: Any) -> Optional[Any]:
@@ -210,7 +262,7 @@ def _context_props() -> Dict[str, Any]:
         backend = _CTX.get("summarizer_backend", "none")
     known = sorted({a if a in _KNOWN_AGENTS else "other-agent" for a in agents})
     return {
-        "agents": ",".join(known)[:120],
+        "agents": _join_capped(known),
         "agent_count": len(agents),
         "summarizer_backend": backend if backend in _ENUMS["backend"] else "other",
     }
@@ -352,8 +404,65 @@ def sample_payloads() -> List[Dict[str, Any]]:
         "analytics.filtered": {"dimension": "local-only"},
         "feature.used": {"name": "plan-library"},
         "retention.opted_in": {"tier": "full"},
+        "harness.scanned": {"agent": "qoder", "volume": "1-9"},
     }
-    return [build_event(ev, p) for ev, p in samples.items()]
+    # Iterate the allowlist, not the sample dict: an event added to
+    # _EVENT_PROPS without a sample here still shows up in the panel (with
+    # empty props) rather than silently going undisclosed.
+    return [build_event(ev, samples.get(ev)) for ev in sorted(_EVENT_PROPS)]
+
+
+# Plain-English gloss for the props that ride on every event. The *keys* are
+# read from _context_props()/_system_props() at runtime, so a prop added there
+# still appears in Settings even if nobody writes a description for it here.
+_ALWAYS_SENT_NOTES = {
+    "agents": "Which coding agents were detected on this machine, by name. Anything unrecognised becomes \"other-agent\".",
+    "agent_count": "How many were detected.",
+    "summarizer_backend": "Which summarizer engine is configured, or \"none\".",
+    "locale": "The constant \"en-US\" -- not read from your system.",
+    "osName": "Operating system family (Darwin / Linux / Windows).",
+    "osVersion": "Operating system release string.",
+    "deviceModel": "CPU architecture only (arm64 / x86_64) -- never a device name.",
+    "isDebug": "Whether telemetry debug mode is on.",
+    "appVersion": "The commit this build was made from.",
+    "sdkVersion": "A constant client tag.",
+}
+
+
+def event_catalog() -> List[Dict[str, Any]]:
+    """Every event, every prop it may carry, and each prop's permitted values.
+
+    Derived wholly from the allowlists above, so the Settings panel gains a new
+    row the moment an event or prop is added -- there is no second, hand-written
+    list to fall out of date. `values: None` means the prop is free-form and
+    passes only the safe-scalar filter.
+    """
+    return [
+        {
+            "event": event,
+            "props": [
+                {"name": key, "values": sorted(_ENUMS[key]) if key in _ENUMS else None}
+                for key in sorted(_EVENT_PROPS[event])
+            ],
+        }
+        for event in sorted(_EVENT_PROPS)
+    ]
+
+
+def always_sent() -> List[Dict[str, Any]]:
+    """The context/system props attached to every event, with this machine's
+    actual current values -- so the panel shows what would really be sent rather
+    than a description of it."""
+    rows: List[Dict[str, Any]] = []
+    for scope, values in (("context", _context_props()), ("system", _system_props())):
+        for key in sorted(values):
+            rows.append({
+                "name": key,
+                "scope": scope,
+                "value": values[key],
+                "note": _ALWAYS_SENT_NOTES.get(key, ""),
+            })
+    return rows
 
 
 def preview() -> Dict[str, Any]:
@@ -370,6 +479,8 @@ def preview() -> Dict[str, Any]:
             "any stable device or user identifier",
         ],
         "events": sorted(_EVENT_PROPS.keys()),
+        "event_catalog": event_catalog(),
+        "always_sent": always_sent(),
         "sample": sample_payloads(),
         "recent_sent": list(_SENT),
         "last_send": dict(_LAST_SEND),

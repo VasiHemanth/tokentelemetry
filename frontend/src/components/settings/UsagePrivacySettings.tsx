@@ -18,6 +18,7 @@ export default function UsagePrivacySettings() {
   const [state, setState] = useState<TelemetryPreview | null>(null);
   const [toggling, setToggling] = useState(false);
   const [showPayload, setShowPayload] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -129,23 +130,113 @@ export default function UsagePrivacySettings() {
               <ChevronDown size={14} className={cn("transition-transform", showPayload && "rotate-180")} />
             </button>
             {showPayload && (
-              <div className="border-t border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 space-y-3">
+              <div className="border-t border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 space-y-4">
                 <div>
-                  <h3 className="text-[12px] font-medium text-[var(--tt-fg-muted)] mb-2">What we collect</h3>
+                  <h3 className="text-[12px] font-medium text-[var(--tt-fg-muted)] mb-2">In plain English</h3>
                   <ul className="text-[12px] text-[var(--tt-fg-dim)] space-y-1 pl-4">
-                    <li className="list-disc">Which pages you open</li>
+                    <li className="list-disc">Which pages you open — including which coding agent&apos;s panel</li>
                     <li className="list-disc">Which features you use (summaries, filters, budgets, Hermes, etc.)</li>
                     <li className="list-disc">When you open or save a budget — the count only, never the limit or amount</li>
                     <li className="list-disc">Whether a summary succeeded or failed, and which engine</li>
+                    <li className="list-disc">
+                      For each coding agent found on this machine, whether we could read any sessions
+                      from it — as a size band (&ldquo;10-99&rdquo;), never the actual number. This is
+                      how we find out that support for an agent is broken without you having to report it.
+                    </li>
                     <li className="list-disc">Your OS, CPU type, and app version</li>
                     <li className="list-disc">Your country (from the network edge — never your IP)</li>
                     <li className="list-disc">Which AI agents are detected (Claude, Codex, …)</li>
                     <li className="list-disc">A random per-launch session id (reset each launch, not linked to you)</li>
                   </ul>
                 </div>
-                <pre className="max-h-[280px] overflow-auto bg-[var(--tt-panel)] p-3 text-[11px] font-mono text-[var(--tt-fg-dim)] leading-relaxed rounded border border-[var(--tt-border)]">
-                  {JSON.stringify(state.sample, null, 2)}
-                </pre>
+
+                {/* The authoritative list. Generated from the same allowlists the
+                    sender validates against, so it cannot drift from what is
+                    actually sent — every value below is one a real payload can
+                    contain, and nothing outside these lists can be transmitted. */}
+                <div>
+                  <h3 className="text-[12px] font-medium text-[var(--tt-fg-muted)] mb-1">
+                    Every event, and every value it can carry
+                  </h3>
+                  <p className="text-[11px] text-[var(--tt-fg-dim)] mb-2 max-w-[560px]">
+                    Read straight from the allowlist the app validates against before sending, so
+                    it is always current. Anything not on these lists is replaced with
+                    <span className="font-mono"> other</span> — it is never transmitted.
+                  </p>
+                  <div className="space-y-2">
+                    {state.event_catalog.map((spec) => (
+                      <div
+                        key={spec.event}
+                        className="rounded border border-[var(--tt-border)] bg-[var(--tt-panel)] px-2.5 py-2"
+                      >
+                        <div className="font-mono text-[11px] text-[var(--tt-fg-muted)]">{spec.event}</div>
+                        {spec.props.length === 0 ? (
+                          <div className="text-[11px] text-[var(--tt-fg-dim)] mt-0.5">
+                            no properties — the event name alone
+                          </div>
+                        ) : (
+                          <div className="mt-1 space-y-1">
+                            {spec.props.map((prop) => (
+                              <div key={prop.name} className="text-[11px] leading-relaxed">
+                                <span className="font-mono text-[var(--tt-fg-dim)]">{prop.name}</span>
+                                <span className="text-[var(--tt-fg-dim)]">: </span>
+                                {prop.values ? (
+                                  <span className="text-[var(--tt-fg-dim)]">
+                                    {prop.values.join(" · ")}
+                                  </span>
+                                ) : (
+                                  <span className="text-[var(--tt-fg-dim)] italic">
+                                    short plain text only (no paths, emails, or free text)
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Real current values, not a description of them. */}
+                <div>
+                  <h3 className="text-[12px] font-medium text-[var(--tt-fg-muted)] mb-1">
+                    Attached to every event
+                  </h3>
+                  <p className="text-[11px] text-[var(--tt-fg-dim)] mb-2 max-w-[560px]">
+                    These are this machine&apos;s actual values right now — not an example.
+                  </p>
+                  <div className="rounded border border-[var(--tt-border)] bg-[var(--tt-panel)] divide-y divide-[var(--tt-border)]">
+                    {state.always_sent.map((row) => (
+                      <div key={`${row.scope}.${row.name}`} className="px-2.5 py-1.5">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span className="font-mono text-[11px] text-[var(--tt-fg-dim)]">{row.name}</span>
+                          <span className="font-mono text-[11px] text-[var(--tt-fg-muted)] break-all">
+                            {String(row.value) === "" ? "(empty)" : String(row.value)}
+                          </span>
+                        </div>
+                        {row.note && (
+                          <div className="text-[11px] text-[var(--tt-fg-dim)] mt-0.5">{row.note}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <button
+                    onClick={() => setShowRaw((v) => !v)}
+                    className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] transition-colors"
+                  >
+                    <ChevronDown size={12} className={cn("transition-transform", showRaw && "rotate-180")} />
+                    {showRaw ? "Hide" : "Show"} the raw payloads
+                  </button>
+                  {showRaw && (
+                    <pre className="mt-2 max-h-[280px] overflow-auto bg-[var(--tt-panel)] p-3 text-[11px] font-mono text-[var(--tt-fg-dim)] leading-relaxed rounded border border-[var(--tt-border)]">
+                      {JSON.stringify(state.sample, null, 2)}
+                    </pre>
+                  )}
+                </div>
               </div>
             )}
           </div>
