@@ -1,0 +1,60 @@
+name: Pricing divergence
+
+# Why this exists: issue #303. The curated rates in pricing.py went three months
+# stale while the weekly models.dev sync ran green every Monday. It could never
+# have caught it — _load_bundled_pricing() skips any key an inline entry already
+# claims, so a curated entry is invisible to every refresh after it is written.
+#
+# This reports where the two layers disagree. It does not decide who is right:
+# the inline table is authoritative on purpose, and models.dev is itself
+# sometimes stale (it still carried DeepSeek's pre-repricing rates eight days
+# after the change). A divergence means a human should look.
+#
+# Report-only for now. Once the existing backlog is triaged, add
+# `--fail-over <pct>` to the run below to make it a gate.
+
+on:
+  pull_request:
+    paths:
+      - "backend/pricing.py"
+      - "backend/pricing_data.json"
+      - "backend/pricing_divergence.py"
+      - ".github/workflows/pricing-divergence.yml"
+  # After the Monday sync lands its PR, so a refreshed snapshot is compared
+  # against the curated table while the diff is still in front of someone.
+  schedule:
+    - cron: "30 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  divergence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Compare curated rates against the models.dev overlay
+        run: |
+          {
+            echo '### Pricing divergence'
+            echo
+            echo '```'
+            python backend/pricing_divergence.py --top 40
+            echo '```'
+            echo
+            echo 'Curated inline entries win over the overlay by design. A row here'
+            echo 'means the two layers disagree, not that the inline value is wrong.'
+            echo 'Check the provider price list before changing either.'
+            echo
+            echo 'A rising count is not automatically bad: correcting a curated rate'
+            echo 'against a provider price list raises it whenever models.dev is the'
+            echo 'stale side. Read the per-field breakdown to see which side moved.'
+          } >> "$GITHUB_STEP_SUMMARY"
