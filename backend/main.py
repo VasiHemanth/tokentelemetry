@@ -306,6 +306,21 @@ DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 # backend/omnigent_policy.py. Absent file = plugin not installed, which is the
 # normal case and must never be an error.
 DSH_LIFECYCLE_FILE = data_dir() / "dsh_lifecycle.jsonl"
+# Qoder (Alibaba) ships two surfaces over ONE set of sessions. The CLI writes
+# Claude-Code-shaped JSONL under ~/.qoder/projects/<slugged-cwd>/<uuid>.jsonl;
+# the Electron IDE keeps ~/Library/Application Support/com.qoder.app.stable/
+# main.sqlite, whose chat_session_messages rows are marked source="sdk-projection"
+# and carry the SAME message uuids. The DB is therefore a mirror, not a second
+# store — scanning both would double-count every session. We read the JSONL and
+# use the DB only to enrich (it has a human-readable title the JSONL lacks).
+# Qoder has no relocation env var of its own (its launcher reads only HOME);
+# QODER_HOME exists so tests can point the scan at a fixture tree.
+QODER_DIR = Path(os.environ.get("QODER_HOME") or (HOME / ".qoder")).expanduser()
+QODER_PROJECTS_DIR = QODER_DIR / "projects"
+QODER_IDE_DIR = Path(
+    os.environ.get("QODER_IDE_HOME")
+    or (HOME / "Library/Application Support/com.qoder.app.stable")
+).expanduser()
 HF_DIR = HOME / ".cache/huggingface"
 def _opencode_dbs_in(d: Path) -> List[Path]:
     """DB files OpenCode may have written inside data dir ``d``, canonical first.
@@ -2876,6 +2891,9 @@ def _list_available_agents() -> list:
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
     if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
     if DSH_DIR.exists(): agents.append("dsh")
+    # projects/, not the root: Qoder's installer creates ~/.qoder before the
+    # first session exists, so the root alone would advertise an empty agent.
+    if QODER_PROJECTS_DIR.is_dir(): agents.append("qoder")
     # SmallCode traces are project-local; cheaply check only the explicitly
     # configured extra roots here (the full project-derived root set is only
     # known after _scan_sessions_sync runs the other scanners).
@@ -4598,6 +4616,531 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+# ------------------------------------------------------------------ Qoder --
+#
+# Qoder's CLI is a Claude Code derivative: identical JSONL record shape (cwd,
+# gitBranch, isSidechain, parentUuid, sessionId, version, userType, entrypoint)
+# plus five record types of its own -- workspace-directories, runtime-config,
+# last-prompt, active-leaf and attachment.
+#
+# What makes it different is billing. Every assistant record carries an
+# Anthropic-shaped `usage` object whose input_tokens, output_tokens,
+# cache_read_input_tokens and cache_creation_input_tokens are ALL ZERO, with the
+# real figure in `credits`. Tokens are not merely unread here, they are not
+# recorded, and they cannot be reconstructed: `context_usage_ratio` is a
+# fraction of an unknown denominator (runtime-config.contextWindow is null) and
+# .models/<uid>/catalog-v6 is encrypted at rest, so even the model id stays
+# opaque. See _scan_qoder_sessions.
+
+# Context Qoder splices into the transcript as `attachment` records. None is a
+# user turn. This is an ALLOWLIST on purpose: an unrecognised attachment type
+# may carry file bodies or pasted content, and passing one through to the trace
+# renderer would display it as conversation.
+_QODER_ATTACHMENT_KINDS = frozenset({
+    "skill_listing", "critical_system_reminder", "agent_listing_delta", "hook_output",
+})
+
+# Qoder prepends a plugin/system block to the first human prompt -- in both
+# message.content[0].text and humanInput.text. Rendering it verbatim shows the
+# harness's own instructions as if the user had typed them.
+_QODER_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+def _qoder_ts(value: Any) -> Optional[datetime]:
+    """Qoder writes ISO strings on message records and epoch MILLIseconds on
+    runtime-config, so both shapes turn up inside one file."""
+    if isinstance(value, str) and value:
+        try:
+            return _aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        try:
+            return _aware(datetime.fromtimestamp(value / 1000.0, tz=timezone.utc))
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
+def _qoder_num(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _qoder_strip_reminder(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
+    return _QODER_REMINDER_RE.sub("", text).strip()
+
+
+def _qoder_human_text(row: Dict[str, Any]) -> str:
+    """The words the user actually typed, or "" when this is not a human turn.
+
+    `origin.kind` is the only reliable discriminator -- Qoder replays tool
+    results and harness injections through the same `user` record type.
+    """
+    if (row.get("origin") or {}).get("kind") != "human":
+        return ""
+    human = row.get("humanInput")
+    if isinstance(human, dict):
+        direct = _qoder_strip_reminder(human.get("text"))
+        if direct:
+            return direct
+    parts = [
+        block.get("text") or ""
+        for block in ((row.get("message") or {}).get("content") or [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return _qoder_strip_reminder("".join(parts))
+
+
+def _qoder_fold_attachment(att: Any, skills: Set[str], servers: Set[str],
+                           hooks: Dict[str, int]) -> None:
+    """Mine one attachment for metadata. Unknown types are ignored entirely.
+
+    These record what was AVAILABLE to the session, not what it used -- the
+    skill catalog is injected whether or not a skill is ever invoked. Real
+    usage comes from tool_use blocks instead, so this never feeds skills_used.
+    """
+    if not isinstance(att, dict):
+        return
+    kind = att.get("type")
+    if kind not in _QODER_ATTACHMENT_KINDS:
+        return
+    if kind == "skill_listing":
+        for name in (att.get("names") or []):
+            if isinstance(name, str) and name:
+                skills.add(name)
+    elif kind == "critical_system_reminder":
+        for name in (att.get("serverNames") or []):
+            if isinstance(name, str) and name:
+                servers.add(name)
+    elif kind == "hook_output":
+        event = att.get("hookEventName")
+        if isinstance(event, str) and event:
+            hooks[event] = hooks.get(event, 0) + 1
+
+
+def _qoder_parse_session(path: Path) -> Optional[Dict[str, Any]]:
+    """Parse one Qoder transcript. Returns None when the file yields no turns.
+
+    Read defensively line by line: a live session is being appended to while we
+    read, so the final line can be torn.
+    """
+    session_id = ""
+    cwd = ""
+    git_branch = ""
+    version = ""
+    entrypoint = ""
+    model: Optional[str] = None
+    credits = 0.0
+    original_credits = 0.0
+    billable_turns = 0
+    assistant_turns = 0
+    context_ratio: Optional[float] = None
+    first_text = ""
+    last_prompt = ""
+    first_ts: Optional[datetime] = None
+    last_ts: Optional[datetime] = None
+    is_sidechain = False
+    tool_counts: Dict[str, int] = {}
+    skills: Set[str] = set()
+    servers: Set[str] = set()
+    hooks: Dict[str, int] = {}
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+
+                if not session_id and isinstance(row.get("sessionId"), str):
+                    session_id = row["sessionId"]
+                if isinstance(row.get("cwd"), str) and row["cwd"]:
+                    cwd = row["cwd"]
+                if isinstance(row.get("gitBranch"), str) and row["gitBranch"]:
+                    git_branch = row["gitBranch"]
+                if isinstance(row.get("version"), str) and row["version"]:
+                    version = row["version"]
+                if isinstance(row.get("entrypoint"), str) and row["entrypoint"]:
+                    entrypoint = row["entrypoint"]
+                if row.get("isSidechain"):
+                    is_sidechain = True
+
+                stamp = _qoder_ts(row.get("timestamp"))
+                if stamp:
+                    first_ts = stamp if first_ts is None else min(first_ts, stamp)
+                    last_ts = stamp if last_ts is None else max(last_ts, stamp)
+
+                rtype = row.get("type")
+                if rtype == "workspace-directories":
+                    dirs = row.get("directories") or []
+                    if not cwd and dirs and isinstance(dirs[0], str):
+                        cwd = dirs[0]
+                elif rtype == "runtime-config":
+                    if isinstance(row.get("model"), str) and row["model"]:
+                        model = row["model"]
+                elif rtype == "last-prompt":
+                    last_prompt = _qoder_strip_reminder(row.get("lastPrompt"))
+                elif rtype == "attachment":
+                    _qoder_fold_attachment(row.get("attachment"), skills, servers, hooks)
+                elif rtype == "user":
+                    if not first_text:
+                        first_text = _qoder_human_text(row)
+                elif rtype == "assistant":
+                    msg = row.get("message") or {}
+                    assistant_turns += 1
+                    if isinstance(msg.get("model"), str) and msg["model"]:
+                        model = msg["model"]
+                    usage = msg.get("usage")
+                    if isinstance(usage, dict):
+                        credits += _qoder_num(usage.get("credits"))
+                        original_credits += _qoder_num(usage.get("original_credits"))
+                        if usage.get("billable"):
+                            billable_turns += 1
+                        ratio = usage.get("context_usage_ratio")
+                        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+                            context_ratio = float(ratio)
+                    for block in (msg.get("content") or []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            name = block.get("name")
+                            if isinstance(name, str) and name:
+                                tool_counts[name] = tool_counts.get(name, 0) + 1
+    except OSError:
+        return None
+
+    if last_ts is None:
+        return None
+
+    return {
+        "id": session_id or path.stem,
+        "path": path,
+        "project": cwd or "unknown",
+        "timestamp": last_ts,
+        "started_at": first_ts,
+        "display": first_text or last_prompt,
+        "model": model,
+        "credits": round(credits, 6),
+        "original_credits": round(original_credits, 6),
+        "billable_turns": billable_turns,
+        "assistant_turns": assistant_turns,
+        "context_usage_ratio": context_ratio,
+        "git_branch": git_branch,
+        "cli_version": version,
+        "entrypoint": entrypoint,
+        "is_sidechain": is_sidechain,
+        "tool_counts": tool_counts,
+        "skills_available": sorted(skills),
+        "mcp_servers": sorted(servers),
+        "hook_events": hooks,
+    }
+
+
+def _qoder_subagents(session_dir: Path) -> List[Dict[str, Any]]:
+    """Child transcripts spawned by one Qoder session.
+
+    Children live at <session-dir>/subagents/<name>.jsonl with a sibling
+    <name>.meta.json naming the agent type and the task it was given. They are
+    NOT top-level sessions -- counting the whole projects/ tree would return
+    every child as a session of its own.
+    """
+    sub_dir = session_dir / "subagents"
+    if not sub_dir.is_dir():
+        return []
+    kids: List[Dict[str, Any]] = []
+    for transcript in sorted(sub_dir.glob("*.jsonl")):
+        parsed = _qoder_parse_session(transcript)
+        if not parsed:
+            continue
+        meta: Dict[str, Any] = {}
+        try:
+            meta_path = transcript.with_suffix(".meta.json")
+            if meta_path.exists():
+                loaded = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(loaded, dict):
+                    meta = loaded
+        except (OSError, ValueError):
+            meta = {}
+        # A child's records carry the PARENT's sessionId -- it is the same
+        # session -- so the in-record id is identical for every child and
+        # cannot identify one. Use the transcript's own filename, which
+        # already encodes the agent type and a per-spawn hash.
+        parsed["id"] = transcript.stem
+        parsed["agent_type"] = meta.get("agentType") or meta.get("invocationName") or "subagent"
+        parsed["description"] = meta.get("description") or ""
+        kids.append(parsed)
+    return kids
+
+
+def _qoder_ide_sessions() -> Dict[str, Dict[str, Any]]:
+    """Per-session enrichment from the IDE's mirror database, keyed by id.
+
+    The IDE projects the same SDK sessions into SQLite (its message rows are
+    marked source="sdk-projection" and reuse the JSONL uuids), so this is used
+    ONLY to enrich -- never as a second source of sessions. What it adds is a
+    human-readable title, which the JSONL has nowhere.
+
+    Best-effort by design: opened read-only, and a missing, locked or
+    schema-changed database degrades to CLI-only data rather than failing the
+    scan. Credential tables are never touched.
+
+    Known limitation: `session_kind` also admits `sideChat` and
+    `automationExecution`. Every observed row is `standard` and its id matches a
+    transcript, so there is no evidence either kind skips the JSONL -- but if
+    one does, it would be invisible here. Unioning on session_id would cover it;
+    that is deliberately not built against a shape nobody has seen yet.
+    """
+    db = QODER_IDE_DIR / "main.sqlite"
+    if not db.exists():
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.0)
+        for row in conn.execute(
+            "SELECT session_id, title, session_kind, product_mode, archived "
+            "FROM chat_sessions WHERE deleted_at IS NULL"
+        ):
+            sid = row[0]
+            if isinstance(sid, str) and sid:
+                out[sid] = {
+                    "title": (row[1] or "").strip(),
+                    "session_kind": row[2] or "standard",
+                    "product_mode": row[3] or "coding",
+                    "archived": bool(row[4]),
+                }
+        for row in conn.execute(
+            "SELECT session_id, "
+            "       SUM(COALESCE(json_extract(payload_json,'$.durationMs'),0)), "
+            "       COUNT(*) "
+            "FROM chat_session_messages "
+            "WHERE json_extract(payload_json,'$.role')='assistant' "
+            "GROUP BY session_id"
+        ):
+            entry = out.get(row[0])
+            if entry is not None:
+                entry["duration_ms"] = int(row[1] or 0)
+                entry["turn_count"] = int(row[2] or 0)
+    except (sqlite3.Error, ValueError):
+        return out
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+    return out
+
+
+def _scan_qoder_sessions() -> List[Dict[str, Any]]:
+    """Scan Qoder sessions under ~/.qoder/projects/.
+
+    Layout: projects/<slugged-cwd>/<session-uuid>.jsonl, with child transcripts
+    one level deeper at projects/<slugged-cwd>/<session-uuid>/subagents/*.jsonl.
+    The glob is deliberately ROOT-LEVEL ONLY (`*/*.jsonl`): a recursive walk
+    would return every subagent transcript as a session of its own, which on a
+    two-session install already inflates the count to four.
+
+    The directory slug is NOT reversible -- Qoder replaces "/" with "-" without
+    escaping dashes already in the path, so
+    "-Users-dev-Documents-Qoder-2026-08-30-d5db2e1b" has several valid readings.
+    The project comes from the records' own `cwd` (or the workspace-directories
+    header) instead.
+
+    Tokens are reported as an honest zero. Qoder records none (see the module
+    comment above) and bills in credits, which ride in the per-session "qoder"
+    blob and drive the panel meter -- the same treatment Copilot's AIU gets.
+    Under billing_mode "subscription" a $0.00 cost is the correct reading, not
+    a missing value.
+    """
+    if not QODER_PROJECTS_DIR.is_dir():
+        return []
+
+    aliases = _load_project_aliases()
+    ide = _qoder_ide_sessions()
+    out: List[Dict[str, Any]] = []
+
+    for transcript in sorted(QODER_PROJECTS_DIR.glob("*/*.jsonl")):
+        parsed = _qoder_parse_session(transcript)
+        if not parsed:
+            continue
+        # Belt and braces: the glob depth already excludes children, and the
+        # records flag them too.
+        if parsed["is_sidechain"]:
+            continue
+
+        sid = parsed["id"]
+        meta = ide.get(sid) or {}
+        kids = _qoder_subagents(transcript.parent / transcript.stem)
+
+        display = (meta.get("title") or parsed["display"]
+                   or f"Qoder session {sid[-8:]}")
+        # Qoder titles a thread with the user's whole first message when the
+        # IDE has not named it, so cap what is user-authored.
+        if len(display) > 120:
+            display = display[:117] + "..."
+
+        blob: Dict[str, Any] = {
+            "credits": parsed["credits"],
+            "original_credits": parsed["original_credits"],
+            "billable_turns": parsed["billable_turns"],
+            "assistant_turns": parsed["assistant_turns"],
+            "context_usage_ratio": parsed["context_usage_ratio"],
+            "entrypoint": parsed["entrypoint"] or "cli",
+            "git_branch": parsed["git_branch"],
+            "cli_version": parsed["cli_version"],
+            "skills_available": parsed["skills_available"],
+            "mcp_servers": parsed["mcp_servers"],
+            "hook_events": parsed["hook_events"],
+        }
+        for key in ("session_kind", "product_mode", "duration_ms", "turn_count"):
+            if key in meta:
+                blob[key] = meta[key]
+
+        sess: Dict[str, Any] = {
+            "id": sid,
+            "agent": "qoder",
+            "project": aliases.get(parsed["project"], parsed["project"]),
+            "timestamp": parsed["timestamp"],
+            "display": display,
+            "text": parsed["display"],
+            # Not a scan failure: Qoder records no token counts at all.
+            "tokens": {"input": 0, "output": 0, "cached": 0,
+                       "cache_creation": 0, "reasoning": 0, "total": 0},
+            "cost": 0.0,
+            "model": parsed["model"],
+            "provider": "qoder",
+            "mcp_tools": [t for t in parsed["tool_counts"] if t.startswith("mcp")],
+            "has_plan": False,
+            "plans": [],
+            "artifacts": [{"name": transcript.name, "path": str(transcript),
+                           "type": "document"}],
+            "qoder": blob,
+        }
+
+        if kids:
+            subagents = [{
+                "agent_id": kid["id"],
+                "agent_type": kid["agent_type"],
+                "description": kid["description"],
+                "model": kid["model"],
+                "tokens": {"input": 0, "output": 0, "cached": 0,
+                           "cache_creation": 0, "reasoning": 0, "total": 0},
+                "cost": 0.0,
+                "credits": kid["credits"],
+            } for kid in kids]
+            delegated_credits = round(sum(k["credits"] for k in kids), 6)
+            by_type: Dict[str, Dict[str, Any]] = {}
+            for kid in kids:
+                slot = by_type.setdefault(
+                    kid["agent_type"], {"count": 0, "total": 0, "cost": 0.0, "credits": 0.0})
+                slot["count"] += 1
+                slot["credits"] = round(slot["credits"] + kid["credits"], 6)
+            sess["delegation"] = {
+                "supported": True,
+                # Credits, not tokens -- the delegated spend is real, it just
+                # isn't denominated in tokens anywhere in Qoder.
+                "tokens_recorded": False,
+                "spawn_count": len(subagents),
+                "subagents": subagents,
+                "delegated_total": 0,
+                "delegated_cost": 0.0,
+                "delegated_credits": delegated_credits,
+                "by_type": by_type,
+            }
+            blob["delegated_credits"] = delegated_credits
+            blob["total_credits"] = round(parsed["credits"] + delegated_credits, 6)
+
+        _attach_tool_usage(sess, parsed["tool_counts"])
+        out.append(sess)
+
+    return out
+
+
+def _qoder_session_file(session_id: str) -> Optional[Path]:
+    """Locate one Qoder transcript by session id."""
+    if not QODER_PROJECTS_DIR.is_dir() or not session_id:
+        return None
+    if "/" in session_id or "\\" in session_id or ".." in session_id:
+        return None
+    for match in QODER_PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
+        return match
+    return None
+
+
+def _qoder_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize a Qoder transcript into the Claude-shaped events the trace
+    renderer expects.
+
+    Qoder's records are already Claude-shaped, so this filters rather than
+    converts. Three things are dropped or rewritten:
+
+      * session metadata (workspace-directories, runtime-config, last-prompt,
+        active-leaf) is not a turn;
+      * `attachment` records are harness-injected context -- the renderer
+        displays Event.attachment if present, so passing them through would
+        show the harness's own prompt as conversation;
+      * the first human prompt carries an injected <system-reminder> block,
+        which is stripped so the user's words are what the trace shows.
+
+    Per-step token chips are suppressed: Qoder's usage block is all zeros, so
+    rendering it would imply a measurement that was never taken.
+    """
+    events: List[Dict[str, Any]] = []
+    for row in _parse_session_jsonl_cached(path):
+        rtype = row.get("type")
+        if rtype == "user":
+            # A `user` record is one of three things: a human turn, the result
+            # of a tool the assistant called, or a harness injection. Only the
+            # last is dropped -- tool results must survive or every tool_use in
+            # the trace renders with nothing paired to it.
+            content = (row.get("message") or {}).get("content") or []
+            results = [b for b in content
+                       if isinstance(b, dict) and b.get("type") == "tool_result"]
+            if results:
+                events.append({
+                    "type": "user",
+                    "uuid": row.get("uuid"),
+                    "timestamp": row.get("timestamp"),
+                    "normalized_timestamp": row.get("normalized_timestamp"),
+                    "message": {"role": "user", "content": results},
+                })
+                continue
+            text = _qoder_human_text(row)
+            if not text:
+                continue  # harness injection, not something the user typed
+            events.append({
+                "type": "user",
+                "uuid": row.get("uuid"),
+                "timestamp": row.get("timestamp"),
+                "normalized_timestamp": row.get("normalized_timestamp"),
+                "message": {"role": "user",
+                            "content": [{"type": "text", "text": text}]},
+            })
+        elif rtype == "assistant":
+            msg = row.get("message") or {}
+            blocks = [b for b in (msg.get("content") or []) if isinstance(b, dict)]
+            if not blocks:
+                continue
+            events.append({
+                "type": "assistant",
+                "uuid": row.get("uuid"),
+                "timestamp": row.get("timestamp"),
+                "normalized_timestamp": row.get("normalized_timestamp"),
+                "message": {"role": "assistant",
+                            "model": msg.get("model"),
+                            "content": blocks},
+            })
+    return events
+
+
+
+
 # Cordis FiberState (vendor/cordis/src/fiber.ts) -> readable names. It is a
 # `const enum`, so it inlines to these ordinals at runtime.
 _DSH_FIBER_STATES: Dict[int, str] = {
@@ -4927,8 +5470,11 @@ def _opencode_resolve_model(val):
 # antigravity: parent brain transcript INVOKE_SUBAGENT steps name the child
 # conversation ids. (All verified empirically by running the CLIs — see
 # DESIGN.md "probe findings".)
+# qoder: subagents/<name>.jsonl beside the parent transcript, with a sibling
+# .meta.json naming the agent type and the task — spend per child is real, but
+# denominated in credits rather than tokens.
 _DELEGATION_CAPABLE_AGENTS = {"claude", "cursor", "opencode", "hermes",
-                              "grok", "codex", "antigravity", "cline"}
+                              "grok", "codex", "antigravity", "cline", "qoder"}
 
 
 # content is JSON-escaped inside the INVOKE_SUBAGENT step record, so the quote
@@ -7270,6 +7816,10 @@ def _scan_sessions_sync():
     # 8b3. DeepSeek Harness (DSH) — zstd-compressed JSONL under ~/.dsh/sessions/
     sessions.extend(_scan_dsh_sessions())
 
+    # 8b4. Qoder — Claude-shaped JSONL under ~/.qoder/projects/. Bills in
+    # credits and records no token counts at all; see _scan_qoder_sessions.
+    sessions.extend(_scan_qoder_sessions())
+
     # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
     # cwd, so they naturally participate in project/worktree navigation.
     for sess in _scan_muse_sessions() + _scan_prime_sessions():
@@ -8153,6 +8703,15 @@ async def get_session_detail(session_id: str, agent: str):
             return {"error": "Not found"}
         return _dsh_trace_events(sess_file)
 
+    elif agent == "qoder":
+        # Qoder writes Claude-shaped JSONL, so _qoder_trace_events filters
+        # rather than converts: it drops the harness's own injected context and
+        # strips the <system-reminder> prefix from the opening human prompt.
+        sess_file = _qoder_session_file(session_id)
+        if not sess_file:
+            return {"error": "Not found"}
+        return _qoder_trace_events(sess_file)
+
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
         # conversations/<id>.db — far richer than the brain markdown. Prefer it.
@@ -8823,6 +9382,30 @@ async def session_delegation(session_id: str, agent: str):
         return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
                 "subagents": subagents, "totals": totals,
                 "cost": sum(s["cost"] for s in subagents)}
+
+    if agent == "qoder":
+        # Qoder children sit beside the parent transcript, each with a
+        # .meta.json naming the agent type and the task it was given. Their
+        # spend is real but denominated in credits, so tokens_recorded is
+        # False and the figure to read is delegated_credits.
+        parent_file = _qoder_session_file(session_id)
+        if parent_file is None:
+            return {"error": "Not found"}
+        kids = _qoder_subagents(parent_file.parent / parent_file.stem)
+        subagents = [{
+            "agent_id": kid["id"],
+            "agent_type": kid["agent_type"],
+            "description": kid["description"],
+            "model": kid["model"],
+            "tokens": {"input": 0, "output": 0, "cached": 0,
+                       "cache_creation": 0, "reasoning": 0, "total": 0},
+            "cost": 0.0,
+            "credits": kid["credits"],
+        } for kid in kids]
+        return {"supported": True, "tokens_recorded": False,
+                "spawn_count": len(subagents), "subagents": subagents,
+                "totals": None, "cost": 0.0,
+                "delegated_credits": round(sum(k["credits"] for k in kids), 6)}
 
     if agent == "dsh":
         # DSH children are their own session logs, linked by an explicit

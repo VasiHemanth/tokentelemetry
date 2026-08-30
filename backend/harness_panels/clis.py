@@ -26,8 +26,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import (
-    dir_size, field, human_bytes, iso, iso_ms, newest_mtime, not_installed,
-    panel, preview, ro_sqlite, safe, section, table_exists, tilde, unavailable,
+    dir_size, field, human_bytes, iso, iso_ms, meter, newest_mtime,
+    not_installed, panel, preview, ro_sqlite, safe, section, table_exists,
+    tilde, unavailable,
 )
 from . import paths
 
@@ -662,6 +663,264 @@ def build_dsh(*, with_disk: bool = True) -> Dict[str, Any]:
         "dsh", root, sections=sections, not_available=not_avail,
         last_active=iso(newest_mtime([root / "sessions"])),
         disk=safe(lambda: _simple_disk(root), "dsh disk") if with_disk else None,
+    )
+
+
+# --- Qoder ------------------------------------------------------------------
+#
+# These readers duplicate a little of main._qoder_parse_session on purpose: this
+# package is imported BY main, so importing back would be circular — the same
+# reason paths.py restates the directory constants.
+
+_QODER_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+def _qoder_stats(path: Path) -> Optional[Dict[str, Any]]:
+    """Session id, model, branch, turn count and credit total for one transcript."""
+    out: Dict[str, Any] = {
+        "id": path.stem, "model": None, "branch": "", "turns": 0,
+        "credits": 0.0, "display": "", "version": None, "mtime": None,
+    }
+    try:
+        out["mtime"] = path.stat().st_mtime
+    except OSError:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if isinstance(row.get("sessionId"), str) and row["sessionId"]:
+                    out["id"] = row["sessionId"]
+                if isinstance(row.get("gitBranch"), str) and row["gitBranch"]:
+                    out["branch"] = row["gitBranch"]
+                if isinstance(row.get("version"), str) and row["version"]:
+                    out["version"] = row["version"]
+                rtype = row.get("type")
+                if rtype == "assistant":
+                    msg = row.get("message") or {}
+                    out["turns"] += 1
+                    if isinstance(msg.get("model"), str) and msg["model"]:
+                        out["model"] = msg["model"]
+                    usage = msg.get("usage")
+                    if isinstance(usage, dict):
+                        credits = usage.get("credits")
+                        if isinstance(credits, (int, float)) and not isinstance(credits, bool):
+                            out["credits"] += float(credits)
+                elif rtype == "user" and not out["display"]:
+                    # Only a human turn, and only after stripping the plugin
+                    # block Qoder splices onto the opening prompt.
+                    if (row.get("origin") or {}).get("kind") == "human":
+                        text = "".join(
+                            b.get("text") or ""
+                            for b in ((row.get("message") or {}).get("content") or [])
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                        out["display"] = _QODER_REMINDER_RE.sub("", text).strip()
+    except OSError:
+        return None
+    return out
+
+
+def _qoder_child_stats(session_dir: Path) -> List[Dict[str, Any]]:
+    """Subagent transcripts for one session, with their credit spend."""
+    sub = session_dir / "subagents"
+    if not sub.is_dir():
+        return []
+    kids: List[Dict[str, Any]] = []
+    for transcript in sorted(sub.glob("*.jsonl")):
+        stats = _qoder_stats(transcript)
+        if not stats:
+            continue
+        # Children carry the parent's sessionId, so the filename is the only
+        # thing that tells two spawns apart.
+        stats["id"] = transcript.stem
+        meta = _json(transcript.with_suffix(".meta.json"))
+        if isinstance(meta, dict):
+            stats["agent_type"] = meta.get("agentType") or "subagent"
+            stats["description"] = meta.get("description") or ""
+        kids.append(stats)
+    return kids
+
+
+def _qoder_ide_titles() -> Dict[str, Dict[str, Any]]:
+    """Human-readable session titles from the IDE's mirror database.
+
+    The IDE projects the same sessions into SQLite (rows are marked
+    source="sdk-projection" and reuse the JSONL uuids), so it is used only to
+    name them — never counted as sessions of its own. Opened read-only and
+    best-effort; the app holds a large WAL while running.
+    """
+    db = paths.QODER_IDE_DIR / "main.sqlite"
+    conn = ro_sqlite(db)
+    if conn is None:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        if not table_exists(conn, "chat_sessions"):
+            return {}
+        for sid, title, kind in conn.execute(
+            "SELECT session_id, title, session_kind FROM chat_sessions "
+            "WHERE deleted_at IS NULL"
+        ):
+            if isinstance(sid, str) and sid:
+                out[sid] = {"title": (title or "").strip(), "kind": kind or "standard"}
+    except Exception:
+        return out
+    finally:
+        conn.close()
+    return out
+
+
+def _qoder_disk(cli: Path, ide: Path) -> Optional[Dict[str, Any]]:
+    """Footprint across BOTH Qoder roots.
+
+    The CLI tree under ~/.qoder is the smaller half; the Electron store in
+    Application Support is usually twice its size. Reporting only the dotfile
+    root would understate the agent by about two thirds.
+    """
+    doc = _simple_disk(cli)
+    if doc is None:
+        return None
+    if ide.is_dir():
+        size, complete = dir_size(ide)
+        doc["total_bytes"] += size
+        doc["total_human"] = human_bytes(doc["total_bytes"])
+        doc["complete"] = doc.get("complete", True) and complete
+        doc["parts"].append({"label": "IDE (Application Support)", "bytes": size})
+        doc["parts"].sort(key=lambda p: -p["bytes"])
+        doc["parts"] = doc["parts"][:8]
+    return doc
+
+
+def build_qoder(*, with_disk: bool = True) -> Dict[str, Any]:
+    """Qoder: credits, sessions and delegation from its Claude-shaped JSONL.
+
+    Everything money-shaped here is denominated in CREDITS. Qoder writes an
+    Anthropic-shaped `usage` block whose token counters are all zero and puts
+    the real figure in `credits`, so a credit total is the only spend this
+    harness actually records.
+
+    Reads no credential: ~/.qoder/.auth, auth.v1.dat, auth.machine-id and the
+    IDE's byok_model_credentials / mcp_oauth_credentials tables are never
+    opened. `.qoder-app-status.json` holds the account holder's name and email
+    and is deliberately not read at all.
+    """
+    root = paths.QODER_DIR
+    projects = root / "projects"
+    if not projects.is_dir():
+        return not_installed("qoder")
+
+    sections: List[Dict[str, Any]] = []
+    ide_titles = safe(lambda: _qoder_ide_titles(), "qoder ide titles") or {}
+
+    rows: List[List[Any]] = []
+    total_credits = 0.0
+    delegated_credits = 0.0
+    spawns = 0
+    version = None
+    for transcript in sorted(projects.glob("*/*.jsonl")):
+        stats = safe(lambda p=transcript: _qoder_stats(p), "qoder session")
+        if not stats:
+            continue
+        version = stats.get("version") or version
+        kids = safe(lambda p=transcript: _qoder_child_stats(p.parent / p.stem),
+                    "qoder subagents") or []
+        kid_credits = round(sum(k["credits"] for k in kids), 4)
+        total_credits += stats["credits"]
+        delegated_credits += kid_credits
+        spawns += len(kids)
+        meta = ide_titles.get(stats["id"]) or {}
+        rows.append([
+            preview(meta.get("title") or stats["display"] or stats["id"][-8:]),
+            stats["model"] or "—",
+            stats["branch"] or "—",
+            stats["turns"],
+            round(stats["credits"], 3),
+            kid_credits or 0,
+            iso(stats["mtime"]),
+        ])
+
+    if rows:
+        rows.sort(key=lambda r: r[6] or "", reverse=True)
+        sections.append(section(
+            "table", "Sessions", tilde(projects),
+            columns=["Session", "Model", "Branch", "Turns", "Credits",
+                     "Delegated", "Updated"],
+            rows=rows[:40], total=len(rows),
+            note="Credits are Qoder's own billing unit, read from each turn's "
+                 "usage record. Delegated credits are spent by subagents and "
+                 "are additional to the parent's own.",
+        ))
+
+    if total_credits or delegated_credits:
+        combined = total_credits + delegated_credits
+        share = (delegated_credits / combined * 100.0) if combined else 0.0
+        sections.append(section(
+            "meter", "Credit spend", tilde(projects),
+            meters=[
+                meter("Delegated to subagents", share,
+                      detail=f"{delegated_credits:.2f} of {combined:.2f} credits "
+                             f"across {spawns} spawn{'' if spawns == 1 else 's'}"),
+            ],
+            count=round(combined, 2),
+            note=f"{combined:.2f} credits total — {total_credits:.2f} in the "
+                 f"main sessions, {delegated_credits:.2f} in subagents. Qoder "
+                 f"publishes no credit-to-currency rate locally, so this is "
+                 f"deliberately not converted to dollars.",
+        ))
+
+    plugins = safe(lambda: _json(root / "plugins" / "installed_plugins_v2.json"),
+                   "qoder plugins")
+    fields: List[Dict[str, Any]] = []
+    if version:
+        fields.append(field("CLI version", version))
+    if isinstance(plugins, dict) and isinstance(plugins.get("plugins"), dict):
+        names = sorted(plugins["plugins"].keys())
+        fields.append(field("Installed plugins", len(names),
+                            hint=", ".join(names[:6]) if names else None))
+    settings = safe(lambda: _json(root / "settings.json"), "qoder settings")
+    if isinstance(settings, dict) and isinstance(settings.get("enabledPlugins"), dict):
+        fields.append(field("Enabled plugins",
+                            sum(1 for v in settings["enabledPlugins"].values() if v)))
+    for name, label in ((".auth", "Credential store"),
+                        (".qoder-app-status.json", "Account status file")):
+        target = root / name
+        if target.exists():
+            fields.append(field(label, "present",
+                                hint="Existence only — never opened."))
+    if fields:
+        sections.append(section("fields", "Install", tilde(root), fields=fields))
+
+    not_avail = [
+        unavailable("tokens",
+            "Qoder records no token counts. Every turn carries an "
+            "Anthropic-shaped usage block whose input, output and cache "
+            "counters are all zero, and bills in credits instead — so the "
+            "0 tokens and $0.00 shown elsewhere are what Qoder reports, not a "
+            "failed scan. The credit figures above are the real spend."),
+        unavailable("models",
+            "Model ids stay opaque. Qoder reports internal names such as "
+            "qmodel_38max, and its catalogue at .models/<uid>/catalog-v6 is "
+            "encrypted at rest, so there is no offline mapping to a real "
+            "model — and no published price list to cost it against."),
+        unavailable("session state",
+            "Per-session state.json is encrypted (each item carries a "
+            "ciphertext payload and an auth tag), so resumable context, "
+            "compaction state and todos cannot be read. Opaque by design, "
+            "not a missing store."),
+    ]
+
+    return panel(
+        "qoder", root, sections=sections, not_available=not_avail,
+        version=version,
+        last_active=iso(newest_mtime([projects])),
+        disk=(safe(lambda: _qoder_disk(root, paths.QODER_IDE_DIR), "qoder disk")
+              if with_disk else None),
     )
 
 

@@ -55,6 +55,9 @@ DEFAULT_MODES: Dict[str, str] = {
     "cline": "api",                # BYOK across providers (Anthropic/OpenAI/Ollama/etc.)
     "smallcode": "local",          # runs local models (e.g. ollama-served nemotron)
     "dsh": "api",                  # BYOK; routes to any provider (cerebras/groq/ollama/…)
+    # Credit-metered plan. Qoder records no token counts at all and bills in
+    # its own credits, so $0.00 is the correct API-equivalent cost, not a gap.
+    "qoder": "subscription",
 }
 
 # Human-readable note on where a detected value came from (shown in Settings so

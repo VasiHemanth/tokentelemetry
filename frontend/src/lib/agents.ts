@@ -12,7 +12,8 @@ import DshIcon from "@/components/icons/DshIcon";
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
-  | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime" | "dsh";
+  | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime" | "dsh"
+  | "qoder";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -41,6 +42,9 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   muse:        { key: "muse",        label: "Muse Code",   hex: "#2563eb", icon: MuseIcon },
   prime:       { key: "prime",       label: "Prime Agent", hex: "#D4FF47", icon: PrimeIcon },
   dsh:         { key: "dsh",         label: "DeepSeek Harness", hex: "#4D6BFE", icon: DshIcon },
+  // Qoder's mark is white-on-black, so the tint follows the other monochrome
+  // brands (grok, pi) rather than inventing a colour it doesn't use.
+  qoder:       { key: "qoder",       label: "Qoder",       hex: "#e4e4e7", icon: Boxes },
 };
 
 const FALLBACK: AgentMeta = {

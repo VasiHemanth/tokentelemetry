@@ -133,6 +133,13 @@ _RETENTION: Dict[str, Dict[str, Any]] = {
         "settings_hint": None,
         "note": "Zstd-compressed session logs under ~/.dsh/sessions; no auto-pruning.",
     },
+    "qoder": {
+        "label": "Qoder",
+        "default_days": None,
+        "configurable": False,
+        "settings_hint": None,
+        "note": "JSONL transcripts under ~/.qoder/projects; no auto-pruning.",
+    },
 }
 
 # Which agents we can actually archive (single-file resolvable transcript).

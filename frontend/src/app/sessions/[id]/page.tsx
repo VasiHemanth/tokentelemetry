@@ -74,6 +74,20 @@ interface Session {
    *  session, read back from its own log. DSH loads skills/plugins dynamically,
    *  so this legitimately differs between sessions in the same workspace and
    *  must never be substituted with a scan of what is installed on disk. */
+  /** Qoder records no token counts — every usage block it writes has zeroed
+   *  counters — and bills in credits instead. The trace header shows these
+   *  rather than a row of zeros that reads like a failed scan. */
+  qoder?: {
+    credits?: number;
+    delegated_credits?: number;
+    total_credits?: number;
+    cli_version?: string;
+    /** Skills and MCP servers THIS run was offered, read from the session's
+     *  own log. Many are plugin-scoped (better-harness, qoder-qmind), so the
+     *  generic /config list describes a different agent entirely. */
+    skills_available?: string[];
+    mcp_servers?: string[];
+  };
   dsh?: {
     agent_preset?: string;
     /** Presets the session ran under, in order; >1 means it hot-swapped. */
@@ -592,8 +606,9 @@ export default function SessionDetailPage() {
       // 5. Delegation overlay: subagent spawns + delegated token/cost attribution.
       // Only agents whose logs record spawns at all (claude full, cursor count-only,
       // grok/codex/antigravity/opencode/hermes parent-child links, dsh full via
-      // its children's own session logs).
-      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh"].includes(agent)) {
+      // its children's own session logs, qoder full but in credits — it records
+      // no token counts at all).
+      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh", "qoder"].includes(agent)) {
         apiFetch(`/sessions/${id}/delegation?agent=${agent}`)
           .then(res => res.json())
           .then(data => setDelegation(data && data.supported ? data : null))
@@ -798,6 +813,9 @@ export default function SessionDetailPage() {
       projectConfig,
       // DSH's runtime-resolved capability set for THIS session (see backend).
       dsh: agent === "dsh" ? sessionInfo?.dsh : undefined,
+      // Same for Qoder: its session log records the skills and MCP servers the
+      // run was actually offered.
+      qoder: agent === "qoder" ? sessionInfo?.qoder : undefined,
     };
   }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
 
@@ -808,7 +826,12 @@ export default function SessionDetailPage() {
   // (surfaced as sessionInfo.dsh), so rendering Claude's list there would
   // assert capabilities the run never had.
   useEffect(() => {
-    if (agent === "dsh") return;
+    // Qoder is the same case as DSH: it resolves skills and MCP servers at run
+    // time (many of them plugin-scoped, e.g. better-harness, qoder-qmind) and
+    // records the live set in its own session log. /config would have shown
+    // this project 48 skills that are all user-scoped Claude/Gemini/Qwen ones
+    // and none of Qoder's — capabilities the run never had.
+    if (agent === "dsh" || agent === "qoder") return;
     const cwd = events.find((e) => e.type === "session_meta")?.payload?.cwd || sessionInfo?.project;
     if (!cwd) return;
     apiFetch(`/config?project=${encodeURIComponent(cwd)}`)
@@ -1103,7 +1126,35 @@ export default function SessionDetailPage() {
               </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
-                  {agent === "grok" && sessionInfo.tokens.source !== "usage" ? (
+                  {agent === "qoder" ? (
+                    // Qoder writes a usage block with every token counter at
+                    // zero and bills in credits. Showing Input/Output/Cached
+                    // as 0 would read as a failed scan, which is exactly how
+                    // DSH's missing codec was misread — so show what Qoder
+                    // actually recorded, and say why the tokens are absent.
+                    <div
+                      className="flex items-center gap-3"
+                      title="Qoder records no token counts — its usage block reports zeros and it bills in credits instead. The $0.00 is a real subscription figure, not a missing value."
+                    >
+                      <TokenStat
+                        label="Credits"
+                        value={(sessionInfo.qoder?.credits ?? 0).toFixed(2)}
+                        accent="text-[var(--tt-brand)]"
+                      />
+                      {!!sessionInfo.qoder?.delegated_credits && (
+                        <>
+                          <span className="w-px h-5 bg-[var(--tt-border)]" />
+                          <TokenStat
+                            label="Delegated"
+                            value={`+${sessionInfo.qoder.delegated_credits.toFixed(2)}`}
+                            accent="text-[var(--tt-violet-fg)]"
+                          />
+                        </>
+                      )}
+                      <span className="w-px h-5 bg-[var(--tt-border)]" />
+                      <TokenStat label="Tokens" value="not recorded" />
+                    </div>
+                  ) : agent === "grok" && sessionInfo.tokens.source !== "usage" ? (
                     // Session files only record a context-window footprint.
                     // When unified.jsonl has billed usage, source === "usage"
                     // and we fall through to the Input/Output/Cached row.
@@ -1922,6 +1973,55 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                     <span className="text-[var(--tt-fg)] truncate" title={m.command || m.url || ""}>{m.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m.agent}</span>
                   </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      {ctx.qoder && ((ctx.qoder.skills_available?.length ?? 0) > 0 || (ctx.qoder.mcp_servers?.length ?? 0) > 0) && (
+        <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+            <Settings2 size={12} /> Runtime Capabilities
+          </div>
+          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+            What Qoder offered this run, from its own session log — not a scan of
+            what is installed now. Plugin-scoped entries carry their plugin prefix.
+          </div>
+          {(ctx.qoder.skills_available?.length ?? 0) > 0 && (
+            <details open>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                Skills ({ctx.qoder.skills_available.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.qoder.skills_available.map((s: string) => {
+                  const plugin = s.includes(":") ? s.split(":")[0] : null;
+                  return (
+                    <span
+                      key={s}
+                      title={plugin ? `provided by the ${plugin} plugin` : "user-level skill"}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded border ${plugin
+                        ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
+                        : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
+                    >
+                      {s}
+                    </span>
+                  );
+                })}
+              </div>
+            </details>
+          )}
+          {(ctx.qoder.mcp_servers?.length ?? 0) > 0 && (
+            <details open>
+              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+                MCP Servers ({ctx.qoder.mcp_servers.length}) ▸
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ctx.qoder.mcp_servers.map((m: string) => (
+                  <span key={m} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                    {m}
+                  </span>
                 ))}
               </div>
             </details>

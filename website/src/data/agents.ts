@@ -24,5 +24,6 @@ export const AGENTS: Agent[] = [
   { name: "Muse Code",      vendor: "Meta",      captures: ["tokens", "traces", "model", "subagents"],             logPath: "${XDG_DATA_HOME:-~/.local/share}/muse/sessions/", hex: "#2563eb" },
   { name: "Prime Agent",    vendor: "Prime Intellect", captures: ["tokens", "traces", "cost", "model", "branches"], logPath: "~/.prime/agent/sessions/",          hex: "#D4FF47" },
   { name: "DeepSeek Harness", vendor: "DeepSeek AI", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.dsh/sessions/",                  hex: "#4D6BFE" },
+  { name: "Qoder",          vendor: "Alibaba",   captures: ["traces", "credits", "subagents", "model"],            logPath: "~/.qoder/projects/",              hex: "#e4e4e7" },
   { name: "Hermes Agent",   vendor: "Nous Research", captures: ["tokens", "traces", "cost", "subagents", "skills", "memory", "cron", "38 sources"], logPath: "~/.hermes/",                      hex: "#eab308" },
 ];

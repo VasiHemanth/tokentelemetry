@@ -2,6 +2,22 @@
   "releases": [
     {
       "tag": "2026-08-29",
+      "title": "Qoder is now tracked",
+      "highlights": [
+        {
+          "title": "Qoder sessions, traces and subagents",
+          "description": "Qoder (Alibaba) is the 17th coding agent TokenTelemetry reads. Its sessions appear in the dashboard, analytics and projects like any other agent, with full traces and the subagents each session spawned. Nothing to configure — if you have run Qoder, it shows up.",
+          "href": "/"
+        },
+        {
+          "title": "Qoder bills in credits, so that is what we show",
+          "description": "Qoder records no token counts at all: every turn reports zero tokens and charges credits instead. Rather than invent a number, Qoder sessions show 0 tokens and $0.00, and its agent page shows the credits actually spent — including how much went to subagents, which on a typical run is about half. The page says plainly why the zeros are there, so they never read as a failed scan.",
+          "href": "/agents/qoder"
+        }
+      ]
+    },
+    {
+      "tag": "2026-08-29",
       "title": "DeepSeek costs corrected",
       "highlights": [
         {

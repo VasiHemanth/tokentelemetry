@@ -42,6 +42,12 @@ CURSOR_DIR = HOME / ".cursor"
 PI_DIR = HOME / ".pi" / "agent"
 DSH_DIR = _env_path("DSH_HOME") or (HOME / ".dsh")
 CLINE_DIR = _env_path("TT_CLINE_DIR") or (HOME / ".cline")
+# Same contract as main.py's QODER_DIR / QODER_IDE_DIR. Qoder keeps its CLI
+# transcripts under ~/.qoder and a separate Electron store in Application
+# Support; the panel spans both because neither alone is the agent's footprint.
+QODER_DIR = _env_path("QODER_HOME") or (HOME / ".qoder")
+QODER_IDE_DIR = (_env_path("QODER_IDE_HOME")
+                 or (HOME / "Library" / "Application Support" / "com.qoder.app.stable"))
 # Same contract as main.py's HERMES_DIR.
 HERMES_DIR = _env_path("HERMES_HOME") or (HOME / ".hermes")
 

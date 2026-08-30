@@ -1,6 +1,6 @@
 # Token Telemetry (TokenTelemetry)
 
-> **Local observability for AI coding agents and autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Muse Code, Prime Agent, _and_ Nous Research's Hermes Agent.**
+> **Local observability for AI coding agents and autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Muse Code, Prime Agent, Qoder, _and_ Nous Research's Hermes Agent.**
 
 **Token Telemetry** (one word: **TokenTelemetry**) — free, open-source, 100% local.
 
@@ -60,6 +60,7 @@ TokenTelemetry reads session logs from these agents automatically.
 | **Pi Coding Agent**         | ✅ Fully supported |
 | **Muse Code** (Meta)        | ✅ Fully supported |
 | **Prime Agent**             | ✅ Fully supported |
+| **Qoder** (Alibaba)         | ✅ Fully supported — credits, not tokens (Qoder records none) |
 
 ### Autonomous agents
 

@@ -38,7 +38,7 @@ def test_every_supported_agent_has_a_builder():
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "hermes",
+        "prime", "dsh", "qoder", "hermes",
     }
     assert supported == set(harness_panels.BUILDERS), (
         "every supported agent needs an extractor; "
@@ -297,6 +297,77 @@ def test_dsh_explains_zero_sessions_without_zstandard(tmp_path, monkeypatch):
     assert "start.sh" in note["reason"], "tell the user what to actually do"
 
 
+# --- Qoder ------------------------------------------------------------------
+
+def _qoder_turn(credits, model="qmodel_38max"):
+    """One assistant record. Qoder always writes zeroed token counters."""
+    return json.dumps({
+        "type": "assistant", "sessionId": "s1", "uuid": f"u{credits}",
+        "timestamp": "2026-08-29T19:58:50.418Z", "cwd": "/repo",
+        "gitBranch": "main", "version": "1.1.31", "isSidechain": False,
+        "message": {"role": "assistant", "model": model, "content": [],
+                    "usage": {"input_tokens": 0, "output_tokens": 0,
+                              "cache_read_input_tokens": 0,
+                              "cache_creation_input_tokens": 0,
+                              "credits": credits, "billable": True}},
+    })
+
+
+def test_qoder_reports_credits_and_flags_absent_tokens(tmp_path, monkeypatch):
+    """Credits are the spend; the zero tokens must explain themselves.
+
+    Qoder writes an Anthropic-shaped usage block with every token counter at
+    zero. A bare 0 on screen reads as a failed scan, so the panel has to name
+    the reason -- this pins both halves.
+    """
+    root = tmp_path / ".qoder"
+    proj = root / "projects" / "-repo"
+    proj.mkdir(parents=True)
+    (proj / "s1.jsonl").write_text("\n".join([
+        json.dumps({"type": "workspace-directories", "sessionId": "s1",
+                    "directories": ["/repo"]}),
+        _qoder_turn(1.5),
+        _qoder_turn(2.0),
+    ]), encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "QODER_DIR", root)
+    monkeypatch.setattr(hp_paths, "QODER_IDE_DIR", tmp_path / "no-ide")
+
+    doc = clis.build_qoder()
+    assert doc["installed"] and doc["version"] == "1.1.31"
+
+    table = next(s for s in doc["sections"] if s["title"] == "Sessions")
+    assert table["rows"][0][4] == 3.5, "credits summed across turns"
+
+    kinds = {n["kind"] for n in doc["not_available"]}
+    assert {"tokens", "models", "session state"} <= kinds
+    tokens = next(n for n in doc["not_available"] if n["kind"] == "tokens")
+    assert "credits" in tokens["reason"]
+    assert "not a failed scan" in tokens["reason"]
+
+
+def test_qoder_panel_survives_a_missing_ide_database(tmp_path, monkeypatch):
+    """The IDE mirror only supplies titles; without it the panel still builds."""
+    root = tmp_path / ".qoder"
+    proj = root / "projects" / "-repo"
+    proj.mkdir(parents=True)
+    (proj / "s1.jsonl").write_text(_qoder_turn(1.0), encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "QODER_DIR", root)
+    monkeypatch.setattr(hp_paths, "QODER_IDE_DIR", tmp_path / "absent")
+
+    doc = clis.build_qoder()
+    assert doc["installed"]
+    assert next(s for s in doc["sections"] if s["title"] == "Sessions")["rows"]
+
+
+def test_qoder_not_installed_before_any_session(tmp_path, monkeypatch):
+    """The installer creates ~/.qoder ahead of the first run, so the bare root
+    must not advertise an agent with nothing behind it."""
+    root = tmp_path / ".qoder"
+    (root / "logs").mkdir(parents=True)
+    monkeypatch.setattr(hp_paths, "QODER_DIR", root)
+    assert clis.build_qoder()["installed"] is False
+
+
 # --- Gemini -----------------------------------------------------------------
 
 def test_gemini_trust_and_project_resolver(tmp_path, monkeypatch):
@@ -503,7 +574,8 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     absent = tmp_path / "absent"
     for name in ("CLAUDE_DIR", "CODEX_DIR", "COPILOT_DIR", "GROK_DIR", "GEMINI_DIR",
                  "QWEN_DIR", "VIBE_DIR", "CURSOR_DIR", "PI_DIR", "DSH_DIR",
-                 "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR"):
+                 "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR",
+                 "QODER_DIR", "QODER_IDE_DIR"):
         monkeypatch.setattr(hp_paths, name, absent, raising=False)
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)
