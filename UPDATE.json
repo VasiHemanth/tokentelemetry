@@ -1,6 +1,26 @@
 {
   "releases": [
     {
+      "tag": "2026-08-30",
+      "title": "Telemetry you can read line by line",
+      "highlights": [
+        {
+          "title": "Settings lists every value we send, not a summary of it",
+          "description": "\"Show exactly what we send\" is now generated from the same allowlist the app checks against before anything is sent, so it lists every event, every property and every permitted value — and cannot drift from what actually leaves your machine. It also shows the values attached to your own events right now, rather than an example. Previously this was a hand-written list, and it had already fallen behind.",
+          "href": "/settings#usage-privacy"
+        },
+        {
+          "title": "We can now tell a broken agent from an unused one",
+          "description": "Once per launch, TokenTelemetry reports whether each coding agent it found could actually be read — as a size band like \"10-99\", never a real count, and never which project or session. Support for an agent can break quietly on machines that cannot be tested against: DeepSeek Harness shipped reporting zero sessions and it took a bug report to catch. This is the signal that catches it instead. Covered by the same one-click opt-out as everything else.",
+          "href": "/settings#usage-privacy"
+        },
+        {
+          "title": "Fixed: an event we described but never actually sent",
+          "description": "The transparency panel listed a retention event, complete with a sample payload, that no part of the app ever sent. It is now genuinely wired up, and a test keeps the panel and the code in agreement so the list can't overstate what we collect again."
+        }
+      ]
+    },
+    {
       "tag": "2026-08-29",
       "title": "Qoder is now tracked",
       "highlights": [

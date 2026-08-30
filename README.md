@@ -248,7 +248,7 @@ optional outbound calls:
    content-free usage signals sent to a Cloudflare Worker: which pages you
    open, which features you use, summary success/engine, OS + CPU arch + app
    version, approximate country (derived at Cloudflare's edge — never your
-   IP), which AI agents are detected (generic names), and a random per-launch
+   IP), which AI agents are detected (generic names), whether each detected agent's sessions could be read at all (a size band, never a count), and a random per-launch
    session id that is not linked across launches. It never collects your code,
    prompts, model output, file/directory paths, project names, token counts,
    costs, IP address, or any stable user or device identifier. Full details:

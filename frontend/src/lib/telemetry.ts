@@ -14,11 +14,36 @@ export interface TelemetryState {
   notice_ack: boolean;
 }
 
+/** One prop an event may carry. `values` is the closed set it is validated
+ *  against, or null when the prop is free-form (safe-scalar filter only). */
+export interface TelemetryProp {
+  name: string;
+  values: string[] | null;
+}
+
+/** One event and every prop it can carry. Derived server-side from the
+ *  allowlists, so this list can never drift from what is actually sent. */
+export interface TelemetryEventSpec {
+  event: string;
+  props: TelemetryProp[];
+}
+
+/** A context/system prop attached to every event, with this machine's real
+ *  current value — so the panel shows what would be sent, not a description. */
+export interface TelemetryAlwaysSent {
+  name: string;
+  scope: "context" | "system";
+  value: string | number | boolean;
+  note: string;
+}
+
 /** Exactly-what-we-send transparency payload (`GET /config/telemetry/preview`). */
 export interface TelemetryPreview extends TelemetryState {
   session_id: string;
   never_collected: string[];
   events: string[];
+  event_catalog: TelemetryEventSpec[];
+  always_sent: TelemetryAlwaysSent[];
   sample: unknown[];
   recent_sent: unknown[];
 }
@@ -72,7 +97,19 @@ export function routeOf(pathname: string): string {
   if (p.startsWith("/local-models")) return "local-models";
   if (p.startsWith("/sessions")) return "traces";
   if (p.startsWith("/projects")) return p === "/projects" ? "projects" : "project-detail";
+  if (p.startsWith("/agents/")) return "agent-panel";
   if (p.startsWith("/hermes")) return "hermes";
   if (p.startsWith("/settings")) return "settings";
   return "other";
+}
+
+/** The harness key from an `/agents/<key>` path, else undefined.
+ *
+ *  Paired with `routeOf`, this is what makes "is anyone actually opening the
+ *  Qoder panel?" answerable. The backend re-validates the key against its own
+ *  closed agent list, so an unrecognised one is reported as "other" rather than
+ *  riding through. */
+export function agentOf(pathname: string): string | undefined {
+  const m = pathname.replace(/\/+$/, "").match(/^\/agents\/([A-Za-z0-9_-]+)/);
+  return m ? m[1].toLowerCase() : undefined;
 }
