@@ -108,6 +108,8 @@ sent at most once per meaningful action.
 | `analytics.filtered` | a filter is applied on Analytics | `dimension` (agent/model/local-only/day), no values | **Is local-model filtering used?** (your explicit question) |
 | `feature.used` | generic, for discrete features | `name` (plan-library, project-insights, delegation-view, power-cost, billing-mode, search…) | Long-tail feature adoption |
 | `retention.opted_in` | user enables durable history | `tier` | Which power features convert |
+| `planlimits.toggled` | the sidebar plan-limit gauge is clicked | `state` (opened/closed) | **How often is the plan-limit gauge used, and is it pinned?** |
+| `agent.opened` | a connected coding-agent tile is opened | `agent` (claude/codex/…) | **Are the per-agent pages reached from the tiles?** |
 
 **Duration/outcome buckets, never raw values.** e.g. summary latency as
 `fast/medium/slow`, not milliseconds tied to a specific trace.

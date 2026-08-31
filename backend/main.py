@@ -10249,7 +10249,8 @@ import telemetry as _telemetry
 # Frontend events we accept through the bridge. Backend-origin events
 # (app.launched, trace.summarized) are emitted server-side and not listed here,
 # so a remote caller can't spoof them.
-_TELEMETRY_CLIENT_EVENTS = {"page.viewed", "analytics.filtered", "feature.used"}
+_TELEMETRY_CLIENT_EVENTS = {"page.viewed", "analytics.filtered", "feature.used",
+                            "planlimits.toggled", "agent.opened"}
 
 
 @app.get("/config/telemetry")
