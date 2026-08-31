@@ -8,8 +8,16 @@
  *   - launches FastAPI and Next.js
  *   - shuts both down cleanly on Ctrl+C
  *
+ * The first argument is a verb when it matches one of: dashboard, menubar,
+ * desktop, status, stop. Anything else falls through to flag parsing, so
+ * `tokentelemetry --port 4000` behaves exactly as it always has. The bare
+ * command (no verb) starts the dashboard.
+ *
  * Thin wrapper scripts (install.sh, start.sh, start.bat) just call into here,
  * so platform-specific bugs can only live in one place.
+ *
+ * The parsing/dispatch helpers are exported for `node --test`; the CLI only
+ * runs when this file is the entrypoint (require.main === module).
  */
 
 const { spawn, spawnSync } = require('child_process');
@@ -35,27 +43,47 @@ function die(msg) {
   process.exit(1);
 }
 
+// A bad flag. Thrown rather than calling die() so the parse layer is testable;
+// main() catches it and prints through die(), preserving the exit behaviour.
+class UsageError extends Error {}
+
+// --- Verbs ------------------------------------------------------------------
+// The first CLI argument is a verb only when it matches one of these; anything
+// else (including the empty case) means "dashboard", so `--port 4000` and a
+// stray argument can never silently change what the command does.
+const VERBS = ['dashboard', 'menubar', 'desktop', 'status', 'stop'];
+
+function parseInvocation(argv) {
+  if (argv.length > 0 && VERBS.includes(argv[0])) {
+    return { verb: argv[0], args: argv.slice(1) };
+  }
+  return { verb: 'dashboard', args: argv };
+}
+
 // --- CLI argument parsing -------------------------------------------------
 // Accepts --port / --api-port (and -p / -a shorthands), in `--flag value` or
-// `--flag=value` form. Anything unknown triggers the help text.
+// `--flag=value` form. Anything unknown throws a UsageError. Returns
+// { help, options }: help is true when -h/--help was seen (the caller prints
+// help and exits 0).
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null };
+  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false };
+  const fail = (msg) => { throw new UsageError(msg); };
   const take = (i) => {
-    if (i + 1 >= argv.length) die(`expected a value after ${argv[i]}`);
+    if (i + 1 >= argv.length) fail(`expected a value after ${argv[i]}`);
     return argv[i + 1];
   };
   const setPort = (key, raw) => {
     const n = parseInt(raw, 10);
-    if (!Number.isFinite(n) || n < 1 || n > 65535) die(`invalid port: ${raw}`);
+    if (!Number.isFinite(n) || n < 1 || n > 65535) fail(`invalid port: ${raw}`);
     out[key] = n;
   };
   const setDataDir = (raw) => {
-    if (!raw || !raw.trim()) die('expected a path after --data-dir');
+    if (!raw || !raw.trim()) fail('expected a path after --data-dir');
     out.dataDir = raw;
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '-h' || a === '--help') { printHelp(); process.exit(0); }
+    if (a === '-h' || a === '--help') { return { help: true, options: out }; }
     else if (a === '-p' || a === '--port')     { setPort('frontPort', take(i)); i++; }
     else if (a.startsWith('--port='))          { setPort('frontPort', a.slice('--port='.length)); }
     else if (a === '-a' || a === '--api-port') { setPort('apiPort',   take(i)); i++; }
@@ -67,11 +95,12 @@ function parseArgs(argv) {
     else if (a === '--auth-token')             { out.authToken = take(i); i++; }
     else if (a.startsWith('--auth-token='))    { out.authToken = a.slice('--auth-token='.length); }
     else if (a === '--insecure-no-auth')       { out.insecureNoAuth = true; }
+    else if (a === '--no-open')                { out.noOpen = true; }
     else if (a === '-d' || a === '--data-dir') { setDataDir(take(i)); i++; }
     else if (a.startsWith('--data-dir='))      { setDataDir(a.slice('--data-dir='.length)); }
-    else die(`unknown argument: ${a}\nRun with --help for usage.`);
+    else fail(`unknown argument: ${a}\nRun with --help for usage.`);
   }
-  return out;
+  return { help: false, options: out };
 }
 
 // Pick a concrete, reachable address for the connect/QR URL. 0.0.0.0 is a bind
@@ -94,7 +123,14 @@ function pickConnectHost(host, allowedOrigins) {
 
 function printHelp() {
   console.log([
-    'Usage: tokentelemetry [options]',
+    'Usage: tokentelemetry [command] [options]',
+    '',
+    'Commands:',
+    '  dashboard [options]        Start the dashboard (the default).',
+    '  menubar                    Menu bar app (macOS only).',
+    '  desktop                    Desktop app (not available yet).',
+    '  status                     Dashboard status (not available yet).',
+    '  stop                       Stop the dashboard (not available yet).',
     '',
     'Options:',
     '  -p, --port <N>            Frontend (Next.js) port. Default 3000.',
@@ -110,6 +146,8 @@ function printHelp() {
     '                            random token is generated and printed once.',
     '      --insecure-no-auth    Disable the remote access token entirely. Only safe',
     '                            on a fully trusted private network (e.g. a tailnet).',
+    '      --no-open             Do not open the dashboard in a browser. Useful from',
+    '                            scripts; AGENT_HARNESS_NO_OPEN still works too.',
     '  -h, --help               Show this help.',
     '',
     'Examples:',
@@ -186,9 +224,17 @@ async function ensurePortsFree(ports) {
   process.exit(1);
 }
 
-function openBrowser(url) {
+// True unless the caller passed --no-open or AGENT_HARNESS_NO_OPEN is set.
+// Split out so the suppression logic is unit-testable without spawning.
+function shouldOpenBrowser(options) {
+  if (options && options.noOpen) return false;
+  if (process.env.AGENT_HARNESS_NO_OPEN) return false;
+  return true;
+}
+
+function openBrowser(url, options) {
   // Platform-native launcher. No npm dep needed.
-  if (process.env.AGENT_HARNESS_NO_OPEN) return;
+  if (!shouldOpenBrowser(options)) return;
   try {
     if (process.platform === 'darwin') spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
     else if (isWindows) spawn('cmd', ['/c', 'start', '""', url], { detached: true, stdio: 'ignore' }).unref();
@@ -415,8 +461,8 @@ function ensureFrontend() {
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
-async function start() {
-  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir } = parseArgs(process.argv.slice(2));
+async function start(options) {
+  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir } = options;
 
   // --data-dir is just a friendly front-end for TOKENTELEMETRY_DATA_DIR, which
   // the Python backend reads (tt_paths.data_dir). An explicit flag wins over an
@@ -554,7 +600,7 @@ async function start() {
   waitForHttp(dashUrl).then((ok) => {
     if (ok) {
       console.log('→ opening dashboard in your browser…');
-      openBrowser(dashUrl);
+      openBrowser(dashUrl, options);
     }
   });
 
@@ -584,4 +630,102 @@ async function start() {
   frontend.on('exit', (code) => shutdown(code || 0));
 }
 
-start();
+// --- Subcommand messages ----------------------------------------------------
+// Vertical slice 1: verbs exist and are dispatched, but menubar/desktop/status/
+// stop are not implemented yet. They print one clear line and exit non-zero,
+// and (critically) none of them bootstrap dependencies or launch servers.
+
+function menubarMessage(platform) {
+  return platform === 'darwin'
+    ? 'The tokentelemetry menu bar is not implemented yet.'
+    : 'The tokentelemetry menu bar is macOS-only.';
+}
+
+function desktopMessage() {
+  return 'The tokentelemetry desktop app is not available yet.';
+}
+
+function statusMessage() {
+  return 'tokentelemetry status is not implemented yet.';
+}
+
+function stopMessage() {
+  return 'tokentelemetry stop is not implemented yet.';
+}
+
+function cmdMenubar() {
+  console.error(menubarMessage(process.platform));
+  return 1;
+}
+
+function cmdDesktop() {
+  console.error(desktopMessage());
+  return 1;
+}
+
+function cmdStatus() {
+  console.error(statusMessage());
+  return 1;
+}
+
+function cmdStop() {
+  console.error(stopMessage());
+  return 1;
+}
+
+// --- Dispatch + entrypoint ---------------------------------------------------
+async function main(argv = process.argv.slice(2)) {
+  const { verb, args } = parseInvocation(argv);
+  let parsed;
+  try {
+    parsed = parseArgs(args);
+  } catch (err) {
+    if (err instanceof UsageError) die(err.message);
+    throw err;
+  }
+  if (parsed.help) {
+    printHelp();
+    return 0;
+  }
+  switch (verb) {
+    case 'menubar': return cmdMenubar();
+    case 'desktop': return cmdDesktop();
+    case 'status': return cmdStatus();
+    case 'stop': return cmdStop();
+    case 'dashboard':
+    default:
+      // The bare command and `dashboard` are the same path. start() never
+      // returns until the user stops it, so no exit code follows this await.
+      await start(parsed.options);
+      return undefined;
+  }
+}
+
+if (require.main === module) {
+  main().then((code) => {
+    if (typeof code === 'number') process.exit(code);
+  }).catch((err) => {
+    console.error(err && err.stack ? err.stack : String(err));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  VERBS,
+  UsageError,
+  parseInvocation,
+  parseArgs,
+  printHelp,
+  shouldOpenBrowser,
+  openBrowser,
+  start,
+  main,
+  cmdMenubar,
+  cmdDesktop,
+  cmdStatus,
+  cmdStop,
+  menubarMessage,
+  desktopMessage,
+  statusMessage,
+  stopMessage,
+};

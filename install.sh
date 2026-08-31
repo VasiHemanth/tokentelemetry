@@ -30,6 +30,48 @@ if [ ! -f "./bin/cli.js" ]; then
   cd "$TARGET_DIR"
 fi
 
+# Absolute path to the checkout. The shim below points at this exact location,
+# so it keeps working after the installer's shell exits and from any directory.
+CHECKOUT_DIR="$(pwd)"
+
+# Install a ~/.local/bin/tokentelemetry shim so the command resolves from any
+# directory. A shim rather than npm link, because npm's global dir is
+# Node-version-specific under nvm and a user who switches Node versions would
+# silently lose the command. Idempotent: only rewritten when missing or
+# pointing at a different checkout.
+SHIM_DIR="${HOME}/.local/bin"
+SHIM_PATH="${SHIM_DIR}/tokentelemetry"
+if [ ! -f "$SHIM_PATH" ] || ! grep -Fq "$CHECKOUT_DIR" "$SHIM_PATH" >/dev/null 2>&1; then
+  mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_PATH.tmp" <<EOF
+#!/usr/bin/env bash
+exec node "$CHECKOUT_DIR/bin/cli.js" "\$@"
+EOF
+  chmod +x "$SHIM_PATH.tmp"
+  mv "$SHIM_PATH.tmp" "$SHIM_PATH"
+fi
+
+case ":$PATH:" in
+  *":$SHIM_DIR:"*) ;;
+  *) echo "⚠  ~/.local/bin is not on your PATH. Add it to run 'tokentelemetry' from any directory:"
+     # The right rc file depends on the login shell: bash reads ~/.bashrc, zsh
+     # (macOS default since Catalina) reads ~/.zshrc.
+     case "${SHELL:-}" in
+       */zsh|zsh)
+         echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+         echo "    source ~/.zshrc"
+         ;;
+       */bash|bash)
+         echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
+         echo "    source ~/.bashrc"
+         ;;
+       *)
+         echo "    Add \$HOME/.local/bin to your shell's startup file (~/.bashrc or ~/.zshrc), then reload it."
+         ;;
+     esac ;;
+esac
+
 echo "✓ TokenTelemetry ready in $(pwd)"
 echo "  Start it again any time with:  cd \"$(pwd)\" && ./start.sh"
+echo "  ... or from anywhere with:     tokentelemetry"
 exec node bin/cli.js
