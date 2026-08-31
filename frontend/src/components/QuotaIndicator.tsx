@@ -23,14 +23,20 @@ import { useQuotas } from "./QuotaProvider";
  */
 export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
   const { data, worst } = useQuotas();
-  const [open, setOpen] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  // Clicking pins the panel so it survives the pointer leaving — needed to
+  // scroll it, follow its link, or just read it without holding the mouse
+  // still. Hover alone remains the quick look.
+  const [pinned, setPinned] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const open = pinned || hovering;
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    if (!pinned) return;
+    const close = () => { setPinned(false); setHovering(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
     const onClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onClick);
@@ -38,7 +44,7 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onClick);
     };
-  }, [open]);
+  }, [pinned]);
 
   const providers = Object.entries(data?.providers ?? {});
   const unavailable = Object.values(data?.capabilities ?? {}).filter((c) => c.state !== "available");
@@ -51,11 +57,11 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
     <div
       ref={rootRef}
       className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
     >
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setPinned((v) => !v)}
         aria-label={worst
           ? `Plan limits: ${worst.displayName} ${worst.label} ${Math.round(worst.pct)}% used`
           : "Plan limits"}

@@ -41,7 +41,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
       )}
     >
       {/* Brand */}
-      <div className={cn("flex items-center gap-3 px-2 py-3 mb-3", isCollapsed && "justify-center px-0")}>
+      <div className={cn("shrink-0 flex items-center gap-3 px-2 py-3 mb-3", isCollapsed && "justify-center px-0")}>
         <div className="relative h-8 w-8 grid place-items-center rounded-[var(--tt-radius)] bg-gradient-to-br from-[var(--tt-brand)] to-[var(--tt-brand-deep)] shadow-[0_0_20px_-4px_var(--tt-brand-glow)]">
           <Activity className="text-white" size={16} strokeWidth={2.5} />
         </div>
@@ -57,41 +57,49 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
         )}
       </div>
 
-      {/* Links */}
-      <div className="space-y-0.5">
-        {[
-          ...LINKS,
-          ...(availableAgents.includes("hermes")
-            ? [{ name: "Hermes Agent", href: "/hermes", icon: HermesIcon as typeof LayoutDashboard }]
-            : []),
-        ].map((link) => (
-          <NavLink key={link.name} link={link} pathname={pathname} isCollapsed={isCollapsed} />
-        ))}
+      {/* Scrolls, so a long agent list can never push the controls below the
+          fold. The collapse button in particular has to stay reachable — with
+          19 agents connected it was pushed off-screen entirely. */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col -mx-1 px-1">
+        {/* Links */}
+        <div className="space-y-0.5">
+          {[
+            ...LINKS,
+            ...(availableAgents.includes("hermes")
+              ? [{ name: "Hermes Agent", href: "/hermes", icon: HermesIcon as typeof LayoutDashboard }]
+              : []),
+          ].map((link) => (
+            <NavLink key={link.name} link={link} pathname={pathname} isCollapsed={isCollapsed} />
+          ))}
+        </div>
+
+        {/* Connected agents */}
+        <div className="mt-auto pt-3">
+          {!isCollapsed && availableAgents.length > 0 && (
+            <div className="rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)] mb-2.5 flex items-center justify-between">
+                <span>Connected</span>
+                <span className="tabular text-[var(--tt-fg-muted)]">{availableAgents.length}</span>
+              </div>
+              <div className="grid grid-cols-1 gap-1.5 max-h-[34vh] overflow-y-auto">
+                {availableAgents.map((k) => {
+                  if (!ALL_AGENT_KEYS.includes(k as never)) return null;
+                  const meta = getAgent(k);
+                  return (
+                    <div key={k} className="flex items-center gap-2 text-[11px] text-[var(--tt-fg-muted)]">
+                      <AgentLogo agent={k} size={13} />
+                      <span className="truncate">{meta.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Connected agents */}
-      <div className="mt-auto space-y-3">
-        {!isCollapsed && availableAgents.length > 0 && (
-          <div className="rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3">
-            <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)] mb-2.5 flex items-center justify-between">
-              <span>Connected</span>
-              <span className="tabular text-[var(--tt-fg-muted)]">{availableAgents.length}</span>
-            </div>
-            <div className="grid grid-cols-1 gap-1.5">
-              {availableAgents.map((k) => {
-                if (!ALL_AGENT_KEYS.includes(k as never)) return null;
-                const meta = getAgent(k);
-                return (
-                  <div key={k} className="flex items-center gap-2 text-[11px] text-[var(--tt-fg-muted)]">
-                    <AgentLogo agent={k} size={13} />
-                    <span className="truncate">{meta.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
+      {/* Always reachable, whatever the roster does above. */}
+      <div className="shrink-0 space-y-3 pt-3">
         <QuotaIndicator collapsed={isCollapsed} />
         <NotificationBell collapsed={isCollapsed} />
 
