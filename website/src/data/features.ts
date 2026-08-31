@@ -29,6 +29,7 @@ export const FEATURES: Feature[] = [
       "Real-time monitoring of active traces across all detected tools.",
       "High-level metrics for total sessions, token burn, and cost estimates.",
       "Agent distribution and model usage leaderboards, updated live.",
+      "Live plan limits: session, weekly and monthly quota windows read from the logins already on your machine, with reset times and a sidebar gauge that colours as a window fills.",
     ],
     screenshot: "/screenshots/dashboard-hero.png",
   },

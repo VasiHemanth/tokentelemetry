@@ -112,6 +112,7 @@ The launcher tab works for every TT page, not just `/hermes` — Analytics, Proj
 - 📊 **Token Usage Dashboard** — real-time tokens in/out per agent, model, and project
 - 💰 **Cost Tracking** — see exact LLM API costs per session and cumulative over time
 - 🎯 **Budgets & Alerts** — set monthly/weekly/rolling spend or token limits per project (and per agent); get alerted at 80% and 100%. Observational — never blocks an agent
+- 🔋 **Plan Limits** — live session, weekly and monthly quota windows read from the coding-agent logins already on your machine (Claude Code, Codex, Copilot, OpenCode, Grok and more), with reset times and a sidebar gauge that colours as a window fills
 - 🔍 **Session Traces** — waterfall view of prompts, reasoning chains, tool calls, and responses
 - 🛠️ **Tool Call Analytics** — which tools your agents call most, success/failure rates
 - 📁 **Per-Project Insights** — heatmap, activity timeline, agent leaderboard per codebase
@@ -172,6 +173,16 @@ Per-project heatmap, tool usage breakdown, agent leaderboard, session timeline. 
 Set a spend or token limit on any project — monthly, weekly, or rolling 30-day, overall and per agent. Budgets are **observational**: TokenTelemetry tracks this period's spend against your limit but never blocks an agent. Set one on the project's **Config** tab (dollars or tokens, a period, and alert thresholds — 80% and 100% by default). The project header and **Insights** tab show how close you are, colour-coded as spend climbs, and when spend crosses a threshold an alert lands in the notification center — the bell at the bottom of the sidebar.
 
 📖 [Docs: Budgets & Alerts](https://tokentelemetry.com/docs/features/budgets)
+
+### Plan Limits
+
+How much of each coding agent's plan you have actually spent, read from the login already on your machine — the 5-hour session window, the weekly window, credits, and when each resets. The numbers come from the provider, so they match Claude's or Codex's own usage screen rather than being estimated from your history.
+
+The gauge at the bottom of the sidebar is tinted by whichever window across all your agents is closest to its ceiling; hover it for every window on every signed-in agent, or click to pin it open. Each agent's page and dashboard tile carry the same reading. Agents with no live number say which kind of gap it is — not signed in, a session that needs a fresh login, an account with no plan quota, or a provider with no quota API at all. Nothing is ever estimated.
+
+Distinct from **Budgets**: plan limits are your provider's ceiling on your account, budgets are your own ceiling on a project.
+
+📖 [Docs: Plan limits](https://tokentelemetry.com/docs/features/plan-limits)
 
 ### Session Trace
 
