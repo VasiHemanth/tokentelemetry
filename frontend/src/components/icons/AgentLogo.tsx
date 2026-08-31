@@ -9,6 +9,8 @@ type LogoProps = Pick<SVGProps<SVGSVGElement>, "className" | "aria-hidden"> & {
   agent: string;
   size?: number;
   decorative?: boolean;
+  /** Draw the brand's own colours instead of inheriting the current text colour. */
+  color?: boolean;
 };
 
 /**
@@ -16,7 +18,22 @@ type LogoProps = Pick<SVGProps<SVGSVGElement>, "className" | "aria-hidden"> & {
  * local SVG components for the public brands; proprietary/local integrations
  * retain their original TokenTelemetry marks as an explicit fallback.
  */
-export function AgentLogo({ agent, size = 16, decorative = true, className }: LogoProps) {
+/**
+ * Brands whose Lobe mark ships a full-colour variant. The rest — Cursor, Grok,
+ * OpenCode, Cline, Hermes — are monochrome marks by design, so `color` leaves
+ * them inheriting the tile's brand tint rather than inventing a palette.
+ */
+const COLOR_MARKS = {
+  claude: ClaudeCode.Color,
+  codex: Codex.Color,
+  gemini: GeminiCLI.Color,
+  antigravity: Antigravity.Color,
+  qwen: Qwen.Color,
+  copilot: Copilot.Color,
+  qoder: Qoder.Color,
+} as const;
+
+export function AgentLogo({ agent, size = 16, decorative = true, className, color = false }: LogoProps) {
   const meta = getAgent(agent);
   const props = {
     "aria-hidden": decorative ? true : undefined,
@@ -24,6 +41,9 @@ export function AgentLogo({ agent, size = 16, decorative = true, className }: Lo
     size,
     title: decorative ? undefined : meta.label,
   };
+
+  const ColorMark = color ? COLOR_MARKS[agent as keyof typeof COLOR_MARKS] : undefined;
+  if (ColorMark) return <ColorMark {...props} />;
 
   switch (agent as AgentKey) {
     case "claude": return <ClaudeCode {...props} />;

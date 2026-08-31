@@ -192,7 +192,7 @@ export default function Home() {
                   className="h-7 w-7 grid place-items-center rounded-md"
                   style={{ backgroundColor: `${meta.hex}14`, color: meta.hex }}
                 >
-                  <AgentLogo agent={k} size={16} />
+                  <AgentLogo agent={k} size={16} color />
                 </div>
                 <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
               </div>
