@@ -1,3 +1,5 @@
+import { formatDistanceToNowStrict } from "date-fns";
+
 export type QuotaResource = {
   kind: "consumption" | "balance" | "spend" | "usage" | string;
   unit: "percent" | "credits" | "resets" | "usd" | "count" | string;
@@ -131,4 +133,12 @@ export function worstWindow(data: QuotaResponse | undefined): QuotaWindow | unde
     if (candidate && (!worst || candidate.pct > worst.pct)) worst = candidate;
   }
   return worst;
+}
+
+/** "Resets in 3 days" — the wording the providers use on their own screens. */
+export function resetText(value?: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `Resets ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
 }

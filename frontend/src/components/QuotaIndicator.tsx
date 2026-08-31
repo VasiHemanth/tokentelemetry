@@ -7,8 +7,8 @@ import { Gauge } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { AgentLogo } from "@/components/icons/AgentLogo";
 import {
-  QUOTA_WARN_AT, quotaColor, quotaPercent, worstWindowFor,
-  type QuotaCapability, type QuotaSnapshot, type QuotaWindow,
+  QUOTA_WARN_AT, quotaAmount, quotaColor, quotaPercent, quotaResourceLabel, resetText, worstWindowFor,
+  type QuotaCapability, type QuotaResource, type QuotaSnapshot,
 } from "@/lib/quotas";
 import { useQuotas } from "./QuotaProvider";
 
@@ -69,7 +69,11 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
         )}
       >
         <span className="flex items-center gap-2 min-w-0">
-          <span className="relative flex items-center" style={tone ? { color: tone } : undefined}>
+          {/* The icon and label keep the nav's own colour. A whole sidebar row
+              turning red reads as "this control is broken" rather than "your
+              week is nearly spent", so the state is carried by the reading and
+              the bar, which are the things actually measuring something. */}
+          <span className="relative flex items-center">
             <Gauge size={collapsed ? 16 : 14} />
             {/* Collapsed, the rail has no room for a reading, so the state
                 travels as a dot on the icon instead of disappearing. */}
@@ -86,9 +90,7 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
           )}
         </span>
         {!collapsed && reading && (
-          <span className="tabular text-[11px] shrink-0" style={tone ? { color: tone } : undefined}>
-            {reading}
-          </span>
+          <span className="tabular text-[11px] shrink-0 text-[var(--tt-fg-muted)]">{reading}</span>
         )}
       </button>
 
@@ -106,25 +108,65 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-function Row({ window: w }: { window: QuotaWindow }) {
-  const spent = w.pct >= 100;
+function Bar({ label, pct, note }: { label: string; pct: number; note?: string | null }) {
   return (
-    <div className="px-3.5 py-2.5">
+    <div>
+      <div className="flex items-baseline justify-between gap-3 text-[11px]">
+        <span className="text-[var(--tt-fg-muted)]">{label}</span>
+        <span className="tabular whitespace-nowrap" style={{ color: quotaColor(pct) }}>
+          {pct >= 100 ? "Limit reached" : `${Math.round(pct)}% used`}
+        </span>
+      </div>
+      <div className="mt-1 h-1 rounded-full tt-tint-1 overflow-hidden">
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: quotaColor(pct) }} />
+      </div>
+      {note && <div className="mt-1 text-[10px] text-[var(--tt-fg-faint)]">{note}</div>}
+    </div>
+  );
+}
+
+/** One provider: every window it reports, plus any balance it carries. */
+function ProviderRows({ providerId, snapshot }: { providerId: string; snapshot: QuotaSnapshot }) {
+  const entries = Object.entries(snapshot.resources);
+  const windows = entries
+    .map(([key, resource]) => ({ key, resource, pct: quotaPercent(resource) }))
+    .filter((e): e is { key: string; resource: QuotaResource; pct: number } => e.pct != null);
+  const balances = entries.filter(([, resource]) => quotaPercent(resource) == null);
+
+  return (
+    <div className="px-3.5 py-3 space-y-2.5">
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-2 min-w-0">
-          <AgentLogo agent={w.providerId} size={13} color />
-          <span className="text-[12px] text-[var(--tt-fg)] truncate">{w.displayName}</span>
+          <AgentLogo agent={providerId} size={13} color />
+          <span className="text-[12px] font-medium text-[var(--tt-fg)] truncate">{snapshot.displayName}</span>
         </span>
-        <span className="tabular text-[11px] whitespace-nowrap" style={{ color: quotaColor(w.pct) }}>
-          {spent ? "Limit reached" : `${Math.round(w.pct)}% used`}
-        </span>
+        {snapshot.plan && (
+          <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--tt-fg-faint)] shrink-0">
+            {snapshot.plan}
+          </span>
+        )}
       </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        <div className="flex-1 h-1 rounded-full tt-tint-1 overflow-hidden">
-          <div className="h-full rounded-full" style={{ width: `${w.pct}%`, backgroundColor: quotaColor(w.pct) }} />
+
+      {windows.map(({ key, resource, pct }) => (
+        <Bar key={key} label={quotaResourceLabel(key)} pct={pct} note={resetText(resource.resetsAt)} />
+      ))}
+
+      {balances.map(([key, resource]) => (
+        <div key={key} className="flex items-baseline justify-between gap-3 text-[11px]">
+          <span className="text-[var(--tt-fg-muted)]">{quotaResourceLabel(key)}</span>
+          <span className="tabular text-[var(--tt-fg-dim)] whitespace-nowrap">
+            {resource.available != null
+              ? quotaAmount(resource.available, resource.unit)
+              : resource.used != null
+                ? `${quotaAmount(resource.used, resource.unit)} used`
+                : "No data"}
+          </span>
         </div>
-        <span className="text-[10px] text-[var(--tt-fg-faint)] whitespace-nowrap">{w.label}</span>
-      </div>
+      ))}
+
+      {windows.length === 0 && balances.length === 0 && (
+        <div className="text-[11px] text-[var(--tt-fg-dim)]">No quota reported.</div>
+      )}
     </div>
   );
 }
@@ -136,23 +178,18 @@ function Panel({
   providers: [string, QuotaSnapshot][];
   unavailable: QuotaCapability[];
 }) {
-  const rows = providers
-    .map(([id, snapshot]) => worstWindowFor(id, snapshot))
-    .filter((w): w is QuotaWindow => w != null)
-    .sort((a, b) => b.pct - a.pct);
-
-  // Providers that report only balances (credits, spend) have no window to
-  // rank, so they would vanish from a list built purely of meters.
-  const balances = providers.filter(([id, snapshot]) =>
-    !rows.some((r) => r.providerId === id)
-    && Object.values(snapshot.resources).some((r) => quotaPercent(r) == null));
+  // Closest to a ceiling first: the provider about to cut you off is the one
+  // worth reading. A provider with only balances has no window to rank and
+  // sorts last rather than dropping out of the list.
+  const ordered = [...providers].sort(
+    ([a, sa], [b, sb]) => (worstWindowFor(b, sb)?.pct ?? -1) - (worstWindowFor(a, sa)?.pct ?? -1));
 
   return (
     <div
       role="dialog"
       aria-label="Plan limits"
       className={cn(
-        "absolute z-[200] bottom-0 w-72 max-h-[70vh] flex flex-col",
+        "absolute z-[200] bottom-0 w-80 max-h-[75vh] flex flex-col",
         "rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] shadow-2xl",
         collapsed ? "left-[calc(100%+12px)]" : "left-[calc(100%+8px)]",
       )}
@@ -162,17 +199,10 @@ function Panel({
       </div>
 
       <div className="overflow-y-auto divide-y divide-[var(--tt-border)]">
-        {rows.map((w) => <Row key={w.providerId} window={w} />)}
-        {balances.map(([id, snapshot]) => (
-          <div key={id} className="px-3.5 py-2.5 flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 min-w-0">
-              <AgentLogo agent={id} size={13} color />
-              <span className="text-[12px] text-[var(--tt-fg)] truncate">{snapshot.displayName}</span>
-            </span>
-            <span className="text-[10px] text-[var(--tt-fg-faint)]">balance only</span>
-          </div>
+        {ordered.map(([id, snapshot]) => (
+          <ProviderRows key={id} providerId={id} snapshot={snapshot} />
         ))}
-        {rows.length === 0 && balances.length === 0 && (
+        {ordered.length === 0 && (
           <div className="px-4 py-8 text-center text-[12px] text-[var(--tt-fg-dim)]">
             No agent is reporting a plan limit yet.
           </div>
