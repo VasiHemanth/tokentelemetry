@@ -622,3 +622,47 @@ def test_every_supported_agent_has_a_quota_entry():
     assert roster, "agent roster could not be read"
     assert roster - reported == set(), f"agents with no quota entry: {sorted(roster - reported)}"
     assert reported - roster == set(), f"quota entries for unknown agents: {sorted(reported - roster)}"
+
+
+def test_claude_panel_and_dashboard_report_the_same_windows(tmp_path, monkeypatch):
+    """One app must not show two different numbers for the same week.
+
+    The panel's own source, ~/.claude.json, is only rewritten when the CLI next
+    calls the API, so it lagged the live provider reading by days.
+    """
+    import harness_panels.claude as panel
+
+    cache = tmp_path / "quotas.json"
+    cache.write_text(json.dumps({"providers": {"claude": {
+        "plan": "Pro",
+        "resources": {
+            "session": {"used": 27.0, "resetsAt": "2026-08-31T07:59:59Z"},
+            "weekly": {"used": 84.0, "resetsAt": "2026-09-03T03:59:59Z"},
+        },
+    }}}))
+    monkeypatch.setattr(panel, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(panel, "CLAUDE_JSON", tmp_path / "stale.json")
+    (tmp_path / "stale.json").write_text(json.dumps({"cachedUsageUtilization": {
+        "utilization": {"five_hour": {"utilization": 34}, "seven_day": {"utilization": 30}},
+    }}))
+
+    section = panel._quota()
+
+    assert [m["pct"] for m in section["meters"]] == [27.0, 84.0], "the stale file must not win"
+    assert "live" in section["source"]
+
+
+def test_claude_panel_falls_back_to_its_cached_file_without_a_live_reading(tmp_path, monkeypatch):
+    import harness_panels.claude as panel
+
+    monkeypatch.setattr(panel, "data_dir", lambda: tmp_path / "empty")
+    monkeypatch.setattr(panel, "CLAUDE_JSON", tmp_path / "claude.json")
+    (tmp_path / "claude.json").write_text(json.dumps({"cachedUsageUtilization": {
+        "fetchedAtMs": 1_787_544_557_030,
+        "utilization": {"five_hour": {"utilization": 34}, "seven_day": {"utilization": 30}},
+    }}))
+
+    section = panel._quota()
+
+    assert [m["pct"] for m in section["meters"]] == [34.0, 30.0]
+    assert "claude.json" in section["source"]

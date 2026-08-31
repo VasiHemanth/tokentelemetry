@@ -878,6 +878,12 @@ class GrokQuotaProvider:
         run Grok today always holds a dead one. ``~/.grok/auth.json`` is never
         rewritten: mutating another agent's session file could log the user out
         of their own CLI, so the fresh token lives only for this request.
+
+        That is only safe because x.ai's rotation is non-invalidating. It does
+        return a new refresh token each time, but the stored one keeps working
+        (verified by replaying the same token twice: both calls answer 200). A
+        provider that invalidated on use would need the opposite design, since
+        discarding the rotated token would break the user's own CLI.
         """
         refresh, client = entry.get("refresh_token"), entry.get("oidc_client_id")
         if not isinstance(refresh, str) or not refresh.strip() or not isinstance(client, str) or not client.strip():
