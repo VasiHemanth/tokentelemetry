@@ -55,8 +55,8 @@ const RESOURCE_NAMES: Record<string, string> = {
   rateLimitResets: "Rate-limit resets",
   chat: "Chat",
   completions: "Completions",
-  cursorModels: "Cursor Models",
-  otherModels: "Other Models",
+  cursorModels: "Cursor models",
+  otherModels: "Other models",
   onDemand: "On-demand",
 };
 

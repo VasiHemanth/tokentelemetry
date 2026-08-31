@@ -2,17 +2,18 @@
 
 import { useState } from "react";
 import { formatDistanceToNowStrict } from "date-fns";
-import { RefreshCw, TimerReset } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { api, useResource } from "@/lib/api";
 import { quotaAmount, quotaResourceLabel, type QuotaCapability, type QuotaResource, type QuotaResponse } from "@/lib/quotas";
 import { Badge, Button, Card, CardEyebrow, CardHeader, CardTitle, Section, Skeleton } from "@/components/ui";
+import { AgentLogo } from "@/components/icons/AgentLogo";
 
 function resetText(value?: string): string | null {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return `resets ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
+  return `Resets ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
 }
 
 /** Matches the thresholds the providers use in their own usage screens. */
@@ -25,58 +26,68 @@ function meterColor(pct: number): string {
   return "var(--tt-brand)";
 }
 
-function Meter({ resourceKey, resource }: { resourceKey: string; resource: QuotaResource }) {
-  const label = quotaResourceLabel(resourceKey);
+/** A quota with a ceiling: a labelled bar over its reading and reset time. */
+function Meter({ label, resource, pct }: { label: string; resource: QuotaResource; pct: number }) {
   const reset = resetText(resource.resetsAt);
-  const usableMeter = resource.used != null && resource.limit != null && resource.limit > 0;
-  // The bar reads as consumption: it fills left to right as the window is spent,
-  // the same direction and wording the provider's own usage screen uses, so the
-  // two can be compared without mentally inverting one of them.
-  const pct = usableMeter ? Math.min(100, Math.max(0, (resource.used! / resource.limit!) * 100)) : null;
-  const value = pct != null && resource.unit === "percent"
-    ? `${Math.round(pct)}% used`
-    : usableMeter
-      ? `${quotaAmount(resource.used!, resource.unit)} used`
-    : resource.available != null
-      ? quotaAmount(resource.available, resource.unit)
-      : resource.used != null
-        ? quotaAmount(resource.used, resource.unit)
-        : "No data";
+  const spent = pct >= 100;
+  const tone = pct >= WARN_AT ? meterColor(pct) : "var(--tt-fg)";
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline justify-between gap-3 text-[11px]">
-        <span className="text-[var(--tt-fg-muted)]">{label}</span>
-        <span
-          className="tabular whitespace-nowrap"
-          style={{ color: pct != null && pct >= WARN_AT ? meterColor(pct) : "var(--tt-fg)" }}
-        >
-          {value}
-        </span>
-      </div>
-      {pct != null && (
+    <div className="space-y-2">
+      <div className="text-[12px] font-medium text-[var(--tt-fg)]">{label}</div>
+      <div
+        className="h-1.5 rounded-full tt-tint-1 overflow-hidden"
+        role="progressbar"
+        aria-label={`${label}: ${Math.round(pct)}% used`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+      >
         <div
-          className="h-1.5 rounded-full tt-tint-1 overflow-hidden"
-          role="progressbar"
-          aria-label={`${label}: ${Math.round(pct)}% used`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(pct)}
-        >
-          <div
-            className="h-full rounded-full transition-[width,background-color] duration-500"
-            style={{ width: `${pct}%`, backgroundColor: meterColor(pct) }}
-          />
-        </div>
-      )}
-      {(reset || resource.estimated) && (
-        <div className="flex items-center gap-1 text-[10px] text-[var(--tt-fg-faint)]">
-          {reset && <TimerReset size={10} />}
-          <span>{[reset, resource.estimated ? "estimated" : null].filter(Boolean).join(" · ")}</span>
-        </div>
-      )}
+          className="h-full rounded-full transition-[width,background-color] duration-500"
+          style={{ width: `${pct}%`, backgroundColor: meterColor(pct) }}
+        />
+      </div>
+      <div className="flex items-baseline justify-between gap-3 text-[11px]">
+        <span className="tabular whitespace-nowrap" style={{ color: tone }}>
+          {spent ? "Limit reached" : `${Math.round(pct)}% used`}
+        </span>
+        {(reset || resource.estimated) && (
+          <span className="text-[var(--tt-fg-dim)] whitespace-nowrap">
+            {[reset, resource.estimated ? "estimated" : null].filter(Boolean).join(" · ")}
+          </span>
+        )}
+      </div>
     </div>
   );
+}
+
+/** A balance with no ceiling — credits, spend, resets. One line, no bar. */
+function Balance({ label, resource }: { label: string; resource: QuotaResource }) {
+  const value = resource.available != null
+    ? quotaAmount(resource.available, resource.unit)
+    : resource.used != null
+      ? `${quotaAmount(resource.used, resource.unit)} used`
+      : "No data";
+
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-[11px]">
+      <span className="text-[var(--tt-fg-muted)]">{label}</span>
+      <span className="tabular text-[var(--tt-fg)] whitespace-nowrap">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * A bar is only honest when the provider gave a ceiling to fill. Balances are
+ * shown as plain readings rather than a meter against an invented maximum.
+ */
+function Reading({ resourceKey, resource }: { resourceKey: string; resource: QuotaResource }) {
+  const label = quotaResourceLabel(resourceKey);
+  const bounded = resource.used != null && resource.limit != null && resource.limit > 0;
+  if (!bounded) return <Balance label={label} resource={resource} />;
+  const pct = Math.min(100, Math.max(0, (resource.used! / resource.limit!) * 100));
+  return <Meter label={label} resource={resource} pct={pct} />;
 }
 
 function capabilityLabel(state: QuotaCapability["state"]): string {
@@ -94,11 +105,14 @@ function capabilityVariant(state: QuotaCapability["state"]): "success" | "warn" 
   return "neutral";
 }
 
-function QuotaSource({ capability }: { capability: QuotaCapability }) {
+function QuotaSource({ providerId, capability }: { providerId: string; capability: QuotaCapability }) {
   return (
     <Card padding="md">
       <CardHeader className="mb-3">
-        <CardTitle>{capability.displayName}</CardTitle>
+        <div className="flex items-center gap-2 min-w-0">
+          <AgentLogo agent={providerId} size={14} />
+          <CardTitle className="truncate">{capability.displayName}</CardTitle>
+        </div>
         <Badge variant={capabilityVariant(capability.state)} size="xs">{capabilityLabel(capability.state)}</Badge>
       </CardHeader>
       <p className="text-[11px] leading-5 text-[var(--tt-fg-dim)]">
@@ -148,16 +162,19 @@ export default function QuotaOverview() {
               {providers.map(([providerId, snapshot]) => (
                 <Card key={providerId} padding="md">
                   <CardHeader className="mb-5">
-                    <div>
-                      <CardTitle>{snapshot.displayName}</CardTitle>
-                      {snapshot.plan && <CardEyebrow className="mt-1">{snapshot.plan}</CardEyebrow>}
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <CardTitle className="truncate">{snapshot.displayName}</CardTitle>
+                      {snapshot.plan && <CardEyebrow className="shrink-0">{snapshot.plan}</CardEyebrow>}
                     </div>
-                    <Badge variant={snapshot.stale ? "warn" : "success"} size="xs">
-                      {snapshot.stale ? "Cached" : "Live"}
-                    </Badge>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {snapshot.stale && <Badge variant="warn" size="xs">Cached</Badge>}
+                      <AgentLogo agent={providerId} size={16} />
+                    </div>
                   </CardHeader>
-                  <div className="space-y-4">
-                    {Object.entries(snapshot.resources).map(([key, resource]) => <Meter key={key} resourceKey={key} resource={resource} />)}
+                  <div className="space-y-5">
+                    {Object.entries(snapshot.resources).map(([key, resource]) => (
+                      <Reading key={key} resourceKey={key} resource={resource} />
+                    ))}
                     {Object.keys(snapshot.resources).length === 0 && (
                       <p className="text-[11px] text-[var(--tt-fg-dim)]">This plan does not expose a personal quota meter.</p>
                     )}
@@ -175,7 +192,7 @@ export default function QuotaOverview() {
                 Other coding agents — why each has no live quota above
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {unavailableSources.map(([providerId, capability]) => <QuotaSource key={providerId} capability={capability} />)}
+                {unavailableSources.map(([providerId, capability]) => <QuotaSource key={providerId} providerId={providerId} capability={capability} />)}
               </div>
             </div>
           )}
