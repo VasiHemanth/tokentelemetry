@@ -128,7 +128,7 @@ function printHelp() {
     'Commands:',
     '  dashboard [options]        Start the dashboard (the default).',
     '  menubar                    Menu bar app (macOS only).',
-    '  desktop                    Desktop app (not available yet).',
+    '  desktop                    Desktop app.',
     '  status                     Dashboard status (not available yet).',
     '  stop                       Stop the dashboard (not available yet).',
     '',
@@ -272,6 +272,15 @@ function checkNode() {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < 20 || (major === 20 && minor < 9)) {
     die(`Node.js 20.9+ required (detected ${process.versions.node}).`);
+  }
+}
+
+function checkDesktopNode() {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  // Electron's current installer requires this newer Node line. Keep the
+  // ordinary dashboard's existing Node 20.9 floor unchanged.
+  if (major < 22 || (major === 22 && minor < 12)) {
+    die(`TokenTelemetry Desktop requires Node.js 22.12+ (detected ${process.versions.node}).`);
   }
 }
 
@@ -631,19 +640,14 @@ async function start(options) {
 }
 
 // --- Subcommand messages ----------------------------------------------------
-// Vertical slice 1: verbs exist and are dispatched, but menubar/desktop/status/
-// stop are not implemented yet. They print one clear line and exit non-zero,
-// and (critically) none of them bootstrap dependencies or launch servers.
+// The desktop shell owns local backend/frontend processes and always addresses
+// them through localhost. 127.0.0.1 remains only a legacy CLI bind default.
 
-function menubarMessage(platform) {
-  return platform === 'darwin'
-    ? 'The tokentelemetry menu bar is not implemented yet.'
-    : 'The tokentelemetry menu bar is macOS-only.';
+function menubarMessage() {
+  return 'The tokentelemetry menu bar is macOS-only.';
 }
 
-function desktopMessage() {
-  return 'The tokentelemetry desktop app is not available yet.';
-}
+function desktopMessage() { return 'Starting TokenTelemetry Desktop…'; }
 
 function statusMessage() {
   return 'tokentelemetry status is not implemented yet.';
@@ -653,14 +657,117 @@ function stopMessage() {
   return 'tokentelemetry stop is not implemented yet.';
 }
 
-function cmdMenubar() {
-  console.error(menubarMessage(process.platform));
-  return 1;
+// --- macOS menu bar ----------------------------------------------------------
+// The menu bar app is a thin rumps wrapper over backend/quotas.py. rumps (and
+// its PyObjC dependencies) is macOS-only, so it lives in a separate
+// requirements-macos.txt and is installed into the existing backend venv only
+// when this command runs on macOS. The app runs detached in the background; its
+// "Open dashboard" item shells back out to this same CLI via absolute paths
+// passed through the environment (never a hard-coded checkout/account path).
+
+function menubarPythonArgs(backendDirParam = backendDir, dataDir = null) {
+  const args = [path.join(backendDirParam, 'menubar', 'app.py')];
+  if (dataDir) args.push('--data-dir', dataDir);
+  return args;
 }
 
-function cmdDesktop() {
-  console.error(desktopMessage());
-  return 1;
+function menubarEnv(dataDir, cliPath, nodePath, backendDirParam = backendDir, env = process.env) {
+  const base = dataDir ? { ...env, TOKENTELEMETRY_DATA_DIR: dataDir } : env;
+  const existing = env.PYTHONPATH ? [env.PYTHONPATH] : [];
+  return {
+    ...base,
+    PYTHONPATH: [backendDirParam, ...existing].join(path.delimiter),
+    TOKENTELEMETRY_CLI: cliPath,
+    TOKENTELEMETRY_NODE: nodePath,
+  };
+}
+
+function ensureMenubarRumps() {
+  // Install the macOS-only rumps requirement into the venv ensureBackend() just
+  // built, stamped by hash so a second `menubar` run is a no-op. Mirrors
+  // ensureBackend()'s lock/stamp logic, minus the hashes (this file is not
+  // lock-pinned) — rumps is a small, stable dependency and the file is macOS-only.
+  const reqPath = path.join(backendDir, 'requirements-macos.txt');
+  const stampPath = path.join(venvDir, '.requirements-macos.sha');
+  const currentSha = crypto.createHash('sha1').update(fs.readFileSync(reqPath)).digest('hex');
+  let cachedSha = null;
+  try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
+  if (cachedSha === currentSha) return;
+  const uv = findUv();
+  if (uv) {
+    console.log('→ installing macOS menu bar dependencies (uv)…');
+    if (runSoft(uv, ['pip', 'install', '--quiet', '--python', venvPython, '-r', 'requirements-macos.txt'], { cwd: backendDir }) !== 0) {
+      die('installing the macOS menu bar dependencies with uv failed (see above).\nRe-run with TT_NO_UV=1 to install them with pip instead.');
+    }
+  } else {
+    ensureVenvPip();
+    console.log('→ installing macOS menu bar dependencies…');
+    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements-macos.txt'], { cwd: backendDir });
+  }
+  try { fs.writeFileSync(stampPath, currentSha); } catch {}
+}
+
+function startMenubar(options = {}) {
+  checkNode();
+  ensureBackend();
+  ensureMenubarRumps();
+  const cliPath = path.join(__dirname, 'cli.js');
+  const child = spawn(venvPython, menubarPythonArgs(backendDir, options.dataDir), {
+    cwd: backendDir,
+    stdio: 'ignore',
+    detached: true,
+    env: menubarEnv(options.dataDir, cliPath, process.execPath),
+  });
+  child.unref();
+  return 0;
+}
+
+function electronExecutable(root = rootDir, platform = process.platform) {
+  return path.join(root, 'node_modules', '.bin', platform === 'win32' ? 'electron.cmd' : 'electron');
+}
+
+function ensureDesktopElectron() {
+  const executable = electronExecutable();
+  if (fs.existsSync(executable)) return executable;
+  if (!which('npm')) die('npm is required to install TokenTelemetry Desktop.');
+  console.log('→ installing TokenTelemetry Desktop…');
+  run('npm', ['install', '--no-audit', '--no-fund'], { cwd: rootDir });
+  if (!fs.existsSync(executable)) {
+    die('TokenTelemetry Desktop did not install correctly. Re-run `npm install` in the TokenTelemetry checkout.');
+  }
+  return executable;
+}
+
+function desktopEnv(dataDir, env = process.env) {
+  return dataDir ? { ...env, TOKENTELEMETRY_DATA_DIR: dataDir } : env;
+}
+
+function startDesktop(options = {}) {
+  checkNode();
+  checkDesktopNode();
+  ensureBackend();
+  ensureFrontend();
+  const electron = ensureDesktopElectron();
+  const child = spawn(electron, [path.join(rootDir, 'desktop', 'main.cjs')], {
+    cwd: rootDir,
+    detached: !isWindows,
+    stdio: 'ignore',
+    env: desktopEnv(options.dataDir),
+  });
+  child.unref();
+  return 0;
+}
+
+function cmdMenubar(options = {}, platform = process.platform) {
+  if (platform !== 'darwin') {
+    console.error(menubarMessage(platform));
+    return 1;
+  }
+  return startMenubar(options);
+}
+
+function cmdDesktop(options = {}) {
+  return startDesktop(options);
 }
 
 function cmdStatus() {
@@ -688,8 +795,8 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
   switch (verb) {
-    case 'menubar': return cmdMenubar();
-    case 'desktop': return cmdDesktop();
+    case 'menubar': return cmdMenubar(parsed.options);
+    case 'desktop': return cmdDesktop(parsed.options);
     case 'status': return cmdStatus();
     case 'stop': return cmdStop();
     case 'dashboard':
@@ -718,6 +825,7 @@ module.exports = {
   printHelp,
   shouldOpenBrowser,
   openBrowser,
+  checkDesktopNode,
   start,
   main,
   cmdMenubar,
@@ -728,4 +836,11 @@ module.exports = {
   desktopMessage,
   statusMessage,
   stopMessage,
+  menubarPythonArgs,
+  menubarEnv,
+  ensureMenubarRumps,
+  startMenubar,
+  electronExecutable,
+  desktopEnv,
+  startDesktop,
 };

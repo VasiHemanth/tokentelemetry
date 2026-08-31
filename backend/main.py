@@ -3672,6 +3672,8 @@ def _grok_subagent_meta(sess_dir: Path) -> List[Dict[str, Any]]:
                 "agent_type": m.get("subagent_type") or "unknown",
                 "description": m.get("description"),
                 "status": m.get("status"),
+                "started_at": m.get("started_at"),
+                "ended_at": m.get("completed_at"),
                 "duration_ms": m.get("duration_ms"),
                 "tool_calls": m.get("tool_calls"),
                 "turns": m.get("turns"),
@@ -5798,6 +5800,8 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     tokens = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     model = None
+    first_ts: Optional[str] = None
+    last_ts: Optional[str] = None
     seen_message_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
@@ -5806,6 +5810,15 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                     data = json.loads(line)
                 except Exception:
                     continue
+                # Span is read from EVERY line, not just assistant ones: the
+                # first line of a subagent transcript is the user prompt that
+                # spawned it, so filtering first would report the run as
+                # starting at its first model reply and hide the queue wait.
+                ts = data.get("timestamp")
+                if isinstance(ts, str) and ts:
+                    if first_ts is None:
+                        first_ts = ts
+                    last_ts = ts
                 if data.get("type") != "assistant":
                     continue
                 msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
@@ -5838,6 +5851,13 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["_cached_sum"],
                           cache_creation_tokens=tokens["cache_creation"],
                           cache_creation_1h_tokens=tokens["cache_creation_1h"])
+    def _at(ts: Optional[str]) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+        except ValueError:
+            return None
+
+    started, ended = _at(first_ts), _at(last_ts)
     entry = {
         "agent_id": f.stem[len("agent-"):],
         "agent_type": agent_type or "unknown",
@@ -5846,6 +5866,13 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
         "model": model,
         "tokens": tokens,
         "cost": cost,
+        # Span fields stay OUT of `tokens`: _claude_subagent_usage sums every
+        # key of that dict into a running total, so a string in there would
+        # blow up the rollup.
+        "started_at": first_ts,
+        "ended_at": last_ts,
+        "duration_ms": (round((ended - started).total_seconds() * 1000)
+                        if started and ended else None),
     }
     if extra:
         entry.update(extra)
@@ -9633,7 +9660,8 @@ async def session_delegation(session_id: str, agent: str):
             t = child_summary["tokens"]
             subagents.append({"agent_id": child.parent.name, "agent_type": "muse-subagent",
                               "model": child_summary["model"], "tokens": {**t, "total": sum(t.values())},
-                              "cost": calculate_cost(child_summary["model"], t["input"], t["output"], t["cached"], cache_creation_tokens=t["cache_creation"])})
+                              "cost": calculate_cost(child_summary["model"], t["input"], t["output"], t["cached"], cache_creation_tokens=t["cache_creation"]),
+                              "ended_at": child_summary["timestamp"]})
         totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
                   for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
         return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),
@@ -9680,7 +9708,7 @@ async def session_delegation(session_id: str, agent: str):
                 continue
             subagents.append({"agent_id": child["id"], "agent_type": "dsh-subagent",
                               "model": child["model"], "tokens": child["tokens"],
-                              "cost": child["cost"]})
+                              "cost": child["cost"], "ended_at": child.get("timestamp")})
         totals = {key: sum(s["tokens"].get(key, 0) for s in subagents)
                   for key in ("input", "output", "cached", "cache_creation", "reasoning", "total")}
         return {"supported": True, "tokens_recorded": True, "spawn_count": len(subagents),

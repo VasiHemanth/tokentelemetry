@@ -28,7 +28,9 @@
   "bugs": {
     "url": "https://github.com/VasiHemanth/tokentelemetry/issues"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron": "^44.1.0"
+  },
   "engines": {
     "node": ">=20.9.0"
   }

@@ -1,0 +1,5 @@
+# macOS-only extras for the menu bar app. rumps pulls in its own PyObjC
+# frameworks; a Linux or Windows install never reads this file, so those
+# platforms never try to resolve PyObjC. Installed into the same backend venv
+# as requirements.txt, only when `tokentelemetry menubar` runs on macOS.
+rumps>=0.4.0,<0.5

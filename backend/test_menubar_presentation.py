@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from menubar.presentation import build_menu_presentation
+from menubar.presentation import build_menu_presentation, percent_left_text, resets_in_text
 
 
 def test_presentation_selects_the_global_worst_window_with_stable_ties():
@@ -113,3 +113,57 @@ def test_presentation_distinguishes_loading_and_collection_failure_states():
     assert (failed.state, failed.title, failed.failure_message) == (
         "failure", "◔ Quota unavailable", "Could not refresh quota data.",
     )
+
+
+def test_presentation_adds_left_percent_resets_and_balance_amount_fields():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+    presentation = build_menu_presentation({
+        "providers": {
+            "codex": {
+                "displayName": "Codex",
+                "plan": "Plus",
+                "resources": {
+                    "weekly": {
+                        "kind": "consumption", "unit": "percent", "used": 81, "limit": 100,
+                        "resetsAt": (now + timedelta(days=1, hours=16)).isoformat(),
+                    },
+                    "session": {
+                        "kind": "consumption", "unit": "percent", "used": 60, "limit": 100,
+                        "resetsAt": (now + timedelta(hours=5)).isoformat(),
+                    },
+                    "extraUsage": {"kind": "spend", "unit": "usd", "used": 24.8},
+                },
+            },
+        },
+        "capabilities": {},
+        "errors": [],
+    }, now=now)
+
+    weekly = next(row for row in presentation.rows if row.resource_id == "weekly")
+    assert weekly.pct_left_text == "19% left"
+    assert weekly.resets_text == "Resets in 1d 16h"
+
+    session = next(row for row in presentation.rows if row.resource_id == "session")
+    assert session.pct_left_text == "40% left"
+    assert session.resets_text == "Resets in 5h 0m"
+
+    extra = next(row for row in presentation.rows if row.resource_id == "extraUsage")
+    assert extra.is_balance is True
+    assert extra.amount_text == "$25 used"
+    assert extra.pct_left_text is None
+    assert extra.text == "$25 used"
+
+
+def test_percent_left_text_and_resets_in_text_helpers():
+    from datetime import datetime, timezone
+
+    assert percent_left_text(90.0) == "10% left"
+    assert percent_left_text(100.0) == "0% left"
+    now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+    assert resets_in_text("2026-09-02T04:00:00Z", now=now) == "Resets in 1d 16h"
+    assert resets_in_text("2026-08-31T17:00:00Z", now=now) == "Resets in 5h 0m"
+    assert resets_in_text("2026-08-31T11:00:00Z", now=now) == "Resets now"
+    assert resets_in_text(None, now=now) is None
+    assert resets_in_text("garbage", now=now) is None

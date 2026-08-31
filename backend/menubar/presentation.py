@@ -8,8 +8,9 @@ single worst-window choice that must match the dashboard.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Callable, Literal, Mapping, Optional, Tuple
 
 from harness_panels.base import QUOTA_CRITICAL_AT, QUOTA_LABELS, QUOTA_WARN_AT
 
@@ -44,7 +45,12 @@ class QuotaWindow:
 
 @dataclass(frozen=True)
 class MenuBarRow:
-    """A single resource to render below its provider name in the menu."""
+    """A single resource to render below its provider name in the menu.
+
+    ``text`` stays the dashboard wording (``16% used`` / ``Limit reached`` /
+    ``$24.80 used``) for backwards compatibility and headless tests. The
+    optional display fields carry the richer, reference-style rendering data.
+    """
 
     provider_id: str
     provider_name: str
@@ -54,6 +60,10 @@ class MenuBarRow:
     text: str
     pct: Optional[float]
     severity: Optional[Severity]
+    pct_left_text: Optional[str] = None
+    resets_text: Optional[str] = None
+    amount_text: Optional[str] = None
+    is_balance: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,7 @@ def build_menu_presentation(
     *,
     loading: bool = False,
     failure: Optional[str] = None,
+    now: Optional[datetime] = None,
 ) -> MenuBarPresentation:
     """Build deterministic display data from one ``QuotaService.collect`` result.
 
@@ -81,6 +92,10 @@ def build_menu_presentation(
     example, a timer callback). A response may contain both cached provider data
     and refresh errors; cached data remains useful, so it stays ``ready`` when
     at least one consumption window is available.
+
+    ``now`` is an injectable clock used only to render "Resets in …" text; when
+    omitted the wall clock is used. Both ``used`` and ``left`` wording derive
+    from the same ``pct`` so the menu and the dashboard never disagree.
     """
 
     if loading:
@@ -90,6 +105,7 @@ def build_menu_presentation(
     if response is None:
         return _empty_presentation("no_data")
 
+    now = now or datetime.now(timezone.utc)
     providers = response.get("providers")
     if not isinstance(providers, Mapping):
         return _empty_presentation("failure", failure_message="Quota data is unavailable.")
@@ -123,6 +139,10 @@ def build_menu_presentation(
                 text=text,
                 pct=pct,
                 severity=severity,
+                pct_left_text=percent_left_text(pct) if pct is not None else None,
+                resets_text=resets_in_text(resource.get("resetsAt"), now=now),
+                amount_text=text if pct is None else None,
+                is_balance=pct is None,
             ))
             if pct is not None:
                 windows.append(QuotaWindow(
@@ -199,6 +219,54 @@ def _empty_presentation(state: PresentationState, failure_message: Optional[str]
         not_supported_count=0,
         failure_message=failure_message,
     )
+
+
+def percent_left_text(pct: float) -> str:
+    """The reference-style remaining-percentage label: ``81% left``."""
+    return f"{100 - _rounded_percent(pct)}% left"
+
+
+def resets_in_text(resets_at: Any, now: Optional[datetime] = None) -> Optional[str]:
+    """Compact reset countdown: ``Resets in 1d 16h`` / ``Resets in 5h`` / ``Resets in 3m``.
+
+    Returns ``None`` when the resource carries no future reset, so callers skip
+    the note line rather than rendering a nonsense time.
+    """
+    target = _parse_utc(resets_at)
+    if target is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    delta = target - now
+    total = int(round(delta.total_seconds()))
+    if total < 0:
+        return "Resets now"
+    if total < 60:
+        return "Resets in <1m"
+    days, remainder = divmod(total, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, _ = divmod(remainder, 60)
+    if days:
+        return f"Resets in {days}d {hours}h"
+    if hours:
+        return f"Resets in {hours}h {minutes}m"
+    return f"Resets in {minutes}m"
+
+
+def _parse_utc(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
 
 
 def _resource_text(resource: Mapping[str, Any], pct: Optional[float]) -> Optional[str]:

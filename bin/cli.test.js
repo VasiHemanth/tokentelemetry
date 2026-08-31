@@ -105,24 +105,27 @@ test('AGENT_HARNESS_NO_OPEN still suppresses the browser launch', () => {
 
 test('menubar is macOS-only off macOS and never mentions rumps', () => {
   assert.strictEqual(
-    cli.menubarMessage('linux'),
+    cli.menubarMessage(),
     'The tokentelemetry menu bar is macOS-only.',
   );
-  assert.strictEqual(
-    cli.menubarMessage('win32'),
-    'The tokentelemetry menu bar is macOS-only.',
-  );
-  assert.strictEqual(
-    cli.menubarMessage('darwin'),
-    'The tokentelemetry menu bar is not implemented yet.',
-  );
+  // Off-platform the handler prints exactly one line and exits non-zero.
+  for (const platform of ['linux', 'win32']) {
+    const { result, errLines } = captured(() => cli.cmdMenubar({}, platform));
+    assert.strictEqual(result, 1);
+    assert.strictEqual(errLines.length, 1);
+    assert.strictEqual(errLines[0], 'The tokentelemetry menu bar is macOS-only.');
+    assert.ok(!errLines[0].includes('rumps'));
+  }
 });
 
-test('desktop reports not available on every platform', () => {
-  assert.strictEqual(
-    cli.desktopMessage(),
-    'The tokentelemetry desktop app is not available yet.',
-  );
+test('desktop helpers resolve a local Electron runtime and preserve its data directory', () => {
+  assert.strictEqual(cli.desktopMessage(), 'Starting TokenTelemetry Desktop…');
+  assert.strictEqual(cli.electronExecutable('/repo', 'darwin'), path.join('/repo', 'node_modules', '.bin', 'electron'));
+  assert.strictEqual(cli.electronExecutable('/repo', 'win32'), path.join('/repo', 'node_modules', '.bin', 'electron.cmd'));
+  assert.deepStrictEqual(cli.desktopEnv('/custom/data', { KEEP: 'yes' }), {
+    KEEP: 'yes',
+    TOKENTELEMETRY_DATA_DIR: '/custom/data',
+  });
 });
 
 test('status and stop report not-available-yet', () => {
@@ -130,12 +133,36 @@ test('status and stop report not-available-yet', () => {
   assert.strictEqual(cli.stopMessage(), 'tokentelemetry stop is not implemented yet.');
 });
 
-test('subcommand handlers print one line and exit non-zero', () => {
-  for (const fn of [cli.cmdMenubar, cli.cmdDesktop, cli.cmdStatus, cli.cmdStop]) {
+test('status and stop handlers print one line and exit non-zero', () => {
+  for (const fn of [cli.cmdStatus, cli.cmdStop]) {
     const { result, errLines } = captured(fn);
     assert.strictEqual(result, 1);
     assert.strictEqual(errLines.length, 1);
   }
+});
+
+test('menubar argument and environment helpers are absolute and forward --data-dir', () => {
+  assert.deepStrictEqual(cli.menubarPythonArgs('/repo/backend'), [
+    path.join('/repo/backend', 'menubar', 'app.py'),
+  ]);
+  assert.deepStrictEqual(cli.menubarPythonArgs('/repo/backend', '/custom/data'), [
+    path.join('/repo/backend', 'menubar', 'app.py'),
+    '--data-dir',
+    '/custom/data',
+  ]);
+
+  const env = cli.menubarEnv(
+    '/custom/data',
+    '/repo/bin/cli.js',
+    '/usr/local/bin/node',
+    '/repo/backend',
+    { PYTHONPATH: '/existing' },
+  );
+  assert.strictEqual(env.TOKENTELEMETRY_DATA_DIR, '/custom/data');
+  assert.strictEqual(env.TOKENTELEMETRY_CLI, '/repo/bin/cli.js');
+  assert.strictEqual(env.TOKENTELEMETRY_NODE, '/usr/local/bin/node');
+  assert.ok(env.PYTHONPATH.split(path.delimiter).includes('/repo/backend'));
+  assert.ok(env.PYTHONPATH.split(path.delimiter).includes('/existing'));
 });
 
 test('main dispatches subcommands without bootstrapping or launching servers', async () => {
@@ -147,14 +174,8 @@ test('main dispatches subcommands without bootstrapping or launching servers', a
   assert.strictEqual(await stop.result, 1);
   assert.strictEqual(stop.errLines[0], 'tokentelemetry stop is not implemented yet.');
 
-  const desktop = captured(() => cli.main(['desktop']));
-  assert.strictEqual(await desktop.result, 1);
-  assert.strictEqual(desktop.errLines[0], 'The tokentelemetry desktop app is not available yet.');
-
-  const menubar = captured(() => cli.main(['menubar']));
-  assert.strictEqual(await menubar.result, 1);
-  assert.strictEqual(menubar.errLines.length, 1);
-  assert.strictEqual(menubar.errLines[0], cli.menubarMessage(process.platform));
+  // Menubar and desktop dispatch real launchers on macOS, so their runtime
+  // contracts are tested through pure helpers rather than starting services.
 });
 
 test('main --help prints usage and exits 0', async () => {
