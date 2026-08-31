@@ -15,6 +15,7 @@ from quotas import (
     CodexQuotaProvider,
     CopilotQuotaProvider,
     CursorQuotaProvider,
+    FRESHNESS,
     GeminiQuotaProvider,
     GrokQuotaProvider,
     OpenCodeQuotaProvider,
@@ -377,6 +378,80 @@ def test_service_skips_a_fresh_provider_until_a_forced_refresh(tmp_path):
     service.collect(force=True)
 
     assert provider.calls == 2
+
+
+def test_second_service_reloads_a_fresh_disk_cache_before_refreshing(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self, plan):
+            self.calls = 0
+            self.plan = plan
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=self.plan)
+
+    cache_path = tmp_path / "quotas.json"
+    stale_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    current_at = stale_at + FRESHNESS + timedelta(seconds=1)
+    stale_provider = Provider("stale")
+    stale_service = QuotaService([stale_provider], cache_path=cache_path, now=lambda: stale_at)
+    stale_service.collect(force=True)
+
+    second_provider = Provider("second")
+    second_service = QuotaService([second_provider], cache_path=cache_path, now=lambda: current_at)
+    second_service._load()  # Simulate a menubar process that loaded the stale cache earlier.
+
+    first_provider = Provider("first")
+    first_service = QuotaService([first_provider], cache_path=cache_path, now=lambda: current_at)
+    first_service.collect(force=True)
+
+    result = second_service.collect()
+
+    assert second_provider.calls == 0
+    assert result["providers"]["opencode"]["plan"] == "first"
+
+
+def test_second_service_never_saves_an_older_in_memory_snapshot_over_newer_disk_cache(tmp_path):
+    class Provider:
+        provider_id = "codex"
+        display_name = "Codex"
+
+        def __init__(self, plan):
+            self.calls = 0
+            self.plan = plan
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=self.plan)
+
+    cache_path = tmp_path / "quotas.json"
+    initial_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    updated_at = initial_at + timedelta(minutes=1)
+    initial_provider = Provider("initial")
+    QuotaService([initial_provider], cache_path=cache_path, now=lambda: initial_at).collect(force=True)
+
+    older_provider = Provider("older-memory")
+    older_service = QuotaService([older_provider], cache_path=cache_path, now=lambda: updated_at)
+    older_service._load()  # Its cache remains fresh, but another process updates it first.
+
+    writer_provider = Provider("newer-disk")
+    QuotaService([writer_provider], cache_path=cache_path, now=lambda: updated_at).collect(force=True)
+
+    result = older_service.collect()
+    persisted = json.loads(cache_path.read_text(encoding="utf-8"))
+
+    assert older_provider.calls == 0
+    assert result["providers"]["codex"]["plan"] == "newer-disk"
+    assert persisted["providers"]["codex"]["plan"] == "newer-disk"
 
 
 def test_local_api_routes_share_the_quota_service(monkeypatch, tmp_path):
