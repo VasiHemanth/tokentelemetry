@@ -15,14 +15,26 @@ function resetText(value?: string): string | null {
   return `resets ${formatDistanceToNowStrict(date, { addSuffix: true })}`;
 }
 
+/** Matches the thresholds the providers use in their own usage screens. */
+const WARN_AT = 75;
+const CRITICAL_AT = 90;
+
+function meterColor(pct: number): string {
+  if (pct >= CRITICAL_AT) return "var(--tt-danger-fg)";
+  if (pct >= WARN_AT) return "var(--tt-warn-fg)";
+  return "var(--tt-brand)";
+}
+
 function Meter({ resourceKey, resource }: { resourceKey: string; resource: QuotaResource }) {
   const label = quotaResourceLabel(resourceKey);
   const reset = resetText(resource.resetsAt);
   const usableMeter = resource.used != null && resource.limit != null && resource.limit > 0;
+  // The bar reads as consumption: it fills left to right as the window is spent,
+  // the same direction and wording the provider's own usage screen uses, so the
+  // two can be compared without mentally inverting one of them.
   const pct = usableMeter ? Math.min(100, Math.max(0, (resource.used! / resource.limit!) * 100)) : null;
-  const percentAllowance = pct != null && resource.unit === "percent";
-  const value = percentAllowance
-    ? `${Math.round(100 - pct!)}% left`
+  const value = pct != null && resource.unit === "percent"
+    ? `${Math.round(pct)}% used`
     : usableMeter
       ? `${quotaAmount(resource.used!, resource.unit)} used`
     : resource.available != null
@@ -35,20 +47,25 @@ function Meter({ resourceKey, resource }: { resourceKey: string; resource: Quota
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3 text-[11px]">
         <span className="text-[var(--tt-fg-muted)]">{label}</span>
-        <span className="tabular text-[var(--tt-fg)] whitespace-nowrap">{value}</span>
+        <span
+          className="tabular whitespace-nowrap"
+          style={{ color: pct != null && pct >= WARN_AT ? meterColor(pct) : "var(--tt-fg)" }}
+        >
+          {value}
+        </span>
       </div>
       {pct != null && (
         <div
           className="h-1.5 rounded-full tt-tint-1 overflow-hidden"
           role="progressbar"
-          aria-label={`${label}: ${Math.round(percentAllowance ? 100 - pct : pct)}% ${percentAllowance ? "left" : "used"}`}
+          aria-label={`${label}: ${Math.round(pct)}% used`}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(percentAllowance ? 100 - pct : pct)}
+          aria-valuenow={Math.round(pct)}
         >
           <div
-            className="h-full rounded-full bg-[var(--tt-brand)] transition-[width] duration-500"
-            style={{ width: `${percentAllowance ? 100 - pct : pct}%` }}
+            className="h-full rounded-full transition-[width,background-color] duration-500"
+            style={{ width: `${pct}%`, backgroundColor: meterColor(pct) }}
           />
         </div>
       )}

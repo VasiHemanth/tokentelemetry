@@ -666,3 +666,16 @@ def test_claude_panel_falls_back_to_its_cached_file_without_a_live_reading(tmp_p
 
     assert [m["pct"] for m in section["meters"]] == [34.0, 30.0]
     assert "claude.json" in section["source"]
+
+
+def test_quota_meters_colour_at_the_same_marks_as_the_dashboard():
+    """Panel and dashboard show the same windows, so they must colour alike.
+
+    `meter()`'s generic default warns at 70; the quota cards warn at 75, which
+    is where the providers' own usage screens change colour.
+    """
+    import harness_panels.claude as panel
+
+    assert [panel._quota_severity(p) for p in (0, 74.9)] == ["ok", "ok"]
+    assert [panel._quota_severity(p) for p in (75, 89.9)] == ["warn", "warn"]
+    assert [panel._quota_severity(p) for p in (90, 100)] == ["crit", "crit"]

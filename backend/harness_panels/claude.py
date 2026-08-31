@@ -43,6 +43,16 @@ def _read_json(path: Path) -> Optional[Any]:
 QUOTA_WINDOWS = {"session": "5-hour window", "weekly": "7-day window",
                  "sonnetWeekly": "7-day Sonnet"}
 
+# The dashboard's quota cards colour at these marks, matching the thresholds the
+# providers use in their own usage screens. The panel shows the same windows, so
+# it states them explicitly rather than inheriting `meter()`'s generic 70.
+QUOTA_WARN_AT = 75.0
+QUOTA_CRITICAL_AT = 90.0
+
+
+def _quota_severity(pct: float) -> str:
+    return "crit" if pct >= QUOTA_CRITICAL_AT else "warn" if pct >= QUOTA_WARN_AT else "ok"
+
 
 def _live_quota() -> Optional[Dict[str, Any]]:
     """The reading the dashboard's quota cards are showing, if there is one.
@@ -68,7 +78,8 @@ def _live_quota() -> Optional[Dict[str, Any]]:
         window = resources.get(key)
         used = window.get("used") if isinstance(window, dict) else None
         if isinstance(used, (int, float)):
-            meters.append(meter(label, float(used), resets_at=window.get("resetsAt")))
+            meters.append(meter(label, float(used), resets_at=window.get("resetsAt"),
+                                severity=_quota_severity(float(used))))
     if not meters:
         return None
     plan = snapshot.get("plan")
