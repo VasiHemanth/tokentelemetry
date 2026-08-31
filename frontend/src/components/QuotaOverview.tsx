@@ -110,7 +110,7 @@ function QuotaSource({ providerId, capability }: { providerId: string; capabilit
     <Card padding="md">
       <CardHeader className="mb-3">
         <div className="flex items-center gap-2 min-w-0">
-          <AgentLogo agent={providerId} size={14} />
+          <AgentLogo agent={providerId} size={14} color />
           <CardTitle className="truncate">{capability.displayName}</CardTitle>
         </div>
         <Badge variant={capabilityVariant(capability.state)} size="xs">{capabilityLabel(capability.state)}</Badge>
@@ -168,7 +168,7 @@ export default function QuotaOverview() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {snapshot.stale && <Badge variant="warn" size="xs">Cached</Badge>}
-                      <AgentLogo agent={providerId} size={16} />
+                      <AgentLogo agent={providerId} size={16} color />
                     </div>
                   </CardHeader>
                   <div className="space-y-5">
