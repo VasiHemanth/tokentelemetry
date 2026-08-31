@@ -1286,3 +1286,34 @@ class QuotaService:
             temporary.replace(self.cache_path)
         except OSError:
             return
+
+
+def default_quota_providers() -> List[QuotaProvider]:
+    """The ordered provider roster for the local API and any desktop/menubar client.
+
+    Native sources first, in the order the dashboard lists them, then every
+    other supported agent as a static entry so a harness is never silently
+    missing from the quota page. Construction only: no credentials are read and
+    nothing is written.
+    """
+    return [
+        CodexQuotaProvider(),
+        ClaudeQuotaProvider(),
+        CursorQuotaProvider(),
+        OpenCodeQuotaProvider(),
+        CopilotQuotaProvider(),
+        GrokQuotaProvider(),
+        GeminiQuotaProvider(),
+        StaticQuotaProvider("antigravity", "Antigravity", "Antigravity keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("qwen", "Qwen CLI", "Qwen's OAuth free tier was discontinued and its Coding Plan key exposes no account-quota endpoint."),
+        StaticQuotaProvider("vibe", "Vibe", "Vibe routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("cline", "Cline", "Cline routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("pi", "Pi", "Pi routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("smallcode", "SmallCode", "SmallCode routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("muse", "Muse Code", "Muse Code's local session exposes no plan-quota API."),
+        StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
+        StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
+    ]

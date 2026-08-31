@@ -21,6 +21,7 @@ from quotas import (
     QuotaService,
     QuotaSnapshot,
     StaticQuotaProvider,
+    default_quota_providers,
 )
 
 
@@ -622,6 +623,40 @@ def test_every_supported_agent_has_a_quota_entry():
     assert roster, "agent roster could not be read"
     assert roster - reported == set(), f"agents with no quota entry: {sorted(roster - reported)}"
     assert reported - roster == set(), f"quota entries for unknown agents: {sorted(reported - roster)}"
+
+
+def test_default_quota_providers_roster_is_exact_and_stable():
+    """The factory is the single source of truth for the /quotas roster.
+
+    Pinning the ordered ids, the native provider classes, and the static
+    entries' display text catches a reorder, an accidental drop, or a rewritten
+    detail here rather than as silent drift in the running service.
+    """
+    providers = default_quota_providers()
+
+    assert [p.provider_id for p in providers] == [
+        "codex", "claude", "cursor", "opencode", "copilot", "grok", "gemini",
+        "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
+        "muse", "prime", "dsh", "qoder", "openai_compat",
+    ]
+
+    native = [p for p in providers if not isinstance(p, StaticQuotaProvider)]
+    assert [type(p) for p in native] == [
+        CodexQuotaProvider, ClaudeQuotaProvider, CursorQuotaProvider,
+        OpenCodeQuotaProvider, CopilotQuotaProvider, GrokQuotaProvider,
+        GeminiQuotaProvider,
+    ]
+
+    statics = {p.provider_id: p for p in providers if isinstance(p, StaticQuotaProvider)}
+    assert set(statics) == {
+        "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
+        "muse", "prime", "dsh", "qoder", "openai_compat",
+    }
+    assert statics["qwen"].display_name == "Qwen CLI"
+    assert statics["dsh"].display_name == "DeepSeek Harness"
+    assert statics["muse"].display_name == "Muse Code"
+    assert statics["openai_compat"].display_name == "OpenAI-compatible server"
+    assert [p.capability()["state"] for p in statics.values()] == ["notSupported"] * len(statics)
 
 
 def test_claude_panel_and_dashboard_report_the_same_windows(tmp_path, monkeypatch):

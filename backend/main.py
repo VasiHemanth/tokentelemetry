@@ -23,8 +23,7 @@ from harness_config import (
 import notifications as notif
 from tt_paths import canonical_project, data_dir
 from quotas import (
-    ClaudeQuotaProvider, CodexQuotaProvider, CopilotQuotaProvider, CursorQuotaProvider,
-    GeminiQuotaProvider, GrokQuotaProvider, OpenCodeQuotaProvider, QuotaService, StaticQuotaProvider,
+    QuotaService, default_quota_providers,
 )
 import scan_cache
 import harness_panels
@@ -2950,32 +2949,7 @@ _quota_service: Optional[QuotaService] = None
 def _get_quota_service() -> QuotaService:
     global _quota_service
     if _quota_service is None:
-        _quota_service = QuotaService([
-            # Native quota sources: an account API the agent's own login can read.
-            CodexQuotaProvider(),
-            ClaudeQuotaProvider(),
-            CursorQuotaProvider(),
-            OpenCodeQuotaProvider(),
-            CopilotQuotaProvider(),
-            GrokQuotaProvider(),
-            GeminiQuotaProvider(),
-            # Every other supported agent stays listed with the reason it has no
-            # live quota, so an agent is never silently missing from the page.
-            # A router has no account of its own; its quota belongs to whichever
-            # model provider it is configured against.
-            StaticQuotaProvider("antigravity", "Antigravity", "Antigravity keeps its plan and usage state server-side; nothing local reports it."),
-            StaticQuotaProvider("qwen", "Qwen CLI", "Qwen's OAuth free tier was discontinued and its Coding Plan key exposes no account-quota endpoint."),
-            StaticQuotaProvider("vibe", "Vibe", "Vibe routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("cline", "Cline", "Cline routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("pi", "Pi", "Pi routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("smallcode", "SmallCode", "SmallCode routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("muse", "Muse Code", "Muse Code's local session exposes no plan-quota API."),
-            StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
-            StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
-            StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
-            StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
-        ])
+        _quota_service = QuotaService(default_quota_providers())
     return _quota_service
 
 
