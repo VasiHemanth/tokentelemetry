@@ -1,6 +1,26 @@
 {
   "releases": [
     {
+      "tag": "2026-08-31",
+      "title": "Plan limits for every coding agent",
+      "highlights": [
+        {
+          "title": "Live plan limits from the logins already on your machine",
+          "description": "The dashboard reads session, weekly and monthly windows, credits and reset times for Codex, Claude Code, GitHub Copilot, OpenCode and Grok. Claude Code was previously missing because it keeps its login in the macOS Keychain rather than a file, and OpenCode was blocked by its provider's bot filter. Both now report.",
+          "href": "/"
+        },
+        {
+          "title": "Every agent is listed, with the reason when there is no number",
+          "description": "All 19 supported agents appear. An agent with no live reading says why: not signed in, a session that needs a fresh login, an account with no plan quota, or a provider that has no quota to read at all. Nothing is estimated from your session history.",
+          "href": "/"
+        },
+        {
+          "title": "The refresh warning only appears when a refresh actually failed",
+          "description": "Being signed out of an agent is a fact about the account, not an error, so it no longer raises the amber “could not refresh” banner. Expired logins now name the command to run instead."
+        }
+      ]
+    },
+    {
       "tag": "2026-08-30",
       "title": "Codex Sites appear with your artifacts",
       "highlights": [

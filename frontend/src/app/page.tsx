@@ -17,6 +17,7 @@ import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
+import QuotaOverview from "@/components/QuotaOverview";
 import { formatTokens, formatCost } from "@/lib/format";
 import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
@@ -163,6 +164,8 @@ export default function Home() {
           </Link>.
         </p>
       </Section>
+
+      <QuotaOverview />
 
       {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
