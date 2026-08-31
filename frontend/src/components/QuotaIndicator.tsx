@@ -6,6 +6,7 @@ import { Gauge } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { AgentLogo } from "@/components/icons/AgentLogo";
+import { trackEvent } from "@/lib/telemetry";
 import {
   QUOTA_WARN_AT, quotaAmount, quotaColor, quotaPercent, quotaResourceLabel, resetText, worstWindowFor,
   type QuotaCapability, type QuotaResource, type QuotaSnapshot,
@@ -61,7 +62,11 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
       onMouseLeave={() => setHovering(false)}
     >
       <button
-        onClick={() => setPinned((v) => !v)}
+        onClick={() => {
+          const next = !pinned;
+          setPinned(next);
+          trackEvent("planlimits.toggled", { state: next ? "opened" : "closed" });
+        }}
         aria-label={worst
           ? `Plan limits: ${worst.displayName} ${worst.label} ${Math.round(worst.pct)}% used`
           : "Plan limits"}

@@ -9,6 +9,7 @@ TRACE_VIEW_ENHANCEMENT_PLAN.md
 # --- Node / frontend ---
 node_modules/
 .next/
+.next-desktop/
 out/
 *.tsbuildinfo
 

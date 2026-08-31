@@ -44,6 +44,8 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5 space-y-2 mt-2">
           <li>Which pages you open in the app, including which coding agent&apos;s panel</li>
           <li>Which features you use (e.g. trace summaries, analytics filters, the Hermes dashboard)</li>
+          <li>When you open or close the sidebar plan-limit gauge — the click only, never the percentage or window</li>
+          <li>When you open a connected coding agent&apos;s tile — which agent, never its content</li>
           <li>Whether a summary succeeded or failed, and which summarizer engine was used</li>
           <li>Your OS family, CPU architecture, and the app version</li>
           <li>

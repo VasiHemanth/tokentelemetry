@@ -8,12 +8,14 @@ import remarkGfm from "remark-gfm";
 import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
 import Link from "next/link";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
+import AgentSigil from "@/components/icons/AgentSigil";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
+import { timeAgo } from "@/lib/notifications";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
 
@@ -478,7 +480,7 @@ export default function SessionDetailPage() {
   const fromParam = searchParams.get("from");
   const initialTab = (() => {
     const t = searchParams.get("tab");
-    return t === "tools" || t === "artifacts" || t === "raw" || t === "context" ? t : "context";
+    return t === "tools" || t === "artifacts" || t === "raw" || t === "agents" || t === "context" ? t : "context";
   })();
 
   const [events, setEvents] = useState<Event[]>([]);
@@ -508,7 +510,7 @@ export default function SessionDetailPage() {
   // with nothing below it. The visible slice is max(playbackIndex, this).
   const [revealedCount, setRevealedCount] = useState(1000);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "raw">(initialTab);
+  const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "agents" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -855,6 +857,25 @@ export default function SessionDetailPage() {
       }
     }
     return map;
+  }, [events]);
+
+  // Spawned children this session has, whatever the harness calls them: agents
+  // with per-child transcripts report `subagents`, the SQLite harnesses
+  // (opencode/hermes) only link child session ids. Either way, a non-zero count
+  // is what earns the Agents tab.
+  const subagentCount = (delegation?.subagents?.length ?? 0)
+    || (delegation?.child_session_ids?.length ?? 0);
+
+  const toolUseIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of events) {
+      if (Array.isArray(e.message?.content)) {
+        for (const c of e.message.content as TraceValue[]) {
+          if (c?.type === "tool_use" && c.id) ids.add(c.id);
+        }
+      }
+    }
+    return ids;
   }, [events]);
 
   // Tool summary
@@ -1480,8 +1501,9 @@ export default function SessionDetailPage() {
                 </button>
              ) : (
              <>
-             <div className="flex border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.18em]">
+             <div className="flex items-stretch gap-1 px-1.5 border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.08em]">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
+                {subagentCount > 0 && <TabBtn active={sidebarTab === "agents"} onClick={() => setSidebarTab("agents")} icon={<GitBranch size={12} />}>Agents</TabBtn>}
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
                 {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <TabBtn active={sidebarTab === "artifacts"} onClick={() => setSidebarTab("artifacts")} icon={<LayoutPanelLeft size={12} />}>Artifacts</TabBtn>}
                 <TabBtn active={sidebarTab === "raw"} onClick={() => setSidebarTab("raw")} icon={<FileCode size={12} />}>Raw</TabBtn>
@@ -1494,13 +1516,13 @@ export default function SessionDetailPage() {
                 </button>
              </div>
              <div className="p-4 text-[11px]">
-                {sidebarTab === "context" && (
-                  <>
-                    {delegation && agent && ((delegation.subagents?.length ?? 0) > 0 || (delegation.child_session_ids?.length ?? 0) > 0) && (
-                      <SubagentsSidebar delegation={delegation} onOpen={setSubagentView} />
-                    )}
-                    <ContextPanel ctx={context} />
-                  </>
+                {sidebarTab === "context" && <ContextPanel ctx={context} />}
+                {sidebarTab === "agents" && (
+                  <SubagentsSidebar
+                    delegation={delegation}
+                    onOpen={setSubagentView}
+                    isRunning={(id) => !!id && toolUseIds.has(id) && !toolResultByUseId.has(id)}
+                  />
                 )}
                 {sidebarTab === "tools" && <ToolsPanel summary={toolSummary} onJump={(name) => {
                    const idx = events.findIndex((e) => {
@@ -1599,61 +1621,175 @@ export default function SessionDetailPage() {
   );
 }
 
-/* Sidebar list of this session's subagents — the at-a-glance "what was
-   delegated" context, one click from each child's full trace. */
-function SubagentsSidebar({ delegation, onOpen }: { delegation: TraceValue; onOpen: (entry: TraceValue) => void }) {
-  const entries: TraceValue[] = delegation.subagents?.length
+/* This session's spawned children, as a scannable roster.
+   Each child gets a generated sigil (see AgentSigil) because subagents have no
+   branding of their own and a dozen identical generic glyphs is a list nobody
+   reads. Newest first; still-running children are grouped above the finished
+   ones, and that group is omitted entirely when nothing is running, since a
+   permanent "Running - 0" row on a historical trace is chrome, not
+   information. */
+function SubagentsSidebar({ delegation, onOpen, isRunning }: {
+  delegation: TraceValue | null;
+  onOpen: (entry: TraceValue) => void;
+  isRunning: (toolUseId?: string) => boolean;
+}) {
+  const entries: TraceValue[] = delegation?.subagents?.length
     ? delegation.subagents
-    : (delegation.child_session_ids || []).map((cid: string) => ({ child_session_id: cid }));
-  if (entries.length === 0) return null;
-  return (
-    <div className="px-4 py-4 border-t border-[var(--tt-border)]">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-3">
-        <GitBranch size={12} /> Subagents
-        <span className="tabular text-[var(--tt-fg-faint)]">{entries.length}</span>
+    // opencode/hermes link parent to child by session id and record nothing
+    // else about the spawn, so the row is an id and a way in.
+    : (delegation?.child_session_ids || []).map((cid: string) => ({ child_session_id: cid }));
+
+  if (entries.length === 0) {
+    return (
+      <div className="px-1 py-8 text-center text-[11px] text-[var(--tt-fg-dim)]">
+        This session spawned no subagents.
       </div>
-      <div className="space-y-1.5">
-        {entries.map((s: TraceValue, i: number) => (
-          <button
-            key={s.agent_id ?? s.child_session_id ?? i}
-            onClick={() => onOpen(s)}
-            className="w-full text-left rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2.5 py-2 hover:border-[var(--tt-brand)]/50 transition-colors group"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--tt-brand)]">
-                {s.agent_type || s.agent_role || "subagent"}
-              </span>
-              <ChevronRight size={12} className="text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg)] shrink-0" />
-            </div>
-            <div className="text-[11px] text-[var(--tt-fg)] truncate mt-0.5">
-              {s.description || s.nickname || s.child_session_id || s.agent_id}
-            </div>
-            <div className="text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5">
-              {s.model && <span>{String(s.model).replace(/-\d{8}$/, "")} · </span>}
-              {s.tokens != null && <span>{formatTokens(s.tokens.total)} tok · </span>}
-              {s.cost != null && <span>{formatCost(s.cost)} · </span>}
-              {typeof s.duration_ms === "number" && <span>{(s.duration_ms / 1000).toFixed(1)}s</span>}
-            </div>
-            {/* A delegated child inherits its sandbox/approval posture and can
-                end up more permissive than the session that spawned it (DSH
-                runs children on approval "never" under an "ask" parent). The
-                child has no page of its own, so surface it here. */}
-            {s.sandbox?.approval && (
-              <div className="text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5">
-                <span title="File-sandbox mode and approval policy this subagent ran under">
-                  sandbox {s.sandbox.mode || "?"} · approval{" "}
-                  <span className={s.sandbox.approval === "never" ? "text-[var(--tt-warn-fg)]" : ""}>
-                    {s.sandbox.approval}
-                  </span>
-                  {s.sandbox.approval_source === "delegation" && " (inherited)"}
-                </span>
-              </div>
-            )}
-          </button>
+    );
+  }
+
+  // Newest first, but only among entries that HAVE a time. cursor/opencode
+  // children carry none, and letting undefined sort to the top would put the
+  // least-informative rows first; they keep their original file order below.
+  const withTime = entries.filter((e) => e.ended_at || e.started_at);
+  const withoutTime = entries.filter((e) => !(e.ended_at || e.started_at));
+  const stamp = (e: TraceValue) => new Date(e.ended_at || e.started_at).getTime() || 0;
+  const ordered = [...withTime.sort((a, b) => stamp(b) - stamp(a)), ...withoutTime];
+
+  const live = (e: TraceValue) => isRunning(e.tool_use_id) || e.status === "running" || e.status === "in_progress";
+  const running = ordered.filter(live);
+  const done = ordered.filter((e) => !live(e));
+
+  const totalTokens = entries.reduce((n, e) => n + (e.tokens?.total ?? 0), 0);
+  const totalCost = entries.reduce((n, e) => n + (e.cost ?? 0), 0);
+  const totalCredits = entries.reduce((n, e) => n + (e.credits ?? 0), 0);
+  // A recurring spawn can fail dozens of times without any single row standing
+  // out in a list this long, so the count goes in the footer too.
+  const failed = entries.filter((e) => e.status === "failed" || e.status === "error").length;
+
+  const group = (label: string, rows: TraceValue[]) => (
+    <div>
+      <div className="flex items-center gap-2 px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+        <span>{label}</span>
+        <span className="tabular text-[var(--tt-fg-faint)]">{rows.length}</span>
+      </div>
+      <div className="space-y-0.5">
+        {rows.map((sa: TraceValue, i: number) => (
+          <SubagentRow
+            key={sa.agent_id ?? sa.child_session_id ?? i}
+            sa={sa}
+            running={live(sa)}
+            onOpen={() => onOpen(sa)}
+          />
         ))}
       </div>
     </div>
   );
+
+  return (
+    <div className="space-y-5">
+      {running.length > 0 && group("Running", running)}
+      {done.length > 0 && group(running.length > 0 ? "Done" : "Subagents", done)}
+
+      {/* Delegated spend is a separate bucket from the parent's own tokens
+          (count-once), so it is worth stating rather than leaving the reader
+          to add up the rows. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--tt-border)] pt-3 px-1 text-[10px] tabular text-[var(--tt-fg-dim)]">
+        <span>{entries.length} spawned</span>
+        {failed > 0 && <span className="text-[var(--tt-warn-fg)]">· {failed} failed</span>}
+        {delegation?.workflow_count > 0 && <span>· {delegation.workflow_count} in workflows</span>}
+        {totalTokens > 0 && <span>· {formatTokens(totalTokens)} tok delegated</span>}
+        {totalCost > 0 && <span>· {formatCost(totalCost)}</span>}
+        {totalCredits > 0 && <span>· {totalCredits.toFixed(2)} credits</span>}
+        {delegation?.tokens_recorded === false && totalCredits === 0 && (
+          <span title="This agent's logs record that a subagent ran, but not what it spent.">
+            · spend not recorded
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SubagentRow({ sa, running, onOpen }: { sa: TraceValue; running: boolean; onOpen: () => void }) {
+  const kind = sa.agent_type && sa.agent_type !== "unknown" ? sa.agent_type : null;
+  const title = sa.description || sa.phase || sa.nickname || kind || sa.child_session_id || sa.agent_id;
+  const when = sa.ended_at || sa.started_at;
+  // Qoder bills subagents in credits and reports an all-zero token block, so a
+  // `tokens != null` check would print a confident "0 tok". Read credits there.
+  const hasTokens = (sa.tokens?.total ?? 0) > 0;
+
+  const meta: string[] = [];
+  if (sa.kind === "workflow") meta.push("workflow");
+  else if (kind && title !== kind) meta.push(kind);
+  if (sa.model) meta.push(String(sa.model).replace(/-\d{8}$/, ""));
+  if (hasTokens) meta.push(`${formatTokens(sa.tokens.total)} tok`);
+  if (sa.credits > 0) meta.push(`${sa.credits.toFixed(2)} cr`);
+  if (sa.cost) meta.push(formatCost(sa.cost));
+  if (typeof sa.duration_ms === "number") meta.push(formatDuration(sa.duration_ms));
+
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full text-left flex items-start gap-2.5 rounded-[var(--tt-radius)] px-2 py-2 border border-transparent hover:border-[var(--tt-border)] hover:bg-[var(--tt-sunken)] transition-colors group"
+    >
+      <AgentSigil
+        seed={sa.description || sa.phase || sa.agent_id || sa.child_session_id || kind || ""}
+        running={running}
+        className="mt-0.5"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="flex items-baseline gap-1.5 min-w-0">
+            <span className="text-[12px] text-[var(--tt-fg)] truncate" title={title}>{title}</span>
+            {sa.status && !["completed", "success", "done", "running", "in_progress"].includes(sa.status) && (
+              <span className="text-[9px] uppercase tracking-[0.12em] shrink-0 text-[var(--tt-warn-fg)]">
+                {sa.status}
+              </span>
+            )}
+          </span>
+          <span className="text-[10px] tabular shrink-0 text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg-dim)]">
+            {running ? "running" : when ? relativeStamp(when) : ""}
+          </span>
+        </span>
+        {meta.length > 0 && (
+          <span className="block text-[10px] tabular text-[var(--tt-fg-dim)] truncate mt-0.5">
+            {meta.join(" · ")}
+          </span>
+        )}
+        {/* A delegated child inherits its sandbox/approval posture and can end
+            up more permissive than the session that spawned it (DSH runs
+            children on approval "never" under an "ask" parent). The child has
+            no page of its own, so surface it here. */}
+        {sa.sandbox?.approval && (
+          <span
+            className="block text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5"
+            title="File-sandbox mode and approval policy this subagent ran under"
+          >
+            sandbox {sa.sandbox.mode || "?"} · approval{" "}
+            <span className={sa.sandbox.approval === "never" ? "text-[var(--tt-warn-fg)]" : ""}>
+              {sa.sandbox.approval}
+            </span>
+            {sa.sandbox.approval_source === "delegation" && " (inherited)"}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+/** "4m ago", "3d ago", but "Aug 1" once timeAgo stops being relative. */
+function relativeStamp(iso: string): string {
+  const t = timeAgo(iso);
+  return t === "just now" || /^\d+[mhd]$/.test(t) ? `${t} ago` : t;
+}
+
+/** "8m 54s" / "42s" — subagent runs are minutes, not hours. */
+function formatDuration(ms: number): string {
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
 /* Slide-over trace viewer for one subagent — the LangSmith-style drill-in:
@@ -1835,10 +1971,12 @@ function TabBtn({ active, onClick, icon, children }: { active: boolean; onClick:
   return (
     <button
       onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 border-b-2 transition-colors ${active ? "border-blue-500 text-[var(--tt-brand)] bg-blue-500/5" : "border-transparent text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"}`}
+      title={typeof children === "string" ? children : undefined}
+      aria-label={typeof children === "string" ? children : undefined}
+      className={`min-w-0 flex items-center justify-center gap-1.5 py-2.5 border-b-2 transition-colors ${active ? "flex-1 border-blue-500 text-[var(--tt-brand)] bg-blue-500/5" : "px-2.5 border-transparent text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"}`}
     >
-      {icon}
-      {children}
+      <span className="shrink-0 flex items-center">{icon}</span>
+      {active && <span className="truncate">{children}</span>}
     </button>
   );
 }
@@ -3464,6 +3602,10 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
               className={`flex items-center justify-between gap-3 text-[11px] font-mono text-[var(--tt-fg-muted)] py-1.5 px-2 rounded ${onOpenSubagent ? "cursor-pointer hover:bg-[var(--tt-sunken)] hover:text-[var(--tt-fg)]" : "hover:bg-[var(--tt-sunken)]"}`}
             >
               <span className="flex items-center gap-2 min-w-0">
+                <AgentSigil
+                  seed={s.description || s.phase || s.agent_id || s.child_session_id || s.agent_type || ""}
+                  size={15}
+                />
                 {s.kind === "workflow" && (
                   <span
                     title={s.workflow_id ? `dynamic workflow ${s.workflow_id}` : "dynamic workflow"}

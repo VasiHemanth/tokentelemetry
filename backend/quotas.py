@@ -13,7 +13,9 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +29,14 @@ from tt_paths import data_dir
 
 SCHEMA = "tokentelemetry.quotas.v1"
 FRESHNESS = timedelta(minutes=5)
+CACHE_LOCK_TIMEOUT_SECONDS = 15
+
+# ``flock``/``msvcrt.locking`` coordinate separate processes, but their
+# same-process behaviour differs by platform. Keep a per-cache thread lock as
+# well, so two independently constructed services in one app cannot bypass the
+# interprocess lock while another process is also using the cache.
+_cache_locks: Dict[str, threading.Lock] = {}
+_cache_locks_guard = threading.Lock()
 
 # Some provider edges (OpenCode sits behind Cloudflare) reject the stdlib's
 # default "Python-urllib/x.y" agent with a 1010 browser-signature ban, which
@@ -44,6 +54,95 @@ LOGIN_REJECTED = "local login was rejected"
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _cache_lock_for(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _cache_locks_guard:
+        return _cache_locks.setdefault(key, threading.Lock())
+
+
+class _CacheFileLock:
+    """A bounded advisory lock that works on the supported desktop platforms."""
+
+    def __init__(self, cache_path: Path, timeout: float = CACHE_LOCK_TIMEOUT_SECONDS) -> None:
+        self.path = cache_path.with_name(f"{cache_path.name}.lock")
+        self.timeout = timeout
+        self._thread_lock = _cache_lock_for(cache_path)
+        self._handle: Optional[Any] = None
+        self._acquired = False
+
+    def __enter__(self) -> bool:
+        if not self._thread_lock.acquire(timeout=self.timeout):
+            return False
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._handle = self.path.open("a+b")
+            self._handle.seek(0, os.SEEK_END)
+            if self._handle.tell() == 0:
+                self._handle.write(b"0")
+                self._handle.flush()
+
+            deadline = time.monotonic() + self.timeout
+            while True:
+                if self._try_acquire():
+                    self._acquired = True
+                    return True
+                if time.monotonic() >= deadline:
+                    self._handle.close()
+                    self._handle = None
+                    self._thread_lock.release()
+                    return False
+                time.sleep(0.05)
+        except OSError:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+            self._thread_lock.release()
+            return False
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        if self._handle is not None:
+            try:
+                if self._acquired:
+                    self._release()
+            finally:
+                self._handle.close()
+                self._handle = None
+        if self._acquired:
+            self._thread_lock.release()
+            self._acquired = False
+
+    def _try_acquire(self) -> bool:
+        assert self._handle is not None
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (BlockingIOError, OSError):
+            return False
+
+    def _release(self) -> None:
+        assert self._handle is not None
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
 
 
 def _iso(value: datetime) -> str:
@@ -1206,42 +1305,53 @@ class QuotaService:
 
     def collect(self, force: bool = False) -> Dict[str, Any]:
         with self._lock:
-            self._load()
-            generated_at = self.now()
-            errors = []
-            capabilities: Dict[str, Dict[str, str]] = {}
-            for provider in self.providers:
-                current = self._snapshots.get(provider.provider_id)
-                explicit = getattr(provider, "capability", None)
-                if callable(explicit):
-                    capabilities[provider.provider_id] = explicit()
-                    continue
-                is_fresh = current and generated_at < current.fetched_at + FRESHNESS
-                if not force and is_fresh:
-                    capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
-                    continue
-                if not provider.has_local_credentials():
-                    capabilities[provider.provider_id] = {
-                        "displayName": provider.display_name,
-                        "state": "notSignedIn",
-                        "detail": "No local credentials found.",
-                    }
-                    continue
-                try:
-                    self._snapshots[provider.provider_id] = provider.refresh(generated_at)
-                    capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
-                except Exception as error:
-                    state, detail = _classify(provider, error)
-                    capabilities[provider.provider_id] = {
-                        "displayName": provider.display_name, "state": state, "detail": detail,
-                    }
-                    # A signed-out, expired or unlicensed account is a fact about
-                    # the account, not a fault. Only a genuine fetch failure gets
-                    # an error row, so the dashboard's warning stays meaningful.
-                    if state == "refreshFailed":
-                        errors.append({"providerId": provider.provider_id, "message": detail})
-            self._save()
-            return self._wire(generated_at, errors, capabilities)
+            with _CacheFileLock(self.cache_path) as acquired:
+                if not acquired:
+                    # Another process is still collecting. Its atomic replace
+                    # means this read is either the prior complete cache or the
+                    # next complete cache; never write a competing snapshot.
+                    self._load(reload=True)
+                    return self._wire(self.now(), [])
+
+                # Reload *inside* the process lock. A long-lived dashboard or
+                # menubar instance may have loaded a stale cache before another
+                # instance refreshed it, and must not overwrite that newer file.
+                self._load(reload=True)
+                generated_at = self.now()
+                errors = []
+                capabilities: Dict[str, Dict[str, str]] = {}
+                for provider in self.providers:
+                    current = self._snapshots.get(provider.provider_id)
+                    explicit = getattr(provider, "capability", None)
+                    if callable(explicit):
+                        capabilities[provider.provider_id] = explicit()
+                        continue
+                    is_fresh = current and generated_at < current.fetched_at + FRESHNESS
+                    if not force and is_fresh:
+                        capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
+                        continue
+                    if not provider.has_local_credentials():
+                        capabilities[provider.provider_id] = {
+                            "displayName": provider.display_name,
+                            "state": "notSignedIn",
+                            "detail": "No local credentials found.",
+                        }
+                        continue
+                    try:
+                        self._snapshots[provider.provider_id] = provider.refresh(generated_at)
+                        capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
+                    except Exception as error:
+                        state, detail = _classify(provider, error)
+                        capabilities[provider.provider_id] = {
+                            "displayName": provider.display_name, "state": state, "detail": detail,
+                        }
+                        # A signed-out, expired or unlicensed account is a fact about
+                        # the account, not a fault. Only a genuine fetch failure gets
+                        # an error row, so the dashboard's warning stays meaningful.
+                        if state == "refreshFailed":
+                            errors.append({"providerId": provider.provider_id, "message": detail})
+                self._save(generated_at)
+                return self._wire(generated_at, errors, capabilities)
 
     def _wire(
         self,
@@ -1260,8 +1370,8 @@ class QuotaService:
             "capabilities": dict(sorted((capabilities or {}).items())),
         }
 
-    def _load(self) -> None:
-        if self._loaded:
+    def _load(self, reload: bool = False) -> None:
+        if self._loaded and not reload:
             return
         self._loaded = True
         try:
@@ -1269,20 +1379,63 @@ class QuotaService:
             providers = value.get("providers") if isinstance(value, dict) else None
             if not isinstance(providers, dict):
                 return
-            self._snapshots = {
+            snapshots = {
                 provider_id: snapshot
                 for provider_id, raw in providers.items()
                 if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw))
             }
         except (OSError, json.JSONDecodeError):
             return
+        self._snapshots = snapshots
 
-    def _save(self) -> None:
+    def _save(self, generated_at: datetime) -> None:
+        temporary: Optional[Path] = None
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = self._wire(self.now(), [])
-            temporary = self.cache_path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-            temporary.replace(self.cache_path)
+            payload = self._wire(generated_at, [])
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.cache_path.parent,
+                prefix=f".{self.cache_path.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                json.dump(payload, handle, separators=(",", ":"))
+            os.replace(temporary, self.cache_path)
         except OSError:
             return
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
+def default_quota_providers() -> List[QuotaProvider]:
+    """The ordered provider roster for the local API and any desktop/menubar client.
+
+    Native sources first, in the order the dashboard lists them, then every
+    other supported agent as a static entry so a harness is never silently
+    missing from the quota page. Construction only: no credentials are read and
+    nothing is written.
+    """
+    return [
+        CodexQuotaProvider(),
+        ClaudeQuotaProvider(),
+        CursorQuotaProvider(),
+        OpenCodeQuotaProvider(),
+        CopilotQuotaProvider(),
+        GrokQuotaProvider(),
+        GeminiQuotaProvider(),
+        StaticQuotaProvider("antigravity", "Antigravity", "Antigravity keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("qwen", "Qwen CLI", "Qwen's OAuth free tier was discontinued and its Coding Plan key exposes no account-quota endpoint."),
+        StaticQuotaProvider("vibe", "Vibe", "Vibe routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("cline", "Cline", "Cline routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("pi", "Pi", "Pi routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("smallcode", "SmallCode", "SmallCode routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("muse", "Muse Code", "Muse Code's local session exposes no plan-quota API."),
+        StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
+        StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
+    ]

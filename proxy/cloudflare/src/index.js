@@ -53,7 +53,7 @@ const MAX_BODY = 8 * 1024; // events are tiny; reject anything bigger as abuse.
 const ALLOWED_EVENTS = new Set([
   "app.launched", "page.viewed", "trace.summarized",
   "analytics.filtered", "feature.used", "retention.opted_in",
-  "harness.scanned",
+  "harness.scanned", "planlimits.toggled", "agent.opened",
 ]);
 
 // Cheap, stateless validation. This is NOT anti-spoof (an open-source client

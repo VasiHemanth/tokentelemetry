@@ -17,6 +17,11 @@
         {
           "title": "The refresh warning only appears when a refresh actually failed",
           "description": "Being signed out of an agent is a fact about the account, not an error, so it no longer raises the amber “could not refresh” banner. Expired logins now name the command to run instead."
+        },
+        {
+          "title": "Read the full plan-limits guide",
+          "description": "How each meter is read, which agents report a live number and which do not, the colour thresholds, and the privacy note all live in one place. Session, weekly and monthly windows, credits, rate-limit resets and reset times are covered.",
+          "href": "/docs/features/plan-limits"
         }
       ]
     },

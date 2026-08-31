@@ -1,8 +1,10 @@
 # macOS Menu Bar, Global CLI, and Desktop App
 
-Status: proposed. Prompted by wanting plan limits visible in the macOS menu bar without
-opening the dashboard, and by the `hermes dashboard` / `hermes desktop` commands working
-from any directory.
+Status: in progress. The global CLI and macOS menu bar are implemented; the Electron
+desktop development shell is implemented, while packaged release builds remain deferred.
+The work was prompted by wanting plan limits visible in the macOS menu bar without opening
+the dashboard, and by the `hermes dashboard` / `hermes desktop` commands working from any
+directory.
 
 ## Decisions taken before writing this
 
@@ -16,7 +18,7 @@ from any directory.
 | --- | --- | --- |
 | `tokentelemetry` on PATH with subcommands | Small | Nothing |
 | `tokentelemetry menubar` (macOS) | Medium | Subcommands |
-| `tokentelemetry desktop` (Electron) | Large | Subcommands. Deferred. |
+| `tokentelemetry desktop` (Electron) | Large | Subcommands. Runnable shell implemented; packaging deferred. |
 
 ---
 
@@ -293,14 +295,22 @@ title formatting, threshold colouring, menu construction as data) lives in a pla
 with no `rumps` import and is unit-tested like everything else in `backend/`. The `rumps`
 layer is a thin renderer over that structure.
 
-## 4.3 Electron desktop app (deferred)
+## 4.3 Electron desktop app
 
-Recorded now because the CLI design should not foreclose it.
+The first implementation is a small Electron shell. `tokentelemetry desktop` launches
+Electron, which owns a FastAPI child and a separate Next development server. Both are bound
+and addressed as `localhost` on ephemeral ports, avoiding collisions with an already-running
+browser dashboard. The desktop server uses `frontend/.next-desktop`, so it never takes the
+ordinary dashboard's `.next` lock. Closing the Electron app terminates both child process
+groups. The renderer is sandboxed with Node integration disabled and context isolation on.
+
+The menu-bar app stays standalone; its **Open dashboard** action launches this desktop shell
+instead of opening a browser.
 
 ### It is much smaller here than in Hermes
 
-`frontend/` has no API routes, no server actions, and no dynamic server components. Every
-piece of data arrives from FastAPI through client-side fetch. So for a desktop build,
+`frontend/` has no API routes and every piece of data arrives from FastAPI through
+client-side fetch. For a packaged desktop build,
 `next.config.ts` can move from `output: "standalone"` to `output: "export"`, producing static
 files that Electron loads directly with no Node server in the app at all.
 
@@ -311,10 +321,8 @@ That removes most of what makes Hermes's `main.ts` 17,621 lines. A first version
 
 1. `tokentelemetry desktop` resolves a packaged app (the `_desktop_packaged_executable`
    pattern from `hermes_cli/main.py:6921`) and launches it, or builds first.
-2. Electron main spawns `backend/main.py --host 127.0.0.1 --port 0`, reads back the chosen
-   port, and waits for health. `--port 0` is Hermes's trick for never colliding with a
-   dashboard the user already has open. It requires the backend to print its bound port,
-   which it does not do today.
+2. Electron main spawns `backend/main.py --host localhost --port <ephemeral>`, waits for
+   health, then loads the renderer at `http://localhost:<ephemeral>`.
 3. The window loads the static export with the port injected.
 4. electron-builder produces a `.dmg`.
 

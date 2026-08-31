@@ -70,7 +70,12 @@ export async function ackTelemetryNotice(): Promise<void> {
 }
 
 /** Client-origin events the backend bridge accepts. */
-export type ClientEvent = "page.viewed" | "analytics.filtered" | "feature.used";
+export type ClientEvent =
+  | "page.viewed"
+  | "analytics.filtered"
+  | "feature.used"
+  | "planlimits.toggled"
+  | "agent.opened";
 
 /**
  * Fire-and-forget event. The backend re-sanitizes everything (allowlist + enum),

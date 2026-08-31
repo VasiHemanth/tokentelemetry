@@ -15,12 +15,14 @@ from quotas import (
     CodexQuotaProvider,
     CopilotQuotaProvider,
     CursorQuotaProvider,
+    FRESHNESS,
     GeminiQuotaProvider,
     GrokQuotaProvider,
     OpenCodeQuotaProvider,
     QuotaService,
     QuotaSnapshot,
     StaticQuotaProvider,
+    default_quota_providers,
 )
 
 
@@ -378,6 +380,80 @@ def test_service_skips_a_fresh_provider_until_a_forced_refresh(tmp_path):
     assert provider.calls == 2
 
 
+def test_second_service_reloads_a_fresh_disk_cache_before_refreshing(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self, plan):
+            self.calls = 0
+            self.plan = plan
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=self.plan)
+
+    cache_path = tmp_path / "quotas.json"
+    stale_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    current_at = stale_at + FRESHNESS + timedelta(seconds=1)
+    stale_provider = Provider("stale")
+    stale_service = QuotaService([stale_provider], cache_path=cache_path, now=lambda: stale_at)
+    stale_service.collect(force=True)
+
+    second_provider = Provider("second")
+    second_service = QuotaService([second_provider], cache_path=cache_path, now=lambda: current_at)
+    second_service._load()  # Simulate a menubar process that loaded the stale cache earlier.
+
+    first_provider = Provider("first")
+    first_service = QuotaService([first_provider], cache_path=cache_path, now=lambda: current_at)
+    first_service.collect(force=True)
+
+    result = second_service.collect()
+
+    assert second_provider.calls == 0
+    assert result["providers"]["opencode"]["plan"] == "first"
+
+
+def test_second_service_never_saves_an_older_in_memory_snapshot_over_newer_disk_cache(tmp_path):
+    class Provider:
+        provider_id = "codex"
+        display_name = "Codex"
+
+        def __init__(self, plan):
+            self.calls = 0
+            self.plan = plan
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=self.plan)
+
+    cache_path = tmp_path / "quotas.json"
+    initial_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    updated_at = initial_at + timedelta(minutes=1)
+    initial_provider = Provider("initial")
+    QuotaService([initial_provider], cache_path=cache_path, now=lambda: initial_at).collect(force=True)
+
+    older_provider = Provider("older-memory")
+    older_service = QuotaService([older_provider], cache_path=cache_path, now=lambda: updated_at)
+    older_service._load()  # Its cache remains fresh, but another process updates it first.
+
+    writer_provider = Provider("newer-disk")
+    QuotaService([writer_provider], cache_path=cache_path, now=lambda: updated_at).collect(force=True)
+
+    result = older_service.collect()
+    persisted = json.loads(cache_path.read_text(encoding="utf-8"))
+
+    assert older_provider.calls == 0
+    assert result["providers"]["codex"]["plan"] == "newer-disk"
+    assert persisted["providers"]["codex"]["plan"] == "newer-disk"
+
+
 def test_local_api_routes_share_the_quota_service(monkeypatch, tmp_path):
     import main
 
@@ -622,6 +698,40 @@ def test_every_supported_agent_has_a_quota_entry():
     assert roster, "agent roster could not be read"
     assert roster - reported == set(), f"agents with no quota entry: {sorted(roster - reported)}"
     assert reported - roster == set(), f"quota entries for unknown agents: {sorted(reported - roster)}"
+
+
+def test_default_quota_providers_roster_is_exact_and_stable():
+    """The factory is the single source of truth for the /quotas roster.
+
+    Pinning the ordered ids, the native provider classes, and the static
+    entries' display text catches a reorder, an accidental drop, or a rewritten
+    detail here rather than as silent drift in the running service.
+    """
+    providers = default_quota_providers()
+
+    assert [p.provider_id for p in providers] == [
+        "codex", "claude", "cursor", "opencode", "copilot", "grok", "gemini",
+        "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
+        "muse", "prime", "dsh", "qoder", "openai_compat",
+    ]
+
+    native = [p for p in providers if not isinstance(p, StaticQuotaProvider)]
+    assert [type(p) for p in native] == [
+        CodexQuotaProvider, ClaudeQuotaProvider, CursorQuotaProvider,
+        OpenCodeQuotaProvider, CopilotQuotaProvider, GrokQuotaProvider,
+        GeminiQuotaProvider,
+    ]
+
+    statics = {p.provider_id: p for p in providers if isinstance(p, StaticQuotaProvider)}
+    assert set(statics) == {
+        "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
+        "muse", "prime", "dsh", "qoder", "openai_compat",
+    }
+    assert statics["qwen"].display_name == "Qwen CLI"
+    assert statics["dsh"].display_name == "DeepSeek Harness"
+    assert statics["muse"].display_name == "Muse Code"
+    assert statics["openai_compat"].display_name == "OpenAI-compatible server"
+    assert [p.capability()["state"] for p in statics.values()] == ["notSupported"] * len(statics)
 
 
 def test_claude_panel_and_dashboard_report_the_same_windows(tmp_path, monkeypatch):

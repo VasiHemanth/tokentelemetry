@@ -14,7 +14,7 @@ export const API_BASE = (() => {
   if (typeof window !== "undefined") {
     return `${window.location.protocol}//${window.location.hostname}:${port}`;
   }
-  return `http://127.0.0.1:${port}`;
+  return `http://localhost:${port}`;
 })();
 
 // --- Remote-access token --------------------------------------------------

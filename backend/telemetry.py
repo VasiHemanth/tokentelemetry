@@ -123,6 +123,10 @@ _EVENT_PROPS: Dict[str, set] = {
     "analytics.filtered": {"dimension"},
     "feature.used":       {"name"},
     "retention.opted_in": {"tier"},
+    # Sidebar plan-limit gauge: how often it is opened vs. collapsed.
+    "planlimits.toggled": {"state"},
+    # A connected-coding-agent tile leading to /agents/<key>.
+    "agent.opened":       {"agent"},
     # One per *detected* harness, once per process, after the first successful
     # scan. The `agents` context prop says which harnesses are installed; this
     # says whether their readers actually returned anything. Without it a broken
@@ -157,6 +161,8 @@ _ENUMS: Dict[str, set] = {
     # Order-of-magnitude bucket, never a raw count -- enough to separate a
     # reader that found one session from one that found four hundred.
     "volume": {"0", "1-9", "10-99", "100-999", "1000-plus", "other"},
+    # Plan-limit gauge: opened (pinned/panel shown) vs. closed (a second click).
+    "state": {"opened", "closed", "other"},
 }
 
 # Detected-agent names we recognise — must match _list_available_agents() in
@@ -405,6 +411,8 @@ def sample_payloads() -> List[Dict[str, Any]]:
         "feature.used": {"name": "plan-library"},
         "retention.opted_in": {"tier": "full"},
         "harness.scanned": {"agent": "qoder", "volume": "1-9"},
+        "planlimits.toggled": {"state": "opened"},
+        "agent.opened": {"agent": "claude"},
     }
     # Iterate the allowlist, not the sample dict: an event added to
     # _EVENT_PROPS without a sample here still shows up in the panel (with

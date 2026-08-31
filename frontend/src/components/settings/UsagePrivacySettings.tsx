@@ -137,6 +137,8 @@ export default function UsagePrivacySettings() {
                     <li className="list-disc">Which pages you open — including which coding agent&apos;s panel</li>
                     <li className="list-disc">Which features you use (summaries, filters, budgets, Hermes, etc.)</li>
                     <li className="list-disc">When you open or save a budget — the count only, never the limit or amount</li>
+                    <li className="list-disc">When you open or close the plan-limit gauge in the sidebar — the click only, never which window or percentage</li>
+                    <li className="list-disc">When you open a connected coding agent&apos;s tile — which agent, never any session detail</li>
                     <li className="list-disc">Whether a summary succeeded or failed, and which engine</li>
                     <li className="list-disc">
                       For each coding agent found on this machine, whether we could read any sessions

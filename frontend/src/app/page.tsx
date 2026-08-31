@@ -11,6 +11,7 @@ import {
 
 import { useResource } from "@/lib/api";
 import { useScrollState } from "@/lib/useScrollState";
+import { trackEvent } from "@/lib/telemetry";
 import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
 import { quotaColor, worstWindowFor } from "@/lib/quotas";
 import { useQuotas } from "@/components/QuotaProvider";
@@ -234,7 +235,12 @@ export default function Home() {
           // on to /hermes through the panel's `dashboard` field.
           if (panelCount > 0) {
             return (
-              <Link key={k} href={`/agents/${k}`} className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}>
+              <Link
+                key={k}
+                href={`/agents/${k}`}
+                onClick={() => trackEvent("agent.opened", { agent: k })}
+                className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}
+              >
                 {inner}
               </Link>
             );
