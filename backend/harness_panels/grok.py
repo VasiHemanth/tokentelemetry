@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from .base import (
     HOME, dir_size, field, human_bytes, iso, meter, newest_mtime, not_installed,
-    panel, ro_sqlite, safe, section, table_exists, tilde, unavailable,
+    panel, ro_sqlite, safe, section, table_exists, tilde, unavailable, live_quota,
 )
 
 GROK_DIR = Path(os.environ.get("GROK_HOME") or (HOME / ".grok")).expanduser()
@@ -291,6 +291,10 @@ def build(*, with_disk: bool = True) -> Dict[str, Any]:
 
     sections: List[Dict[str, Any]] = []
     not_avail: List[Dict[str, Any]] = []
+
+    quota = safe(lambda: live_quota("grok"), "grok quota")
+    if quota:
+        sections.append(quota)
 
     for step, what in ((_credits, "credits"), (_plugin_jobs, "jobs"),
                        (_trust_and_live, "trust"), (_skills, "skills")):

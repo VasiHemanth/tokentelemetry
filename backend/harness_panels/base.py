@@ -34,12 +34,15 @@ than a 500 that takes the whole page down.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+from tt_paths import data_dir
 
 logger = logging.getLogger("tokentelemetry.harness_panels")
 
@@ -436,3 +439,71 @@ def rrule_human(rule: str) -> str:
         except ValueError:
             pass
     return base
+
+
+# --- live plan quota -------------------------------------------------------
+
+# The dashboard's quota surfaces colour at these marks, matching the thresholds
+# the providers use in their own usage screens.
+QUOTA_WARN_AT = 75.0
+QUOTA_CRITICAL_AT = 90.0
+
+# Window keys are normalised by backend/quotas.py, so one map covers every
+# provider and the panel names a window exactly as the sidebar does.
+QUOTA_LABELS = {
+    "session": "Session",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "sonnetWeekly": "Sonnet weekly",
+    "chat": "Chat",
+    "completions": "Completions",
+    "cursorModels": "Cursor models",
+    "otherModels": "Other models",
+}
+
+
+def quota_severity(pct: float) -> str:
+    return "crit" if pct >= QUOTA_CRITICAL_AT else "warn" if pct >= QUOTA_WARN_AT else "ok"
+
+
+def live_quota(provider_id: str, *, title: str = "Plan usage") -> Optional[Dict[str, Any]]:
+    """The reading the dashboard is showing for this agent, if there is one.
+
+    Panels and the dashboard describe the same windows, so they must not
+    disagree. Rather than each panel re-deriving a number from whatever the
+    agent happens to cache on disk — which is how the Claude panel came to
+    report a week at 30% that the live provider had at 84% — they all read the
+    quota service's own last-good snapshot. That adds no request and touches no
+    credential; the service refreshes it on its own schedule.
+    """
+    try:
+        payload = json.loads((data_dir() / "quotas.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    snapshot = (payload.get("providers") or {}).get(provider_id)
+    resources = snapshot.get("resources") if isinstance(snapshot, dict) else None
+    if not isinstance(resources, dict):
+        return None
+
+    meters = []
+    for key, label in QUOTA_LABELS.items():
+        window = resources.get(key)
+        if not isinstance(window, dict):
+            continue
+        used, limit = window.get("used"), window.get("limit")
+        if not isinstance(used, (int, float)) or not isinstance(limit, (int, float)) or limit <= 0:
+            continue
+        pct = max(0.0, min(100.0, used / limit * 100))
+        meters.append(meter(label, pct, resets_at=window.get("resetsAt"),
+                            severity=quota_severity(pct)))
+    if not meters:
+        return None
+
+    plan = snapshot.get("plan")
+    source = "live from the provider"
+    if isinstance(plan, str) and plan:
+        source += f" — {plan} plan"
+    return section("meter", title, source, meters=meters,
+                   note="Read from your existing login, the same reading as the sidebar gauge.")

@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 from .base import (
     HOME, dir_size, field, human_bytes, iso, iso_ms, meter, newest_mtime,
     not_installed, panel, preview, ro_sqlite, rrule_human, safe, section,
-    table_exists, tilde, unavailable,
+    table_exists, tilde, unavailable, live_quota,
 )
 
 CODEX_DIR = HOME / ".codex"
@@ -371,6 +371,10 @@ def build(*, with_disk: bool = True) -> Dict[str, Any]:
 
     sections: List[Dict[str, Any]] = []
     not_avail: List[Dict[str, Any]] = []
+
+    quota = safe(lambda: live_quota("codex"), "codex quota")
+    if quota:
+        sections.append(quota)
 
     for step, what in ((_schedules, "schedules"), (_security, "security")):
         s = safe(step, f"codex {what}")

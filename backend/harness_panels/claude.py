@@ -21,9 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tt_paths import data_dir
+
 from .base import (
     HOME, dir_size, field, human_bytes, iso, iso_ms, meter, newest_mtime,
-    not_installed, panel, preview, safe, section, tilde, unavailable,
+    not_installed, panel, preview, safe, section, tilde, unavailable, live_quota,
 )
 
 CLAUDE_DIR = HOME / ".claude"
@@ -39,12 +41,15 @@ def _read_json(path: Path) -> Optional[Any]:
 
 
 def _quota() -> Optional[Dict[str, Any]]:
-    """Subscription utilisation, straight off disk.
+    """Subscription utilisation: the live reading when there is one, else disk.
 
-    `cachedUsageUtilization` is written by the CLI after it asks the API, so it
-    costs us nothing and needs no network of our own. It is a cache: if it's
-    stale we say when it was fetched rather than presenting it as live.
+    `cachedUsageUtilization` costs nothing and needs no network of our own, but
+    it is a cache: when it is all we have, we say when it was fetched rather
+    than presenting it as live.
     """
+    live = live_quota("claude", title="Subscription usage")
+    if live:
+        return live
     data = _read_json(CLAUDE_JSON)
     if not isinstance(data, dict):
         return None

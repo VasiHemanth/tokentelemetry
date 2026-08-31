@@ -167,6 +167,7 @@ Full docs site: https://tokentelemetry.com/docs
 - [Analytics](https://tokentelemetry.com/docs/features/analytics): Token trends by agent, model, and day with date-range filters, cache efficiency, and delegation graphs.
 - [Projects](https://tokentelemetry.com/docs/features/projects): Per-working-directory cards with activity heatmaps, tool usage, config overlays, a plans library, and git-worktree rollups.
 - [Budgets & Alerts](https://tokentelemetry.com/docs/features/budgets): Spend or token limits per project (and per agent), with 80% / 100% alerts — observational, never blocks an agent.
+- [Plan Limits](https://tokentelemetry.com/docs/features/plan-limits): Live session, weekly and monthly quota windows read from the coding-agent logins already on your machine — Claude Code, Codex, Copilot, OpenCode, Grok and more, with reset times.
 - [Traces](https://tokentelemetry.com/docs/features/traces): Replay every session step by step — events, messages, tool calls, artifacts, and plans.
 - [Summarization](https://tokentelemetry.com/docs/features/summarization): One-click LLM summaries of any session, cached by content hash, with classified error cards.
 - [Artifacts](https://tokentelemetry.com/docs/features/artifacts): Screenshots, browser recordings, and documents captured by your agents, viewable inline.

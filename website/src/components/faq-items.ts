@@ -17,6 +17,10 @@ export const FAQ_ITEMS = [
     a: "TokenTelemetry auto-reads logs from Google Antigravity, OpenAI Codex CLI, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, and Qoder. Token counts and dollar costs appear in the local dashboard automatically when each agent records them.",
   },
   {
+    q: "Can I see how much of my Claude Code or Codex plan is left?",
+    a: "Yes. TokenTelemetry reads live plan limits from the coding-agent logins already on your machine and shows the session, weekly and monthly windows with their reset times — Claude Code's 5-hour and 7-day windows, Codex's session and weekly plus credits, GitHub Copilot's chat and completion allowances, OpenCode's rolling, weekly and monthly windows, and Grok's weekly credit pool. The numbers come from each provider, so they match that provider's own usage screen rather than being estimated from your history. A gauge in the sidebar colours as a window fills, and an agent with no live number says why instead of showing a guess.",
+  },
+  {
     q: "Is there a free tool to monitor AI coding agent token usage?",
     a: "Yes — TokenTelemetry is free, open-source (MIT), and runs 100% locally. No account, no signup, no cloud.",
   },

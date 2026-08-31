@@ -22,6 +22,10 @@ from harness_config import (
 )
 import notifications as notif
 from tt_paths import canonical_project, data_dir
+from quotas import (
+    ClaudeQuotaProvider, CodexQuotaProvider, CopilotQuotaProvider, CursorQuotaProvider,
+    GeminiQuotaProvider, GrokQuotaProvider, OpenCodeQuotaProvider, QuotaService, StaticQuotaProvider,
+)
 import scan_cache
 import harness_panels
 import codex_goals
@@ -2936,6 +2940,59 @@ async def get_agent_panel(agent: str, fresh: bool = False):
     empty page.
     """
     return harness_panels.build_panel(agent, fresh=fresh)
+
+# Quota limits are a separate, provider-reported signal from the session
+# scanner's token/cost history. Keep a single service so its last-good cache is
+# shared by the dashboard, CLI, and any local API consumer.
+_quota_service: Optional[QuotaService] = None
+
+
+def _get_quota_service() -> QuotaService:
+    global _quota_service
+    if _quota_service is None:
+        _quota_service = QuotaService([
+            # Native quota sources: an account API the agent's own login can read.
+            CodexQuotaProvider(),
+            ClaudeQuotaProvider(),
+            CursorQuotaProvider(),
+            OpenCodeQuotaProvider(),
+            CopilotQuotaProvider(),
+            GrokQuotaProvider(),
+            GeminiQuotaProvider(),
+            # Every other supported agent stays listed with the reason it has no
+            # live quota, so an agent is never silently missing from the page.
+            # A router has no account of its own; its quota belongs to whichever
+            # model provider it is configured against.
+            StaticQuotaProvider("antigravity", "Antigravity", "Antigravity keeps its plan and usage state server-side; nothing local reports it."),
+            StaticQuotaProvider("qwen", "Qwen CLI", "Qwen's OAuth free tier was discontinued and its Coding Plan key exposes no account-quota endpoint."),
+            StaticQuotaProvider("vibe", "Vibe", "Vibe routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("cline", "Cline", "Cline routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("pi", "Pi", "Pi routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("smallcode", "SmallCode", "SmallCode routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("muse", "Muse Code", "Muse Code's local session exposes no plan-quota API."),
+            StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
+            StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
+            StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
+            StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
+        ])
+    return _quota_service
+
+
+@app.get("/quotas")
+async def get_quotas():
+    """Normalized live plan limits from locally stored provider credentials.
+
+    The response never includes a credential. A five-minute cache returns
+    immediately, while a failed refresh preserves the previous safe snapshot.
+    """
+    return await _asyncio.to_thread(_get_quota_service().collect)
+
+
+@app.post("/quotas/refresh")
+async def refresh_quotas():
+    """Request a fresh provider fetch while retaining last-good snapshots."""
+    return await _asyncio.to_thread(_get_quota_service().collect, True)
 
 # @app.get("/local-runtime")
 # async def get_local_runtime():
