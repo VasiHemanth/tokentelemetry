@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import (
     HOME, dir_size, field, human_bytes, iso, newest_mtime, not_installed,
-    panel, preview, ro_sqlite, safe, section, table_exists, tilde, unavailable,
+    panel, preview, ro_sqlite, safe, section, table_exists, tilde, unavailable, live_quota,
 )
 
 COPILOT_DIR = HOME / ".copilot"
@@ -233,6 +233,11 @@ def build(*, with_disk: bool = True) -> Dict[str, Any]:
 
     sections: List[Dict[str, Any]] = []
     not_avail: List[Dict[str, Any]] = []
+
+    quota = safe(lambda: live_quota("copilot"), "copilot quota")
+    if quota:
+        sections.append(quota)
+
 
     conn = ro_sqlite(STORE_DB)
     if conn is not None:

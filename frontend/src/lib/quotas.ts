@@ -69,3 +69,66 @@ export function quotaAmount(value: number, unit: string): string {
   if (unit === "percent") return `${Math.round(value)}%`;
   return `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
 }
+
+/** Colour marks shared by every quota surface. */
+export const QUOTA_WARN_AT = 75;
+export const QUOTA_CRITICAL_AT = 90;
+
+export function quotaColor(pct: number): string {
+  if (pct >= QUOTA_CRITICAL_AT) return "var(--tt-danger-fg)";
+  if (pct >= QUOTA_WARN_AT) return "var(--tt-warn-fg)";
+  return "var(--tt-brand)";
+}
+
+export type QuotaWindow = {
+  providerId: string;
+  displayName: string;
+  resourceKey: string;
+  label: string;
+  pct: number;
+};
+
+/** Percentage consumed, or null when the provider gave no ceiling to fill. */
+export function quotaPercent(resource: QuotaResource): number | null {
+  if (resource.used == null || resource.limit == null || resource.limit <= 0) return null;
+  return Math.min(100, Math.max(0, (resource.used / resource.limit) * 100));
+}
+
+/** The most-consumed window for one provider — what its tile should show. */
+export function worstWindowFor(
+  providerId: string,
+  snapshot: QuotaSnapshot | undefined,
+): QuotaWindow | undefined {
+  if (!snapshot) return undefined;
+  let worst: QuotaWindow | undefined;
+  for (const [resourceKey, resource] of Object.entries(snapshot.resources)) {
+    const pct = quotaPercent(resource);
+    if (pct == null) continue;
+    if (!worst || pct > worst.pct) {
+      worst = {
+        providerId,
+        displayName: snapshot.displayName,
+        resourceKey,
+        label: quotaResourceLabel(resourceKey),
+        pct,
+      };
+    }
+  }
+  return worst;
+}
+
+/**
+ * The single window closest to its limit across every signed-in provider.
+ *
+ * This is what the sidebar reports, so "am I about to be cut off?" is answerable
+ * without opening anything: the nearest ceiling anywhere is the one that matters.
+ */
+export function worstWindow(data: QuotaResponse | undefined): QuotaWindow | undefined {
+  if (!data) return undefined;
+  let worst: QuotaWindow | undefined;
+  for (const [providerId, snapshot] of Object.entries(data.providers)) {
+    const candidate = worstWindowFor(providerId, snapshot);
+    if (candidate && (!worst || candidate.pct > worst.pct)) worst = candidate;
+  }
+  return worst;
+}

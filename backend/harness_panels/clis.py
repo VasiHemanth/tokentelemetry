@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from .base import (
     dir_size, field, human_bytes, iso, iso_ms, meter, newest_mtime,
     not_installed, panel, preview, ro_sqlite, safe, section, table_exists,
-    tilde, unavailable,
+    tilde, unavailable, live_quota,
 )
 from . import paths
 
@@ -153,6 +153,11 @@ def build_opencode(*, with_disk: bool = True) -> Dict[str, Any]:
     if not data.is_dir():
         return not_installed("opencode")
     sections: List[Dict[str, Any]] = []
+
+    quota = safe(lambda: live_quota("opencode"), "opencode quota")
+    if quota:
+        sections.append(quota)
+
 
     conn = ro_sqlite(db)
     if conn is not None:

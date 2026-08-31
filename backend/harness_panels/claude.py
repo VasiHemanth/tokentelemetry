@@ -25,7 +25,7 @@ from tt_paths import data_dir
 
 from .base import (
     HOME, dir_size, field, human_bytes, iso, iso_ms, meter, newest_mtime,
-    not_installed, panel, preview, safe, section, tilde, unavailable,
+    not_installed, panel, preview, safe, section, tilde, unavailable, live_quota,
 )
 
 CLAUDE_DIR = HOME / ".claude"
@@ -40,55 +40,6 @@ def _read_json(path: Path) -> Optional[Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-QUOTA_WINDOWS = {"session": "5-hour window", "weekly": "7-day window",
-                 "sonnetWeekly": "7-day Sonnet"}
-
-# The dashboard's quota cards colour at these marks, matching the thresholds the
-# providers use in their own usage screens. The panel shows the same windows, so
-# it states them explicitly rather than inheriting `meter()`'s generic 70.
-QUOTA_WARN_AT = 75.0
-QUOTA_CRITICAL_AT = 90.0
-
-
-def _quota_severity(pct: float) -> str:
-    return "crit" if pct >= QUOTA_CRITICAL_AT else "warn" if pct >= QUOTA_WARN_AT else "ok"
-
-
-def _live_quota() -> Optional[Dict[str, Any]]:
-    """The reading the dashboard's quota cards are showing, if there is one.
-
-    The panel and the dashboard describe the same two windows, so they must not
-    disagree. `cachedUsageUtilization` is only rewritten when the CLI next calls
-    the API and is routinely days old, which is how the panel came to show 30%
-    for a week that the live provider reading had at 84%. The quota service's
-    own last-good cache is the shared source; reading it here adds no request of
-    our own and no credential access.
-    """
-    try:
-        payload = json.loads((data_dir() / "quotas.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    snapshot = (payload.get("providers") or {}).get("claude") if isinstance(payload, dict) else None
-    resources = snapshot.get("resources") if isinstance(snapshot, dict) else None
-    if not isinstance(resources, dict):
-        return None
-
-    meters = []
-    for key, label in QUOTA_WINDOWS.items():
-        window = resources.get(key)
-        used = window.get("used") if isinstance(window, dict) else None
-        if isinstance(used, (int, float)):
-            meters.append(meter(label, float(used), resets_at=window.get("resetsAt"),
-                                severity=_quota_severity(float(used))))
-    if not meters:
-        return None
-    plan = snapshot.get("plan")
-    return section("meter", "Subscription usage",
-                   f"live from Anthropic{f' — {plan} plan' if isinstance(plan, str) and plan else ''}",
-                   meters=meters,
-                   note="Read live from your Claude Code login, the same reading as the dashboard.")
-
-
 def _quota() -> Optional[Dict[str, Any]]:
     """Subscription utilisation: the live reading when there is one, else disk.
 
@@ -96,7 +47,7 @@ def _quota() -> Optional[Dict[str, Any]]:
     it is a cache: when it is all we have, we say when it was fetched rather
     than presenting it as live.
     """
-    live = _live_quota()
+    live = live_quota("claude", title="Subscription usage")
     if live:
         return live
     data = _read_json(CLAUDE_JSON)

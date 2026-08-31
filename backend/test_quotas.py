@@ -630,17 +630,18 @@ def test_claude_panel_and_dashboard_report_the_same_windows(tmp_path, monkeypatc
     The panel's own source, ~/.claude.json, is only rewritten when the CLI next
     calls the API, so it lagged the live provider reading by days.
     """
+    import harness_panels.base as base
     import harness_panels.claude as panel
 
     cache = tmp_path / "quotas.json"
     cache.write_text(json.dumps({"providers": {"claude": {
         "plan": "Pro",
         "resources": {
-            "session": {"used": 27.0, "resetsAt": "2026-08-31T07:59:59Z"},
-            "weekly": {"used": 84.0, "resetsAt": "2026-09-03T03:59:59Z"},
+            "session": {"used": 27.0, "limit": 100, "resetsAt": "2026-08-31T07:59:59Z"},
+            "weekly": {"used": 84.0, "limit": 100, "resetsAt": "2026-09-03T03:59:59Z"},
         },
     }}}))
-    monkeypatch.setattr(panel, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(panel, "CLAUDE_JSON", tmp_path / "stale.json")
     (tmp_path / "stale.json").write_text(json.dumps({"cachedUsageUtilization": {
         "utilization": {"five_hour": {"utilization": 34}, "seven_day": {"utilization": 30}},
@@ -653,9 +654,10 @@ def test_claude_panel_and_dashboard_report_the_same_windows(tmp_path, monkeypatc
 
 
 def test_claude_panel_falls_back_to_its_cached_file_without_a_live_reading(tmp_path, monkeypatch):
+    import harness_panels.base as base
     import harness_panels.claude as panel
 
-    monkeypatch.setattr(panel, "data_dir", lambda: tmp_path / "empty")
+    monkeypatch.setattr(base, "data_dir", lambda: tmp_path / "empty")
     monkeypatch.setattr(panel, "CLAUDE_JSON", tmp_path / "claude.json")
     (tmp_path / "claude.json").write_text(json.dumps({"cachedUsageUtilization": {
         "fetchedAtMs": 1_787_544_557_030,
@@ -674,8 +676,45 @@ def test_quota_meters_colour_at_the_same_marks_as_the_dashboard():
     `meter()`'s generic default warns at 70; the quota cards warn at 75, which
     is where the providers' own usage screens change colour.
     """
-    import harness_panels.claude as panel
+    from harness_panels.base import quota_severity
 
-    assert [panel._quota_severity(p) for p in (0, 74.9)] == ["ok", "ok"]
-    assert [panel._quota_severity(p) for p in (75, 89.9)] == ["warn", "warn"]
-    assert [panel._quota_severity(p) for p in (90, 100)] == ["crit", "crit"]
+    assert [quota_severity(p) for p in (0, 74.9)] == ["ok", "ok"]
+    assert [quota_severity(p) for p in (75, 89.9)] == ["warn", "warn"]
+    assert [quota_severity(p) for p in (90, 100)] == ["crit", "crit"]
+
+
+def test_every_native_provider_panel_surfaces_its_live_quota(tmp_path, monkeypatch):
+    """Each agent's own page shows its own limits, from the shared snapshot.
+
+    Quota used to live only on the dashboard while everything else
+    agent-specific lived on the agent page. Reading one cache keeps the page,
+    the tile and the sidebar gauge from disagreeing about the same window.
+    """
+    import harness_panels.base as base
+
+    (tmp_path / "quotas.json").write_text(json.dumps({"providers": {
+        provider: {"plan": "Test", "resources": {
+            "weekly": {"used": 42.0, "limit": 100, "resetsAt": "2026-09-03T00:00:00Z"},
+        }}
+        for provider in ("claude", "codex", "copilot", "grok", "opencode")
+    }}))
+    monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
+
+    for provider in ("claude", "codex", "copilot", "grok", "opencode"):
+        section = base.live_quota(provider)
+        assert section is not None, f"{provider} panel has no quota section"
+        assert [m["pct"] for m in section["meters"]] == [42.0]
+        assert section["meters"][0]["severity"] == "ok"
+
+
+def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
+    """A bar needs a maximum; credits and spend have none, so they are skipped."""
+    import harness_panels.base as base
+
+    (tmp_path / "quotas.json").write_text(json.dumps({"providers": {"codex": {"resources": {
+        "credits": {"kind": "balance", "unit": "credits", "available": 0.0},
+        "rateLimitResets": {"kind": "balance", "unit": "resets", "available": 1.0},
+    }}}}))
+    monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
+
+    assert base.live_quota("codex") is None

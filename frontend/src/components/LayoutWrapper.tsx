@@ -4,6 +4,7 @@ import Navigation from "./Navigation";
 import FeedbackFloatingButton from "./feedback/FeedbackFloatingButton";
 import WhatsNewBanner from "./WhatsNewBanner";
 import { NotificationProvider } from "./notifications/NotificationProvider";
+import { QuotaProvider } from "./QuotaProvider";
 import NotificationToaster from "./notifications/NotificationToaster";
 import TokenGate from "./TokenGate";
 import TelemetryNotice from "./TelemetryNotice";
@@ -34,6 +35,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
 
   return (
     <NotificationProvider>
+      <QuotaProvider>
       <body className="min-h-full flex bg-[var(--tt-canvas)] overflow-hidden">
         <Navigation isCollapsed={isCollapsed} setIsCollapsed={toggle} />
         <main className="flex-1 h-screen overflow-y-auto relative">
@@ -50,6 +52,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <TokenGate />
         <TelemetryNotice />
       </body>
+      </QuotaProvider>
     </NotificationProvider>
   );
 }

@@ -12,12 +12,13 @@ import {
 import { useResource } from "@/lib/api";
 import { useScrollState } from "@/lib/useScrollState";
 import { AGENTS, getAgent, type AgentKey } from "@/lib/agents";
+import { quotaColor, worstWindowFor } from "@/lib/quotas";
+import { useQuotas } from "@/components/QuotaProvider";
 import { AgentLogo } from "@/components/icons/AgentLogo";
 import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
-import QuotaOverview from "@/components/QuotaOverview";
 import { formatTokens, formatCost } from "@/lib/format";
 import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
@@ -70,6 +71,7 @@ export default function Home() {
   });
   const availableAgents = agentsRes.data ?? [];
   const panelCounts = panelsRes.data ?? {};
+  const { data: quotaData } = useQuotas();
   const byModel = analyticsRes.data?.by_model ?? {};
 
   const totalTokens = sessions.reduce((a, s) => a + (s.tokens?.total ?? 0), 0);
@@ -165,8 +167,6 @@ export default function Home() {
         </p>
       </Section>
 
-      <QuotaOverview />
-
       {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
       {/* Connected agents — split into coding vs autonomous */}
@@ -178,6 +178,9 @@ export default function Home() {
           const meta = AGENTS[k as AgentKey];
           if (!meta) return null;
           const count = sessions.filter((s) => s.agent === k).length;
+          // The nearest ceiling this agent reports, so the tile answers "how
+          // much of this plan is left?" without opening its page.
+          const quotaWindow = worstWindowFor(k, quotaData?.providers[k]);
           // How many harness panels sit behind this tile.
           const panelCount = panelCounts[k] ?? 0;
           const inner = (
@@ -199,6 +202,22 @@ export default function Home() {
               <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[var(--tt-fg-muted)]">
                 {meta.label}
               </div>
+              {quotaWindow && (
+                <div className="mt-2" title={`${quotaWindow.label}: ${Math.round(quotaWindow.pct)}% used`}>
+                  <div className="h-1 rounded-full tt-tint-1 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-[width,background-color] duration-500"
+                      style={{ width: `${quotaWindow.pct}%`, backgroundColor: quotaColor(quotaWindow.pct) }}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
+                    <span className="text-[var(--tt-fg-faint)] truncate">{quotaWindow.label}</span>
+                    <span className="tabular whitespace-nowrap" style={{ color: quotaColor(quotaWindow.pct) }}>
+                      {quotaWindow.pct >= 100 ? "Limit reached" : `${Math.round(quotaWindow.pct)}%`}
+                    </span>
+                  </div>
+                </div>
+              )}
               {panelCount > 0 && (
                 <div className="mt-1 flex items-center gap-1 font-mono text-[10.5px] text-[var(--tt-brand)]">
                   {panelCount} {panelCount === 1 ? "panel" : "panels"} <ArrowRight size={10} />

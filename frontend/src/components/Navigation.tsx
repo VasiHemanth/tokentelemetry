@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { clearPageState } from "@/lib/pageState";
 import { ThemeToggle } from "./ThemeToggle";
 import NotificationBell from "./notifications/NotificationBell";
+import QuotaIndicator from "./QuotaIndicator";
 import HermesIcon from "./icons/HermesIcon";
 
 interface NavigationProps {
@@ -91,6 +92,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
           </div>
         )}
 
+        <QuotaIndicator collapsed={isCollapsed} />
         <NotificationBell collapsed={isCollapsed} />
 
         <NavLink
