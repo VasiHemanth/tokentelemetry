@@ -1,17 +1,31 @@
 ---
 title: CLI & Environment Reference
-description: Complete table of every CLI flag and environment variable that TokenTelemetry recognizes.
+description: Complete table of every CLI subcommand, flag and environment variable that TokenTelemetry recognizes.
 ---
 
-This is the authoritative reference for the TokenTelemetry launcher CLI and every environment variable the launcher and backend recognize. Run it with `./start.sh` (or `node bin/cli.js`) from inside the cloned `tokentelemetry/` folder — there is no global `tokentelemetry` command.
+This is the authoritative reference for the TokenTelemetry launcher CLI and every environment variable the launcher and backend recognize. If you installed via the [one-line installer](/docs/installation), a `tokentelemetry` shim is written to `~/.local/bin` (macOS/Linux) or `%USERPROFILE%\.local\bin` (Windows), so the command resolves from any directory. If you cloned the repo instead, run `./start.sh` (or `node bin/cli.js`) from inside the `tokentelemetry/` folder.
 
 ## Usage
 
 ```bash
-# from inside the tokentelemetry/ folder:
-./start.sh [options]          # macOS / Linux
-node bin/cli.js [options]     # cross-platform
+tokentelemetry [command] [options]     # from anywhere (after the installer)
+./start.sh [options]                   # macOS / Linux, from the repo folder
+node bin/cli.js [options]              # cross-platform, from the repo folder
 ```
+
+## Subcommands
+
+The first argument is a command only when it matches a known verb; anything else falls through to dashboard flag parsing, so `tokentelemetry --port 4000` keeps working exactly as before.
+
+| Command | Description |
+| --- | --- |
+| `dashboard` | Start the dashboard. The default when no command is given. |
+| `menubar` | Start the menu bar app. macOS only. |
+| `desktop` | Launch the [desktop app](/docs/features/desktop). |
+| `status` | Dashboard status. Not implemented yet. |
+| `stop` | Stop the dashboard. Not implemented yet. |
+
+> **`menubar` off macOS:** prints `The tokentelemetry menu bar is macOS-only.` and exits non-zero. It never surfaces an `ImportError` about `rumps`.
 
 ## CLI flags
 

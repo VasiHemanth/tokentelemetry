@@ -71,3 +71,4 @@ tokentelemetry-cro-analysis.md
 pr.diff
 simulate.py
 .grok/
+dist/

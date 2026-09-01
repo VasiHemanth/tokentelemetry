@@ -11,7 +11,9 @@ import { Section, Card, CardHeader, CardTitle } from "@/components/ui";
 // access is enabled — the backend serves /remote-access loopback-only, so on a
 // remote device the fetch 403s and this renders nothing. On a normal local run
 // (no --host) the backend reports {enabled:false}, so it's hidden there too.
-export function ConnectDevice() {
+// `showWhenOff` renders a short explanation instead of nothing, so a Settings
+// category never appears empty.
+export function ConnectDevice({ showWhenOff = false }: { showWhenOff?: boolean }) {
   const [info, setInfo] = useState<RemoteAccess | null>(null);
   const [copied, setCopied] = useState<"" | "link" | "token">("");
 
@@ -23,7 +25,26 @@ export function ConnectDevice() {
     return () => { cancelled = true; };
   }, []);
 
-  if (!info?.enabled || !info.url) return null;
+  if (!info?.enabled || !info.url) {
+    if (!showWhenOff) return null;
+    return (
+      <Section
+        title="Connect a device"
+        description="Remote access lets you open the dashboard from a phone or tablet on your network."
+      >
+        <Card>
+          <CardHeader>
+            <CardTitle>Remote access is off</CardTitle>
+          </CardHeader>
+          <p className="text-[12px] leading-relaxed text-[var(--tt-fg-dim)] max-w-[560px]">
+            To scan a QR and open the dashboard on another device, start TokenTelemetry
+            with a reachable host and a token, then come back here. See
+            <a href="/docs/configuration/remote-access" className="text-[var(--tt-brand)] hover:underline"> Remote Access</a>.
+          </p>
+        </Card>
+      </Section>
+    );
+  }
 
   const copy = (what: "link" | "token", text: string) => {
     navigator.clipboard?.writeText(text)

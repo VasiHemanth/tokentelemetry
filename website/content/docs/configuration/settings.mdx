@@ -1,0 +1,51 @@
+---
+title: Settings
+description: The categorized Settings page — Theme, per-category options, and rebindable keyboard shortcuts.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The Settings page is organized into categories so related options live together instead of one long scroll. A left sidebar lists the categories (each expandable to its options) and a **Search settings** box filters them by name or description. The category you're looking at is highlighted as you scroll.
+
+## Categories
+
+| Category | What it holds |
+| --- | --- |
+| **General** | Theme, and dashboard preferences |
+| **Agents & AI** | AI trace summaries (summarizer backend), agent feature flags |
+| **Billing & cost** | Per-agent billing mode |
+| **Data & retention** | Transcript archival per agent |
+| **Privacy** | Anonymous usage stats, update checks |
+| **Access** | Connect a device (remote access) |
+| **Keyboard shortcuts** | Rebind navigation shortcuts |
+
+Use the sidebar to jump to a category, or the search box to find an option by name.
+
+## Theme
+
+Under **General → Theme** you can pick **System**, **Light**, or **Dark**.
+
+- **System** follows your OS appearance and updates live if you change it.
+- **Light** / **Dark** force a theme.
+- The choice is stored in your browser (`localStorage`) and kept in sync with the header theme toggle.
+
+## Keyboard shortcuts
+
+Under **Keyboard shortcuts** is the shortcut reference. Navigation uses the leader pattern: press **`g`** then a letter.
+
+| Shortcut | Action |
+| --- | --- |
+| `g` then `h` | Go to dashboard |
+| `g` then `a` | Go to analytics |
+| `g` then `p` | Go to projects |
+| `g` then `t` | Go to sessions |
+| `g` then `s` | Go to settings |
+| `g` then `e` | Go to Hermes |
+| `g` then `l` | Go to local models |
+| `?` | Open the shortcut reference |
+
+Click the pencil beside a shortcut to re-record its key (press a bare letter). Changes are saved per-browser and applied app-wide; **Reset to defaults** restores the stock bindings.
+
+<Callout title="Shortcuts don't fire while typing">
+The leader and `?` shortcuts are ignored when you're typing in a field, so they never hijack the search box or a form input.
+</Callout>

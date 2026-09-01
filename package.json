@@ -7,7 +7,47 @@
     "tokentelemetry": "./bin/cli.js"
   },
   "scripts": {
-    "start": "node bin/cli.js"
+    "start": "node bin/cli.js",
+    "desktop": "electron desktop/main.cjs",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.tokentelemetry.desktop",
+    "productName": "TokenTelemetry",
+    "executableName": "TokenTelemetry",
+    "artifactName": "TokenTelemetry-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "desktop/assets"
+    },
+    "files": [
+      "desktop/**/*",
+      "bin/**/*",
+      "backend/**/*",
+      "frontend/.next/**/*"
+    ],
+    "mac": {
+      "icon": "desktop/assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "target": "dmg",
+      "extendInfo": {
+        "CFBundleDisplayName": "TokenTelemetry",
+        "CFBundleExecutable": "TokenTelemetry",
+        "CFBundleName": "TokenTelemetry"
+      }
+    },
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": "nsis"
+    },
+    "linux": {
+      "icon": "desktop/assets/icon.png",
+      "category": "Development",
+      "target": "AppImage"
+    }
   },
   "keywords": [
     "observability",
