@@ -28,6 +28,12 @@
   --tt-brand-deep:   #1d4ed8;
   --tt-brand-glow:   rgba(96, 165, 250, 0.18);
 
+  /* Brand marks that are near-white on the dark theme (Grok, Pi) so they are
+     legible against the dark surface. Flipped to a visible dark equivalent in
+     light mode; consumed via var() so the icon re-tints on theme change. */
+  --agent-grok: #d4d4d8;
+  --agent-pi:   #fafafa;
+
   /* Status */
   --tt-success: #10b981;
   --tt-warn:    #f59e0b;
@@ -94,6 +100,10 @@
   --tt-brand-strong: #1d4ed8;
   --tt-brand-deep:   #1e40af;
   --tt-brand-glow:   rgba(37, 99, 235, 0.10);
+
+  --agent-grok: #52525b;
+  --agent-pi:   #111827;
+  --agent-qoder: #52525b;
 
   --tt-shadow-soft:  0 1px 0 rgba(15,23,42,0.02) inset, 0 4px 12px -6px rgba(15,23,42,0.10);
   --tt-shadow-pop:   0 1px 0 rgba(15,23,42,0.03) inset, 0 18px 40px -18px rgba(15,23,42,0.15);

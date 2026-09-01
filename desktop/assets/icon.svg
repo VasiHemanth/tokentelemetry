@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- TokenTelemetry app icon. The brand mark is drawn as an 80%-inset rounded
+       square on a transparent 1024 canvas so it matches the macOS squircle
+       proportions (system icons have breathing room, not an edge-to-edge fill).
+       Regenerate every platform format from this single source. -->
+  <g transform="translate(102,102) scale(25.625)">
+    <rect width="32" height="32" rx="7" fill="#2563eb"/>
+    <path d="M27 16h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L14.24 6.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 9 16H7" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

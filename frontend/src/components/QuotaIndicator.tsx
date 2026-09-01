@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Gauge } from "lucide-react";
+import { Gauge, RefreshCw, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { AgentLogo } from "@/components/icons/AgentLogo";
@@ -195,6 +195,18 @@ function Panel({
   const ordered = [...providers].sort(
     ([a, sa], [b, sb]) => (worstWindowFor(b, sb)?.pct ?? -1) - (worstWindowFor(a, sa)?.pct ?? -1));
 
+  const [refreshing, setRefreshing] = useState(false);
+  const { refresh } = useQuotas();
+
+  const doRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div
       role="dialog"
@@ -205,8 +217,18 @@ function Panel({
         collapsed ? "left-[calc(100%+12px)]" : "left-[calc(100%+8px)]",
       )}
     >
-      <div className="px-3.5 py-2.5 border-b border-[var(--tt-border)]">
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--tt-border)]">
         <span className="text-[12px] font-semibold text-[var(--tt-fg)]">Plan limits</span>
+        <button
+          type="button"
+          onClick={doRefresh}
+          disabled={refreshing}
+          aria-label="Refresh plan limits"
+          title="Refresh plan limits"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:bg-[var(--tt-sunken)] disabled:opacity-50 transition-colors"
+        >
+          {refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+        </button>
       </div>
 
       <div className="overflow-y-auto divide-y divide-[var(--tt-border)]">

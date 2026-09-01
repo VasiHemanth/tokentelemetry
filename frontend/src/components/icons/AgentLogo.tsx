@@ -36,6 +36,15 @@ const COLOR_MARKS = {
 
 export function AgentLogo({ agent, size = 16, decorative = true, className, color = false }: LogoProps) {
   const meta = getAgent(agent);
+  // Near-white brand marks (Grok, Pi) are stored in globals.css as theme-aware
+  // `--agent-<key>` variables so a light-mode build re-tints them to something
+  // visible instead of a white glyph on a white surface. These brands are always
+  // tinted — even when `color` is false — because their intrinsic mark is white,
+  // so inheriting `currentColor` from a container that uses the brand hex would
+  // leave them invisible on a light background (and monochrome elsewhere).
+  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder";
+  const brandColor = isLightBrand ? `var(--agent-${agent})` : meta.hex;
+  const applyTint = color || isLightBrand;
   const props = {
     "aria-hidden": decorative ? true : undefined,
     className,
@@ -43,7 +52,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
     title: decorative ? undefined : meta.label,
     // Lobe's monochrome marks fill with currentColor, so the brand hex reaches
     // them through `style`. A full-colour mark ignores it, which is correct.
-    ...(color ? { style: { color: meta.hex } } : {}),
+    ...(applyTint ? { style: { color: brandColor } } : {}),
   };
 
   const ColorMark = color ? COLOR_MARKS[agent as keyof typeof COLOR_MARKS] : undefined;

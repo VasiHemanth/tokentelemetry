@@ -1,0 +1,48 @@
+---
+title: Desktop App
+description: Run the dashboard in a native desktop window with a local Electron shell — no server to manage.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The **desktop app** runs the same TokenTelemetry dashboard in a native window, using a small Electron shell. It keeps a backend and a frontend on ephemeral loopback ports, so it never collides with a dashboard you already have open on the default ports.
+
+## Requirements
+
+The same [install requirements](/docs/installation) as the dashboard, plus `node_modules/electron` (installed automatically with the repo's dependencies).
+
+## Launch it
+
+```bash
+tokentelemetry desktop
+# or from the checkout:
+node bin/cli.js desktop
+```
+
+The command:
+1. Prepares the desktop dependencies if needed.
+2. Starts the dashboard on ephemeral loopback ports (no fixed port to collide with).
+3. Opens a native window pointed at it.
+
+A local `tokentelemetry` dashboard on the default ports can keep running alongside the desktop app; they use different ports and share the same data directory.
+
+## What it looks like
+
+The window uses the app's branding: the TokenTelemetry icon and name, and a clean title bar with your OS's window controls. The keyboard shortcuts and [Settings](/docs/configuration/settings) work the same as in the browser.
+
+## Packaging
+
+For a distributable install (a `.dmg` on macOS, an installer on Windows, an AppImage on Linux), the repo includes an `electron-builder` config and per-OS icons:
+
+```bash
+npm install -D electron-builder
+npm run dist:mac    # macOS .dmg
+npm run dist:win    # Windows NSIS
+npm run dist:linux  # Linux AppImage
+```
+
+Each target picks up the right icon (`desktop/assets/icon.icns` / `icon.ico` / `icon.png`) and the app name from the build config.
+
+<Callout title="Icons and name">
+The packaged build uses `TokenTelemetry` as the app name and the TokenTelemetry icon on every OS. Running an unpackaged `electron .` for development can still show the generic Electron name in some OS menus; the packaged app does not.
+</Callout>

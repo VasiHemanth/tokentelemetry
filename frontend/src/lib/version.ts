@@ -15,6 +15,9 @@ export interface UpdateRelease {
   tag: string | null;
   title: string | null;
   highlights: UpdateHighlight[];
+  /** Big releases (desktop app, Settings redesign) get a hero "what's new"
+   *  modal on open, keyed on `latest_release`, instead of only a banner. */
+  featured?: boolean;
 }
 
 /** Response shape from `GET /version`. */

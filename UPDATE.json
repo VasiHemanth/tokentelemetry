@@ -1,6 +1,33 @@
 {
   "releases": [
     {
+      "tag": "2026-09-02",
+      "title": "Desktop app, Settings redesign & keyboard shortcuts",
+      "featured": true,
+      "highlights": [
+        {
+          "title": "Native desktop app",
+          "description": "The dashboard now runs in a desktop window (local Electron shell) on ephemeral ports, with the TokenTelemetry icon and name on macOS, Windows and Linux. Launch it with `tokentelemetry desktop`.",
+          "href": "https://tokentelemetry.com/docs/features/desktop"
+        },
+        {
+          "title": "Settings, reorganized",
+          "description": "Settings are grouped into categories with a searchable sidebar: General, Agents & AI, Billing, Data & retention, Privacy, Access, and Keyboard shortcuts.",
+          "href": "https://tokentelemetry.com/docs/configuration/settings"
+        },
+        {
+          "title": "Theme: System / Light / Dark",
+          "description": "Pick a theme that follows your OS or forces light or dark, persisted per browser and synced with the header toggle.",
+          "href": "https://tokentelemetry.com/docs/configuration/settings"
+        },
+        {
+          "title": "Keyboard shortcuts",
+          "description": "Navigate with a leader key (`g` then a letter for analytics, projects, sessions, settings, and more) and `?` for the reference. Rebind any of them in Settings.",
+          "href": "https://tokentelemetry.com/docs/configuration/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-08-31",
       "title": "Plan limits for every coding agent",
       "highlights": [
@@ -21,7 +48,7 @@
         {
           "title": "Read the full plan-limits guide",
           "description": "How each meter is read, which agents report a live number and which do not, the colour thresholds, and the privacy note all live in one place. Session, weekly and monthly windows, credits, rate-limit resets and reset times are covered.",
-          "href": "/docs/features/plan-limits"
+          "href": "https://tokentelemetry.com/docs/features/plan-limits"
         }
       ]
     },
