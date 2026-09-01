@@ -6,6 +6,7 @@ import Script from "next/script";
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 const CLARITY_ID = process.env.NEXT_PUBLIC_CLARITY_ID;
+const CLOUDFLARE_TOKEN = process.env.NEXT_PUBLIC_CLOUDFLARE_ANALYTICS_TOKEN;
 
 const STORAGE_KEY = "tt-consent";
 type Consent = "granted" | "denied";
@@ -83,6 +84,15 @@ export default function Analytics() {
         </Script>
       )}
 
+      {analyticsEnabled && CLOUDFLARE_TOKEN && (
+        <Script
+          id="cloudflare-analytics"
+          strategy="afterInteractive"
+          src="https://static.cloudflareinsights.com/beacon.min.js"
+          data-cf-beacon={`{"token": "${CLOUDFLARE_TOKEN}"}`}
+        />
+      )}
+
       {!decided && (
         <div
           role="dialog"
@@ -93,9 +103,9 @@ export default function Analytics() {
           <div className="mx-auto max-w-[640px] rounded-[var(--tt-radius-lg)] border border-[var(--tt-border-strong)] bg-[var(--tt-panel)] shadow-[0_20px_60px_-20px_rgba(0,0,0,0.8)] backdrop-blur p-4 sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
               <p className="text-[13px] leading-relaxed text-[var(--tt-fg-muted)]">
-                We use cookies for anonymous analytics (Google Analytics &amp;
-                Microsoft Clarity) to understand how the site is used. No
-                accounts, no ads.{" "}
+                We use cookies for anonymous analytics (Google Analytics,
+                Microsoft Clarity &amp; Cloudflare Web Analytics) to understand
+                how the site is used. No accounts, no ads.{" "}
                 <Link
                   href="/privacy"
                   className="text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)] transition-colors"
