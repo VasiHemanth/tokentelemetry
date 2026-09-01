@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Copy, Check, RefreshCw, ArrowRight } from "lucide-react";
 import WhatsChangedDrawer from "./WhatsChangedDrawer";
+import WhatsNewModal from "./WhatsNewModal";
 import { getVersion, type VersionInfo } from "@/lib/version";
 
 /**
@@ -40,11 +41,24 @@ export default function WhatsNewBanner() {
   });
   const [copied, setCopied] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     getVersion()
-      .then((d) => { if (!cancelled) setInfo(d); })
+      .then((d) => {
+        if (cancelled) return;
+        setInfo(d);
+        // Auto-open the hero modal once for a FEATURED release the user hasn't
+        // seen yet. Read the dismissal straight from storage (not stale state)
+        // and set the modal inside this async resolve, so it isn't a synchronous
+        // setState within the effect body.
+        let seen = null;
+        try { seen = window.localStorage.getItem(STORAGE_KEY); } catch {}
+        if (d && d.behind && d.latest_release && seen !== d.latest_release && d.releases?.[0]?.featured) {
+          setModalOpen(true);
+        }
+      })
       .catch(() => { /* backend down or endpoint missing — silent */ });
 
     // Keep tabs in sync: if another tab dismisses, hide here too (and vice versa).
@@ -61,12 +75,17 @@ export default function WhatsNewBanner() {
   const isVisible =
     !!info && info.behind && !!info.latest_release && dismissedRelease !== info.latest_release;
 
+  // Newest release, if any. When it is flagged `featured`, a hero modal takes
+  // over the first-open attention (still keyed on `latest_release`).
+  const featuredRelease = info?.releases?.[0]?.featured ? info.releases[0] : null;
+
   function dismiss() {
     if (!info?.latest_release) return;
     try { window.localStorage.setItem(STORAGE_KEY, info.latest_release); }
     catch { /* private mode etc. — banner just re-appears next visit */ }
     setDismissedRelease(info.latest_release);
     setDrawerOpen(false);
+    setModalOpen(false);
   }
 
   async function copyCmd() {
@@ -174,6 +193,15 @@ export default function WhatsNewBanner() {
         currentSha={info.current}
         latestSha={info.latest}
       />
+
+      {featuredRelease && (
+        <WhatsNewModal
+          open={modalOpen}
+          onClose={dismiss}
+          release={featuredRelease}
+          onSeeAll={() => { setModalOpen(false); setDrawerOpen(true); }}
+        />
+      )}
     </>
   );
 }

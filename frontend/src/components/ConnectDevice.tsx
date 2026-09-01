@@ -39,7 +39,11 @@ export function ConnectDevice({ showWhenOff = false }: { showWhenOff?: boolean }
           <p className="text-[12px] leading-relaxed text-[var(--tt-fg-dim)] max-w-[560px]">
             To scan a QR and open the dashboard on another device, start TokenTelemetry
             with a reachable host and a token, then come back here. See
-            <a href="/docs/configuration/remote-access" className="text-[var(--tt-brand)] hover:underline"> Remote Access</a>.
+            <a
+              href="https://tokentelemetry.com/docs/configuration/remote-access"
+              target="_blank" rel="noopener noreferrer"
+              className="text-[var(--tt-brand)] hover:underline"
+            > Remote Access</a>.
           </p>
         </Card>
       </Section>

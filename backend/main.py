@@ -2753,6 +2753,7 @@ def _fetch_remote() -> Optional[Dict[str, Any]]:
                     "tag": (str(r["tag"]).strip() if r.get("tag") else None),
                     "title": (str(r["title"]).strip() if r.get("title") else None),
                     "highlights": hls,
+                    "featured": bool(r.get("featured")),
                 })
         elif upd.get("highlights"):
             # Legacy flat shape — wrap into one synthetic release.
