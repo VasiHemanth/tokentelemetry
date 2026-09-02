@@ -13,11 +13,15 @@ import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
+import LocalInferenceCard from "@/components/insights/LocalInferenceCard";
+import DelegationTopologyCard from "@/components/session/DelegationTopologyCard";
+import { AgentSwimlaneTimeline } from "@/components/session/AgentSwimlaneTimeline";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { timeAgo } from "@/lib/notifications";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
+import type { LocalSessionMetrics } from "@/lib/insights";
 
 // Harnesses emit different event schemas. Keep that compatibility boundary
 // explicit while the normalized Event shape remains intentionally permissive.
@@ -132,6 +136,11 @@ interface Session {
   goals?: TraceValue[];
   /** Claude Code records that lack local usage and therefore cannot be priced. */
   untracked_background?: { recaps: number; titles: number; compactions: number; total: number };
+  provider?: string;
+  billing_mode?: string;
+  tok_per_sec?: number;
+  /** Attached by GET /sessions when the session is local. */
+  local?: LocalSessionMetrics;
 }
 
 interface Event {
@@ -1108,6 +1117,18 @@ export default function SessionDetailPage() {
                 <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
                 <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
                 <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
+                {sessionInfo?.local && (
+                  <StatPill
+                    icon={<Zap size={11} />}
+                    label="t/s"
+                    value={
+                      sessionInfo.local.tok_per_sec_source === "estimated"
+                        ? `~${sessionInfo.local.tok_per_sec.toFixed(0)}`
+                        : sessionInfo.local.tok_per_sec.toFixed(1)
+                    }
+                    tone="emerald"
+                  />
+                )}
                 <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
                 {sessionInfo?.loop?.is_loop && (() => {
                   const lp = sessionInfo.loop;
@@ -1387,6 +1408,14 @@ export default function SessionDetailPage() {
                   <SummaryPanel key={id} sessionId={id} agent={agent} />
                 </div>
               )}
+             {sessionInfo?.local && (
+               <div className="mb-6">
+                 <LocalInferenceCard
+                   local={sessionInfo.local}
+                   model={sessionInfo.model || modelsUsed[0]}
+                 />
+               </div>
+             )}
              {/* Hermes session chain (compression / branched continuations) */}
              {agent === "hermes" && sessionInfo && allHermesSessions && (
                <HermesChainBanner current={sessionInfo} all={allHermesSessions} from={fromParam} />
@@ -1402,7 +1431,7 @@ export default function SessionDetailPage() {
                <GoalCard key={g.goal_id || i} goal={g} sessionTokens={sessionInfo?.tokens?.total} />
              ))}
              {/* Delegated work — subagent spawns and what they actually cost */}
-             {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
+             {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} parent={sessionInfo} onOpenSubagent={setSubagentView} />}
              {/* Split View Header & Boundary Gap Mode Controller */}
              {splitView && (
                <div className="relative grid grid-cols-2 gap-8 items-center mb-6 pb-2 border-b border-[var(--tt-border)]">
@@ -3560,8 +3589,10 @@ function GoalCard({ goal, sessionTokens }: { goal: TraceValue; sessionTokens?: n
 }
 
 
-function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: TraceValue; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void }) {
-  const subagents: TraceValue[] = delegation?.subagents || [];
+function DelegationCard({ delegation, agent, sessionId, parent, onOpenSubagent }: { delegation: TraceValue; agent: string; sessionId: string; parent?: Session | null; onOpenSubagent?: (entry: TraceValue) => void }) {
+  const subagents: TraceValue[] = delegation?.subagents?.length
+    ? delegation.subagents
+    : (delegation?.child_session_ids || []).map((childSessionId: string) => ({ child_session_id: childSessionId }));
   const spawnCount: number = delegation?.spawn_count ?? 0;
   const children: string[] = delegation?.child_session_ids || [];
   const parentId: string | null = delegation?.parent_session_id || null;
@@ -3571,6 +3602,20 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
   // Children listed in subagent entries don't need a duplicate "Child session" row.
   const inlineChildIds = new Set(subagents.map((s: TraceValue) => s.child_session_id).filter(Boolean));
   const backTo = encodeURIComponent(`/sessions/${sessionId}?agent=${agent}`);
+  const topologyEntries = subagents.map((entry: TraceValue, index: number) => ({
+    id: entry.agent_id ?? entry.child_session_id ?? `subagent-${index + 1}`,
+    label: [entry.nickname, entry.description, entry.agent_id, entry.child_session_id]
+      .find((value) => typeof value === "string" && value.trim()) ?? `Subagent ${index + 1}`,
+    description: typeof entry.nickname === "string" && typeof entry.description === "string"
+      ? entry.description
+      : undefined,
+    model: entry.model ?? entry.effective_model_id,
+    status: entry.status,
+    durationMs: entry.duration_ms ?? entry.durationMs,
+    tokens: entry.tokens,
+    cost: entry.cost,
+    entry,
+  }));
   return (
     <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
       <div className="flex items-center justify-between mb-3">
@@ -3591,8 +3636,31 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
           <Stat label="Delegated cost" value={formatCost(delegation.cost)} />
         </div>
       )}
+      {subagents.length > 0 && onOpenSubagent && (
+        <div className="mt-4 space-y-3">
+          <DelegationTopologyCard
+            parent={{
+              label: parent?.display || sessionId,
+              model: parent?.model,
+              tokens: parent?.tokens,
+              cost: parent?.cost,
+            }}
+            entries={topologyEntries}
+            onOpen={onOpenSubagent}
+          />
+          <AgentSwimlaneTimeline
+            delegation={delegation}
+            onOpen={onOpenSubagent}
+            initialVisibleLanes={8}
+          />
+        </div>
+      )}
       {subagents.length > 0 && (
-        <div className="space-y-1">
+        <details className="mt-3 border-t border-[var(--tt-border)] pt-3">
+          <summary className="cursor-pointer rounded-[var(--tt-radius-sm)] text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-muted)] hover:text-[var(--tt-brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tt-border-focus)]">
+            Detailed attribution ({subagents.length})
+          </summary>
+          <div className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
           {subagents.map((s: TraceValue, i: number) => (
             <div
               key={s.agent_id ?? s.child_session_id ?? i}
@@ -3636,7 +3704,8 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
               </span>
             </div>
           ))}
-        </div>
+          </div>
+        </details>
       )}
 
       {/* Cursor: spawn count only — its transcripts carry no usage data and no descriptions */}

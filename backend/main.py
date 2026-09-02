@@ -2904,7 +2904,9 @@ def _list_available_agents() -> list:
     # known after _scan_sessions_sync runs the other scanners).
     if any((Path(r).expanduser() / ".smallcode" / "traces").is_dir() for r in SMALLCODE_EXTRA_ROOTS):
         agents.append("smallcode")
-    # if OLLAMA_DIR.exists(): agents.append("ollama")
+    # Standalone Ollama chat history is not a first-class agent scan (history
+    # format is sparse); local usage is attributed via provider/endpoint on
+    # coding agents + the live /local-runtime probe below.
     return agents
 
 
@@ -2969,23 +2971,166 @@ async def refresh_quotas():
     """Request a fresh provider fetch while retaining last-good snapshots."""
     return await _asyncio.to_thread(_get_quota_service().collect, True)
 
-# @app.get("/local-runtime")
-# async def get_local_runtime():
-#     import httpx
-#     status = {"ollama": "offline", "models": [], "hf_usage": "0GB"}
-#     try:
-#         async with httpx.AsyncClient() as client:
-#             resp = await client.get("http://localhost:11434/api/tags", timeout=1.0)
-#             if resp.status_code == 200:
-#                 status["ollama"] = "online"
-#                 status["models"] = resp.json().get("models", [])
-#     except: pass
-#     if HF_DIR.exists():
-#         try:
-#             total_size = sum(f.stat().st_size for f in HF_DIR.rglob('*') if f.is_file())
-#             status["hf_usage"] = f"{total_size / (1024**3):.1f}GB"
-#         except: pass
-#     return status
+
+def _ollama_base_urls() -> List[str]:
+    """Loopback Ollama bases only — never arbitrary user URLs (SSRF).
+
+    Cross-platform: Ollama binds 127.0.0.1:11434 on macOS, Linux, and Windows.
+    ``TT_OLLAMA_HOST`` may override the host:port but must resolve to loopback.
+    Rebuilds the URL from parsed host/port only (never re-embeds raw input).
+    """
+    raw = (os.environ.get("TT_OLLAMA_HOST") or "127.0.0.1:11434").strip()
+    # Strip scheme + path; drop any userinfo (user@host).
+    hostport = raw.split("://", 1)[-1].split("/", 1)[0]
+    if "@" in hostport:
+        hostport = hostport.rsplit("@", 1)[-1]
+    if hostport.startswith("["):
+        # IPv6 literal [::1]:11434
+        end = hostport.find("]")
+        host = hostport[1:end].lower() if end > 0 else "127.0.0.1"
+        port_part = hostport[end + 1:]
+        port = port_part[1:] if port_part.startswith(":") and port_part[1:].isdigit() else "11434"
+    else:
+        parts = hostport.split(":")
+        host = (parts[0] or "127.0.0.1").lower()
+        port = parts[1] if len(parts) > 1 and parts[1].isdigit() else "11434"
+    if host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        host, port = "127.0.0.1", "11434"
+    if host == "::1":
+        return [f"http://[{host}]:{port}"]
+    return [f"http://{host}:{port}"]
+
+
+def _probe_ollama_runtime() -> Dict[str, Any]:
+    """Best-effort Ollama status. Fail-open with short timeouts on every OS."""
+    import urllib.error
+    import urllib.request
+
+    out: Dict[str, Any] = {
+        "ollama": "offline",
+        "base_url": None,
+        "models": [],
+        "running": [],
+        "error": None,
+    }
+    for base in _ollama_base_urls():
+        out["base_url"] = base
+        try:
+            req = urllib.request.Request(
+                f"{base}/api/tags",
+                headers={"User-Agent": "TokenTelemetry/local-runtime"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                body = json.loads(resp.read().decode("utf-8", errors="replace"))
+            models = []
+            for m in (body.get("models") or []):
+                if not isinstance(m, dict):
+                    continue
+                models.append({
+                    "name": m.get("name") or m.get("model"),
+                    "size": m.get("size"),
+                    "parameter_size": (m.get("details") or {}).get("parameter_size"),
+                    "quantization_level": (m.get("details") or {}).get("quantization_level"),
+                    "family": (m.get("details") or {}).get("family"),
+                    "modified_at": m.get("modified_at"),
+                })
+            out["models"] = models
+            out["ollama"] = "online"
+        except Exception as e:  # noqa: BLE001 — probe must never raise
+            out["error"] = type(e).__name__
+            continue
+
+        # Resident / loaded models (Ollama /api/ps). Optional; older servers 404.
+        try:
+            req = urllib.request.Request(
+                f"{base}/api/ps",
+                headers={"User-Agent": "TokenTelemetry/local-runtime"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                ps = json.loads(resp.read().decode("utf-8", errors="replace"))
+            running = []
+            for m in (ps.get("models") or []):
+                if not isinstance(m, dict):
+                    continue
+                running.append({
+                    "name": m.get("name") or m.get("model"),
+                    "size_vram": m.get("size_vram") or m.get("size"),
+                    "details": m.get("details") or {},
+                    "expires_at": m.get("expires_at"),
+                })
+            out["running"] = running
+        except Exception:
+            pass
+        break
+    return out
+
+
+def _probe_gpu_snapshot() -> Dict[str, Any]:
+    """Optional NVIDIA GPU snapshot via nvidia-smi (macOS/Linux/Windows when present)."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return {"available": False, "gpus": [], "reason": "nvidia-smi not found"}
+    try:
+        # CSV query is stable across nvidia-smi versions on all OSes.
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True, text=True, timeout=2.0, check=False,
+        )
+        if proc.returncode != 0:
+            return {"available": False, "gpus": [], "reason": "nvidia-smi failed"}
+        gpus = []
+        for line in (proc.stdout or "").strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 6:
+                continue
+            def _f(i: int) -> Optional[float]:
+                try:
+                    return float(parts[i])
+                except (ValueError, IndexError):
+                    return None
+            gpus.append({
+                "index": int(float(parts[0])) if parts[0] else 0,
+                "name": parts[1],
+                "memory_used_mb": _f(2),
+                "memory_total_mb": _f(3),
+                "utilization_pct": _f(4),
+                "power_w": _f(5),
+            })
+        return {"available": bool(gpus), "gpus": gpus, "reason": None if gpus else "no GPUs reported"}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "gpus": [], "reason": type(e).__name__}
+
+
+@app.get("/local-runtime")
+async def get_local_runtime():
+    """Live local inference runtime probe (Ollama + optional NVIDIA snapshot).
+
+    Loopback-only Ollama HTTP; short timeouts; fail-open. Safe on macOS, Linux,
+    and Windows. Does not scan chat history — use agent session providers for that.
+    """
+    ollama = await _asyncio.to_thread(_probe_ollama_runtime)
+    gpu = await _asyncio.to_thread(_probe_gpu_snapshot)
+    hf_usage = None
+    if HF_DIR.exists():
+        try:
+            total_size = sum(f.stat().st_size for f in HF_DIR.rglob("*") if f.is_file())
+            hf_usage = f"{total_size / (1024 ** 3):.1f}GB"
+        except Exception:
+            hf_usage = None
+    return {
+        "ollama": ollama,
+        "gpu": gpu,
+        "hf_usage": hf_usage,
+        "platform": sys.platform,
+    }
 
 
 # Grok Build recurring loop ("Grok Tasks" / the `/loop <interval> <prompt>`
@@ -3732,7 +3877,20 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
                 "input": input_tokens, "output": output_tokens, "cached": 0,
                 "total": input_tokens + output_tokens, "cost": 0.0,
             }
-            tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], at=ts)
+            # SmallCode runs local models (Ollama-served etc.). Stamp provider +
+            # billing_mode so electricity pricing and local analytics win over
+            # the cloud name table (e.g. a nemotron that also exists as cloud).
+            provider_id = "ollama"
+            billing_mode = "local"
+            # Whole-trace wall clock → measured tok/s when duration looks real.
+            from insights import tok_per_sec_from_duration
+            duration_ms = trace.get("durationMs")
+            measured_tps = tok_per_sec_from_duration(output_tokens, duration_ms)
+            tokens["cost"] = calculate_cost(
+                model, tokens["input"], tokens["output"], tokens["cached"], at=ts,
+                provider=provider_id, billing_mode=billing_mode,
+                tok_per_sec=measured_tps,
+            )
 
             prompt = trace.get("prompt") or ""
             mcp_tools: List[str] = []
@@ -3744,7 +3902,7 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
                     if name and name not in mcp_tools:
                         mcp_tools.append(name)
 
-            out.append({
+            rec: Dict[str, Any] = {
                 "id": sid,
                 "agent": "smallcode",
                 "project": str(root_path),
@@ -3752,12 +3910,19 @@ def _scan_smallcode_sessions(roots: Iterable[str]) -> List[Dict[str, Any]]:
                 "display": prompt[:120],
                 "tokens": tokens,
                 "model": model,
+                "provider": provider_id,
+                "billing_mode": billing_mode,
                 "mcp_tools": mcp_tools,
                 "has_plan": False,
                 "plans": [],
                 "artifacts": [{"name": trace_path.name, "path": str(trace_path), "type": "document"}],
                 "cost": tokens["cost"],
-            })
+            }
+            if measured_tps is not None:
+                rec["tok_per_sec"] = measured_tps
+            if isinstance(duration_ms, (int, float)):
+                rec["duration_ms"] = float(duration_ms)
+            out.append(rec)
 
     return out
 
@@ -3956,6 +4121,9 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
             # metadata.totalCost is the AGGREGATE (parent + children); for a
             # parent we switched to own-usage above, so derive own cost to match
             # rather than inheriting the children's cost.
+            # Hoist provider so is_local_session / electricity pricing see
+            # Ollama (etc.) without digging into the nested cline bag.
+            cline_provider = row["provider"] if isinstance(row["provider"], str) else None
             meta_cost = metadata.get("totalCost")
             if not is_parent and isinstance(meta_cost, (int, float)) and meta_cost > 0:
                 tokens["cost"] = float(meta_cost)
@@ -3983,6 +4151,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 "display": display,
                 "tokens": tokens,
                 "model": model,
+                "provider": cline_provider,
                 "mcp_tools": [],
                 "has_plan": False,
                 "plans": [],
@@ -3990,7 +4159,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 "cost": tokens["cost"],
                 "cline": {
                     "source": "cli",
-                    "provider": row["provider"],
+                    "provider": cline_provider,
                     "status": row["status"],
                     "messages_path": messages_path,
                     "is_subagent": is_subagent,
@@ -8480,6 +8649,21 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         return _sessions_cache["data"]
 
 
+def _session_public_view(s: Dict[str, Any]) -> Dict[str, Any]:
+    """Shallow copy for API: drop scan plumbing, attach local insight metrics."""
+    out = {k: v for k, v in s.items() if k != "stub"}
+    try:
+        from insights import local_metrics_for_session
+        metrics = local_metrics_for_session(s)
+        if metrics:
+            out["local"] = metrics
+            # Convenience top-level mirrors for FE cards (non-breaking).
+            out.setdefault("tok_per_sec", metrics.get("tok_per_sec"))
+    except Exception:
+        pass
+    return out
+
+
 @app.get("/sessions")
 async def get_sessions(fresh: bool = False):
     """Return the session list. Pass ?fresh=1 to force a re-scan."""
@@ -8487,8 +8671,8 @@ async def get_sessions(fresh: bool = False):
     # `stub` is scan→persist plumbing (history_store.upsert_sessions keys its
     # conflict clause on it), not API surface. Strip it on shallow copies —
     # never mutate the cached dicts, which the async history persist may
-    # still be reading.
-    return [{k: v for k, v in s.items() if k != "stub"} for s in data]
+    # still be reading. Local sessions get a `local` insight blob.
+    return [_session_public_view(s) for s in data]
 
 
 @app.get("/pricing")
@@ -11034,12 +11218,16 @@ async def get_analytics(
     agents: List[str] = Query(default=[]),
     models: List[str] = Query(default=[]),
     projects: List[str] = Query(default=[]),
+    local_only: bool = Query(False),
 ):
     import history_store
     from power_config import (
         is_local_session, load_power_config, default_tok_per_sec_for_model, co2_for_session,
+        parse_model_params_b, parse_model_quant, parse_model_base,
     )
-    from insights import energy_wh, cloud_equiv_cost, savings_vs_cloud
+    from insights import (
+        energy_wh, cloud_equiv_cost, savings_vs_cloud, resolve_tok_per_sec, efficiency_row,
+    )
     pc = load_power_config()
     load_watts = pc.get("loadWatts", 80)
     ref_model = pc.get("referenceCloudModel", "claude-sonnet-4-6")
@@ -11061,27 +11249,50 @@ async def get_analytics(
             if _session_in_filters(s, from_b, to_b, agents, models, projects):
                 merged[(s.get("agent"), s.get("id"))] = s  # live wins over stored
     sessions = list(merged.values())
+    if local_only:
+        sessions = [
+            s for s in sessions
+            if is_local_session(
+                model_name=s.get("model"), endpoint=s.get("endpoint"),
+                provider=s.get("provider"), billing_mode=s.get("billing_mode"),
+                config=pc,
+            )
+        ]
     by_agent = {}; by_day = {}; by_model = {}
+    # Per-bucket tok/s accumulators for efficiency averages (not serialized raw).
+    _tps_agent: Dict[str, List[float]] = {}
+    _tps_model: Dict[str, List[float]] = {}
     for s in sessions:
         agent = s["agent"]
         if agent not in by_agent:
             by_agent[agent] = {"input": 0, "output": 0, "cached": 0, "cache_reads": 0, "total": 0, "cost": 0.0,
-                               "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0, "session_count": 0}
+                               "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0, "session_count": 0,
+                               "local_session_count": 0, "local_output": 0, "local_cost": 0.0,
+                               "avg_tok_per_sec": None, "tok_per_sec_samples": 0,
+                               "wh_per_1m_output": None, "cost_per_1m_output": None}
+            _tps_agent[agent] = []
         st = s.get("tokens", {})
         # None for an unpriced session; feeds three aggregates plus
         # savings_vs_cloud() below, all of which need a number.
         scost = s.get("cost") or 0.0
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
-        if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
-                            provider=s.get("provider"), billing_mode=s.get("billing_mode"), config=pc):
-            tps = s.get("tok_per_sec")
-            if not tps or tps <= 0:
-                tps = default_tok_per_sec_for_model(s.get("model"))
+        is_local = is_local_session(
+            model_name=s.get("model"), endpoint=s.get("endpoint"),
+            provider=s.get("provider"), billing_mode=s.get("billing_mode"), config=pc,
+        )
+        tps = None
+        tps_src = None
+        if is_local:
+            tps, tps_src = resolve_tok_per_sec(s.get("tok_per_sec"), s.get("model"))
             energy = energy_wh(st.get("output", 0), load_watts=load_watts, tok_per_sec=tps)
             cloud_cost = cloud_equiv_cost(ref_model, st.get("input", 0), st.get("output", 0), st.get("cached", 0))
             savings = savings_vs_cloud(scost, cloud_cost)
             co2 = co2_for_session(st.get("output", 0), config=pc, tok_per_sec=tps)
+            _tps_agent[agent].append(tps)
+            by_agent[agent]["local_session_count"] += 1
+            by_agent[agent]["local_output"] += st.get("output", 0) or 0
+            by_agent[agent]["local_cost"] += scost or 0.0
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
         # Cumulative cache reads for the hit-rate metric. Claude-style scanners
         # keep `cached` as a per-session high-water mark (unique prefix size) and
@@ -11096,15 +11307,31 @@ async def get_analytics(
         by_agent[agent]["session_count"] += 1
         model_name = s.get("model") or f"{agent} (unknown)"
         if model_name not in by_model:
-            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
-                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
-                                    "session_count": 0, "agent": agent}
+            by_model[model_name] = {
+                "input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                "session_count": 0, "local_session_count": 0, "agent": agent,
+                "is_local": False, "provider": s.get("provider"),
+                "params_b": parse_model_params_b(model_name),
+                "quant": parse_model_quant(model_name),
+                "base_model": parse_model_base(model_name),
+                "avg_tok_per_sec": None, "tok_per_sec_samples": 0,
+                "wh_per_1m_output": None, "cost_per_1m_output": None,
+            }
+            _tps_model[model_name] = []
         for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
         by_model[model_name]["cost"] += scost
         by_model[model_name]["energy_wh"] += energy
         by_model[model_name]["savings_usd"] += savings
         by_model[model_name]["co2_g"] += co2
         by_model[model_name]["session_count"] += 1
+        if is_local:
+            by_model[model_name]["is_local"] = True
+            by_model[model_name]["local_session_count"] += 1
+            if tps is not None:
+                _tps_model[model_name].append(tps)
+            if s.get("provider") and not by_model[model_name].get("provider"):
+                by_model[model_name]["provider"] = s.get("provider")
         # Bucket by LOCAL day, not UTC.
         day = _bucket_key(s["timestamp"], granularity)
         if day not in by_day:
@@ -11117,16 +11344,48 @@ async def get_analytics(
         by_day[day]["co2_g"] += co2
     for agent, row in by_agent.items():
         row["cache_hit_pct"] = _cache_hit_pct(row["input"], row["cache_reads"])
-        # agg = quality_by_agent.get(agent)
-        # if agg:
-        #     row["quality"] = _quality_summary(agg["edit_turns"], agg["retry_turns"], agg["measured_sessions"])
-        # else:
-        #     row["quality"] = _quality_summary(0, 0, 0)
+        samples = _tps_agent.get(agent) or []
+        # Efficiency is local-only: don't dilute Wh/1M with cloud output tokens.
+        eff = efficiency_row(
+            output_tokens=row.get("local_output") or 0,
+            energy_wh_total=row["energy_wh"],
+            cost_usd=row.get("local_cost") or 0.0,
+            tok_per_sec_sum=sum(samples),
+            tok_per_sec_n=len(samples),
+        )
+        row.update(eff)
+        row.pop("local_output", None)
+        row.pop("local_cost", None)
+    for model_name, row in by_model.items():
+        samples = _tps_model.get(model_name) or []
+        # For local models, cost is electricity; for cloud, cost_per_1m is API $.
+        eff = efficiency_row(
+            output_tokens=row["output"],
+            energy_wh_total=row["energy_wh"],
+            cost_usd=row["cost"],
+            tok_per_sec_sum=sum(samples),
+            tok_per_sec_n=len(samples),
+        )
+        row.update(eff)
     sorted_days = sorted([{"date": d, **v} for d, v in by_day.items()], key=lambda x: x["date"])
     total_input = sum(a["input"] for a in by_agent.values())
     total_output = sum(a["output"] for a in by_agent.values())
     total_cached = sum(a["cached"] for a in by_agent.values())
     total_cache_reads = sum(a["cache_reads"] for a in by_agent.values())
+    total_energy = sum(a["energy_wh"] for a in by_agent.values())
+    total_savings = sum(a["savings_usd"] for a in by_agent.values())
+    total_co2 = sum(a["co2_g"] for a in by_agent.values())
+    total_local_sessions = sum(a.get("local_session_count", 0) for a in by_agent.values())
+    all_tps = [t for samples in _tps_model.values() for t in samples]
+    local_eff = efficiency_row(
+        output_tokens=sum(
+            m["output"] for m in by_model.values() if m.get("is_local")
+        ),
+        energy_wh_total=total_energy,
+        cost_usd=sum(m["cost"] for m in by_model.values() if m.get("is_local")),
+        tok_per_sec_sum=sum(all_tps),
+        tok_per_sec_n=len(all_tps),
+    )
 
     # Ecosystem usage: skills, MCP servers, subagent types. New keys only — the
     # existing by_agent/by_day/by_model/total stay byte-identical (no silent
@@ -11286,10 +11545,26 @@ async def get_analytics(
             "cached": total_cached,
             "total": sum(a["total"] for a in by_agent.values()),
             "cost": sum(a["cost"] for a in by_agent.values()),
-            "energy_wh": sum(a["energy_wh"] for a in by_agent.values()),
-            "savings_usd": sum(a["savings_usd"] for a in by_agent.values()),
-            "co2_g": sum(a["co2_g"] for a in by_agent.values()),
+            "energy_wh": total_energy,
+            "savings_usd": total_savings,
+            "co2_g": total_co2,
+            "local_session_count": total_local_sessions,
             "cache_hit_pct": _cache_hit_pct(total_input, total_cache_reads),
+            "wh_per_1m_output": local_eff.get("wh_per_1m_output"),
+            "cost_per_1m_output": local_eff.get("cost_per_1m_output"),
+            "avg_tok_per_sec": local_eff.get("avg_tok_per_sec"),
+            "tok_per_sec_samples": local_eff.get("tok_per_sec_samples"),
+        },
+        "local": {
+            "enabled": True,
+            "local_only": bool(local_only),
+            "reference_cloud_model": ref_model,
+            "load_watts": load_watts,
+            "session_count": total_local_sessions,
+            "energy_wh": total_energy,
+            "savings_usd": total_savings,
+            "co2_g": total_co2,
+            **local_eff,
         },
         "coverage": history_store.coverage(),
         "granularity": granularity,

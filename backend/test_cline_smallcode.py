@@ -220,6 +220,9 @@ def test_scan_cline_cli_uses_aggregate_usage(tmp_path, monkeypatch):
     assert rec["agent"] == "cline"
     assert rec["id"] == "sess-agg"
     assert rec["project"] == str(tmp_path / "proj")
+    # Top-level provider (not only nested cline.provider) for local detection.
+    assert rec.get("provider") == "anthropic"
+    assert rec.get("cline", {}).get("provider") == "anthropic"
     assert rec["tokens"]["input"] == 500
     assert rec["tokens"]["output"] == 120
     assert rec["tokens"]["cached"] == 30

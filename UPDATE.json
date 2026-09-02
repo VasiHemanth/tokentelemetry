@@ -2,6 +2,31 @@
   "releases": [
     {
       "tag": "2026-09-02",
+      "title": "Local model insights: energy, tok/s & savings",
+      "highlights": [
+        {
+          "title": "Local-only analytics with energy, CO₂ & savings",
+          "description": "Filter Analytics to local sessions only and see electricity cost, watt-hours, CO₂, cloud savings vs a reference model, and average tokens/sec — not just API-style token totals.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Model efficiency table & session local card",
+          "description": "Compare local models by throughput, Wh per 1M output tokens, and savings. Open a local session to see gen time, energy, electricity $, and CO₂ for that run.",
+          "href": "/local-models"
+        },
+        {
+          "title": "Live Ollama runtime probe (all OSes)",
+          "description": "The Local Models page probes loopback Ollama for installed and loaded models, plus optional NVIDIA GPU stats via nvidia-smi — works on macOS, Linux, and Windows without exposing remote hosts.",
+          "href": "/local-models"
+        },
+        {
+          "title": "SmallCode & Cline local detection fixed",
+          "description": "SmallCode sessions now stamp Ollama/local billing and measure tok/s from wall-clock duration; Cline hoists its provider so Ollama runs price by electricity instead of cloud rates."
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-02",
       "title": "Desktop app, Settings redesign & keyboard shortcuts",
       "featured": true,
       "highlights": [

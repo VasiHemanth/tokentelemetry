@@ -405,20 +405,70 @@ _TOK_PER_SEC_BY_PARAMS = [
 _PARAM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b", re.IGNORECASE)
 
 
+def parse_model_params_b(model: Optional[str]) -> Optional[float]:
+    """Extract parameter count in billions from a model name, if present.
+
+    e.g. ``nemotron-3-nano:4b`` → 4.0, ``llama-3.3-70b-instruct`` → 70.0.
+    """
+    if not model:
+        return None
+    m = _PARAM_RE.search(str(model))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+# Quantization tags commonly embedded in Ollama / GGUF model names.
+# Allow leading separators (_-:.) so tags like ``7b-q4_K_M`` match.
+_QUANT_RE = re.compile(
+    r"(?i)(?:^|[^a-z0-9])("
+    r"q[2-8](?:_[0-9a-z_]+)?|"
+    r"iq[1-4](?:_[0-9a-z_]+)?|"
+    r"fp(?:16|8)|bf16|int[48]|gguf"
+    r")(?:$|[^a-z0-9])"
+)
+
+
+def parse_model_quant(model: Optional[str]) -> Optional[str]:
+    """Best-effort quantization tag from a model name (e.g. ``q4_K_M``)."""
+    if not model:
+        return None
+    # Normalize separators so both q4_K_M and q4-k-m parse.
+    normalized = str(model).replace("-", "_").replace(":", "_")
+    m = _QUANT_RE.search(normalized + " ")
+    if not m:
+        return None
+    return m.group(1).upper().replace("GGUF", "gguf")
+
+
+def parse_model_base(model: Optional[str]) -> Optional[str]:
+    """Strip size/quant suffix tags for grouping (``nemotron-3-nano:4b`` → base).
+
+    Conservative: returns the segment before the first ``:`` when present,
+    else the full name lowercased. Used for quant side-by-side tables.
+    """
+    if not model:
+        return None
+    s = str(model).strip()
+    if not s:
+        return None
+    base = s.split(":", 1)[0]
+    # Drop trailing size tokens like -4b / -70b for coarser grouping.
+    base = re.sub(r"(?i)[-_]?(\d+(?:\.\d+)?)\s*b\b", "", base).strip("-_ ")
+    return base.lower() or s.lower()
+
+
 def default_tok_per_sec_for_model(model: Optional[str]) -> float:
     """Best-effort default throughput from a model's parameter count in its name.
 
     e.g. ``nemotron-3-nano:4b`` → ~90 tok/s, ``llama-3.3-70b`` → ~18. Falls back
     to ``DEFAULT_TOK_PER_SEC`` when no size is parseable.
     """
-    if not model:
-        return DEFAULT_TOK_PER_SEC
-    m = _PARAM_RE.search(str(model))
-    if not m:
-        return DEFAULT_TOK_PER_SEC
-    try:
-        params_b = float(m.group(1))
-    except ValueError:
+    params_b = parse_model_params_b(model)
+    if params_b is None:
         return DEFAULT_TOK_PER_SEC
     for ceiling, rate in _TOK_PER_SEC_BY_PARAMS:
         if params_b <= ceiling:

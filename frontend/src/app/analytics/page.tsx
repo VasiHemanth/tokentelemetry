@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   BarChart3, TrendingUp, ArrowDownToLine, ArrowUpFromLine,
-  Zap, DollarSign, Cpu, GitBranch, Repeat, Info,
+  Zap, DollarSign, Cpu, GitBranch, Repeat, Info, Leaf, Gauge, Cloud,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart as RePieChart, Pie, Cell,
@@ -24,8 +24,14 @@ import {
 
 interface AnalyticsData {
   by_agent: Record<string, AgentStats>;
-  by_day: { date: string; total: number; input: number; output: number; cached: number; cost: number }[];
-  by_model?: Record<string, AgentStats & { agent: string }>;
+  by_day: {
+    date: string; total: number; input: number; output: number; cached: number; cost: number;
+    energy_wh?: number; savings_usd?: number; co2_g?: number;
+  }[];
+  by_model?: Record<string, AgentStats & {
+    agent: string; is_local?: boolean; energy_wh?: number; savings_usd?: number; co2_g?: number;
+    avg_tok_per_sec?: number | null; wh_per_1m_output?: number | null; quant?: string | null;
+  }>;
   by_skill?: Record<string, { invocations: number; session_count: number; agents?: string[] }>;
   by_mcp_server?: Record<string, { calls: number; tools: Record<string, number>; session_count: number; agents?: string[] }>;
   by_subagent_type?: Record<string, { spawns: number; tokens: number; cost: number; session_count: number; tokens_recorded?: boolean; agents?: string[] }>;
@@ -56,7 +62,15 @@ interface AnalyticsData {
     expires_at: string | null;
     next_fire_at?: string | null;
   }>;
-  total: { input: number; output: number; cached: number; total: number; cost: number };
+  total: {
+    input: number; output: number; cached: number; total: number; cost: number;
+    energy_wh?: number; savings_usd?: number; co2_g?: number;
+    local_session_count?: number; avg_tok_per_sec?: number | null; wh_per_1m_output?: number | null;
+  };
+  local?: {
+    local_only?: boolean; energy_wh?: number; savings_usd?: number; co2_g?: number;
+    session_count?: number; avg_tok_per_sec?: number | null; reference_cloud_model?: string;
+  };
   coverage?: {
     earliest: string | null;
     total_sessions: number;
@@ -68,6 +82,8 @@ interface AnalyticsData {
 
 interface AgentStats {
   input: number; output: number; cached: number; total: number; cost: number; session_count: number;
+  energy_wh?: number; savings_usd?: number; co2_g?: number; local_session_count?: number;
+  avg_tok_per_sec?: number | null;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -131,6 +147,7 @@ export default function AnalyticsPage() {
   const [customTo, setCustomTo] = useState("");
   const [selAgents, setSelAgents] = useState<string[]>([]);
   const [selModels, setSelModels] = useState<string[]>([]);
+  const [localOnly, setLocalOnly] = useState(false);
 
   const queryPath = useMemo(() => {
     const p = new URLSearchParams();
@@ -142,9 +159,10 @@ export default function AnalyticsPage() {
     if (granularity !== "day") p.set("granularity", granularity);
     selAgents.forEach(a => p.append("agents", a));
     selModels.forEach(m => p.append("models", m));
+    if (localOnly) p.set("local_only", "true");
     const qs = p.toString();
     return qs ? `/analytics?${qs}` : "/analytics";
-  }, [range, granularity, customFrom, customTo, selAgents, selModels]);
+  }, [range, granularity, customFrom, customTo, selAgents, selModels, localOnly]);
 
   const { data, loading } = useResource<AnalyticsData>(queryPath, { pollMs: 30_000 });
   const agentOptions = useResource<string[]>("/agents").data ?? [];
@@ -184,8 +202,14 @@ export default function AnalyticsPage() {
   // Server already returns by_day windowed to the selected range/granularity.
   const rangeTotals = useMemo(() => {
     return (data?.by_day ?? []).reduce(
-      (acc, d) => ({ total: acc.total + (d.total || 0), cost: acc.cost + (d.cost || 0) }),
-      { total: 0, cost: 0 }
+      (acc, d) => ({
+        total: acc.total + (d.total || 0),
+        cost: acc.cost + (d.cost || 0),
+        energy_wh: acc.energy_wh + (d.energy_wh || 0),
+        savings_usd: acc.savings_usd + (d.savings_usd || 0),
+        co2_g: acc.co2_g + (d.co2_g || 0),
+      }),
+      { total: 0, cost: 0, energy_wh: 0, savings_usd: 0, co2_g: 0 }
     );
   }, [data]);
 
@@ -332,6 +356,28 @@ export default function AnalyticsPage() {
             )}
           </div>
         )}
+
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Scope</span>
+          <button
+            onClick={() => {
+              setLocalOnly((v) => {
+                const next = !v;
+                trackEvent("analytics.filtered", { dimension: "local-only" });
+                return next;
+              });
+            }}
+            className={cn(
+              "px-2.5 py-0.5 text-[10px] font-semibold rounded-full border transition-colors inline-flex items-center gap-1.5",
+              localOnly
+                ? "border-emerald-500/60 text-emerald-300 bg-emerald-500/10"
+                : "border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]"
+            )}
+          >
+            <Leaf size={11} />
+            Local only
+          </button>
+        </div>
       </div>
 
       {/* Data-availability notice: history only accrues from the first run, and
@@ -349,12 +395,15 @@ export default function AnalyticsPage() {
       )}
 
       {/* KPI strip */}
-      <Section title="Totals" description={`${rangeLabel} · all agents. The dashboard shows all-time totals, so these differ by window.`}>
+      <Section
+        title={localOnly ? "Local totals" : "Totals"}
+        description={`${rangeLabel} · ${localOnly ? "local sessions only" : "all agents"}. The dashboard shows all-time totals, so these differ by window.`}
+      >
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatTile
             label="Total tokens"
             value={data.total.total.toLocaleString()}
-            hint={rangeLabel}
+            hint={localOnly ? `${rangeLabel} · local sessions only` : rangeLabel}
             icon={<TrendingUp size={16} />}
             accent="var(--tt-brand)"
           />
@@ -373,13 +422,69 @@ export default function AnalyticsPage() {
             accent="var(--tt-success)"
           />
           <StatTile
-            label="Cache efficiency"
-            value={`${cacheEff.toFixed(1)}%`}
-            hint={`${compact(data.total.cached)} cached · est. $${data.total.cost.toFixed(2)} API equiv.`}
+            label={localOnly ? "Electricity cost" : "Cache efficiency"}
+            value={
+              localOnly
+                ? `$${data.total.cost.toFixed(2)}`
+                : `${cacheEff.toFixed(1)}%`
+            }
+            hint={
+              localOnly
+                ? `${data.total.local_session_count ?? 0} local sessions`
+                : `${compact(data.total.cached)} cached · est. $${data.total.cost.toFixed(2)} API equiv.`
+            }
             icon={<Zap size={16} />}
             accent="var(--tt-warn)"
           />
         </div>
+        {(localOnly || (data.total.energy_wh ?? 0) > 0 || (data.total.savings_usd ?? 0) > 0) && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+            <StatTile
+              label="Local energy"
+              value={
+                (data.total.energy_wh ?? 0) >= 1000
+                  ? `${((data.total.energy_wh ?? 0) / 1000).toFixed(2)} kWh`
+                  : `${(data.total.energy_wh ?? 0).toFixed(2)} Wh`
+              }
+              hint="From watts × generation time"
+              icon={<Zap size={16} />}
+              accent="var(--tt-success)"
+            />
+            <StatTile
+              label="Cloud savings"
+              value={`$${(data.total.savings_usd ?? 0).toFixed(2)}`}
+              hint={`vs ${data.local?.reference_cloud_model || "cloud reference"}`}
+              icon={<DollarSign size={16} />}
+              accent="#34d399"
+            />
+            <StatTile
+              label="CO₂"
+              value={
+                (data.total.co2_g ?? 0) >= 1000
+                  ? `${((data.total.co2_g ?? 0) / 1000).toFixed(2)} kg`
+                  : `${(data.total.co2_g ?? 0).toFixed(2)} g`
+              }
+              hint="Grid intensity × kWh"
+              icon={<Cloud size={16} />}
+              accent="var(--tt-info)"
+            />
+            <StatTile
+              label="Avg throughput"
+              value={
+                data.total.avg_tok_per_sec != null && data.total.avg_tok_per_sec > 0
+                  ? `${data.total.avg_tok_per_sec.toFixed(1)} t/s`
+                  : "—"
+              }
+              hint={
+                data.total.wh_per_1m_output != null
+                  ? `${data.total.wh_per_1m_output.toFixed(1)} Wh / 1M out`
+                  : "Local models only"
+              }
+              icon={<Gauge size={16} />}
+              accent="var(--tt-warn)"
+            />
+          </div>
+        )}
       </Section>
 
       {/* Daily consumption + agent share */}
