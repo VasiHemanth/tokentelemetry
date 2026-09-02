@@ -78,6 +78,11 @@ def _retry_after_seconds(headers: Any) -> Optional[float]:
         return None
     try:
         raw = headers.get("Retry-After")
+        if raw is None:
+            # urllib hands us an email.message.Message, whose lookup is already
+            # case-insensitive. A plain mapping is not, and servers do send
+            # "retry-after" lowercase, so fall back to scanning the keys.
+            raw = next((value for key, value in headers.items() if key.lower() == "retry-after"), None)
     except AttributeError:
         return None
     if not isinstance(raw, str) or not raw.strip():

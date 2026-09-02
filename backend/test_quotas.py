@@ -842,15 +842,19 @@ def test_transport_reports_a_throttle_even_when_the_body_is_empty(monkeypatch):
     and a temporary throttle would surface as "invalid response".
     """
     import io
+    from email.message import Message
     from urllib.error import HTTPError
 
     import quotas
 
+    # urllib supplies an email.message.Message here, not a dict. Building the
+    # real type keeps the test honest about how the header is looked up, and
+    # the lowercase spelling is what several edges actually send.
+    headers = Message()
+    headers["retry-after"] = "120"
+
     def raise_throttled(request, timeout=None):
-        raise HTTPError(
-            request.full_url, 429, "Too Many Requests",
-            {"Retry-After": "120"}, io.BytesIO(b""),
-        )
+        raise HTTPError(request.full_url, 429, "Too Many Requests", headers, io.BytesIO(b""))
 
     monkeypatch.setattr(quotas, "urlopen", raise_throttled)
 
@@ -924,6 +928,9 @@ def test_retry_after_accepts_a_date_and_survives_a_malformed_header():
 
     when = datetime.now(timezone.utc) + timedelta(seconds=90)
     assert 60 <= _retry_after_seconds({"Retry-After": format_datetime(when)}) <= 120
+    # A plain mapping has a case-sensitive .get(), unlike the Message urllib
+    # supplies, so a lowercase header must still be found.
+    assert _retry_after_seconds({"retry-after": "45"}) == 45
     assert _retry_after_seconds({"Retry-After": "not-a-date"}) is None
     assert _retry_after_seconds({}) is None
     assert _retry_after_seconds(None) is None
