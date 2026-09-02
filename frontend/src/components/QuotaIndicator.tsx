@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Gauge, RefreshCw, Loader2 } from "lucide-react";
+import { Gauge, RefreshCw, Loader2, Clock } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { AgentLogo } from "@/components/icons/AgentLogo";
@@ -48,7 +48,14 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
   }, [pinned]);
 
   const providers = Object.entries(data?.providers ?? {});
-  const unavailable = Object.values(data?.capabilities ?? {}).filter((c) => c.state !== "available");
+  const capabilities = data?.capabilities ?? {};
+  // A throttled provider whose last reading is still on screen has not lost its
+  // live quota, it just could not refresh this minute. Counting it in the
+  // footer would contradict the row rendered directly above it. One that has
+  // never fetched successfully has nothing to show, so it stays in the count.
+  const unavailable = Object.entries(capabilities)
+    .filter(([id, c]) => c.state !== "available" && !(c.state === "rateLimited" && data?.providers?.[id]))
+    .map(([, c]) => c);
   if (providers.length === 0 && unavailable.length === 0) return null;
 
   const tone = worst && worst.pct >= QUOTA_WARN_AT ? quotaColor(worst.pct) : undefined;
@@ -114,7 +121,14 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
         </div>
       )}
 
-      {open && <Panel collapsed={collapsed} providers={providers} unavailable={unavailable} />}
+      {open && (
+        <Panel
+          collapsed={collapsed}
+          providers={providers}
+          capabilities={capabilities}
+          unavailable={unavailable}
+        />
+      )}
     </div>
   );
 }
@@ -137,7 +151,13 @@ function Bar({ label, pct, note }: { label: string; pct: number; note?: string |
 }
 
 /** One provider: every window it reports, plus any balance it carries. */
-function ProviderRows({ providerId, snapshot }: { providerId: string; snapshot: QuotaSnapshot }) {
+function ProviderRows({
+  providerId, snapshot, capability,
+}: {
+  providerId: string;
+  snapshot: QuotaSnapshot;
+  capability?: QuotaCapability;
+}) {
   const entries = Object.entries(snapshot.resources);
   const windows = entries
     .map(([key, resource]) => ({ key, resource, pct: quotaPercent(resource) }))
@@ -157,6 +177,15 @@ function ProviderRows({ providerId, snapshot }: { providerId: string; snapshot: 
           </span>
         )}
       </div>
+
+      {/* Said before the numbers, not after: a reading the provider refused to
+          refresh is one the reader should discount while looking at it. */}
+      {capability?.state === "rateLimited" && (
+        <div className="flex items-start gap-1.5 text-[10px] leading-snug text-[var(--tt-warn-fg)]">
+          <Clock size={11} className="mt-px shrink-0" aria-hidden />
+          <span>{capability.detail ?? "The usage API is rate limiting requests. The last reading is still shown."}</span>
+        </div>
+      )}
 
       {windows.map(({ key, resource, pct }) => (
         <Bar key={key} label={quotaResourceLabel(key)} pct={pct} note={resetText(resource.resetsAt)} />
@@ -183,10 +212,11 @@ function ProviderRows({ providerId, snapshot }: { providerId: string; snapshot: 
 }
 
 function Panel({
-  collapsed, providers, unavailable,
+  collapsed, providers, capabilities, unavailable,
 }: {
   collapsed: boolean;
   providers: [string, QuotaSnapshot][];
+  capabilities: Record<string, QuotaCapability>;
   unavailable: QuotaCapability[];
 }) {
   // Closest to a ceiling first: the provider about to cut you off is the one
@@ -233,7 +263,7 @@ function Panel({
 
       <div className="overflow-y-auto divide-y divide-[var(--tt-border)]">
         {ordered.map(([id, snapshot]) => (
-          <ProviderRows key={id} providerId={id} snapshot={snapshot} />
+          <ProviderRows key={id} providerId={id} snapshot={snapshot} capability={capabilities[id]} />
         ))}
         {ordered.length === 0 && (
           <div className="px-4 py-8 text-center text-[12px] text-[var(--tt-fg-dim)]">

@@ -36,6 +36,10 @@ export type QuotaCapabilityState =
   | "notSignedIn"
   | "sessionExpired"
   | "notEntitled"
+  // The provider's usage API returned HTTP 429. Unlike the states around it
+  // this one is temporary and needs nothing from the user, and the previous
+  // reading is still served (marked stale) rather than the row emptying out.
+  | "rateLimited"
   | "refreshFailed"
   | "notSupported";
 

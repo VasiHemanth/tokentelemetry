@@ -52,6 +52,54 @@ NOT_ENTITLED = "not entitled"
 LOGIN_REJECTED = "local login was rejected"
 
 
+class RateLimited(RuntimeError):
+    """The provider's usage API asked us to slow down (HTTP 429).
+
+    This is raised by the transport helpers rather than by each provider's
+    status check, because a 429 frequently arrives with an empty or non-JSON
+    body: decoding it as JSON fails first, and the provider would then report
+    "invalid response" for what is really a temporary throttle. Catching it at
+    the transport keeps every provider consistent without seven copies of the
+    same branch.
+
+    A throttle is not a fault to fix. The service keeps serving the previous
+    snapshot (marked stale) so the panel still shows a real reading instead of
+    emptying out while the limit clears.
+    """
+
+    def __init__(self, retry_after: Optional[float] = None) -> None:
+        super().__init__("rate limited")
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(headers: Any) -> Optional[float]:
+    """Read ``Retry-After``, which is either a delay in seconds or a date."""
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -286,6 +334,10 @@ def _fetch_json(url: str, headers: Dict[str, str]) -> tuple[int, Dict[str, Any]]
             status = response.status
             body = response.read()
     except HTTPError as error:
+        # Checked before the body is decoded: a 429 often carries an empty or
+        # non-JSON body, which would otherwise surface as "invalid response".
+        if error.code == 429:
+            raise RateLimited(_retry_after_seconds(error.headers)) from error
         status, body = error.code, error.read()
     except (URLError, OSError) as error:
         raise RuntimeError("network") from error
@@ -310,6 +362,10 @@ def _post_json(url: str, headers: Dict[str, str], body: Optional[Dict[str, Any]]
             status = response.status
             body = response.read()
     except HTTPError as error:
+        # Checked before the body is decoded: a 429 often carries an empty or
+        # non-JSON body, which would otherwise surface as "invalid response".
+        if error.code == 429:
+            raise RateLimited(_retry_after_seconds(error.headers)) from error
         status, body = error.code, error.read()
     except (URLError, OSError) as error:
         raise RuntimeError("network") from error
@@ -333,6 +389,10 @@ def _post_form(url: str, body: Dict[str, str]) -> tuple[int, Dict[str, Any]]:
             status = response.status
             body = response.read()
     except HTTPError as error:
+        # Checked before the body is decoded: a 429 often carries an empty or
+        # non-JSON body, which would otherwise surface as "invalid response".
+        if error.code == 429:
+            raise RateLimited(_retry_after_seconds(error.headers)) from error
         status, body = error.code, error.read()
     except (URLError, OSError) as error:
         raise RuntimeError("network") from error
@@ -1273,8 +1333,29 @@ class StaticQuotaProvider:
         return {"displayName": self.display_name, "state": "notSupported", "detail": self.detail}
 
 
+def _retry_wording(seconds: Optional[float]) -> str:
+    """Render Retry-After as "Try again in 2 minutes.", or "" when unknown.
+
+    Most throttles do not send the header, so the caller must read an empty
+    string as "no advice available" rather than "retry now".
+    """
+    if seconds is None or seconds <= 0:
+        return ""
+    if seconds < 90:
+        count = max(1, round(seconds))
+        return f" Try again in {count} second{'' if count == 1 else 's'}."
+    count = max(1, round(seconds / 60))
+    return f" Try again in {count} minute{'' if count == 1 else 's'}."
+
+
 def _classify(provider: Any, error: Exception) -> tuple[str, str]:
     """Turn a refresh failure into a state the dashboard can act on."""
+    if isinstance(error, RateLimited):
+        # Deliberately provider-neutral. This endpoint reports the account-level
+        # plan, shared with the provider's other surfaces, so naming the agent
+        # ("Claude Code is rate limiting you") would blame the wrong thing.
+        wait = _retry_wording(error.retry_after)
+        return "rateLimited", f"The usage API is rate limiting requests. The last reading is still shown.{wait}"
     reason = str(error)
     if reason == NOT_SIGNED_IN:
         return "notSignedIn", "No local credentials found."

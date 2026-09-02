@@ -8,11 +8,15 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from quotas import (
     ClaudeQuotaProvider,
     CodexQuotaProvider,
+    QuotaResource,
+    RateLimited,
     CopilotQuotaProvider,
     CursorQuotaProvider,
     FRESHNESS,
@@ -828,3 +832,98 @@ def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
 
     assert base.live_quota("codex") is None
+
+
+def test_transport_reports_a_throttle_even_when_the_body_is_empty(monkeypatch):
+    """A 429 must survive the JSON decode that would otherwise mask it.
+
+    Throttles routinely arrive with an empty or HTML body. Decoding that as
+    JSON fails first, so a status check inside each provider would never run
+    and a temporary throttle would surface as "invalid response".
+    """
+    import io
+    from urllib.error import HTTPError
+
+    import quotas
+
+    def raise_throttled(request, timeout=None):
+        raise HTTPError(
+            request.full_url, 429, "Too Many Requests",
+            {"Retry-After": "120"}, io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(quotas, "urlopen", raise_throttled)
+
+    for transport, args in (
+        (quotas._fetch_json, ("https://example.test/usage", {})),
+        (quotas._post_json, ("https://example.test/usage", {})),
+        (quotas._post_form, ("https://example.test/usage", {"grant_type": "refresh"})),
+    ):
+        with pytest.raises(quotas.RateLimited) as caught:
+            transport(*args)
+        assert caught.value.retry_after == 120
+
+
+def test_service_reports_a_throttled_provider_without_dropping_its_last_reading(tmp_path):
+    class Provider:
+        provider_id = "claude"
+        display_name = "Claude Code"
+
+        def __init__(self):
+            self.throttled = False
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            if self.throttled:
+                raise RateLimited(120)
+            return QuotaSnapshot(
+                provider_id=self.provider_id,
+                display_name=self.display_name,
+                fetched_at=now,
+                resources={"session": QuotaResource(
+                    kind="consumption", unit="percent", used=32, limit=100,
+                )},
+            )
+
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    later = now + FRESHNESS + timedelta(minutes=1)
+    provider = Provider()
+    clock = {"value": now}
+    service = QuotaService([provider], cache_path=tmp_path / "quotas.json", now=lambda: clock["value"])
+
+    first = service.collect(force=True)
+    provider.throttled = True
+    clock["value"] = later
+    second = service.collect()
+
+    capability = second["capabilities"]["claude"]
+    assert capability["state"] == "rateLimited"
+    assert "rate limiting" in capability["detail"]
+    assert "Try again in 2 minutes." in capability["detail"]
+    # Provider-neutral: this is the account's usage API, shared with the
+    # provider's other surfaces, so the CLI must not be blamed for it.
+    assert "Claude Code" not in capability["detail"]
+
+    # The previous reading survives, flagged stale, so the panel still shows a
+    # real number instead of emptying out while the throttle clears.
+    assert second["providers"]["claude"]["resources"]["session"]["used"] == 32
+    assert second["providers"]["claude"]["fetchedAt"] == first["providers"]["claude"]["fetchedAt"]
+    assert second["providers"]["claude"]["stale"] is True
+
+    # A throttle is temporary and needs nothing from the user, so it must not
+    # raise the dashboard's error banner the way a real fetch failure does.
+    assert second["errors"] == []
+
+
+def test_retry_after_accepts_a_date_and_survives_a_malformed_header():
+    from email.utils import format_datetime
+
+    from quotas import _retry_after_seconds
+
+    when = datetime.now(timezone.utc) + timedelta(seconds=90)
+    assert 60 <= _retry_after_seconds({"Retry-After": format_datetime(when)}) <= 120
+    assert _retry_after_seconds({"Retry-After": "not-a-date"}) is None
+    assert _retry_after_seconds({}) is None
+    assert _retry_after_seconds(None) is None
