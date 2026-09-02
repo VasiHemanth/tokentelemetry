@@ -178,6 +178,67 @@ def _git(*args: str, cwd: Optional[str] = None, timeout: int = 10) -> Optional[s
         return None
 
 
+def _git_dash_c_dir(tokens: List[str]) -> Optional[str]:
+    """The directory from `git -C <dir> ...`, if the command uses one."""
+    for i, tok in enumerate(tokens):
+        if tok == "-C" and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if tok.startswith("-C") and len(tok) > 2:
+            return tok[2:]
+    return None
+
+
+def resolve_push_cwd(command_str: str, base: str) -> str:
+    """Directory the push will actually run in.
+
+    The hook process's cwd is the session's project directory, which is NOT
+    where the push happens when the command is `cd <worktree> && git push` or
+    `git -C <worktree> push`. Enforcing against the session's directory checks a
+    different branch entirely: a worktree push of a clean `fix:` branch was
+    denied because the *session* directory happened to sit on an unrelated
+    branch carrying a `feat:` commit.
+
+    Walks the command chain in order, tracking `cd` (relative paths resolve
+    against whatever the previous `cd` set, and `cd -` is ignored as
+    unresolvable), and stops at the fragment that actually pushes. Falls back to
+    ``base`` whenever the result isn't a real directory, so a malformed or
+    exotic command keeps the old behaviour instead of silently skipping the gate.
+    """
+    cwd = base
+    for frag in _split_on_chain_operators(command_str):
+        frag = frag.strip()
+        if not frag:
+            continue
+        try:
+            tokens = shlex.split(frag)
+        except ValueError:
+            continue
+
+        i = 0
+        while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+            i += 1
+        if i >= len(tokens):
+            continue
+
+        if _is_push_subcommand(tokens):
+            explicit = _git_dash_c_dir(tokens[i:])
+            if explicit:
+                cand = os.path.abspath(os.path.join(cwd, os.path.expanduser(explicit)))
+                if os.path.isdir(cand):
+                    return cand
+            return cwd if os.path.isdir(cwd) else base
+
+        if tokens[i] == "cd" and i + 1 < len(tokens):
+            target = tokens[i + 1]
+            if target == "-":
+                continue  # previous-directory; not reconstructable here
+            cand = os.path.abspath(os.path.join(cwd, os.path.expanduser(target)))
+            if os.path.isdir(cand):
+                cwd = cand
+
+    return cwd if os.path.isdir(cwd) else base
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -194,8 +255,11 @@ def main() -> None:
         _allow()
         return
 
-    # It IS a push / PR-create. Now check the branch state.
-    repo_root = _git("rev-parse", "--show-toplevel")
+    # It IS a push / PR-create. Now check the branch state — of the repository
+    # the push actually runs in, which for a worktree push is not this process's
+    # cwd. See resolve_push_cwd.
+    push_cwd = resolve_push_cwd(command, (payload.get("cwd") or os.getcwd()))
+    repo_root = _git("rev-parse", "--show-toplevel", cwd=push_cwd)
     if not repo_root:
         _allow()
         return

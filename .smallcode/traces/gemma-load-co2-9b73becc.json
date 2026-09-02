@@ -1,0 +1,30 @@
+{
+  "id": "gemma-load-co2-9b73becc",
+  "model": "gemma4:12b-mlx",
+  "prompt": "Explain co2_for_session and savings. Worked example 3600 out / 30tps / 80W.\n\n===== insights.py =====\n\"\"\"Local-model insight helpers: energy, cloud savings, efficiency, session enrich.\n\nUsed by ``GET /analytics`` and session-list enrichment. Never raises on bad input\n\u2014 callers get zeros / None so a malformed session can't break the dashboard.\n\"\"\"\nfrom __future__ import annotations\n\nfrom typing import Any, Dict, Optional, Tuple\n\n\ndef energy_wh(\n    output_tokens: int,\n    *,\n    load_watts: float,\n    tok_per_sec: float,\n) -> float:\n    \"\"\"Compute energy consumed in watt-hours for generating tokens locally.\"\"\"\n    if output_tokens <= 0 or load_watts <= 0 or tok_per_sec <= 0:\n        return 0.0\n    # Wh = (output_tokens / tok_per_sec) * load_watts / 3600\n    gen_seconds = output_tokens / tok_per_sec\n    return (gen_seconds * load_watts) / 3600.0\n\n\ndef gen_seconds(output_tokens: int, tok_per_sec: float) -> float:\n    \"\"\"Wall-clock generation seconds from output tokens and throughput.\"\"\"\n  ",
+  "startedAt": "2026-07-12T18:15:39.169359Z",
+  "endedAt": "2026-07-12T18:16:31.693838Z",
+  "durationMs": 12072.074458,
+  "steps": [
+    {
+      "type": "tool_call",
+      "name": "read_file",
+      "args": {
+        "path": "backend/insights.py"
+      },
+      "result": "ok",
+      "durationMs": 2,
+      "timestamp": 1783880139169
+    }
+  ],
+  "tokens": {
+    "prompt": 3176,
+    "completion": 240
+  },
+  "_tt_loadtest": {
+    "label": "co2",
+    "wall_s": 52.53120470046997,
+    "decode_tps": 19.88059308571902,
+    "total_ms": 52524.466875
+  }
+}

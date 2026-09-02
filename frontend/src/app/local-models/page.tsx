@@ -2,18 +2,26 @@ import { Cpu } from "lucide-react";
 import { PageHeader, Section } from "@/components/ui";
 import { PowerSettings } from "@/components/settings/PowerSettings";
 import LocalPowerInsights from "@/components/insights/LocalPowerInsights";
+import LocalRuntimePanel from "@/components/insights/LocalRuntimePanel";
 
 export default function LocalModelsPage() {
   return (
-    <div className="px-8 py-8 max-w-[900px] mx-auto space-y-10 pb-20">
+    <div className="px-8 py-8 max-w-[1100px] mx-auto space-y-10 pb-20">
       <PageHeader
         eyebrow="Hardware"
         title="Local Models & Power"
-        description="Configure your local machine's power and electricity rates to accurately track local model costs."
+        description="Energy, throughput, cloud savings, and live runtime for Ollama / local GPUs — plus power settings for electricity pricing on every OS."
         icon={<Cpu size={20} strokeWidth={2.25} />}
       />
 
       <LocalPowerInsights forceShow={true} />
+
+      <Section
+        title="Live local runtime"
+        description="Loopback probe of Ollama (installed + loaded models) and optional NVIDIA GPU stats. Works on macOS, Linux, and Windows."
+      >
+        <LocalRuntimePanel />
+      </Section>
 
       <Section
         title="How to measure local power"
@@ -29,14 +37,14 @@ export default function LocalModelsPage() {
             <li><strong>Click &quot;Measure&quot;</strong> below while the model is actively generating text.</li>
           </ol>
           <p className="mt-4">
-            TokenTelemetry will sample your power draw for 5 seconds and lock in the wattage. This ensures your local model costs are based on actual electricity usage rather than cloud API rates!
+            TokenTelemetry will sample your power draw for a few seconds and suggest a wattage. Save it so local model costs use real electricity instead of cloud API rates.
           </p>
         </div>
       </Section>
 
       <Section
         title="Power configuration"
-        description="Set your wattage and local electricity rate. These numbers are used to price sessions on local models (Ollama, vLLM, etc.) and calculate your carbon footprint."
+        description="Set your wattage, electricity rate, grid carbon intensity, and the cloud reference model used for savings. These price Ollama / vLLM / LM Studio sessions."
       >
         <PowerSettings />
       </Section>

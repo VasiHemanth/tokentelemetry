@@ -8,6 +8,8 @@ export interface PowerConfig {
   gridCarbonIntensity: number;
   subscriptionEndpoints: string[];
   localEndpoints: string[];
+  /** Cloud model id used for local-vs-API savings (backend default: claude-sonnet-4-6). */
+  referenceCloudModel?: string;
   /** True once the user has saved a power.json (else values are shipped defaults). */
   configured: boolean;
   /** Chip-aware default wattage for this machine, the baseline loadWatts falls back to. */
@@ -18,6 +20,42 @@ export interface PowerConfig {
     /** True only when the hardware was auto-detected (e.g. Apple Silicon); false = generic fallback. */
     detected?: boolean;
   };
+}
+
+export interface LocalRuntimeModel {
+  name?: string;
+  size?: number;
+  parameter_size?: string;
+  quantization_level?: string;
+  family?: string;
+  modified_at?: string;
+  size_vram?: number;
+  details?: Record<string, unknown>;
+  expires_at?: string;
+}
+
+export interface LocalRuntime {
+  ollama: {
+    ollama: "online" | "offline" | string;
+    base_url?: string | null;
+    models: LocalRuntimeModel[];
+    running: LocalRuntimeModel[];
+    error?: string | null;
+  };
+  gpu: {
+    available: boolean;
+    gpus: {
+      index: number;
+      name: string;
+      memory_used_mb?: number | null;
+      memory_total_mb?: number | null;
+      utilization_pct?: number | null;
+      power_w?: number | null;
+    }[];
+    reason?: string | null;
+  };
+  hf_usage?: string | null;
+  platform?: string;
 }
 
 export interface PowerEstimate {
@@ -67,3 +105,5 @@ export const getPowerMeter = () => api<PowerMeter>("/config/power/meter");
 
 export const calibratePower = () =>
   api<CalibrateResult>("/config/power/calibrate", { method: "POST" });
+
+export const getLocalRuntime = () => api<LocalRuntime>("/local-runtime");

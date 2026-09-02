@@ -1,0 +1,40 @@
+{
+  "id": "gemma-load-arch-review-e42c7ebf",
+  "model": "gemma4:12b-mlx",
+  "prompt": "Code review TokenTelemetry local cost accounting.\n\n===== backend/insights.py =====\n\"\"\"Local-model insight helpers: energy, cloud savings, efficiency, session enrich.\n\nUsed by ``GET /analytics`` and session-list enrichment. Never raises on bad input\n\u2014 callers get zeros / None so a malformed session can't break the dashboard.\n\"\"\"\nfrom __future__ import annotations\n\nfrom typing import Any, Dict, Optional, Tuple\n\n\ndef energy_wh(\n    output_tokens: int,\n    *,\n    load_watts: float,\n    tok_per_sec: float,\n) -> float:\n    \"\"\"Compute energy consumed in watt-hours for generating tokens locally.\"\"\"\n    if output_tokens <= 0 or load_watts <= 0 or tok_per_sec <= 0:\n        return 0.0\n    # Wh = (output_tokens / tok_per_sec) * load_watts / 3600\n    gen_seconds = output_tokens / tok_per_sec\n    return (gen_seconds * load_watts) / 3600.0\n\n\ndef gen_seconds(output_tokens: int, tok_per_sec: float) -> float:\n    \"\"\"Wall-clock generation seconds from output tokens and throughput.\"\"\"\n    if output_tokens <= 0 or tok_per_sec <= 0:\n        return 0.0\n    return output_tokens / tok_per_sec\n\n\ndef cloud_equiv_cost(\n    model_reference: str,\n    input_tokens: int,\n    output_tokens: int,\n    cached_tokens:",
+  "startedAt": "2026-07-12T18:06:28.128746Z",
+  "endedAt": "2026-07-12T18:10:55.407425Z",
+  "durationMs": 267278.2315,
+  "steps": [
+    {
+      "type": "tool_call",
+      "name": "read_file",
+      "args": {
+        "path": "backend/insights.py"
+      },
+      "result": "ok",
+      "durationMs": 3,
+      "timestamp": 1783879588128
+    },
+    {
+      "type": "tool_call",
+      "name": "read_file",
+      "args": {
+        "path": "backend/power_config.py"
+      },
+      "result": "ok",
+      "durationMs": 2,
+      "timestamp": 1783879588133
+    }
+  ],
+  "tokens": {
+    "prompt": 12408,
+    "completion": 320
+  },
+  "_tt_loadtest": {
+    "label": "arch-review",
+    "wall_s": 267.35058522224426,
+    "tps": 17.2436486943638,
+    "preview": ""
+  }
+}

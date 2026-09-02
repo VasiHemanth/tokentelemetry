@@ -18,6 +18,7 @@ export function PowerSettings() {
   const [gci, setGci] = useState("");
   const [subs, setSubs] = useState("");
   const [locals, setLocals] = useState("");
+  const [refCloud, setRefCloud] = useState("claude-sonnet-4-6");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -32,6 +33,7 @@ export function PowerSettings() {
     setGci(String(c.gridCarbonIntensity));
     setSubs((c.subscriptionEndpoints ?? []).join("\n"));
     setLocals((c.localEndpoints ?? []).join("\n"));
+    setRefCloud(c.referenceCloudModel || "claude-sonnet-4-6");
   };
 
   useEffect(() => {
@@ -55,6 +57,7 @@ export function PowerSettings() {
         gridCarbonIntensity: Number(gci) || 0,
         subscriptionEndpoints: linesToList(subs),
         localEndpoints: linesToList(locals),
+        referenceCloudModel: refCloud.trim() || "claude-sonnet-4-6",
       });
       hydrate(next);
       setSaved(true);
@@ -184,6 +187,20 @@ export function PowerSettings() {
               placeholder="https://ollama.com"
               className="mt-1 w-full rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[12px] font-mono text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)]"
             />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wide text-[var(--tt-fg-muted)]">Cloud reference model (for savings)</span>
+            <input
+              type="text"
+              value={refCloud}
+              onChange={(e) => setRefCloud(e.target.value)}
+              placeholder="claude-sonnet-4-6"
+              className="mt-1 w-full rounded-md border border-[var(--tt-border)] bg-[var(--tt-bg-elev)] px-2.5 py-1.5 text-[12px] font-mono text-[var(--tt-fg)] outline-none focus:border-[var(--tt-brand)]"
+            />
+            <span className="text-[11px] text-[var(--tt-fg-muted)]">
+              Local cloud-savings figures compare against this model&apos;s API list rates.
+            </span>
           </label>
 
           {error && <p className="text-[12px] text-[var(--tt-danger-fg)]">{error}</p>}

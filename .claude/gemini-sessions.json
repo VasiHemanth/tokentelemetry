@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "session_id": "error-2026-06-22T16-59-40-743Z",
+      "model": "",
+      "prompt": "Please visit and read the Reddit thread at this URL: https://www.reddit.com/r/codex/comments/1ucnd5y/comment/ot5e649/?context=3\n\nGive me:\n1. The original post title and full body text\n2. The specific ",
+      "status": "error",
+      "stats": {
+        "total_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached": 0,
+        "duration_ms": 0,
+        "tool_calls": 0,
+        "models": {}
+      },
+      "tool_uses_count": 0,
+      "created_at": "2026-06-22T16:59:40.743Z",
+      "updated_at": "2026-06-22T16:59:40.743Z",
+      "resume_count": 0
+    },
+    {
+      "session_id": "error-2026-06-27T09-32-57-075Z",
+      "model": "",
+      "prompt": "Fetch and summarize this article: https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing\n\nFocus on:\n1. What is the Open Knowledge Format (OKF)?\n2.",
+      "status": "error",
+      "stats": {
+        "total_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached": 0,
+        "duration_ms": 0,
+        "tool_calls": 0,
+        "models": {}
+      },
+      "tool_uses_count": 0,
+      "created_at": "2026-06-27T09:32:57.075Z",
+      "updated_at": "2026-06-27T09:32:57.075Z",
+      "resume_count": 0
+    }
+  ]
+}

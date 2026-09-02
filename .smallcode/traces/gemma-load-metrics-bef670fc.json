@@ -1,0 +1,30 @@
+{
+  "id": "gemma-load-metrics-bef670fc",
+  "model": "gemma4:12b-mlx",
+  "prompt": "List 5 local metrics from this code with formulas.\n\n===== insights.py =====\n\"\"\"Local-model insight helpers: energy, cloud savings, efficiency, session enrich.\n\nUsed by ``GET /analytics`` and session-list enrichment. Never raises on bad input\n\u2014 callers get zeros / None so a malformed session can't break the dashboard.\n\"\"\"\nfrom __future__ import annotations\n\nfrom typing import Any, Dict, Optional, Tuple\n\n\ndef energy_wh(\n    output_tokens: int,\n    *,\n    load_watts: float,\n    tok_per_sec: float,\n) -> float:\n    \"\"\"Compute energy consumed in watt-hours for generating tokens locally.\"\"\"\n    if output_tokens <= 0 or load_watts <= 0 or tok_per_sec <= 0:\n        return 0.0\n    # Wh = (output_tokens / tok_per_sec) * load_watts / 3600\n    gen_seconds = output_tokens / tok_per_sec\n    return (gen_seconds * load_watts) / 3600.0\n\n\ndef gen_seconds(output_tokens: int, tok_per_sec: float) -> float:\n    \"\"\"Wall-clock generation seconds from output tokens and throughput.\"\"\"\n    if output_tokens <= 0 o",
+  "startedAt": "2026-07-12T18:13:58.146221Z",
+  "endedAt": "2026-07-12T18:15:39.161273Z",
+  "durationMs": 16806.232375,
+  "steps": [
+    {
+      "type": "tool_call",
+      "name": "read_file",
+      "args": {
+        "path": "backend/insights.py"
+      },
+      "result": "ok",
+      "durationMs": 2,
+      "timestamp": 1783880038146
+    }
+  ],
+  "tokens": {
+    "prompt": 7150,
+    "completion": 280
+  },
+  "_tt_loadtest": {
+    "label": "metrics",
+    "wall_s": 101.03164386749268,
+    "decode_tps": 16.660486047813556,
+    "total_ms": 101014.070375
+  }
+}
