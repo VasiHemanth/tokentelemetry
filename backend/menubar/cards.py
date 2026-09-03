@@ -51,13 +51,13 @@ CARD_PAD = 9.0
 
 ICON_W = 21.0            # brand mark beside the provider name (fits two letters)
 ICON_H = 14.0
-HEADER_H = 22.0
+HEADER_H = 16.0          # provider name row, drawn INSIDE the card (see below)
+HEADER_GAP = 7.0
 ROW_LABEL_H = 14.0       # "Weekly" and "81% left · 1d 16h" share this line
 BAR_GAP = 4.0
 BAR_H = 5.0
 ROW_GAP = 9.0
 BALANCE_H = 16.0
-FOOTER_H = 22.0
 CARD_GAP = 6.0
 
 CORNER = 7.0
@@ -85,21 +85,24 @@ def row_height(row: Dict[str, Any]) -> float:
 
 
 def card_height(section: Dict[str, Any]) -> float:
-    """Total height of one provider card, including its header."""
+    """Total height of one provider card, header included.
+
+    The header is INSIDE the card. It used to sit above it, drawn straight onto
+    the menu's own background -- which follows the system appearance, not this
+    palette, so on a dark menu every provider name rendered near-black on near-
+    black and disappeared. Keeping every drawn pixel on a surface this module
+    paints itself removes the dependency entirely.
+    """
     rows: Sequence[Dict[str, Any]] = section.get("rows") or ()
     inner = sum(row_height(r) for r in rows)
     if len(rows) > 1:
         inner += ROW_GAP * (len(rows) - 1)
-    return HEADER_H + CARD_PAD + inner + CARD_PAD
-
-
-def footer_height() -> float:
-    return FOOTER_H
+    return CARD_PAD + HEADER_H + HEADER_GAP + inner + CARD_PAD
 
 
 def layout_rows(section: Dict[str, Any]) -> List[Tuple[Dict[str, Any], float]]:
     """Each row paired with its top offset inside the card view (flipped coords)."""
-    y = HEADER_H + CARD_PAD
+    y = CARD_PAD + HEADER_H + HEADER_GAP
     placed: List[Tuple[Dict[str, Any], float]] = []
     for index, row in enumerate(section.get("rows") or ()):
         if index:
@@ -277,23 +280,12 @@ def _draw_card_body(view: Any, section: Dict[str, Any], width: float) -> None:
     inner_w = width - (OUTER_PAD_X * 2)
     total_h = card_height(section)
 
-    # Header sits above the card surface: the provider labels the card rather
-    # than living inside it, which keeps the meters visually grouped.
-    provider_id = section.get("provider_id")
-    name = section.get("provider_name") or section.get("title") or ""
-    _draw_brand_mark(provider_id, name, OUTER_PAD_X, 3.0)
-    text_x = OUTER_PAD_X + ICON_W + 6.0
-    _draw_text(name, text_x, 3.0, 12.0, _color(pal["fg"]), bold=True)
-    plan = section.get("plan")
-    if plan:
-        _draw_text(plan, text_x + _text_width(name, 12.0, True) + 6.0, 4.5, 9.5,
-                   _color(pal["dim"]))
-
-    card_y = HEADER_H
-    card_h = total_h - HEADER_H
+    # The card surface is painted FIRST and spans the whole view, so everything
+    # after this draws onto a colour this module controls rather than onto the
+    # menu's own background.
     _color(pal["panel"]).setFill()
-    _rounded(OUTER_PAD_X, card_y, inner_w, card_h, CORNER).fill()
-    path = _rounded(OUTER_PAD_X, card_y, inner_w, card_h, CORNER)
+    _rounded(OUTER_PAD_X, 0.0, inner_w, total_h, CORNER).fill()
+    path = _rounded(OUTER_PAD_X, 0.0, inner_w, total_h, CORNER)
     _color(pal["border"], pal["border_alpha"]).setStroke()
     path.setLineWidth_(1.0)
     path.stroke()
@@ -301,6 +293,16 @@ def _draw_card_body(view: Any, section: Dict[str, Any], width: float) -> None:
     left = OUTER_PAD_X + CARD_PAD
     right = OUTER_PAD_X + inner_w - CARD_PAD
     content_w = right - left
+
+    provider_id = section.get("provider_id")
+    name = section.get("provider_name") or section.get("title") or ""
+    _draw_brand_mark(provider_id, name, left, CARD_PAD + 1.0)
+    text_x = left + ICON_W + 6.0
+    _draw_text(name, text_x, CARD_PAD, 12.0, _color(pal["fg"]), bold=True)
+    plan = section.get("plan")
+    if plan:
+        _draw_text(plan, text_x + _text_width(name, 12.0, True) + 6.0,
+                   CARD_PAD + 1.5, 9.5, _color(pal["dim"]))
 
     for row, top in layout_rows(section):
         if row.get("type") == "balance":
@@ -338,15 +340,6 @@ def _fill_fraction(row: Dict[str, Any]) -> float:
     return max(0.0, min(1.0, filled / float(len(bar))))
 
 
-def _draw_footer_body(view: Any, spec: Dict[str, Any], width: float) -> None:
-    pal = palette()
-    left = OUTER_PAD_X + CARD_PAD
-    right = width - OUTER_PAD_X - CARD_PAD
-    _draw_text(str(spec.get("version") or ""), left, 5.0, 9.5, _color(pal["dim"]))
-    _draw_text(str(spec.get("next_update") or ""), left, 5.0, 9.5,
-               _color(pal["dim"]), right_edge=right)
-
-
 _CLASSES: Dict[str, Any] = {}
 
 
@@ -373,21 +366,7 @@ def _view_classes():
             except Exception as exc:  # pragma: no cover - drawing is best-effort
                 logger.debug("menubar card draw failed: %s", exc)
 
-    class TTFooterView(NSView):
-        def isFlipped(self):
-            return True
-
-        def drawRect_(self, rect):
-            spec = getattr(self, "_tt_footer", None)
-            if not spec:
-                return
-            try:
-                _draw_footer_body(self, spec, float(self.frame().size.width))
-            except Exception as exc:  # pragma: no cover - drawing is best-effort
-                logger.debug("menubar footer draw failed: %s", exc)
-
     _CLASSES["card"] = TTQuotaCardView
-    _CLASSES["footer"] = TTFooterView
     return _CLASSES
 
 
@@ -413,14 +392,4 @@ def build_card_view(section: Dict[str, Any], width: Optional[float] = None):
     view = cls.alloc().initWithFrame_(
         NSMakeRect(0, 0, width, card_height(section) + CARD_GAP))
     view._tt_section = section
-    return view
-
-
-def build_footer_view(spec: Dict[str, Any], width: Optional[float] = None):
-    """An NSView drawing the version / next-update line under the cards."""
-    from Foundation import NSMakeRect
-    width = current_width() if width is None else width
-    cls = _view_classes()["footer"]
-    view = cls.alloc().initWithFrame_(NSMakeRect(0, 0, width, footer_height()))
-    view._tt_footer = spec
     return view

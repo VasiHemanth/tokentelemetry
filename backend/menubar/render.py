@@ -235,14 +235,15 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
         if kind == "note":
             return rumps.MenuItem(item_spec["text"])
         if kind == "footer":
-            item = rumps.MenuItem("")
-            if _attach_footer_view(item, item_spec):
-                return item
-            # Falls back to text rather than None: None means "separator" to the
-            # loop below, which would silently turn a failed footer into a rule.
+            # Deliberately a PLAIN menu item, not a drawn view. It is the only
+            # element not sitting on a card, so it draws straight onto the menu's
+            # own background -- which follows the system appearance. A fixed grey
+            # is unreadable against one of the two, and the system's dynamic
+            # colours do not resolve reliably outside a real window. Letting
+            # macOS colour an ordinary item removes the guesswork entirely.
             version = item_spec.get("version") or ""
             nxt = item_spec.get("next_update") or ""
-            return rumps.MenuItem(f"{version}   {nxt}".strip())
+            return rumps.MenuItem(f"{version}   ·   {nxt}".strip())
         if kind == "section":
             parent = rumps.MenuItem(item_spec["title"])
             # A drawn card replaces the submenu entirely. If the view cannot be
@@ -291,12 +292,3 @@ def _attach_card_view(item: Any, section: Dict[str, Any]) -> bool:
         logger.debug("menubar card view unavailable (%s); using text rows", exc)
         return False
 
-
-def _attach_footer_view(item: Any, spec: Dict[str, Any]) -> bool:
-    try:
-        from menubar import cards
-        item._menuitem.setView_(cards.build_footer_view(spec))
-        return True
-    except Exception as exc:  # pragma: no cover — view drawing is best-effort
-        logger.debug("menubar footer view unavailable (%s); using text", exc)
-        return False
