@@ -30,6 +30,24 @@ from menubar.presentation import MenuBarPresentation, build_menu_presentation
 APP_NAME = "TokenTelemetry"
 REFRESH_SECONDS = 60.0
 
+
+def _app_version() -> str:
+    """Version from the repo's package.json, or "" when it cannot be read.
+
+    The menu bar ships inside the same package as the CLI, so package.json is
+    the single source of truth. A missing or malformed file yields an empty
+    string and the footer simply shows the app name.
+    """
+    import json
+
+    candidate = Path(__file__).resolve().parent.parent.parent / "package.json"
+    try:
+        with open(candidate, "r", encoding="utf-8") as handle:
+            version = json.load(handle).get("version")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(version) if version else ""
+
 # Headless placeholder for the moment between launch and the first collect.
 _LOADING = build_menu_presentation(None, loading=True)
 
@@ -115,6 +133,9 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
             self._refreshing = False
             self._refresh_queued = False
             self._presentation = _LOADING
+            # Seeded from disk so the sparkline survives a restart instead of
+            # redrawing itself from one sample every time the app relaunches.
+            self._trend = self._record_trend(_LOADING)
             self._rebuild_menu()
             self._request_refresh(force=False)
 
@@ -139,7 +160,12 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 response = None
                 failure = str(error) or type(error).__name__
             presentation = build_menu_presentation(response, failure=failure)
-            self._app_helper.callAfter(lambda p=presentation: self._apply_presentation(p))
+            # Recorded off the main thread, next to the fetch that produced it:
+            # this is the only place a fresh reading exists, and a disk write on
+            # the UI thread would stall the menu for the sake of a sparkline.
+            trend = self._record_trend(presentation)
+            self._app_helper.callAfter(
+                lambda p=presentation, t=trend: self._apply_presentation(p, t))
             with self._refresh_lock:
                 self._refreshing = False
                 queued = self._refresh_queued
@@ -147,14 +173,38 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
             if queued:
                 self._request_refresh(force=True)
 
-        def _apply_presentation(self, presentation: MenuBarPresentation) -> None:
+        def _record_trend(self, presentation: MenuBarPresentation) -> dict:
+            """Append this reading to the rolling store and return every series."""
+            try:
+                from menubar import history
+                samples = history.samples_from_presentation(presentation.rows)
+                if not samples:
+                    return history.load(self._data_dir)
+                return history.record(self._data_dir, samples)
+            except Exception:  # noqa: BLE001 — a sparkline must never break refresh
+                return {}
+
+        def _apply_presentation(self, presentation: MenuBarPresentation,
+                                trend: Optional[dict] = None) -> None:
             self._presentation = presentation
+            if trend is not None:
+                self._trend = trend
             self.title = presentation.title
             self._rebuild_menu()
 
+        def _footer_spec(self) -> dict:
+            # Stated as a cadence, not a live countdown: the menu is rebuilt only
+            # when a refresh lands, so a ticking value would be wrong the moment
+            # the user opened the menu a few seconds later.
+            return {"version": f"{APP_NAME} {_app_version()}",
+                    "next_update": f"Updates every {int(REFRESH_SECONDS)}s"}
+
         def _rebuild_menu(self) -> None:
             self.menu.clear()
-            for item in render.build_rumps_menu(self._presentation, handler=self._on_action):
+            for item in render.build_rumps_menu(
+                self._presentation, handler=self._on_action,
+                trend=getattr(self, "_trend", None), footer=self._footer_spec(),
+            ):
                 self.menu.add(item)
 
         def _on_action(self, kind: str, _sender: Any) -> None:

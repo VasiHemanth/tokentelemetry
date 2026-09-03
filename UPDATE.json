@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "tag": "2026-09-03",
+      "title": "A redesigned menu bar panel",
+      "highlights": [
+        {
+          "title": "Plan limits as real cards, not text rows",
+          "description": "Clicking the menu bar icon now opens a panel with one card per provider: the plan on a badge beside the name, a drawn meter per window, how much is left, and when it resets. Colours match the dashboard, so amber and red mean the same thing in both places, and the panel follows your system light or dark appearance."
+        },
+        {
+          "title": "A trend line for the window you are closest to using up",
+          "description": "Each card charts how that quota has moved over roughly the last hour, sampled from the refresh the menu bar already performs. It is scaled to its own range rather than to 100%, so a window that drifts between 60% and 70% still shows the movement instead of drawing flat."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-02",
       "title": "Desktop app, Settings redesign & keyboard shortcuts",
       "featured": true,

@@ -94,3 +94,84 @@ def test_row_spec_marks_balance_and_consumption():
     assert bar["type"] == "bar" and bar["right"] == "10% left"
     assert bar["severity"] == "crit"
     assert balance["type"] == "balance" and balance["value"] == "$12 used"
+
+
+def _card_presentation():
+    """One provider with two windows, for the card-oriented spec fields."""
+    return build_menu_presentation({
+        "providers": {
+            "claude": {
+                "displayName": "Claude Code", "plan": "Pro",
+                "resources": {
+                    "session": {"kind": "consumption", "unit": "percent", "used": 60, "limit": 100},
+                    "weekly": {"kind": "consumption", "unit": "percent", "used": 20, "limit": 100},
+                },
+            },
+        },
+        "capabilities": {},
+        "errors": [],
+    })
+
+
+def test_sections_carry_the_parts_a_card_needs_without_changing_the_title():
+    """The card sets the plan as its own badge, so it needs the pieces apart.
+
+    `title` stays the single combined string the text renderer has always used.
+    """
+    section = next(s for s in menu_spec(_card_presentation(), launch_checked=False)
+                   if s["type"] == "section")
+
+    assert section["title"] == "Claude Code  Pro"
+    assert section["provider_id"] == "claude"
+    assert section["provider_name"] == "Claude Code"
+    assert section["plan"] == "Pro"
+
+
+def test_the_footer_sits_above_the_action_block():
+    """Placing it here keeps the menu tail (separator, actions, Quit last) intact."""
+    spec = menu_spec(_card_presentation(), launch_checked=False,
+                     footer={"version": "TokenTelemetry 1.0.0",
+                             "next_update": "Updates every 60s"})
+
+    footer_index = next(i for i, item in enumerate(spec) if item["type"] == "footer")
+    first_action = next(i for i, item in enumerate(spec) if item["type"] == "action")
+    assert footer_index < first_action
+    assert spec[footer_index]["version"] == "TokenTelemetry 1.0.0"
+    assert spec[-1]["kind"] == "quit"
+
+
+def test_no_footer_item_when_none_is_supplied():
+    spec = menu_spec(_card_presentation(), launch_checked=False)
+    assert not any(item["type"] == "footer" for item in spec)
+
+
+def test_the_card_charts_the_window_closest_to_its_ceiling():
+    """One sparkline per card, matching the window the menu-bar title reports.
+
+    Choosing per row would draw a chart under every bar; charting a different
+    window than the title would describe two different things at once.
+    """
+    from menubar import history
+
+    trend = {
+        history.series_key("claude", "session"): [10.0, 20.0, 30.0],
+        history.series_key("claude", "weekly"): [1.0, 2.0, 3.0],
+    }
+    section = next(s for s in menu_spec(_card_presentation(), launch_checked=False, trend=trend)
+                   if s["type"] == "section")
+
+    # session is 60% used against weekly's 20%, so session is the headline.
+    assert section["trend"] == [10.0, 20.0, 30.0]
+
+
+def test_a_section_has_no_trend_when_the_store_is_empty_or_too_short():
+    from menubar import history
+
+    plain = next(s for s in menu_spec(_card_presentation(), launch_checked=False)
+                 if s["type"] == "section")
+    assert plain["trend"] is None
+
+    single = {history.series_key("claude", "session"): [42.0]}
+    short = next(s for s in menu_spec(_card_presentation(), launch_checked=False, trend=single)
+                 if s["type"] == "section")
+    assert short["trend"] is None

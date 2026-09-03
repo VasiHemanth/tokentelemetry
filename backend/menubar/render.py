@@ -18,10 +18,13 @@ module stays importable on Linux/Windows.
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Any, Dict, List, Optional
 
 from menubar.presentation import MenuBarPresentation
+
+logger = logging.getLogger("tokentelemetry.menubar.render")
 
 _ACTION_KINDS = {"open", "refresh", "launch", "quit"}
 
@@ -30,7 +33,9 @@ _FILLED = "▰"
 _TRACK = "▱"
 
 
-def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] = None) -> List[Dict[str, Any]]:
+def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] = None,
+              trend: Optional[Dict[str, Any]] = None,
+              footer: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Render a presentation into a headless menu spec.
 
     Each top-level entry is one of:
@@ -52,10 +57,20 @@ def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] 
 
     items: List[Dict[str, Any]] = []
     for section in _sections(presentation.rows):
-        section["rows"] = [row_spec(row) for row in section["rows"]]
+        source_rows = section["rows"]
+        section["rows"] = [row_spec(row) for row in source_rows]
+        # Attach the trend to the section rather than to each row: the card draws
+        # ONE sparkline per provider, from its most significant window, the same
+        # way the reference does. Picking per row would draw a chart per bar.
+        section["trend"] = _section_trend(source_rows, trend)
         items.append(section)
     if presentation.not_supported_count:
         items.append({"type": "note", "text": _not_supported_text(presentation.not_supported_count)})
+    # Sits directly under the cards and ABOVE the action block, which is both
+    # where the reference puts it and what keeps the menu's tail (separator,
+    # actions, Quit last) unchanged for anything that depends on that order.
+    if footer:
+        items.append({"type": "footer", **footer})
     items.append({"type": "separator"})
     items.append(_action("Open dashboard", "open", checked=False))
     items.append(_action("Refresh now", "refresh", checked=False))
@@ -114,11 +129,39 @@ def _sections(rows: Any) -> List[Dict[str, Any]]:
             flush()
             current_id = row.provider_id
             title = row.provider_name + (f"  {row.plan}" if row.plan else "")
-            current_header = {"type": "section", "title": title, "rows": []}
+            # `title` stays the single combined string the text renderer has
+            # always used. The card renderer needs the parts separately so it can
+            # set the plan as its own badge, so both are carried.
+            current_header = {"type": "section", "title": title, "rows": [],
+                              "provider_id": row.provider_id,
+                              "provider_name": row.provider_name,
+                              "plan": row.plan}
             current_rows = []
         current_rows.append(row)
     flush()
     return sections
+
+
+def _section_trend(source_rows: List[Any], trend: Optional[Dict[str, Any]]) -> Optional[List[float]]:
+    """The sparkline series for a provider card, or None when there is none.
+
+    Chooses the window closest to its ceiling, matching the headline the menu
+    bar title already shows, so the chart and the title never describe different
+    windows. Balance rows are skipped: an amount has no percentage to plot.
+    """
+    if not trend:
+        return None
+    from menubar import history
+
+    best_row, best_pct = None, -1.0
+    for row in source_rows:
+        if getattr(row, "is_balance", False) or getattr(row, "pct", None) is None:
+            continue
+        if float(row.pct) > best_pct:
+            best_row, best_pct = row, float(row.pct)
+    if best_row is None:
+        return None
+    return history.trend_for(trend, best_row.provider_id, best_row.resource_id)
 
 
 def _not_supported_text(count: int) -> str:
@@ -187,7 +230,10 @@ def _severity_nscolor(severity: Optional[str]):
 # --- rumps layer --------------------------------------------------------------
 # Imported lazily so this module stays importable on any platform.
 
-def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None, launch_checked: Optional[bool] = None) -> List[Any]:
+def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
+                     launch_checked: Optional[bool] = None,
+                     trend: Optional[Dict[str, Any]] = None,
+                     footer: Optional[Dict[str, Any]] = None) -> List[Any]:
     """Return a list of rumps menu items for a presentation.
 
     Each entry is a ``rumps.MenuItem`` or ``None`` (meaning a separator). Rows
@@ -211,15 +257,31 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None, lau
             return item
         if kind == "note":
             return rumps.MenuItem(item_spec["text"])
+        if kind == "footer":
+            item = rumps.MenuItem("")
+            if _attach_footer_view(item, item_spec):
+                return item
+            # Falls back to text rather than None: None means "separator" to the
+            # loop below, which would silently turn a failed footer into a rule.
+            version = item_spec.get("version") or ""
+            nxt = item_spec.get("next_update") or ""
+            return rumps.MenuItem(f"{version}   {nxt}".strip())
         if kind == "section":
             parent = rumps.MenuItem(item_spec["title"])
+            # A drawn card replaces the submenu entirely. If the view cannot be
+            # built (no PyObjC, a drawing error, a future macOS change), the
+            # original nested text rows are still attached below, so the menu
+            # degrades to exactly what it rendered before rather than to nothing.
+            if _attach_card_view(parent, item_spec):
+                return parent
             for row in item_spec.get("rows", []):
                 parent.add(_row_menu_item(row))
             return parent
         return None
 
     items: List[Any] = []
-    for item_spec in menu_spec(presentation, launch_checked=launch_checked):
+    for item_spec in menu_spec(presentation, launch_checked=launch_checked,
+                               trend=trend, footer=footer):
         built = build(item_spec)
         items.append(rumps.separator if built is None else built)
     return items
@@ -240,3 +302,24 @@ def _try_colorized_title(row: Dict[str, Any]):
         return _colorized_title(row)
     except Exception:  # pragma: no cover — color is best-effort
         return None
+
+
+def _attach_card_view(item: Any, section: Dict[str, Any]) -> bool:
+    """Give a provider item a drawn card view. False means "keep the text rows"."""
+    try:
+        from menubar import cards
+        item._menuitem.setView_(cards.build_card_view(section))
+        return True
+    except Exception as exc:  # pragma: no cover — view drawing is best-effort
+        logger.debug("menubar card view unavailable (%s); using text rows", exc)
+        return False
+
+
+def _attach_footer_view(item: Any, spec: Dict[str, Any]) -> bool:
+    try:
+        from menubar import cards
+        item._menuitem.setView_(cards.build_footer_view(spec))
+        return True
+    except Exception as exc:  # pragma: no cover — view drawing is best-effort
+        logger.debug("menubar footer view unavailable (%s); using text", exc)
+        return False
