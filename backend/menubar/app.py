@@ -31,6 +31,20 @@ APP_NAME = "TokenTelemetry"
 REFRESH_SECONDS = 60.0
 
 
+def menubar_icon_path() -> Optional[str]:
+    """The TokenTelemetry mark for the status item, or None when absent.
+
+    Reuses the desktop app's icon set rather than adding a second copy, so the
+    menu bar and the desktop window can never show different marks. The 16pt@2x
+    slice is the one macOS wants for a status item. Returns None when the file
+    is missing (a partial checkout, a packaged build that trims assets) so the
+    app falls back to its text title instead of failing to launch.
+    """
+    candidate = (Path(__file__).resolve().parent.parent.parent
+                 / "desktop" / "assets" / "icon.iconset" / "icon_16x16@2x.png")
+    return str(candidate) if candidate.is_file() else None
+
+
 def _app_version() -> str:
     """Version from the repo's package.json, or "" when it cannot be read.
 
@@ -125,7 +139,11 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
 
     class MenubarApp(rumps.App):
         def __init__(self, service: Any, data: Path, app_helper: Any) -> None:
-            super().__init__(APP_NAME, title=_LOADING.title, quit_button=None)
+            # template=True renders the mark as a silhouette that macOS tints for
+            # the current menu bar, light or dark, which is how every native
+            # status item behaves. A full-colour icon would look pasted on.
+            super().__init__(APP_NAME, title=_LOADING.title, quit_button=None,
+                             icon=menubar_icon_path(), template=True)
             self._service = service
             self._data_dir = data
             self._app_helper = app_helper
@@ -133,9 +151,6 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
             self._refreshing = False
             self._refresh_queued = False
             self._presentation = _LOADING
-            # Seeded from disk so the sparkline survives a restart instead of
-            # redrawing itself from one sample every time the app relaunches.
-            self._trend = self._record_trend(_LOADING)
             self._rebuild_menu()
             self._request_refresh(force=False)
 
@@ -160,12 +175,7 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 response = None
                 failure = str(error) or type(error).__name__
             presentation = build_menu_presentation(response, failure=failure)
-            # Recorded off the main thread, next to the fetch that produced it:
-            # this is the only place a fresh reading exists, and a disk write on
-            # the UI thread would stall the menu for the sake of a sparkline.
-            trend = self._record_trend(presentation)
-            self._app_helper.callAfter(
-                lambda p=presentation, t=trend: self._apply_presentation(p, t))
+            self._app_helper.callAfter(lambda p=presentation: self._apply_presentation(p))
             with self._refresh_lock:
                 self._refreshing = False
                 queued = self._refresh_queued
@@ -173,22 +183,8 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
             if queued:
                 self._request_refresh(force=True)
 
-        def _record_trend(self, presentation: MenuBarPresentation) -> dict:
-            """Append this reading to the rolling store and return every series."""
-            try:
-                from menubar import history
-                samples = history.samples_from_presentation(presentation.rows)
-                if not samples:
-                    return history.load(self._data_dir)
-                return history.record(self._data_dir, samples)
-            except Exception:  # noqa: BLE001 — a sparkline must never break refresh
-                return {}
-
-        def _apply_presentation(self, presentation: MenuBarPresentation,
-                                trend: Optional[dict] = None) -> None:
+        def _apply_presentation(self, presentation: MenuBarPresentation) -> None:
             self._presentation = presentation
-            if trend is not None:
-                self._trend = trend
             self.title = presentation.title
             self._rebuild_menu()
 
@@ -202,8 +198,7 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         def _rebuild_menu(self) -> None:
             self.menu.clear()
             for item in render.build_rumps_menu(
-                self._presentation, handler=self._on_action,
-                trend=getattr(self, "_trend", None), footer=self._footer_spec(),
+                self._presentation, handler=self._on_action, footer=self._footer_spec(),
             ):
                 self.menu.add(item)
 

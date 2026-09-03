@@ -2,22 +2,29 @@
 
 The text menu (``render._row_menu_item``) can only ever be one line of glyphs
 per row, so a unicode bar is as close to a progress meter as it gets. This
-module draws the real thing: a rounded card per provider, a plan badge, a drawn
-track-and-fill bar per window, and an optional sparkline, in the TokenTelemetry
+module draws the real thing: a compact card per provider, a brand mark, a plan
+badge, and a drawn track-and-fill meter per window, in the TokenTelemetry
 palette.
 
 Two layers, deliberately separated the same way ``render`` splits spec from
 rumps:
 
-* the ``*_height`` / ``layout_*`` functions are pure arithmetic with NO macOS
-  imports, so the sizing that decides whether a card is clipped is unit-testable
-  on any platform;
+* the ``*_height`` / ``layout_*`` / ``panel_width`` functions are pure
+  arithmetic with NO macOS imports, so the sizing that decides whether a card is
+  clipped is unit-testable on any platform;
 * the view classes are built lazily inside functions, so importing this module
   on Linux or Windows never touches Cocoa.
 
 Every view is attached with ``NSMenuItem.setView_``. A view-backed item draws
 its own content and, unlike an attributed title, is not truncated by the menu's
-own text layout -- which is what makes the reference layout possible at all.
+own text layout -- which is what makes this layout possible at all.
+
+LENGTH IS A FEATURE CONSTRAINT. A menu that runs past the bottom of the screen
+is unusable, and a user with six signed-in providers has six cards. Each window
+is therefore TWO lines, not three: the label and its remaining-percentage share
+one line, the meter is the next, and the reset time rides on the first line
+after the percentage. That is roughly half the height of a stacked layout and
+is the single biggest reason the panel fits.
 """
 
 from __future__ import annotations
@@ -28,49 +35,61 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 logger = logging.getLogger("tokentelemetry.menubar.cards")
 
 # --- geometry (pure, no AppKit) ----------------------------------------------
-# Widths and heights are fixed rather than measured. A menu item must report its
-# size BEFORE the menu opens, so anything derived from live text metrics would
-# have to guess anyway; fixed rows keep every card aligned to the same grid.
+# Heights are fixed rather than measured. A menu item must report its size
+# BEFORE the menu opens, so anything derived from live text metrics would be a
+# guess anyway; fixed rows keep every card aligned to the same grid.
 
-WIDTH = 300.0
+# Width adapts to the display (see panel_width). These bound it: narrower than
+# MIN truncates provider names, wider than MAX looks like a window rather than a
+# menu, and neither extreme is worth allowing on an unusual screen.
+MIN_WIDTH = 260.0
+MAX_WIDTH = 360.0
+WIDTH = 300.0  # fallback when no screen can be read
 
-OUTER_PAD_X = 10.0
-CARD_PAD = 10.0
+OUTER_PAD_X = 8.0
+CARD_PAD = 9.0
 
-HEADER_H = 24.0          # provider name + plan badge
-ROW_LABEL_H = 16.0       # "Weekly"
-BAR_H = 6.0
-BAR_GAP = 6.0            # between label and bar, and bar and meta
-ROW_META_H = 15.0        # "81% left" / "Resets in 1d 16h"
-ROW_GAP = 12.0           # between one window and the next
-BALANCE_H = 18.0         # a one-line amount row
-SPARK_H = 26.0
-SPARK_GAP = 8.0
-FOOTER_H = 26.0
+ICON_W = 21.0            # brand mark beside the provider name (fits two letters)
+ICON_H = 14.0
+HEADER_H = 22.0
+ROW_LABEL_H = 14.0       # "Weekly" and "81% left · 1d 16h" share this line
+BAR_GAP = 4.0
+BAR_H = 5.0
+ROW_GAP = 9.0
+BALANCE_H = 16.0
+FOOTER_H = 22.0
+CARD_GAP = 6.0
 
-CORNER = 8.0
-BAR_CORNER = 3.0
+CORNER = 7.0
+BAR_CORNER = 2.5
+ICON_CORNER = 4.0
+
+
+def panel_width(screen_width: Optional[float] = None) -> float:
+    """Panel width for a display, clamped to the readable band.
+
+    Scaled from the screen so the panel is not a postage stamp on a large
+    display nor half the width of a small laptop. ``None`` (no screen readable)
+    falls back to the fixed default rather than raising.
+    """
+    if not screen_width or screen_width <= 0:
+        return WIDTH
+    return max(MIN_WIDTH, min(MAX_WIDTH, round(float(screen_width) * 0.19)))
 
 
 def row_height(row: Dict[str, Any]) -> float:
     """Height of one row inside a card."""
     if row.get("type") == "balance":
         return BALANCE_H
-    return ROW_LABEL_H + BAR_GAP + BAR_H + BAR_GAP + ROW_META_H
+    return ROW_LABEL_H + BAR_GAP + BAR_H
 
 
 def card_height(section: Dict[str, Any]) -> float:
-    """Total height of one provider card, including its header and sparkline.
-
-    Returned to the menu as the item's height, so an error here shows up as a
-    clipped or padded card rather than an exception.
-    """
+    """Total height of one provider card, including its header."""
     rows: Sequence[Dict[str, Any]] = section.get("rows") or ()
     inner = sum(row_height(r) for r in rows)
     if len(rows) > 1:
         inner += ROW_GAP * (len(rows) - 1)
-    if section.get("trend"):
-        inner += SPARK_GAP + SPARK_H
     return HEADER_H + CARD_PAD + inner + CARD_PAD
 
 
@@ -90,55 +109,115 @@ def layout_rows(section: Dict[str, Any]) -> List[Tuple[Dict[str, Any], float]]:
     return placed
 
 
-def spark_top(section: Dict[str, Any]) -> Optional[float]:
-    """Top offset of the sparkline, or None when the card has no trend."""
-    if not section.get("trend"):
-        return None
-    return card_height(section) - CARD_PAD - SPARK_H
+def compact_resets(resets: Optional[str]) -> str:
+    """"Resets in 1d 16h" -> "1d 16h".
 
-
-def spark_bars(values: Sequence[float], count: int = 24) -> List[float]:
-    """Normalize a trend series to ``count`` bars in 0..1.
-
-    Scaled against the series' own max, not against 100, because a window that
-    only ever moves between 60% and 70% would otherwise draw as a flat line and
-    hide exactly the variation the chart exists to show. An all-zero series
-    stays flat rather than dividing by zero.
+    The word "Resets" is repeated on every row of every card, so it costs width
+    on the one line that is already carrying two values. The remaining duration
+    is the part that differs.
     """
-    points = [max(0.0, min(100.0, float(v))) for v in values or ()]
-    if not points:
-        return []
-    if len(points) > count:
-        # Keep the most recent window; the left edge is the oldest sample.
-        points = points[-count:]
-    peak = max(points)
-    if peak <= 0:
-        return [0.0] * len(points)
-    return [p / peak for p in points]
+    if not resets:
+        return ""
+    text = str(resets).strip()
+    for prefix in ("Resets in ", "Resets "):
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
+def meta_text(row: Dict[str, Any]) -> str:
+    """The right-hand value on a window's first line: "81% left · 1d 16h"."""
+    right = str(row.get("right") or "")
+    resets = compact_resets(row.get("resets"))
+    if right and resets:
+        return f"{right} · {resets}"
+    return right or resets
 
 
 # --- palette ------------------------------------------------------------------
-# Mirrors frontend/src/app/globals.css. Menus follow the system appearance, so
-# both themes are carried and chosen at draw time.
+# Mirrors frontend/src/app/globals.css.
 
-_DARK = {
-    "panel": (0x11, 0x14, 0x1A), "sunken": (0x07, 0x09, 0x0D),
-    "border": (0xFF, 0xFF, 0xFF), "border_alpha": 0.10,
-    "fg": (0xE8, 0xEA, 0xF0), "muted": (0x9A, 0xA1, 0xAD), "dim": (0x5F, 0x66, 0x75),
-    "ok": (0x60, 0xA5, 0xFA), "warn": (0xFC, 0xD3, 0x4D), "crit": (0xFD, 0xA4, 0xAF),
-    "badge_bg_alpha": 0.10,
-}
 _LIGHT = {
     "panel": (0xFB, 0xFB, 0xFD), "sunken": (0xE8, 0xEA, 0xF0),
     "border": (0x0F, 0x17, 0x2A), "border_alpha": 0.10,
     "fg": (0x1A, 0x1F, 0x2B), "muted": (0x4B, 0x55, 0x66), "dim": (0x6B, 0x74, 0x88),
     "ok": (0x25, 0x63, 0xEB), "warn": (0xB4, 0x53, 0x09), "crit": (0xBE, 0x12, 0x3C),
-    "badge_bg_alpha": 0.08,
+}
+_DARK = {
+    "panel": (0x11, 0x14, 0x1A), "sunken": (0x07, 0x09, 0x0D),
+    "border": (0xFF, 0xFF, 0xFF), "border_alpha": 0.10,
+    "fg": (0xE8, 0xEA, 0xF0), "muted": (0x9A, 0xA1, 0xAD), "dim": (0x5F, 0x66, 0x75),
+    "ok": (0x60, 0xA5, 0xFA), "warn": (0xFC, 0xD3, 0x4D), "crit": (0xFD, 0xA4, 0xAF),
+}
+
+# The panel is deliberately light in both appearances. macOS menus are a light
+# surface by default and a dark card inside one reads as a foreign element; the
+# dark palette is kept so switching back is a one-line change, not a rewrite.
+FORCE_LIGHT = True
+
+
+def palette(dark: bool = False) -> Dict[str, Any]:
+    if FORCE_LIGHT:
+        return _LIGHT
+    return _DARK if dark else _LIGHT
+
+
+# Brand tints, mirroring frontend/src/lib/agents.ts so a provider is the same
+# colour in the menu as on the dashboard. Only the harnesses that can report a
+# live quota need an entry; anything else falls back to the neutral slate.
+AGENT_HEX = {
+    "claude": (0xF9, 0x73, 0x16), "codex": (0xA8, 0x55, 0xF7),
+    "gemini": (0x06, 0xB6, 0xD4), "antigravity": (0x10, 0xB9, 0x81),
+    "qwen": (0x3B, 0x82, 0xF6), "vibe": (0xF4, 0x72, 0xB6),
+    "cursor": (0x60, 0xA5, 0xFA), "copilot": (0x63, 0x66, 0xF1),
+    "opencode": (0xF5, 0x9E, 0x0B), "hermes": (0xEA, 0xB3, 0x08),
+    "grok": (0x71, 0x71, 0x7A), "cline": (0x7C, 0x3A, 0xED),
+    "smallcode": (0x0D, 0x94, 0x88), "pi": (0x71, 0x71, 0x7A),
+    "muse": (0x25, 0x63, 0xEB), "prime": (0x84, 0xA3, 0x0C),
+    "dsh": (0x4D, 0x6B, 0xFE), "qoder": (0x71, 0x71, 0x7A),
+}
+AGENT_FALLBACK = (0x64, 0x74, 0x8B)
+
+
+def agent_color(provider_id: Optional[str]) -> Tuple[int, int, int]:
+    return AGENT_HEX.get((provider_id or "").lower(), AGENT_FALLBACK)
+
+
+# Curated two-letter marks, because no derivable rule separates these names:
+# Claude/Codex/Cursor/Copilot/Cline all begin with C, and first-two-letters
+# collides Codex with Copilot ("CO"). Every entry here is unique by
+# construction and pinned by a test.
+AGENT_MARK = {
+    "claude": "CC", "codex": "CX", "cursor": "CU", "copilot": "CP",
+    "opencode": "OC", "grok": "GK", "gemini": "GM", "antigravity": "AG",
+    "qwen": "QW", "vibe": "VB", "hermes": "HM", "cline": "CL",
+    "smallcode": "SC", "pi": "PI", "muse": "MU", "prime": "PR",
+    "dsh": "DS", "qoder": "QO",
 }
 
 
-def palette(dark: bool) -> Dict[str, Any]:
-    return _DARK if dark else _LIGHT
+def agent_monogram(provider_id: Optional[str], provider_name: Optional[str]) -> str:
+    """A two-letter mark standing in for the harness logo.
+
+    The dashboard draws real marks from a React icon package that a native
+    NSView cannot use, and copying vendor logo artwork into this repo is a
+    licensing question rather than a drawing one.
+
+    TWO letters, not one, and curated rather than derived: five supported
+    harnesses begin with C, so a single initial identifies nothing, and taking
+    the first two letters makes Codex and Copilot both "CO". An agent added to
+    the backend before this map still gets a readable mark from the fallback.
+    """
+    known = AGENT_MARK.get((provider_id or "").lower())
+    if known:
+        return known
+    source = (provider_name or provider_id or "").strip()
+    if not source:
+        return "?"
+    words = [w for w in source.split() if w]
+    if len(words) >= 2:
+        return (words[0][:1] + words[1][:1]).upper()
+    return words[0][:2].upper()
 
 
 def _color(rgb: Tuple[int, int, int], alpha: float = 1.0):
@@ -151,19 +230,9 @@ def _severity_key(severity: Optional[str]) -> str:
     return severity if severity in ("ok", "warn", "crit") else "ok"
 
 
-def _is_dark(view: Any) -> bool:
-    """Best-effort appearance probe; defaults to dark on any failure."""
-    try:
-        name = view.effectiveAppearance().bestMatchFromAppearancesWithNames_(
-            ["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"])
-        return str(name) == "NSAppearanceNameDarkAqua"
-    except Exception:  # pragma: no cover - appearance API is best-effort
-        return True
-
-
 def _draw_text(text: str, x: float, y: float, size: float, color: Any,
                bold: bool = False, right_edge: Optional[float] = None) -> None:
-    from AppKit import (NSFont, NSFontAttributeName, NSForegroundColorAttributeName)
+    from AppKit import NSFont, NSFontAttributeName, NSForegroundColorAttributeName
     from Foundation import NSAttributedString, NSMakePoint
 
     if not text:
@@ -176,6 +245,15 @@ def _draw_text(text: str, x: float, y: float, size: float, color: Any,
     string.drawAtPoint_(NSMakePoint(x, y))
 
 
+def _text_width(text: str, size: float, bold: bool) -> float:
+    from AppKit import NSFont, NSFontAttributeName
+    from Foundation import NSAttributedString
+    font = NSFont.boldSystemFontOfSize_(size) if bold else NSFont.systemFontOfSize_(size)
+    string = NSAttributedString.alloc().initWithString_attributes_(
+        text, {NSFontAttributeName: font})
+    return float(string.size().width)
+
+
 def _rounded(x: float, y: float, w: float, h: float, radius: float):
     from AppKit import NSBezierPath
     from Foundation import NSMakeRect
@@ -183,29 +261,40 @@ def _rounded(x: float, y: float, w: float, h: float, radius: float):
         NSMakeRect(x, y, max(0.0, w), max(0.0, h)), radius, radius)
 
 
+def _draw_brand_mark(provider_id: Optional[str], provider_name: Optional[str],
+                     x: float, y: float) -> None:
+    tint = agent_color(provider_id)
+    _color(tint, 0.16).setFill()
+    _rounded(x, y, ICON_W, ICON_H, ICON_CORNER).fill()
+    letters = agent_monogram(provider_id, provider_name)
+    width = _text_width(letters, 8.5, True)
+    _draw_text(letters, x + (ICON_W - width) / 2.0, y + 1.5, 8.5, _color(tint), bold=True)
+
+
 def _draw_card_body(view: Any, section: Dict[str, Any], width: float) -> None:
     """Paint one provider card. Flipped coordinates: y grows downward."""
-    pal = palette(_is_dark(view))
+    pal = palette()
     inner_w = width - (OUTER_PAD_X * 2)
     total_h = card_height(section)
 
-    # Header sits ABOVE the card surface, like the reference: the provider name
-    # labels the card rather than living inside it.
+    # Header sits above the card surface: the provider labels the card rather
+    # than living inside it, which keeps the meters visually grouped.
+    provider_id = section.get("provider_id")
     name = section.get("provider_name") or section.get("title") or ""
-    _draw_text(name, OUTER_PAD_X, 3.0, 13.0, _color(pal["fg"]), bold=True)
+    _draw_brand_mark(provider_id, name, OUTER_PAD_X, 3.0)
+    text_x = OUTER_PAD_X + ICON_W + 6.0
+    _draw_text(name, text_x, 3.0, 12.0, _color(pal["fg"]), bold=True)
     plan = section.get("plan")
     if plan:
-        from Foundation import NSAttributedString
-        name_width = _text_width(name, 13.0, True)
-        _draw_text(plan, OUTER_PAD_X + name_width + 7.0, 5.0, 10.5,
-                   _color(pal["muted"]))
+        _draw_text(plan, text_x + _text_width(name, 12.0, True) + 6.0, 4.5, 9.5,
+                   _color(pal["dim"]))
 
     card_y = HEADER_H
     card_h = total_h - HEADER_H
     _color(pal["panel"]).setFill()
     _rounded(OUTER_PAD_X, card_y, inner_w, card_h, CORNER).fill()
-    _color(pal["border"], pal["border_alpha"]).setStroke()
     path = _rounded(OUTER_PAD_X, card_y, inner_w, card_h, CORNER)
+    _color(pal["border"], pal["border_alpha"]).setStroke()
     path.setLineWidth_(1.0)
     path.stroke()
 
@@ -215,13 +304,17 @@ def _draw_card_body(view: Any, section: Dict[str, Any], width: float) -> None:
 
     for row, top in layout_rows(section):
         if row.get("type") == "balance":
-            _draw_text(row.get("label", ""), left, top, 11.5, _color(pal["muted"]))
-            _draw_text(str(row.get("value") or ""), left, top, 11.5,
+            _draw_text(row.get("label", ""), left, top, 10.5, _color(pal["muted"]))
+            _draw_text(str(row.get("value") or ""), left, top, 10.5,
                        _color(pal["fg"]), bold=True, right_edge=right)
             continue
 
+        # Colour codes the meter by how close the window is to its ceiling,
+        # using the dashboard's own thresholds, so amber and red mean the same
+        # thing in both places.
         accent = _color(pal[_severity_key(row.get("severity"))])
-        _draw_text(row.get("label", ""), left, top, 11.5, _color(pal["fg"]), bold=True)
+        _draw_text(row.get("label", ""), left, top, 10.5, _color(pal["fg"]), bold=True)
+        _draw_text(meta_text(row), left, top, 10.0, accent, bold=True, right_edge=right)
 
         bar_y = top + ROW_LABEL_H + BAR_GAP
         _color(pal["sunken"]).setFill()
@@ -230,17 +323,6 @@ def _draw_card_body(view: Any, section: Dict[str, Any], width: float) -> None:
         if filled > 0:
             accent.setFill()
             _rounded(left, bar_y, filled, BAR_H, BAR_CORNER).fill()
-
-        meta_y = bar_y + BAR_H + BAR_GAP
-        _draw_text(str(row.get("right") or ""), left, meta_y, 10.5, accent, bold=True)
-        resets = row.get("resets")
-        if resets:
-            _draw_text(str(resets), left, meta_y, 10.5, _color(pal["dim"]),
-                       right_edge=right)
-
-    top = spark_top(section)
-    if top is not None:
-        _draw_spark(section.get("trend") or (), left, top, content_w, pal)
 
 
 def _fill_fraction(row: Dict[str, Any]) -> float:
@@ -256,40 +338,12 @@ def _fill_fraction(row: Dict[str, Any]) -> float:
     return max(0.0, min(1.0, filled / float(len(bar))))
 
 
-def _draw_spark(values: Sequence[float], x: float, y: float, width: float,
-                pal: Dict[str, Any]) -> None:
-    bars = spark_bars(values)
-    if not bars:
-        return
-    gap = 2.0
-    bar_w = max(1.0, (width - gap * (len(bars) - 1)) / len(bars))
-    accent = _color(pal["ok"], 0.85)
-    track = _color(pal["sunken"])
-    for index, value in enumerate(bars):
-        bx = x + index * (bar_w + gap)
-        track.setFill()
-        _rounded(bx, y, bar_w, SPARK_H, 1.5).fill()
-        h = max(1.5, SPARK_H * value)
-        accent.setFill()
-        # Flipped coordinates: grow the bar upward from the baseline.
-        _rounded(bx, y + (SPARK_H - h), bar_w, h, 1.5).fill()
-
-
-def _text_width(text: str, size: float, bold: bool) -> float:
-    from AppKit import NSFont, NSFontAttributeName
-    from Foundation import NSAttributedString
-    font = NSFont.boldSystemFontOfSize_(size) if bold else NSFont.systemFontOfSize_(size)
-    string = NSAttributedString.alloc().initWithString_attributes_(
-        text, {NSFontAttributeName: font})
-    return float(string.size().width)
-
-
 def _draw_footer_body(view: Any, spec: Dict[str, Any], width: float) -> None:
-    pal = palette(_is_dark(view))
+    pal = palette()
     left = OUTER_PAD_X + CARD_PAD
     right = width - OUTER_PAD_X - CARD_PAD
-    _draw_text(str(spec.get("version") or ""), left, 7.0, 10.0, _color(pal["dim"]))
-    _draw_text(str(spec.get("next_update") or ""), left, 7.0, 10.0,
+    _draw_text(str(spec.get("version") or ""), left, 5.0, 9.5, _color(pal["dim"]))
+    _draw_text(str(spec.get("next_update") or ""), left, 5.0, 9.5,
                _color(pal["dim"]), right_edge=right)
 
 
@@ -337,18 +391,35 @@ def _view_classes():
     return _CLASSES
 
 
-def build_card_view(section: Dict[str, Any], width: float = WIDTH):
+def screen_width() -> Optional[float]:
+    """Width of the main display in points, or None when it cannot be read."""
+    try:
+        from AppKit import NSScreen
+        screen = NSScreen.mainScreen()
+        return float(screen.frame().size.width) if screen else None
+    except Exception:  # pragma: no cover - screen probe is best-effort
+        return None
+
+
+def current_width() -> float:
+    return panel_width(screen_width())
+
+
+def build_card_view(section: Dict[str, Any], width: Optional[float] = None):
     """An NSView drawing one provider card, sized for ``NSMenuItem.setView_``."""
     from Foundation import NSMakeRect
+    width = current_width() if width is None else width
     cls = _view_classes()["card"]
-    view = cls.alloc().initWithFrame_(NSMakeRect(0, 0, width, card_height(section)))
+    view = cls.alloc().initWithFrame_(
+        NSMakeRect(0, 0, width, card_height(section) + CARD_GAP))
     view._tt_section = section
     return view
 
 
-def build_footer_view(spec: Dict[str, Any], width: float = WIDTH):
+def build_footer_view(spec: Dict[str, Any], width: Optional[float] = None):
     """An NSView drawing the version / next-update line under the cards."""
     from Foundation import NSMakeRect
+    width = current_width() if width is None else width
     cls = _view_classes()["footer"]
     view = cls.alloc().initWithFrame_(NSMakeRect(0, 0, width, footer_height()))
     view._tt_footer = spec

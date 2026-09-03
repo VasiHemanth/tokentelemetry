@@ -6,11 +6,15 @@
       "highlights": [
         {
           "title": "Plan limits as real cards, not text rows",
-          "description": "Clicking the menu bar icon now opens a panel with one card per provider: the plan on a badge beside the name, a drawn meter per window, how much is left, and when it resets. Colours match the dashboard, so amber and red mean the same thing in both places, and the panel follows your system light or dark appearance."
+          "description": "Clicking the menu bar icon now opens a panel with one card per provider: a brand mark and the plan beside the name, a drawn meter per window, how much is left, and when it resets. Each window takes two lines rather than three, so a panel with six signed-in providers still fits on screen, and the width scales with your display."
         },
         {
-          "title": "A trend line for the window you are closest to using up",
-          "description": "Each card charts how that quota has moved over roughly the last hour, sampled from the refresh the menu bar already performs. It is scaled to its own range rather than to 100%, so a window that drifts between 60% and 70% still shows the movement instead of drawing flat."
+          "title": "The meter now agrees with the number beside it",
+          "description": "The bar was filled from the amount consumed while the text next to it read \"40% left\", so a mostly-used window drew a mostly-full bar. It now fills by what remains, which also means an exhausted quota draws an empty bar rather than a full one. Colours follow the dashboard's thresholds, so amber and red mean the same thing in both places."
+        },
+        {
+          "title": "The TokenTelemetry mark in the menu bar",
+          "description": "The status item shows the app's own icon, tinted by macOS for a light or dark menu bar, instead of text alone."
         }
       ]
     },

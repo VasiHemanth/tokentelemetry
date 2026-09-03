@@ -149,34 +149,3 @@ def test_no_footer_item_when_none_is_supplied():
     spec = menu_spec(_card_presentation(), launch_checked=False)
     assert not any(item["type"] == "footer" for item in spec)
 
-
-def test_the_card_charts_the_window_closest_to_its_ceiling():
-    """One sparkline per card, matching the window the menu-bar title reports.
-
-    Choosing per row would draw a chart under every bar; charting a different
-    window than the title would describe two different things at once.
-    """
-    from menubar import history
-
-    trend = {
-        history.series_key("claude", "session"): [10.0, 20.0, 30.0],
-        history.series_key("claude", "weekly"): [1.0, 2.0, 3.0],
-    }
-    section = next(s for s in menu_spec(_card_presentation(), launch_checked=False, trend=trend)
-                   if s["type"] == "section")
-
-    # session is 60% used against weekly's 20%, so session is the headline.
-    assert section["trend"] == [10.0, 20.0, 30.0]
-
-
-def test_a_section_has_no_trend_when_the_store_is_empty_or_too_short():
-    from menubar import history
-
-    plain = next(s for s in menu_spec(_card_presentation(), launch_checked=False)
-                 if s["type"] == "section")
-    assert plain["trend"] is None
-
-    single = {history.series_key("claude", "session"): [42.0]}
-    short = next(s for s in menu_spec(_card_presentation(), launch_checked=False, trend=single)
-                 if s["type"] == "section")
-    assert short["trend"] is None

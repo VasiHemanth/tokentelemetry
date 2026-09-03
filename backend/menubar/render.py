@@ -34,7 +34,6 @@ _TRACK = "▱"
 
 
 def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] = None,
-              trend: Optional[Dict[str, Any]] = None,
               footer: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Render a presentation into a headless menu spec.
 
@@ -57,12 +56,7 @@ def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] 
 
     items: List[Dict[str, Any]] = []
     for section in _sections(presentation.rows):
-        source_rows = section["rows"]
-        section["rows"] = [row_spec(row) for row in source_rows]
-        # Attach the trend to the section rather than to each row: the card draws
-        # ONE sparkline per provider, from its most significant window, the same
-        # way the reference does. Picking per row would draw a chart per bar.
-        section["trend"] = _section_trend(source_rows, trend)
+        section["rows"] = [row_spec(row) for row in section["rows"]]
         items.append(section)
     if presentation.not_supported_count:
         items.append({"type": "note", "text": _not_supported_text(presentation.not_supported_count)})
@@ -148,28 +142,6 @@ def _sections(rows: Any) -> List[Dict[str, Any]]:
     return sections
 
 
-def _section_trend(source_rows: List[Any], trend: Optional[Dict[str, Any]]) -> Optional[List[float]]:
-    """The sparkline series for a provider card, or None when there is none.
-
-    Chooses the window closest to its ceiling, matching the headline the menu
-    bar title already shows, so the chart and the title never describe different
-    windows. Balance rows are skipped: an amount has no percentage to plot.
-    """
-    if not trend:
-        return None
-    from menubar import history
-
-    best_row, best_pct = None, -1.0
-    for row in source_rows:
-        if getattr(row, "is_balance", False) or getattr(row, "pct", None) is None:
-            continue
-        if float(row.pct) > best_pct:
-            best_row, best_pct = row, float(row.pct)
-    if best_row is None:
-        return None
-    return history.trend_for(trend, best_row.provider_id, best_row.resource_id)
-
-
 def _not_supported_text(count: int) -> str:
     return "1 agent with no live quota" if count == 1 else f"{count} agents with no live quota"
 
@@ -238,7 +210,6 @@ def _severity_nscolor(severity: Optional[str]):
 
 def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
                      launch_checked: Optional[bool] = None,
-                     trend: Optional[Dict[str, Any]] = None,
                      footer: Optional[Dict[str, Any]] = None) -> List[Any]:
     """Return a list of rumps menu items for a presentation.
 
@@ -287,7 +258,7 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
 
     items: List[Any] = []
     for item_spec in menu_spec(presentation, launch_checked=launch_checked,
-                               trend=trend, footer=footer):
+                               footer=footer):
         built = build(item_spec)
         items.append(rumps.separator if built is None else built)
     return items
