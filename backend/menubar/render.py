@@ -221,6 +221,12 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
     """
     import rumps
 
+    spec_items = menu_spec(presentation, launch_checked=launch_checked, footer=footer)
+    # Computed once, before any card is built: the menu takes the width of its
+    # widest item, so the cards must match the widest PLAIN item or they render
+    # inset with a dead gutter down the right-hand side.
+    card_width = _card_width(spec_items)
+
     def build(item_spec: Dict[str, Any]):
         kind = item_spec.get("type")
         if kind == "separator":
@@ -241,16 +247,14 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
             # is unreadable against one of the two, and the system's dynamic
             # colours do not resolve reliably outside a real window. Letting
             # macOS colour an ordinary item removes the guesswork entirely.
-            version = item_spec.get("version") or ""
-            nxt = item_spec.get("next_update") or ""
-            return rumps.MenuItem(f"{version}   ·   {nxt}".strip())
+            return rumps.MenuItem(_footer_text(item_spec))
         if kind == "section":
             parent = rumps.MenuItem(item_spec["title"])
             # A drawn card replaces the submenu entirely. If the view cannot be
             # built (no PyObjC, a drawing error, a future macOS change), the
             # original nested text rows are still attached below, so the menu
             # degrades to exactly what it rendered before rather than to nothing.
-            if _attach_card_view(parent, item_spec):
+            if _attach_card_view(parent, item_spec, card_width):
                 return parent
             for row in item_spec.get("rows", []):
                 parent.add(_row_menu_item(row))
@@ -258,8 +262,7 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
         return None
 
     items: List[Any] = []
-    for item_spec in menu_spec(presentation, launch_checked=launch_checked,
-                               footer=footer):
+    for item_spec in spec_items:
         built = build(item_spec)
         items.append(rumps.separator if built is None else built)
     return items
@@ -282,11 +285,45 @@ def _try_colorized_title(row: Dict[str, Any]):
         return None
 
 
-def _attach_card_view(item: Any, section: Dict[str, Any]) -> bool:
+def _plain_titles(spec_items: List[Dict[str, Any]]) -> List[str]:
+    """Every title the menu will render as ordinary text, cards excluded.
+
+    These are what an NSMenu measures itself against, so they decide how wide
+    the cards have to be.
+    """
+    titles: List[str] = []
+    for item in spec_items:
+        kind = item.get("type")
+        if kind == "action":
+            titles.append(str(item.get("title") or ""))
+        elif kind == "note":
+            titles.append(str(item.get("text") or ""))
+        elif kind == "footer":
+            titles.append(_footer_text(item))
+    return titles
+
+
+def _footer_text(item_spec: Dict[str, Any]) -> str:
+    version = item_spec.get("version") or ""
+    nxt = item_spec.get("next_update") or ""
+    return f"{version}   ·   {nxt}".strip()
+
+
+def _card_width(spec_items: List[Dict[str, Any]]) -> Optional[float]:
+    try:
+        from menubar import cards
+        return cards.width_for_menu(_plain_titles(spec_items), cards.screen_width())
+    except Exception as exc:  # pragma: no cover — sizing is best-effort
+        logger.debug("menubar card width unavailable (%s); using default", exc)
+        return None
+
+
+def _attach_card_view(item: Any, section: Dict[str, Any],
+                      width: Optional[float] = None) -> bool:
     """Give a provider item a drawn card view. False means "keep the text rows"."""
     try:
         from menubar import cards
-        item._menuitem.setView_(cards.build_card_view(section))
+        item._menuitem.setView_(cards.build_card_view(section, width))
         return True
     except Exception as exc:  # pragma: no cover — view drawing is best-effort
         logger.debug("menubar card view unavailable (%s); using text rows", exc)

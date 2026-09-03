@@ -77,6 +77,34 @@ def panel_width(screen_width: Optional[float] = None) -> float:
     return max(MIN_WIDTH, min(MAX_WIDTH, round(float(screen_width) * 0.19)))
 
 
+# Space an NSMenu puts around a plain item's title: the leading indent where a
+# checkmark would go, plus trailing padding. Measured against the system menu
+# font rather than guessed at from the panel width.
+MENU_ITEM_CHROME = 46.0
+MENU_FONT_SIZE = 13.0
+
+
+def width_for_menu(titles: Sequence[str], screen: Optional[float] = None) -> float:
+    """Card width, wide enough to reach the right edge of the finished menu.
+
+    An NSMenu sizes itself to its WIDEST item. The note, the footer and the
+    action titles are plain text, so if any of them is wider than the cards, the
+    menu grows and every card is left inset with a dead gutter beside it. The
+    cards therefore have to be at least as wide as the widest text item, with
+    :func:`panel_width` acting as a floor rather than the answer.
+
+    Falls back to the floor when text cannot be measured (no AppKit), which is
+    the pre-existing behaviour rather than a failure.
+    """
+    floor = panel_width(screen)
+    try:
+        widest = max((_text_width(t, MENU_FONT_SIZE, False) for t in titles if t),
+                     default=0.0)
+    except Exception:  # pragma: no cover - measurement needs AppKit
+        return floor
+    return max(floor, widest + MENU_ITEM_CHROME)
+
+
 def row_height(row: Dict[str, Any]) -> float:
     """Height of one row inside a card."""
     if row.get("type") == "balance":

@@ -15,8 +15,25 @@ Run: pytest backend/test_menubar_cards.py
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(__file__))
 from menubar import cards  # noqa: E402
+
+
+def _has_appkit() -> bool:
+    try:
+        import AppKit  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+# Everything else in this file is pure arithmetic and runs anywhere. Only text
+# MEASUREMENT needs Cocoa, and without it width_for_menu returns the floor by
+# design, so the comparison below has nothing to compare.
+needs_appkit = pytest.mark.skipif(not _has_appkit(),
+                                  reason="text measurement requires AppKit")
 
 
 def _bar_row(label="Weekly", bar="▰▰▰▰▱▱▱▱▱▱", severity="ok", resets="Resets in 1d 16h"):
@@ -84,6 +101,28 @@ def test_panel_width_scales_with_the_display_and_stays_readable():
 def test_panel_width_falls_back_when_no_screen_can_be_read():
     assert cards.panel_width(None) == cards.WIDTH
     assert cards.panel_width(0) == cards.WIDTH
+
+
+@needs_appkit
+def test_cards_widen_to_reach_the_edge_of_the_widest_text_item():
+    """An NSMenu takes the width of its widest item.
+
+    The footer and the action titles are plain text. If one of them is wider
+    than the cards, the menu grows to fit it and every card renders inset with a
+    dead gutter beside it, which is what the panel did before this. panel_width
+    is a floor, not the answer.
+    """
+    narrow = cards.width_for_menu(["Quit"], 1470.0)
+    assert narrow == cards.panel_width(1470.0)
+
+    wide = cards.width_for_menu(
+        ["Quit", "TokenTelemetry 1.0.0   ·   Updates every 60s"], 1470.0)
+    assert wide > narrow
+
+
+def test_width_falls_back_to_the_floor_when_nothing_can_be_measured():
+    assert cards.width_for_menu([], 1470.0) == cards.panel_width(1470.0)
+    assert cards.width_for_menu(["", None], 1470.0) == cards.panel_width(1470.0)
 
 
 def test_meta_text_joins_the_percentage_and_a_shortened_reset():

@@ -139,10 +139,16 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
 
     class MenubarApp(rumps.App):
         def __init__(self, service: Any, data: Path, app_helper: Any) -> None:
+            # Icon only, no title. The status item used to carry the worst
+            # window's percentage, which is a number the user did not ask the
+            # menu bar to keep showing; the panel behind the icon says it
+            # properly. An icon-only item also stops the bar reflowing every
+            # time the percentage changes width.
+            #
             # template=True renders the mark as a silhouette that macOS tints for
             # the current menu bar, light or dark, which is how every native
             # status item behaves. A full-colour icon would look pasted on.
-            super().__init__(APP_NAME, title=_LOADING.title, quit_button=None,
+            super().__init__(APP_NAME, title=None, quit_button=None,
                              icon=menubar_icon_path(), template=True)
             self._service = service
             self._data_dir = data
@@ -184,8 +190,11 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 self._request_refresh(force=True)
 
         def _apply_presentation(self, presentation: MenuBarPresentation) -> None:
+            # `presentation.title` is deliberately NOT applied: the status item
+            # stays icon-only. The presentation still computes it, and the
+            # headless tests still cover it, so restoring the readout is a
+            # one-line change if it is ever wanted back.
             self._presentation = presentation
-            self.title = presentation.title
             self._rebuild_menu()
 
         def _footer_spec(self) -> dict:
