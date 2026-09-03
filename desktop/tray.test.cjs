@@ -71,11 +71,20 @@ test("a second display's offset is respected", () => {
   assert.ok(bounds.x + bounds.width <= area.x + area.width);
 });
 
-test("the tray icon comes from the 16pt@2x slice", () => {
-  // Larger slices render blurry when the OS scales them down to tray size.
+test("the tray uses the template asset, not the app icon", () => {
+  // The app icon is an opaque rounded square; as a macOS template image only
+  // its alpha survives, so it renders as a featureless square with no mark.
   const found = tray.trayIconPath(path.join(__dirname, "assets"));
   assert.ok(found, "no tray icon asset found");
-  assert.ok(found.endsWith(path.join("icon.iconset", "icon_16x16@2x.png")), found);
+  assert.ok(found.endsWith("tray-icon.png"), found);
+  assert.ok(!found.includes("icon.iconset"), found);
+});
+
+test("the 2x tray asset ships alongside the 1x one", () => {
+  // Electron and rumps both resolve @2x from the 1x filename, so a missing
+  // @2x is a blurry icon on every Retina display.
+  const retina = path.join(__dirname, "assets", "tray-icon@2x.png");
+  assert.ok(require("node:fs").existsSync(retina), `${retina} is missing`);
 });
 
 test("a build with no icon asset reports none rather than an invisible tray", () => {

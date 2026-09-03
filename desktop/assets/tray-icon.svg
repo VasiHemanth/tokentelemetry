@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- TokenTelemetry MENU BAR / TRAY icon, and deliberately not the app icon.
+
+       A macOS status item is drawn as a template image: the system keeps only
+       the ALPHA channel and tints the result for a light or dark menu bar. The
+       app icon (icon.svg) is an opaque blue rounded square with this waveform
+       drawn on top, so its alpha is a filled square. As a template it renders
+       as a featureless rounded rectangle and the mark disappears.
+
+       So the tray asset is the waveform ALONE on transparency, in black. The
+       colour is irrelevant on macOS (only alpha survives) and gives Windows and
+       Linux, which show the artwork as-is, a legible monochrome glyph.
+
+       The stroke is heavier than the app icon's 2.2 because this is rasterised
+       to 16pt, where a hairline reads as a smudge.
+
+       Regenerate the PNGs with:  python3 desktop/assets/make-tray-icon.py -->
+  <path d="M27 16h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L14.24 6.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 9 16H7"
+        fill="none" stroke="#000000" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

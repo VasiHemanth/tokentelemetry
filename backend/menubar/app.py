@@ -34,15 +34,22 @@ REFRESH_SECONDS = 60.0
 def menubar_icon_path() -> Optional[str]:
     """The TokenTelemetry mark for the status item, or None when absent.
 
-    Reuses the desktop app's icon set rather than adding a second copy, so the
-    menu bar and the desktop window can never show different marks. The 16pt@2x
-    slice is the one macOS wants for a status item. Returns None when the file
-    is missing (a partial checkout, a packaged build that trims assets) so the
-    app falls back to its text title instead of failing to launch.
+    Uses the desktop app's TRAY asset, not its app icon. A status item is drawn
+    as a template image: macOS keeps only the alpha channel and tints the
+    result. The app icon is an opaque blue rounded square with the mark on top,
+    so its alpha is a filled square and it renders as a featureless rounded
+    rectangle. `tray-icon.png` is the waveform alone on transparency, which is
+    what a template image needs.
+
+    Returns None when the file is missing (a partial checkout, a packaged build
+    that trims assets) so the app falls back rather than failing to launch.
     """
-    candidate = (Path(__file__).resolve().parent.parent.parent
-                 / "desktop" / "assets" / "icon.iconset" / "icon_16x16@2x.png")
-    return str(candidate) if candidate.is_file() else None
+    assets = Path(__file__).resolve().parent.parent.parent / "desktop" / "assets"
+    for candidate in (assets / "tray-icon.png",
+                      assets / "icon.iconset" / "icon_16x16@2x.png"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def _app_version() -> str:

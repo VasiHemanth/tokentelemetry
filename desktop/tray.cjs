@@ -55,14 +55,29 @@ function popoverBounds(tray, panel, workArea) {
   return { x, y, width, height };
 }
 
-/** The tray icon file, or null when the asset is missing from this build. */
+/**
+ * The tray icon file, or null when no asset ships with this build.
+ *
+ * `tray-icon.png` first, and it is NOT the app icon. A status item is drawn as
+ * a template image: macOS keeps only the alpha channel and tints the result.
+ * The app icon is an opaque blue rounded square with the mark on top, so its
+ * alpha is a filled square and it renders as a featureless rounded rectangle
+ * with no mark visible at all. tray-icon.png is the waveform alone on
+ * transparency, which is what a template image needs.
+ *
+ * Electron picks tray-icon@2x.png automatically from the 1x name, so only the
+ * 1x path is returned here.
+ */
 function trayIconPath(assetsDir) {
-  // 16pt@2x is the slice a tray/status item wants; the larger icons render
-  // blurry when downscaled by the OS.
-  const candidate = path.join(assetsDir, "icon.iconset", "icon_16x16@2x.png");
-  if (fs.existsSync(candidate)) return candidate;
-  const fallback = path.join(assetsDir, "icon.png");
-  return fs.existsSync(fallback) ? fallback : null;
+  const candidates = [
+    path.join(assetsDir, "tray-icon.png"),
+    // Fallbacks keep a tray rather than none if the template asset is missing
+    // from a trimmed build; it will look like a plain square on macOS, but a
+    // square that opens the panel beats an invisible click target.
+    path.join(assetsDir, "icon.iconset", "icon_16x16@2x.png"),
+    path.join(assetsDir, "icon.png"),
+  ];
+  return candidates.find((file) => fs.existsSync(file)) ?? null;
 }
 
 /**
