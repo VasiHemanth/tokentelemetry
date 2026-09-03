@@ -83,7 +83,14 @@ export default function SessionLinksPanel({ sessionId }: { sessionId: string }) 
                 <span style={{ color: "var(--tt-fg-muted)" }}>{outbound ? "to" : "from"}</span>
                 {peerId ? (
                   <Link
-                    href={`/sessions/${peerId}?from=/sessions/${sessionId}`}
+                    // `agent` is REQUIRED: the session detail endpoint declares it
+                    // as a mandatory query param, so a link without it 422s and the
+                    // page hangs on its loading state. Hardcoded to claude because
+                    // only Claude transcripts record peer envelopes, so every peer
+                    // in this graph is a Claude session by construction.
+                    href={`/sessions/${peerId}?agent=claude&from=${encodeURIComponent(
+                      `/sessions/${sessionId}?agent=claude`,
+                    )}`}
                     className="font-medium underline underline-offset-2"
                     style={{ color: "var(--tt-fg)" }}
                   >
