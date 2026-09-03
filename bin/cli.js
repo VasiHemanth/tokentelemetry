@@ -557,7 +557,9 @@ async function start(options) {
   const frontend = spawn(npmCommand, ['run', 'dev', '--', '--hostname', host, '--port', String(frontPort)], {
     cwd: frontendDir,
     stdio: 'inherit',
-    shell: false,
+    // Windows: .cmd files cannot be spawned directly (EINVAL); shell:true routes
+    // through cmd.exe. Local patch 2026-09-04 (upstream bug, see nodejs/node#59210).
+    shell: isWindows,
     detached: !isWindows,
     // The frontend derives its API base from window.location at runtime (see
     // frontend/src/lib/api.ts), so it only needs the API *port* — the host
