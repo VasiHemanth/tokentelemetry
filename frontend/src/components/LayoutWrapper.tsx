@@ -9,8 +9,21 @@ import NotificationToaster from "./notifications/NotificationToaster";
 import TokenGate from "./TokenGate";
 import TelemetryNotice from "./TelemetryNotice";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+
+/**
+ * Routes rendered without any app chrome.
+ *
+ * The tray panel is a popover a few hundred pixels wide: a sidebar, banner and
+ * ambient canvas have no room there and nowhere to navigate to. It keeps
+ * QuotaProvider (its whole content comes from it) and drops the rest, including
+ * the notification poller, which would be pure background cost in a panel that
+ * never shows a notification.
+ */
+const BARE_ROUTES = ["/menubar"];
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
@@ -32,6 +45,14 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     setIsCollapsed(collapsed);
     localStorage.setItem("sidebar-collapsed", String(collapsed));
   };
+
+  if (BARE_ROUTES.some((route) => pathname?.startsWith(route))) {
+    return (
+      <QuotaProvider>
+        <body className="min-h-full overflow-hidden bg-[var(--tt-panel)]">{children}</body>
+      </QuotaProvider>
+    );
+  }
 
   return (
     <NotificationProvider>

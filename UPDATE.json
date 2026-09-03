@@ -14,7 +14,11 @@
         },
         {
           "title": "The TokenTelemetry mark in the menu bar",
-          "description": "The status item shows the app's own icon, tinted by macOS for a light or dark menu bar, instead of text alone."
+          "description": "The status item shows the app's own icon, tinted by macOS for a light or dark menu bar, instead of a percentage readout."
+        },
+        {
+          "title": "A tray panel on macOS, Windows and Linux",
+          "description": "The desktop app now puts a TokenTelemetry icon in the system tray. Clicking it opens the same plan-limits panel the dashboard sidebar shows, with each agent's real logo, so there is one design rather than a separate one per platform. It opens above or below the icon depending on where your tray sits, and closes when you click away."
         }
       ]
     },
