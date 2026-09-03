@@ -242,7 +242,8 @@ def build_graph(projects_dir: Path) -> Dict[str, Any]:
     def node(session_id: str, cwd: Optional[str]) -> Dict[str, Any]:
         entry = nodes.get(session_id)
         if entry is None:
-            entry = {"session": session_id, "cwd": cwd, "sent": 0, "received": 0, "peers": set()}
+            entry = {"session": session_id, "cwd": cwd, "name": None,
+                     "sent": 0, "received": 0, "peers": set()}
             nodes[session_id] = entry
         elif entry["cwd"] is None and cwd:
             entry["cwd"] = cwd
@@ -303,6 +304,13 @@ def build_graph(projects_dir: Path) -> Dict[str, Any]:
 
     edges = []
     for link in by_msg.values():
+        # Only the RECEIVING side records a peer's display name, so a session's
+        # own name is learned from the messages it SENT to others. Recording it
+        # on the node lets the far end be labelled by name even on an edge whose
+        # sender addressed it by raw socket, which is what the transport falls
+        # back to when replying.
+        if link["from_session"] and link["from_name"] and link["from_session"] in nodes:
+            nodes[link["from_session"]]["name"] = link["from_name"]
         link["resolved"] = bool(link["from_session"] and link["to_session"])
         if link["from_session"] and link["to_session"]:
             nodes[link["from_session"]]["peers"].add(link["to_session"])

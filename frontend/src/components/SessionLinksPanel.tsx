@@ -19,6 +19,7 @@ import {
   directionFor,
   peerLabel,
   peerSessionId,
+  nameIndex,
   latencyMs,
 } from "@/lib/sessionLinks";
 
@@ -41,6 +42,10 @@ export default function SessionLinksPanel({ sessionId }: { sessionId: string }) 
   // would be pure waste.
   const { data } = useResource<SessionLinkGraph>("/sessions/links");
   const edges = edgesFor(data, sessionId);
+  // Built from the whole graph, not just this session's edges: a peer's name is
+  // recorded by whoever RECEIVED from it, which may be an exchange this session
+  // was not part of.
+  const names = React.useMemo(() => nameIndex(data), [data]);
 
   if (edges.length === 0) return null;
 
@@ -55,8 +60,8 @@ export default function SessionLinksPanel({ sessionId }: { sessionId: string }) 
           Peer messages
         </h3>
         <span className="text-xs" style={{ color: "var(--tt-fg-dim)" }}>
-          {edges.length} with {new Set(edges.map((e) => peerSessionId(e, sessionId) ?? peerLabel(e, sessionId))).size} session
-          {new Set(edges.map((e) => peerSessionId(e, sessionId) ?? peerLabel(e, sessionId))).size === 1 ? "" : "s"}
+          {edges.length} with {new Set(edges.map((e) => peerSessionId(e, sessionId) ?? peerLabel(e, sessionId, names))).size} session
+          {new Set(edges.map((e) => peerSessionId(e, sessionId) ?? peerLabel(e, sessionId, names))).size === 1 ? "" : "s"}
         </span>
       </div>
 
@@ -82,11 +87,11 @@ export default function SessionLinksPanel({ sessionId }: { sessionId: string }) 
                     className="font-medium underline underline-offset-2"
                     style={{ color: "var(--tt-fg)" }}
                   >
-                    {peerLabel(edge, sessionId)}
+                    {peerLabel(edge, sessionId, names)}
                   </Link>
                 ) : (
                   <span className="font-medium" style={{ color: "var(--tt-fg)" }}>
-                    {peerLabel(edge, sessionId)}
+                    {peerLabel(edge, sessionId, names)}
                   </span>
                 )}
                 {peerId && (

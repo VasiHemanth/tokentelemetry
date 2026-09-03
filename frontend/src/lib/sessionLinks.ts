@@ -34,6 +34,9 @@ export interface SessionLinkEdge {
 export interface SessionLinkNode {
   session: string;
   cwd: string | null;
+  /** Display name, learned from messages this session SENT (only the receiving
+   *  side records a peer's name). Null when it never sent to a session on disk. */
+  name: string | null;
   sent: number;
   received: number;
   peers: string[];
@@ -68,15 +71,32 @@ export function directionFor(edge: SessionLinkEdge, id: string): "sent" | "recei
   return edge.from_session === id ? "sent" : "received";
 }
 
+/** session id -> display name, for labelling an end the edge itself only has an address for. */
+export function nameIndex(graph: SessionLinkGraph | undefined): Record<string, string> {
+  const index: Record<string, string> = {};
+  for (const node of graph?.nodes ?? []) {
+    if (node.name) index[node.session] = node.name;
+  }
+  return index;
+}
+
 /**
  * The other end's label, from `id`'s point of view.
  *
  * Falls back through what each half recorded: the receiver knows the sender's
- * display name, the sender only knows the address it typed. When neither half
- * is present the peer is genuinely unidentified, so say so rather than render
- * an empty cell.
+ * display name, the sender only knows the address it typed. That address is
+ * whatever the model wrote, and when a session replies it is often a raw
+ * "uds:/tmp/cc-socks/<pid>.sock" — accurate but unreadable, so a name learned
+ * from any other edge wins over it. When nothing identifies the peer, say so
+ * rather than render an empty cell.
  */
-export function peerLabel(edge: SessionLinkEdge, id: string): string {
+export function peerLabel(
+  edge: SessionLinkEdge,
+  id: string,
+  names: Record<string, string> = {},
+): string {
+  const peerId = peerSessionId(edge, id);
+  if (peerId && names[peerId]) return names[peerId];
   if (directionFor(edge, id) === "sent") {
     return edge.to_address || edge.to_session || "unknown session";
   }

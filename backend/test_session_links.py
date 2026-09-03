@@ -230,6 +230,40 @@ def test_appending_to_a_transcript_invalidates_the_cache(tmp_path):
     assert graph["edges"][0]["msg_id"] == "msg-2"
 
 
+def test_a_session_name_is_learned_from_what_it_sent(tmp_path):
+    """A reply is often addressed to a raw socket, which is useless as a label.
+
+    Only the RECEIVING side records a peer's display name, so a session's name
+    comes from the messages it sent. Without this the reply edge renders the peer
+    as "uds:/tmp/cc-socks/4878.sock" even though its name is known from the
+    outbound edge.
+    """
+    _write(tmp_path / "proj-a" / f"{SENDER}.jsonl",
+           _send_rows("msg-1", "Peer session [37079d]", "opening", "first", "/w/a")
+           + [_receive_row("msg-2", "peer display name", "reply", "/w/a",
+                           at="2026-09-02T18:00:01.000Z")])
+    reply = _send_rows("msg-2", "uds:/tmp/cc-socks/4878.sock", "reply", "reply", "/w/b",
+                       at="2026-09-02T18:00:00.000Z")
+    for row in reply:  # distinct tool_use id from the file above
+        for block in row["message"]["content"]:
+            block["id" if block.get("type") == "tool_use" else "tool_use_id"] = "toolu_2"
+    _write(tmp_path / "proj-b" / f"{RECEIVER}.jsonl",
+           [_receive_row("msg-1", "sender display name", "first", "/w/b")] + reply)
+
+    graph = session_links.build_graph(tmp_path)
+    names = {n["session"]: n["name"] for n in graph["nodes"]}
+
+    # Each name is recorded by the side that received from it.
+    assert names[SENDER] == "sender display name"
+    assert names[RECEIVER] == "peer display name"
+    # The reply edge still carries the unhelpful raw address it was sent to;
+    # the name lives on the node so the UI can prefer it.
+    reply_edge = next(e for e in graph["edges"] if e["msg_id"] == "msg-2")
+    assert reply_edge["to_address"] == "uds:/tmp/cc-socks/4878.sock"
+    assert reply_edge["to_session"] == SENDER
+    assert reply_edge["resolved"] is True
+
+
 def test_a_directory_with_no_peer_traffic_yields_an_empty_graph(tmp_path):
     _write(tmp_path / "proj-a" / f"{SENDER}.jsonl", [
         {"type": "user", "timestamp": "2026-09-02T10:00:00.000Z", "cwd": "/w/a",
