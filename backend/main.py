@@ -29,6 +29,7 @@ import scan_cache
 import harness_panels
 import codex_goals
 import hermes_telemetry as _ht
+import session_links
 import hashlib
 
 def _aware(dt):
@@ -2968,6 +2969,26 @@ async def get_quotas():
 async def refresh_quotas():
     """Request a fresh provider fetch while retaining last-good snapshots."""
     return await _asyncio.to_thread(_get_quota_service().collect, True)
+
+
+@app.get("/sessions/links")
+async def get_session_links():
+    """Peer messages between local agent sessions — who talked to whom.
+
+    MUST stay declared above `/sessions/{session_id}` (further down this file).
+    FastAPI matches routes in definition order, so moving this below it makes
+    "links" bind as a session id and this endpoint becomes unreachable.
+
+    Sessions on one machine can message each other, and each side records only
+    its own half. Both halves are joined on the delivery receipt's ``msg_id``,
+    the one value they share (see session_links for why name and timestamp are
+    not usable as keys).
+
+    Deliberately NOT part of the session scan: peer traffic is sparse, and
+    folding it in would force a scan_cache.CACHE_VERSION bump that reparses the
+    user's whole history. Runs off its own mtime-keyed cache instead.
+    """
+    return await _asyncio.to_thread(session_links.build_graph, CLAUDE_DIR / "projects")
 
 # @app.get("/local-runtime")
 # async def get_local_runtime():

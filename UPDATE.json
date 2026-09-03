@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-09-03",
+      "title": "See when sessions talk to each other",
+      "highlights": [
+        {
+          "title": "Peer messages between sessions",
+          "description": "Agent sessions running on the same machine can message each other. The session view now shows those exchanges: which session was on the other end, in which direction, how long delivery took, and the first line of what was said. Each side records only its own half, so the two are matched on the delivery receipt and an exchange whose other half is missing says so instead of being dropped."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-02",
       "title": "Desktop app, Settings redesign & keyboard shortcuts",
       "featured": true,
