@@ -50,8 +50,10 @@ def test_menu_spec_groups_windows_under_provider_headers_and_appends_actions():
 
     # Row shape: a consumption window is a bar; an amount is a balance.
     claude = next(s for s in sections if s["title"].startswith("Claude Code"))
+    # The bar fills by what is LEFT, matching the caption beside it: 60% used
+    # leaves 40%, so four of ten cells are filled.
     assert claude["rows"] == [{
-        "type": "bar", "label": "Session", "bar": "▰▰▰▰▰▰▱▱▱▱",
+        "type": "bar", "label": "Session", "bar": "▰▰▰▰▱▱▱▱▱▱",
         "right": "40% left", "resets": None, "severity": "ok",
     }]
 
@@ -92,6 +94,9 @@ def test_row_spec_marks_balance_and_consumption():
     bar = specs["bar"]
     balance = specs["balance"]
     assert bar["type"] == "bar" and bar["right"] == "10% left"
+    # A nearly exhausted window draws a nearly EMPTY bar, so the meter and its
+    # caption say the same thing. An exhausted one would draw empty entirely.
+    assert bar["bar"] == "▰▱▱▱▱▱▱▱▱▱"
     assert bar["severity"] == "crit"
     assert balance["type"] == "balance" and balance["value"] == "$12 used"
 

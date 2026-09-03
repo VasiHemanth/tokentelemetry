@@ -90,7 +90,13 @@ def row_spec(row: Any) -> Dict[str, Any]:
     return {
         "type": "bar",
         "label": row.resource_label,
-        "bar": _unicode_bar(pct),
+        # Filled by what is LEFT, not by what is used, because the caption
+        # rendered beside it says "N% left". Filling by consumption put a
+        # six-tenths bar next to the words "40% left"; as a drawn meter sitting
+        # directly under that caption the contradiction is unmissable. A
+        # exhausted window is now an empty bar, which is also what a "Limit
+        # reached" row should look like.
+        "bar": _unicode_bar(100.0 - pct),
         "right": row.pct_left_text or row.text,
         "resets": row.resets_text,
         "severity": row.severity or "ok",
