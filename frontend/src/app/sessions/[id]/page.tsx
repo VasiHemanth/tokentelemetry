@@ -13,6 +13,7 @@ import SourceBadge from "@/components/SourceBadge";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
+import SessionLinksPanel from "@/components/SessionLinksPanel";
 import { apiFetch, artifactUrl } from "@/lib/api";
 import { formatTokens, formatCost } from "@/lib/format";
 import { timeAgo } from "@/lib/notifications";
@@ -1387,6 +1388,15 @@ export default function SessionDetailPage() {
                   <SummaryPanel key={id} sessionId={id} agent={agent} />
                 </div>
               )}
+             {/* Messages exchanged with other local sessions. Self-hides when this
+                 session has no peer traffic, which is the usual case. Gated on
+                 claude because only Claude transcripts record peer envelopes, so
+                 for any other agent the request could only ever return nothing. */}
+             {agent === "claude" && (
+               <div className="mb-8">
+                 <SessionLinksPanel sessionId={id} />
+               </div>
+             )}
              {/* Hermes session chain (compression / branched continuations) */}
              {agent === "hermes" && sessionInfo && allHermesSessions && (
                <HermesChainBanner current={sessionInfo} all={allHermesSessions} from={fromParam} />
