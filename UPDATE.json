@@ -2,11 +2,27 @@
   "releases": [
     {
       "tag": "2026-09-03",
-      "title": "See when sessions talk to each other",
+      "title": "A redesigned menu bar panel, and sessions that talk to each other",
       "highlights": [
         {
           "title": "Peer messages between sessions",
           "description": "Agent sessions running on the same machine can message each other. The session view now shows those exchanges: which session was on the other end, in which direction, how long delivery took, and the first line of what was said. Each side records only its own half, so the two are matched on the delivery receipt and an exchange whose other half is missing says so instead of being dropped."
+        },
+        {
+          "title": "Plan limits as real cards, not text rows",
+          "description": "Clicking the menu bar icon now opens a panel with one card per provider: a brand mark and the plan beside the name, a drawn meter per window, how much is left, and when it resets. Each window takes two lines rather than three, so a panel with six signed-in providers still fits on screen, and the width scales with your display."
+        },
+        {
+          "title": "The meter now agrees with the number beside it",
+          "description": "The bar was filled from the amount consumed while the text next to it read \"40% left\", so a mostly-used window drew a mostly-full bar. It now fills by what remains, which also means an exhausted quota draws an empty bar rather than a full one. Colours follow the dashboard's thresholds, so amber and red mean the same thing in both places."
+        },
+        {
+          "title": "The TokenTelemetry mark in the menu bar",
+          "description": "The status item shows the app's own icon, tinted by macOS for a light or dark menu bar, instead of a percentage readout."
+        },
+        {
+          "title": "A tray panel on macOS, Windows and Linux",
+          "description": "The desktop app now puts a TokenTelemetry icon in the system tray. Clicking it opens the same plan-limits panel the dashboard sidebar shows, with each agent's real logo, so there is one design rather than a separate one per platform. It opens above or below the icon depending on where your tray sits, and closes when you click away."
         }
       ]
     },

@@ -744,16 +744,32 @@ function desktopEnv(dataDir, env = process.env) {
   return dataDir ? { ...env, TOKENTELEMETRY_DATA_DIR: dataDir } : env;
 }
 
+// Node cannot spawn a .cmd directly with shell:false on Windows — it throws
+// EINVAL (nodejs/node#59210), and electronExecutable() resolves to electron.cmd
+// there. Routing through cmd.exe fixes that, but Node does NOT quote the file or
+// its arguments when shell is true: it simply joins them with spaces. Both of
+// these are absolute paths under the install directory, which routinely contains
+// a space ("C:\Users\dev\My Documents\..."), so they are quoted explicitly here.
+// Quoting on POSIX would make the quotes part of the filename, so it is
+// Windows-only, and the spawn stays shell-free everywhere else.
+function desktopSpawnCommand(electron, scriptPath, platform = process.platform) {
+  if (platform !== 'win32') return { command: electron, args: [scriptPath], shell: false };
+  return { command: `"${electron}"`, args: [`"${scriptPath}"`], shell: true };
+}
+
 function startDesktop(options = {}) {
   checkNode();
   checkDesktopNode();
   ensureBackend();
   ensureFrontend();
   const electron = ensureDesktopElectron();
-  const child = spawn(electron, [path.join(rootDir, 'desktop', 'main.cjs')], {
+  const { command, args, shell } = desktopSpawnCommand(
+    electron, path.join(rootDir, 'desktop', 'main.cjs'));
+  const child = spawn(command, args, {
     cwd: rootDir,
     detached: !isWindows,
     stdio: 'ignore',
+    shell,
     env: desktopEnv(options.dataDir),
   });
   child.unref();
@@ -844,5 +860,6 @@ module.exports = {
   startMenubar,
   electronExecutable,
   desktopEnv,
+  desktopSpawnCommand,
   startDesktop,
 };

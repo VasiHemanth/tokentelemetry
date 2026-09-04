@@ -3,8 +3,10 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const electron = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell } = electron;
 const { isSafeExternalUrl, startDesktopServices, stopDesktopServices, waitForHttp } = require("./runtime.cjs");
+const { createTrayPanel } = require("./tray.cjs");
 
 // Name the app before it's ready so the About panel and app.name read
 // "TokenTelemetry". The macOS menu bar title is set explicitly below (it derives
@@ -69,11 +71,14 @@ const npm = isWindows ? "npm.cmd" : "npm";
 // unpackaged dev run isn't the generic Electron logo.
 const appIcon = path.join(__dirname, "assets", "icon.png");
 let services;
+let mainWindow;
+let trayPanel;
 let quitting = false;
 
 function stopServices() {
   if (quitting) return;
   quitting = true;
+  if (trayPanel) { trayPanel.destroy(); trayPanel = undefined; }
   stopDesktopServices(services);
 }
 
@@ -96,7 +101,19 @@ async function createWindow() {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
+  mainWindow = window;
   await window.loadURL(services.url);
+}
+
+// Surface the dashboard when the tray panel asks for it. The window is only
+// created once, so this re-shows the existing one rather than opening a second.
+function showDashboard(routePath) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const target = `${services.url.replace(/\/$/, "")}${routePath}`;
+  void mainWindow.loadURL(target);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 app.whenReady().then(() => {
@@ -105,11 +122,26 @@ app.whenReady().then(() => {
   if (isMac && app.dock && fs.existsSync(appIcon)) {
     app.dock.setIcon(appIcon);
   }
-  return createWindow();
+  return createWindow().then(() => {
+    // Best-effort: a tray is a convenience, and a desktop environment without
+    // a working tray (some Linux sessions) must not stop the app from running.
+    try {
+      trayPanel = createTrayPanel({
+        electron,
+        assetsDir: path.join(__dirname, "assets"),
+        baseUrl: services.url,
+        preloadPath: path.join(__dirname, "preload.cjs"),
+        onOpenDashboard: showDashboard,
+        platform: process.platform,
+      });
+    } catch (error) {
+      console.warn("TokenTelemetry: tray unavailable —", error instanceof Error ? error.message : error);
+    }
+  });
 }).catch(async (error) => {
   stopServices();
   await dialog.showMessageBox({ type: "error", title: "TokenTelemetry could not start", message: error instanceof Error ? error.message : String(error) });
   app.exit(1);
 });
 app.on("before-quit", stopServices);
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => { if (!trayPanel) app.quit(); });

@@ -18,10 +18,13 @@ module stays importable on Linux/Windows.
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Any, Dict, List, Optional
 
 from menubar.presentation import MenuBarPresentation
+
+logger = logging.getLogger("tokentelemetry.menubar.render")
 
 _ACTION_KINDS = {"open", "refresh", "launch", "quit"}
 
@@ -30,7 +33,8 @@ _FILLED = "▰"
 _TRACK = "▱"
 
 
-def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] = None) -> List[Dict[str, Any]]:
+def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] = None,
+              footer: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Render a presentation into a headless menu spec.
 
     Each top-level entry is one of:
@@ -56,6 +60,11 @@ def menu_spec(presentation: MenuBarPresentation, launch_checked: Optional[bool] 
         items.append(section)
     if presentation.not_supported_count:
         items.append({"type": "note", "text": _not_supported_text(presentation.not_supported_count)})
+    # Sits directly under the cards and ABOVE the action block, which is both
+    # where the reference puts it and what keeps the menu's tail (separator,
+    # actions, Quit last) unchanged for anything that depends on that order.
+    if footer:
+        items.append({"type": "footer", **footer})
     items.append({"type": "separator"})
     items.append(_action("Open dashboard", "open", checked=False))
     items.append(_action("Refresh now", "refresh", checked=False))
@@ -75,7 +84,13 @@ def row_spec(row: Any) -> Dict[str, Any]:
     return {
         "type": "bar",
         "label": row.resource_label,
-        "bar": _unicode_bar(pct),
+        # Filled by what is LEFT, not by what is used, because the caption
+        # rendered beside it says "N% left". Filling by consumption put a
+        # six-tenths bar next to the words "40% left"; as a drawn meter sitting
+        # directly under that caption the contradiction is unmissable. A
+        # exhausted window is now an empty bar, which is also what a "Limit
+        # reached" row should look like.
+        "bar": _unicode_bar(100.0 - pct),
         "right": row.pct_left_text or row.text,
         "resets": row.resets_text,
         "severity": row.severity or "ok",
@@ -114,7 +129,13 @@ def _sections(rows: Any) -> List[Dict[str, Any]]:
             flush()
             current_id = row.provider_id
             title = row.provider_name + (f"  {row.plan}" if row.plan else "")
-            current_header = {"type": "section", "title": title, "rows": []}
+            # `title` stays the single combined string the text renderer has
+            # always used. The card renderer needs the parts separately so it can
+            # set the plan as its own badge, so both are carried.
+            current_header = {"type": "section", "title": title, "rows": [],
+                              "provider_id": row.provider_id,
+                              "provider_name": row.provider_name,
+                              "plan": row.plan}
             current_rows = []
         current_rows.append(row)
     flush()
@@ -187,7 +208,9 @@ def _severity_nscolor(severity: Optional[str]):
 # --- rumps layer --------------------------------------------------------------
 # Imported lazily so this module stays importable on any platform.
 
-def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None, launch_checked: Optional[bool] = None) -> List[Any]:
+def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None,
+                     launch_checked: Optional[bool] = None,
+                     footer: Optional[Dict[str, Any]] = None) -> List[Any]:
     """Return a list of rumps menu items for a presentation.
 
     Each entry is a ``rumps.MenuItem`` or ``None`` (meaning a separator). Rows
@@ -197,6 +220,12 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None, lau
     :func:`rumps.quit_application`.
     """
     import rumps
+
+    spec_items = menu_spec(presentation, launch_checked=launch_checked, footer=footer)
+    # Computed once, before any card is built: the menu takes the width of its
+    # widest item, so the cards must match the widest PLAIN item or they render
+    # inset with a dead gutter down the right-hand side.
+    card_width = _card_width(spec_items)
 
     def build(item_spec: Dict[str, Any]):
         kind = item_spec.get("type")
@@ -211,15 +240,29 @@ def build_rumps_menu(presentation: MenuBarPresentation, handler: Any = None, lau
             return item
         if kind == "note":
             return rumps.MenuItem(item_spec["text"])
+        if kind == "footer":
+            # Deliberately a PLAIN menu item, not a drawn view. It is the only
+            # element not sitting on a card, so it draws straight onto the menu's
+            # own background -- which follows the system appearance. A fixed grey
+            # is unreadable against one of the two, and the system's dynamic
+            # colours do not resolve reliably outside a real window. Letting
+            # macOS colour an ordinary item removes the guesswork entirely.
+            return rumps.MenuItem(_footer_text(item_spec))
         if kind == "section":
             parent = rumps.MenuItem(item_spec["title"])
+            # A drawn card replaces the submenu entirely. If the view cannot be
+            # built (no PyObjC, a drawing error, a future macOS change), the
+            # original nested text rows are still attached below, so the menu
+            # degrades to exactly what it rendered before rather than to nothing.
+            if _attach_card_view(parent, item_spec, card_width):
+                return parent
             for row in item_spec.get("rows", []):
                 parent.add(_row_menu_item(row))
             return parent
         return None
 
     items: List[Any] = []
-    for item_spec in menu_spec(presentation, launch_checked=launch_checked):
+    for item_spec in spec_items:
         built = build(item_spec)
         items.append(rumps.separator if built is None else built)
     return items
@@ -240,3 +283,49 @@ def _try_colorized_title(row: Dict[str, Any]):
         return _colorized_title(row)
     except Exception:  # pragma: no cover — color is best-effort
         return None
+
+
+def _plain_titles(spec_items: List[Dict[str, Any]]) -> List[str]:
+    """Every title the menu will render as ordinary text, cards excluded.
+
+    These are what an NSMenu measures itself against, so they decide how wide
+    the cards have to be.
+    """
+    titles: List[str] = []
+    for item in spec_items:
+        kind = item.get("type")
+        if kind == "action":
+            titles.append(str(item.get("title") or ""))
+        elif kind == "note":
+            titles.append(str(item.get("text") or ""))
+        elif kind == "footer":
+            titles.append(_footer_text(item))
+    return titles
+
+
+def _footer_text(item_spec: Dict[str, Any]) -> str:
+    version = item_spec.get("version") or ""
+    nxt = item_spec.get("next_update") or ""
+    return f"{version}   ·   {nxt}".strip()
+
+
+def _card_width(spec_items: List[Dict[str, Any]]) -> Optional[float]:
+    try:
+        from menubar import cards
+        return cards.width_for_menu(_plain_titles(spec_items), cards.screen_width())
+    except Exception as exc:  # pragma: no cover — sizing is best-effort
+        logger.debug("menubar card width unavailable (%s); using default", exc)
+        return None
+
+
+def _attach_card_view(item: Any, section: Dict[str, Any],
+                      width: Optional[float] = None) -> bool:
+    """Give a provider item a drawn card view. False means "keep the text rows"."""
+    try:
+        from menubar import cards
+        item._menuitem.setView_(cards.build_card_view(section, width))
+        return True
+    except Exception as exc:  # pragma: no cover — view drawing is best-effort
+        logger.debug("menubar card view unavailable (%s); using text rows", exc)
+        return False
+

@@ -30,6 +30,45 @@ from menubar.presentation import MenuBarPresentation, build_menu_presentation
 APP_NAME = "TokenTelemetry"
 REFRESH_SECONDS = 60.0
 
+
+def menubar_icon_path() -> Optional[str]:
+    """The TokenTelemetry mark for the status item, or None when absent.
+
+    Uses the desktop app's TRAY asset, not its app icon. A status item is drawn
+    as a template image: macOS keeps only the alpha channel and tints the
+    result. The app icon is an opaque blue rounded square with the mark on top,
+    so its alpha is a filled square and it renders as a featureless rounded
+    rectangle. `tray-icon.png` is the waveform alone on transparency, which is
+    what a template image needs.
+
+    Returns None when the file is missing (a partial checkout, a packaged build
+    that trims assets) so the app falls back rather than failing to launch.
+    """
+    assets = Path(__file__).resolve().parent.parent.parent / "desktop" / "assets"
+    for candidate in (assets / "tray-icon.png",
+                      assets / "icon.iconset" / "icon_16x16@2x.png"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _app_version() -> str:
+    """Version from the repo's package.json, or "" when it cannot be read.
+
+    The menu bar ships inside the same package as the CLI, so package.json is
+    the single source of truth. A missing or malformed file yields an empty
+    string and the footer simply shows the app name.
+    """
+    import json
+
+    candidate = Path(__file__).resolve().parent.parent.parent / "package.json"
+    try:
+        with open(candidate, "r", encoding="utf-8") as handle:
+            version = json.load(handle).get("version")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(version) if version else ""
+
 # Headless placeholder for the moment between launch and the first collect.
 _LOADING = build_menu_presentation(None, loading=True)
 
@@ -107,7 +146,17 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
 
     class MenubarApp(rumps.App):
         def __init__(self, service: Any, data: Path, app_helper: Any) -> None:
-            super().__init__(APP_NAME, title=_LOADING.title, quit_button=None)
+            # Icon only, no title. The status item used to carry the worst
+            # window's percentage, which is a number the user did not ask the
+            # menu bar to keep showing; the panel behind the icon says it
+            # properly. An icon-only item also stops the bar reflowing every
+            # time the percentage changes width.
+            #
+            # template=True renders the mark as a silhouette that macOS tints for
+            # the current menu bar, light or dark, which is how every native
+            # status item behaves. A full-colour icon would look pasted on.
+            super().__init__(APP_NAME, title=None, quit_button=None,
+                             icon=menubar_icon_path(), template=True)
             self._service = service
             self._data_dir = data
             self._app_helper = app_helper
@@ -148,13 +197,25 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 self._request_refresh(force=True)
 
         def _apply_presentation(self, presentation: MenuBarPresentation) -> None:
+            # `presentation.title` is deliberately NOT applied: the status item
+            # stays icon-only. The presentation still computes it, and the
+            # headless tests still cover it, so restoring the readout is a
+            # one-line change if it is ever wanted back.
             self._presentation = presentation
-            self.title = presentation.title
             self._rebuild_menu()
+
+        def _footer_spec(self) -> dict:
+            # Stated as a cadence, not a live countdown: the menu is rebuilt only
+            # when a refresh lands, so a ticking value would be wrong the moment
+            # the user opened the menu a few seconds later.
+            return {"version": f"{APP_NAME} {_app_version()}",
+                    "next_update": f"Updates every {int(REFRESH_SECONDS)}s"}
 
         def _rebuild_menu(self) -> None:
             self.menu.clear()
-            for item in render.build_rumps_menu(self._presentation, handler=self._on_action):
+            for item in render.build_rumps_menu(
+                self._presentation, handler=self._on_action, footer=self._footer_spec(),
+            ):
                 self.menu.add(item)
 
         def _on_action(self, kind: str, _sender: Any) -> None:
