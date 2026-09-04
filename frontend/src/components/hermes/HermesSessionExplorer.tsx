@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useResource } from "@/lib/api";
+import { useScrollState } from "@/lib/useScrollState";
 import {
   buildHermesSessionsPath, formatHermesProject, type HermesSessionPage,
   type HermesSessionQuery, type HermesSessionSort,
@@ -35,7 +36,12 @@ function readQuery(searchParams: { get(name: string): string | null }): HermesSe
   const sort: HermesSessionSort = rawSort === "oldest" || rawSort === "cost" || rawSort === "tokens"
     ? rawSort
     : "newest";
+  const rawLimit = Number(searchParams.get("limit"));
+  const pageSize = Number.isInteger(rawLimit) && rawLimit >= PAGE_SIZE && rawLimit <= MAX_ROWS
+    ? rawLimit
+    : PAGE_SIZE;
   return {
+    pageSize,
     search: searchParams.get("search") || "",
     project: searchParams.get("project") || "",
     source: searchParams.get("source") || "",
@@ -49,6 +55,7 @@ export default function HermesSessionExplorer() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const query = useMemo(() => readQuery(searchParams), [searchParams]);
+  const rowLimit = query.pageSize ?? PAGE_SIZE;
   const [searchInput, setSearchInput] = useState(query.search || "");
 
   useEffect(() => {
@@ -78,7 +85,6 @@ export default function HermesSessionExplorer() {
   // How many rows to ask for. "Load more" grows this rather than walking pages,
   // so one request always returns the whole visible list and there is no page
   // number to fall out of sync with the results.
-  const [rowLimit, setRowLimit] = useState(PAGE_SIZE);
 
   const path = useMemo(
     () => buildHermesSessionsPath({ ...query, page: 1, pageSize: rowLimit }),
@@ -88,6 +94,9 @@ export default function HermesSessionExplorer() {
     pollMs: 15_000,
     initial: { sessions: [], pagination: { page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 } },
   });
+
+  // Restore scroll position when data fetch is complete.
+  useScrollState("key_hermes_sessions_page", !loading);
 
   const activeFilterCount = [query.project, query.source, query.model, query.search].filter(Boolean).length;
 
@@ -100,11 +109,17 @@ export default function HermesSessionExplorer() {
     // Left over from the old paginated view; harmless in the URL but misleading.
     next.delete("page");
     // Any filter change re-scopes the list, so start from one screenful again.
-    setRowLimit(PAGE_SIZE);
+    next.delete("limit");
     const nextQuery = next.toString();
     // Clearing writes an empty string, so a cleared list stays cleared.
     sessionStorage.setItem(FILTER_MEMORY_KEY, nextQuery);
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  }
+
+  function loadMore() {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("limit", String(Math.min(MAX_ROWS, rowLimit + PAGE_SIZE)));
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }
 
   function clearFilters() {
@@ -196,7 +211,7 @@ export default function HermesSessionExplorer() {
                 variant="ghost"
                 size="sm"
                 disabled={loadingMore}
-                onClick={() => setRowLimit((limit) => Math.min(MAX_ROWS, limit + PAGE_SIZE))}
+                onClick={loadMore}
               >
                 {loadingMore ? "Loading…" : <>Load more <ChevronDown size={14} /></>}
               </Button>
