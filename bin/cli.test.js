@@ -208,3 +208,26 @@ test('install.sh selects the rc file locally instead of calling path-hint', () =
   assert.ok(script.includes('~/.zshrc') && script.includes('~/.bashrc'),
     'install.sh should still tell the user which rc file to edit');
 });
+
+
+test('the Electron spawn quotes its paths when it goes through cmd.exe', () => {
+  // electronExecutable() resolves to electron.cmd on Windows, and Node throws
+  // EINVAL spawning a .cmd with shell:false (nodejs/node#59210). Going through
+  // cmd.exe fixes that, but Node does NOT quote the file or its arguments when
+  // shell is true — it joins them with spaces — and both of these are absolute
+  // paths under an install directory that routinely contains one.
+  const electron = 'C:\\Users\\dev\\My Documents\\tt\\node_modules\\.bin\\electron.cmd';
+  const script = 'C:\\Users\\dev\\My Documents\\tt\\desktop\\main.cjs';
+
+  const win = cli.desktopSpawnCommand(electron, script, 'win32');
+  assert.equal(win.shell, true);
+  assert.equal(win.command, `"${electron}"`);
+  assert.deepEqual(win.args, [`"${script}"`]);
+
+  // Quoting on POSIX would make the quotes part of the filename, so the path is
+  // passed through untouched and no shell is involved.
+  const posix = cli.desktopSpawnCommand('/repo/node_modules/.bin/electron', '/repo/desktop/main.cjs', 'darwin');
+  assert.equal(posix.shell, false);
+  assert.equal(posix.command, '/repo/node_modules/.bin/electron');
+  assert.deepEqual(posix.args, ['/repo/desktop/main.cjs']);
+});

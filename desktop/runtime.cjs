@@ -67,15 +67,24 @@ function desktopEnvironment(baseEnvironment, backendDir, dataDir, apiPort) {
   };
 }
 
-async function startDesktopServices({ spawn, python, npm, backendDir, frontendDir, env, dataDir }) {
+async function startDesktopServices({ spawn, python, npm, backendDir, frontendDir, env, dataDir,
+                                     platform = process.platform }) {
   const [apiPort, frontendPort] = await Promise.all([findAvailablePort(), findAvailablePort()]);
   const childEnv = desktopEnvironment(env, backendDir, dataDir, apiPort);
-  const detached = process.platform !== "win32";
+  const isWindows = platform === "win32";
+  const detached = !isWindows;
   const backend = spawn(python, ["main.py", "--host", LOCAL_HOST, "--port", String(apiPort)], {
     cwd: backendDir, detached, env: childEnv, stdio: "inherit",
   });
+  // `npm` is "npm.cmd" on Windows, and Node cannot spawn a .cmd with
+  // shell:false there — it throws EINVAL (nodejs/node#59210), so the desktop
+  // app never started. Routing through cmd.exe fixes it; the command is a bare
+  // name and none of these arguments can contain a space, so nothing needs
+  // quoting (unlike the absolute paths in the CLI's Electron spawn). POSIX
+  // keeps shell:false, where the behaviour is unchanged.
   const frontend = spawn(npm, ["run", "dev", "--", "--hostname", LOCAL_HOST, "--port", String(frontendPort)], {
-    cwd: frontendDir, detached, env: { ...childEnv, PORT: String(frontendPort) }, shell: false, stdio: "inherit",
+    cwd: frontendDir, detached, env: { ...childEnv, PORT: String(frontendPort) },
+    shell: isWindows, stdio: "inherit",
   });
   return { apiPort, frontendPort, backend, frontend, url: localUrl(frontendPort) };
 }

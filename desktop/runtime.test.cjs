@@ -50,3 +50,31 @@ test("desktop shutdown signals detached process groups on POSIX", () => {
   runtime.stopDesktopServices({ backend: { pid: 12 }, frontend: { pid: 34 } }, "darwin", (pid, signal) => targets.push([pid, signal]));
   assert.deepEqual(targets, [[-12, "SIGTERM"], [-34, "SIGTERM"]]);
 });
+
+
+test("the desktop frontend spawns through cmd.exe on Windows only", () => {
+  // `npm` is "npm.cmd" there, and Node throws EINVAL spawning a .cmd with
+  // shell:false (nodejs/node#59210), so the desktop app never started.
+  const calls = [];
+  const spawn = (file, args, opts) => { calls.push({ file, args, opts }); return { pid: 1 }; };
+  const base = {
+    spawn, python: "/repo/backend/venv/bin/python3", npm: "npm.cmd",
+    backendDir: "/repo/backend", frontendDir: "/repo/frontend", env: {},
+  };
+
+  return runtime.startDesktopServices({ ...base, platform: "win32" }).then(() => {
+    const frontend = calls[calls.length - 1];
+    assert.equal(frontend.opts.shell, true);
+    // Detached process groups are a POSIX concept; Windows must not use them.
+    assert.equal(frontend.opts.detached, false);
+    // Nothing here can contain a space, so no argument needs quoting.
+    assert.ok(frontend.args.every((a) => !a.includes(" ")), frontend.args.join("|"));
+
+    calls.length = 0;
+    return runtime.startDesktopServices({ ...base, npm: "npm", platform: "darwin" });
+  }).then(() => {
+    const frontend = calls[calls.length - 1];
+    assert.equal(frontend.opts.shell, false);
+    assert.equal(frontend.opts.detached, true);
+  });
+});
