@@ -20,12 +20,12 @@ The first argument is a command only when it matches a known verb; anything else
 | Command | Description |
 | --- | --- |
 | `dashboard` | Start the dashboard. The default when no command is given. |
-| `menubar` | Start the menu bar app. macOS only. |
+| `menubar` | Start the menu bar / system tray panel. |
 | `desktop` | Launch the [desktop app](/docs/features/desktop). |
 | `status` | Dashboard status. Not implemented yet. |
 | `stop` | Stop the dashboard. Not implemented yet. |
 
-> **`menubar` off macOS:** prints `The tokentelemetry menu bar is macOS-only.` and exits non-zero. It never surfaces an `ImportError` about `rumps`.
+> **`menubar` vs `desktop`:** both start the same app. `menubar` runs it tray-only, so you get the panel with no dashboard window and, on macOS, no dock icon. Its "Open dashboard" item creates the window on first use. `desktop` opens the window up front and adds the tray alongside it.
 
 ## CLI flags
 

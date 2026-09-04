@@ -1,6 +1,25 @@
 {
   "releases": [
     {
+      "tag": "2026-09-04",
+      "title": "The menu bar command opens the new panel",
+      "highlights": [
+        {
+          "title": "`tokentelemetry menubar` starts the tray panel",
+          "description": "The command still started the older macOS-only panel, so the redesigned one was reachable only through `tokentelemetry desktop`. It now runs the desktop app tray-only: the same panel, with each agent's real logo, and no dashboard window or dock icon behind it.",
+          "href": "/docs/reference/cli"
+        },
+        {
+          "title": "The menu bar works on Windows and Linux",
+          "description": "`menubar` used to refuse to run anywhere but macOS, because the panel was built on a macOS-only Python UI toolkit. The tray version runs wherever the desktop app does, and opens above or below the icon depending on where your tray sits."
+        },
+        {
+          "title": "Open dashboard works from a tray-only start",
+          "description": "With no window running, the panel's \"Open dashboard\" button creates one on first use rather than doing nothing."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-03",
       "title": "A redesigned menu bar panel, and sessions that talk to each other",
       "highlights": [

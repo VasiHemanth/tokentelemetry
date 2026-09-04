@@ -70,6 +70,9 @@ const npm = isWindows ? "npm.cmd" : "npm";
 // macOS uses the bundle's .icns once packaged, and `app.dock.setIcon` so an
 // unpackaged dev run isn't the generic Electron logo.
 const appIcon = path.join(__dirname, "assets", "icon.png");
+// `tokentelemetry menubar` sets this: start the tray panel and nothing else.
+// `tokentelemetry desktop` leaves it unset and gets the dashboard window too.
+const trayOnly = process.env.TT_TRAY_ONLY === "1";
 let services;
 let mainWindow;
 let trayPanel;
@@ -82,9 +85,15 @@ function stopServices() {
   stopDesktopServices(services);
 }
 
-async function createWindow() {
+// The backend and frontend that both the panel and the dashboard read from.
+// Split out of createWindow() because `tokentelemetry menubar` needs the
+// services without a window: the tray panel loads /menubar from this origin.
+async function startServices() {
   services = await startDesktopServices({ spawn, python, npm, backendDir, frontendDir, env: process.env, dataDir: process.env.TOKENTELEMETRY_DATA_DIR });
   if (!await waitForHttp(services.url)) throw new Error("The local TokenTelemetry dashboard did not start in time.");
+}
+
+async function createWindow(routePath = "") {
   const window = new BrowserWindow({
     width: 1440, height: 920, minWidth: 960, minHeight: 640, show: false, title: "TokenTelemetry",
     // Keep the OS-native title bar (draggable everywhere, all content clickable
@@ -102,41 +111,72 @@ async function createWindow() {
     return { action: "deny" };
   });
   mainWindow = window;
-  await window.loadURL(services.url);
+  await window.loadURL(dashboardUrl(routePath));
+  return window;
 }
 
-// Surface the dashboard when the tray panel asks for it. The window is only
-// created once, so this re-shows the existing one rather than opening a second.
+function dashboardUrl(routePath = "") {
+  return `${services.url.replace(/\/$/, "")}${routePath}`;
+}
+
+// Surface the dashboard when the tray panel asks for it. Started tray-only
+// there is no window yet, so the first "Open dashboard" is what creates one.
+// Early-returning instead would leave the panel's own button doing nothing.
 function showDashboard(routePath) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const target = `${services.url.replace(/\/$/, "")}${routePath}`;
-  void mainWindow.loadURL(target);
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    void createWindow(routePath).catch((error) => {
+      console.warn("TokenTelemetry: could not open the dashboard —", error instanceof Error ? error.message : error);
+    });
+    return;
+  }
+  void mainWindow.loadURL(dashboardUrl(routePath));
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
 }
 
+function startTray() {
+  trayPanel = createTrayPanel({
+    electron,
+    assetsDir: path.join(__dirname, "assets"),
+    baseUrl: services.url,
+    preloadPath: path.join(__dirname, "preload.cjs"),
+    onOpenDashboard: showDashboard,
+    platform: process.platform,
+  });
+}
+
 app.whenReady().then(() => {
   buildApplicationMenu();
   // macOS dock icon for an unpackaged (dev) run; packaged apps get the .icns.
-  if (isMac && app.dock && fs.existsSync(appIcon)) {
+  // Tray-only hides the dock entirely, so the icon is only worth setting when
+  // a dashboard window is part of this run.
+  if (isMac && app.dock && !trayOnly && fs.existsSync(appIcon)) {
     app.dock.setIcon(appIcon);
   }
-  return createWindow().then(() => {
+  return startServices().then(() => {
+    if (!trayOnly) return createWindow();
+    // `tokentelemetry menubar`: the panel is the whole app. Hiding the dock is
+    // what makes it a menu bar accessory rather than a windowless app sitting
+    // in the switcher with nothing to switch to.
+    if (isMac && app.dock) app.dock.hide();
+    return undefined;
+  }).then(() => {
     // Best-effort: a tray is a convenience, and a desktop environment without
     // a working tray (some Linux sessions) must not stop the app from running.
     try {
-      trayPanel = createTrayPanel({
-        electron,
-        assetsDir: path.join(__dirname, "assets"),
-        baseUrl: services.url,
-        preloadPath: path.join(__dirname, "preload.cjs"),
-        onOpenDashboard: showDashboard,
-        platform: process.platform,
-      });
+      startTray();
     } catch (error) {
       console.warn("TokenTelemetry: tray unavailable —", error instanceof Error ? error.message : error);
+      // Tray-only has no window to fall back on, so a failed tray would leave
+      // the app running with no way to reach or quit it. Show the dashboard
+      // instead of exiting: the services are already up and the data is there.
+      if (trayOnly) {
+        if (isMac && app.dock) app.dock.show();
+        return createWindow();
+      }
     }
+    return undefined;
   });
 }).catch(async (error) => {
   stopServices();

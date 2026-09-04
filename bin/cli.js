@@ -127,7 +127,7 @@ function printHelp() {
     '',
     'Commands:',
     '  dashboard [options]        Start the dashboard (the default).',
-    '  menubar                    Menu bar app (macOS only).',
+    '  menubar                    Menu bar / system tray panel.',
     '  desktop                    Desktop app.',
     '  status                     Dashboard status (not available yet).',
     '  stop                       Stop the dashboard (not available yet).',
@@ -646,7 +646,7 @@ async function start(options) {
 // them through localhost. 127.0.0.1 remains only a legacy CLI bind default.
 
 function menubarMessage() {
-  return 'The tokentelemetry menu bar is macOS-only.';
+  return 'Starting the TokenTelemetry menu bar…';
 }
 
 function desktopMessage() { return 'Starting TokenTelemetry Desktop…'; }
@@ -659,66 +659,34 @@ function stopMessage() {
   return 'tokentelemetry stop is not implemented yet.';
 }
 
-// --- macOS menu bar ----------------------------------------------------------
-// The menu bar app is a thin rumps wrapper over backend/quotas.py. rumps (and
-// its PyObjC dependencies) is macOS-only, so it lives in a separate
-// requirements-macos.txt and is installed into the existing backend venv only
-// when this command runs on macOS. The app runs detached in the background; its
-// "Open dashboard" item shells back out to this same CLI via absolute paths
-// passed through the environment (never a hard-coded checkout/account path).
+// --- Menu bar / system tray ---------------------------------------------------
+// The menu bar panel is the desktop app started tray-only: same Electron
+// process as `tokentelemetry desktop`, minus the dashboard window. It renders
+// the app's own /menubar page, so the panel and the dashboard's plan-limits
+// section cannot drift, and it works anywhere Electron has a tray rather than
+// on macOS alone. The earlier rumps implementation is still in backend/menubar/
+// but is no longer wired to a command; retiring it is a separate change.
 
-function menubarPythonArgs(backendDirParam = backendDir, dataDir = null) {
-  const args = [path.join(backendDirParam, 'menubar', 'app.py')];
-  if (dataDir) args.push('--data-dir', dataDir);
-  return args;
-}
-
-function menubarEnv(dataDir, cliPath, nodePath, backendDirParam = backendDir, env = process.env) {
+function menubarEnv(dataDir, env = process.env) {
   const base = dataDir ? { ...env, TOKENTELEMETRY_DATA_DIR: dataDir } : env;
-  const existing = env.PYTHONPATH ? [env.PYTHONPATH] : [];
-  return {
-    ...base,
-    PYTHONPATH: [backendDirParam, ...existing].join(path.delimiter),
-    TOKENTELEMETRY_CLI: cliPath,
-    TOKENTELEMETRY_NODE: nodePath,
-  };
-}
-
-function ensureMenubarRumps() {
-  // Install the macOS-only rumps requirement into the venv ensureBackend() just
-  // built, stamped by hash so a second `menubar` run is a no-op. Mirrors
-  // ensureBackend()'s lock/stamp logic, minus the hashes (this file is not
-  // lock-pinned) — rumps is a small, stable dependency and the file is macOS-only.
-  const reqPath = path.join(backendDir, 'requirements-macos.txt');
-  const stampPath = path.join(venvDir, '.requirements-macos.sha');
-  const currentSha = crypto.createHash('sha1').update(fs.readFileSync(reqPath)).digest('hex');
-  let cachedSha = null;
-  try { cachedSha = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
-  if (cachedSha === currentSha) return;
-  const uv = findUv();
-  if (uv) {
-    console.log('→ installing macOS menu bar dependencies (uv)…');
-    if (runSoft(uv, ['pip', 'install', '--quiet', '--python', venvPython, '-r', 'requirements-macos.txt'], { cwd: backendDir }) !== 0) {
-      die('installing the macOS menu bar dependencies with uv failed (see above).\nRe-run with TT_NO_UV=1 to install them with pip instead.');
-    }
-  } else {
-    ensureVenvPip();
-    console.log('→ installing macOS menu bar dependencies…');
-    run(venvPython, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements-macos.txt'], { cwd: backendDir });
-  }
-  try { fs.writeFileSync(stampPath, currentSha); } catch {}
+  // desktop/main.cjs reads this and skips creating the dashboard window.
+  return { ...base, TT_TRAY_ONLY: '1' };
 }
 
 function startMenubar(options = {}) {
   checkNode();
+  checkDesktopNode();
   ensureBackend();
-  ensureMenubarRumps();
-  const cliPath = path.join(__dirname, 'cli.js');
-  const child = spawn(venvPython, menubarPythonArgs(backendDir, options.dataDir), {
-    cwd: backendDir,
+  ensureFrontend();
+  const electron = ensureDesktopElectron();
+  const { command, args, shell } = desktopSpawnCommand(
+    electron, path.join(rootDir, 'desktop', 'main.cjs'));
+  const child = spawn(command, args, {
+    cwd: rootDir,
+    detached: !isWindows,
     stdio: 'ignore',
-    detached: true,
-    env: menubarEnv(options.dataDir, cliPath, process.execPath),
+    shell,
+    env: menubarEnv(options.dataDir),
   });
   child.unref();
   return 0;
@@ -776,11 +744,8 @@ function startDesktop(options = {}) {
   return 0;
 }
 
-function cmdMenubar(options = {}, platform = process.platform) {
-  if (platform !== 'darwin') {
-    console.error(menubarMessage(platform));
-    return 1;
-  }
+function cmdMenubar(options = {}) {
+  console.log(menubarMessage());
   return startMenubar(options);
 }
 
@@ -854,9 +819,7 @@ module.exports = {
   desktopMessage,
   statusMessage,
   stopMessage,
-  menubarPythonArgs,
   menubarEnv,
-  ensureMenubarRumps,
   startMenubar,
   electronExecutable,
   desktopEnv,
