@@ -188,7 +188,7 @@ def _cors_origin_regex() -> str:
         h = h.strip()
         if h:
             hosts.append(re.escape(h))
-    return r"^https?://(" + "|".join(hosts) + r"):\d+$"
+    return r"^https?://(" + "|".join(hosts) + r")(?::\d+)?$"
 
 # --- Remote-access auth gate -------------------------------------------------
 # When TT_AUTH_TOKEN is set (bin/cli.js sets it automatically for a non-loopback
