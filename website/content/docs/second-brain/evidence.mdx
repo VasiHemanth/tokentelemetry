@@ -1,0 +1,83 @@
+---
+title: Evidence
+description: The benchmarks and validation runs behind the token-efficiency claim, including the negative results.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+"Agents answer cheaper from a compiled wiki" is a measurable claim, so we
+measured it before shipping. Everything below ran on real projects with
+headless agent sessions; negative results are listed with the positive ones.
+
+<Callout title="The honest summary">
+Where the wiki covers the question and the agent actually reads it first,
+turns and cost roughly halve. Overall cost across all questions: -18%.
+The bottleneck is adherence (getting agents to consult the wiki), not wiki
+quality. Correctness was equal with and without the wiki.
+</Callout>
+
+## A/B benchmark: wiki vs no wiki
+
+Two arms on identical copies of a real project, 7 realistic questions, 2
+replicates each, 28 headless sessions total. One arm had the compiled wiki
+plus the `AGENTS.md` pointer block; the other had neither.
+
+| Metric | Result |
+|--------|--------|
+| Questions the wiki covers | turns and cost roughly halve |
+| Overall cost, all questions | -18% |
+| Pointer-block adherence | 12/14 sessions consulted the wiki (12/12 when the question didn't name a specific file) |
+| Correctness | equal in both arms |
+
+A question the wiki only partially covered in round 1 (the tracker database)
+flipped to a 3-turn, half-cost answer in round 2 after a page was added, so
+coverage, not luck, drives the effect.
+
+## Routing experiment: what makes agents use the wiki
+
+Before the A/B, a 3-arm experiment (24 sessions) compared ways of getting an
+agent to consult the wiki at all:
+
+| Routing | Wiki consulted | Cost |
+|---------|----------------|------|
+| Pointer block with embedded page map | 8/8 | one third of the turns, half the cost of the plain pointer |
+| Plain pointer block | 5/8 | baseline |
+| Generated routing skill | 0/8 invocations while loaded | no effect |
+
+The negative result mattered: a dedicated skill never fired, so routing moved
+into the pointer block itself. Adherence, not page quality, was and is the
+main lever.
+
+## Staleness validation
+
+The freshness system (content-hash provenance, `status.py` verdicts,
+fallback to source) was designed after a real incident where a forgotten
+ingest produced a stale answer. Before it shipped:
+
+- an 11-agent simulation (6 user personas, 5 adversarial critics) mapped
+  staleness failure modes and produced roughly 66 findings;
+- a 100-case validation set exercised the verdict logic;
+- a 4-role hardening review (red team, tests, integration, docs) ran before
+  merge, alongside the plugin's unit test suite.
+
+The chosen behavior: a stale page never blocks work. The agent falls back to
+reading the source files, answers from code, and queues a refresh note.
+
+## Negative result: memory as images
+
+We also tested a tempting alternative: storing agent memory as rendered
+images, betting that vision tokens undercut text tokens. They do not, on
+Claude today. At densities the model can read inline the ratio is
+break-even (about 1.1x), and at genuinely compressed densities (2.8x) the
+model cannot read the image without crop-and-zoom tooling that costs about
+twice as much as pasting the text. Retrieving 3 records from the dense image
+cost about 8,700 tokens; a grep costs about 90. Full method, test images,
+and deterministic reproduction:
+[image-memory-tokens on GitHub](https://github.com/VasiHemanth/image-memory-tokens).
+
+## How the dashboard will report it
+
+A planned TokenTelemetry panel will show a before/after split of input tokens
+per session, cache-hit ratio, and exploration-tool share at the wiki's
+creation date, as an observed trend. It will never claim causation: if the
+wiki didn't help a project, the numbers will say so.
