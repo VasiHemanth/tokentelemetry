@@ -103,19 +103,14 @@ test('AGENT_HARNESS_NO_OPEN still suppresses the browser launch', () => {
   }
 });
 
-test('menubar is macOS-only off macOS and never mentions rumps', () => {
-  assert.strictEqual(
-    cli.menubarMessage(),
-    'The tokentelemetry menu bar is macOS-only.',
-  );
-  // Off-platform the handler prints exactly one line and exits non-zero.
-  for (const platform of ['linux', 'win32']) {
-    const { result, errLines } = captured(() => cli.cmdMenubar({}, platform));
-    assert.strictEqual(result, 1);
-    assert.strictEqual(errLines.length, 1);
-    assert.strictEqual(errLines[0], 'The tokentelemetry menu bar is macOS-only.');
-    assert.ok(!errLines[0].includes('rumps'));
-  }
+test('the menu bar is no longer macOS-only and never mentions rumps', () => {
+  // It runs the desktop app tray-only now, so it works wherever Electron gives
+  // us a tray. The previous handler rejected linux and win32 outright, because
+  // the panel was a rumps/PyObjC app and those are macOS-only.
+  const message = cli.menubarMessage();
+  assert.strictEqual(message, 'Starting the TokenTelemetry menu bar…');
+  assert.ok(!message.includes('macOS'), message);
+  assert.ok(!message.includes('rumps'), message);
 });
 
 test('desktop helpers resolve a local Electron runtime and preserve its data directory', () => {
@@ -141,28 +136,20 @@ test('status and stop handlers print one line and exit non-zero', () => {
   }
 });
 
-test('menubar argument and environment helpers are absolute and forward --data-dir', () => {
-  assert.deepStrictEqual(cli.menubarPythonArgs('/repo/backend'), [
-    path.join('/repo/backend', 'menubar', 'app.py'),
-  ]);
-  assert.deepStrictEqual(cli.menubarPythonArgs('/repo/backend', '/custom/data'), [
-    path.join('/repo/backend', 'menubar', 'app.py'),
-    '--data-dir',
-    '/custom/data',
-  ]);
-
-  const env = cli.menubarEnv(
-    '/custom/data',
-    '/repo/bin/cli.js',
-    '/usr/local/bin/node',
-    '/repo/backend',
-    { PYTHONPATH: '/existing' },
+test('menubar asks for a tray-only run and otherwise matches desktop', () => {
+  // TT_TRAY_ONLY is the entire difference between the two commands:
+  // desktop/main.cjs reads it and skips creating the dashboard window. Pinning
+  // that here keeps `menubar` from quietly drifting into a second launcher.
+  assert.deepStrictEqual(
+    cli.menubarEnv('/custom/data', { KEEP: 'yes' }),
+    { ...cli.desktopEnv('/custom/data', { KEEP: 'yes' }), TT_TRAY_ONLY: '1' },
   );
-  assert.strictEqual(env.TOKENTELEMETRY_DATA_DIR, '/custom/data');
-  assert.strictEqual(env.TOKENTELEMETRY_CLI, '/repo/bin/cli.js');
-  assert.strictEqual(env.TOKENTELEMETRY_NODE, '/usr/local/bin/node');
-  assert.ok(env.PYTHONPATH.split(path.delimiter).includes('/repo/backend'));
-  assert.ok(env.PYTHONPATH.split(path.delimiter).includes('/existing'));
+
+  // With no --data-dir the app uses its default location, so the variable has
+  // to be absent rather than present and undefined.
+  const plain = cli.menubarEnv(null, { KEEP: 'yes' });
+  assert.strictEqual(plain.TT_TRAY_ONLY, '1');
+  assert.ok(!('TOKENTELEMETRY_DATA_DIR' in plain));
 });
 
 test('main dispatches subcommands without bootstrapping or launching servers', async () => {
