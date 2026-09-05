@@ -8101,6 +8101,21 @@ def _scan_sessions_sync():
     # 9. Hermes Agent (SQLite: sessions / messages, pre-aggregated tokens)
     hermes_dbs = _hermes_dbs_with_profiles()
     hermes_cwd_map = _hermes_cwd_by_session() if hermes_dbs else {}
+    # sessions.model holds ONE model — the last one configured — but Hermes
+    # switches models mid-session (a cheap model for routine turns, a stronger
+    # one for the hard ones). The per-call models live in agent.log, which we
+    # already index here for cwd recovery, so derive the journey from that same
+    # cached index instead of reporting the last model as the only one.
+    hermes_model_journeys: Dict[str, List[str]] = {}
+    if hermes_dbs:
+        try:
+            _h_log_index, _ = _hermes_log_index_all()
+            for _sid, _entry in _h_log_index.items():
+                _journey = _ht.model_journey(_entry.get("api_calls") or [])
+                if _journey:
+                    hermes_model_journeys[_sid] = _journey
+        except Exception:
+            hermes_model_journeys = {}
     hermes_by_id: Dict[str, Dict[str, Any]] = {}
     for db_path, h_profile in hermes_dbs:
         try:
@@ -8246,6 +8261,14 @@ def _scan_sessions_sync():
                         "GROUP BY tool_name",
                         (sid,)).fetchall()}
                     mcp_tools = list(h_tool_counts.keys())
+                    # Distinct models in temporal order. When the log covers this
+                    # session it is authoritative about which models were really
+                    # called — appending the DB's model on top would claim a call
+                    # that never happened. The DB model is the fallback only when
+                    # the log says nothing (lines rotated away).
+                    h_models_used = list(hermes_model_journeys.get(sid) or [])
+                    if not h_models_used and model:
+                        h_models_used = [model]
                     cwd = hermes_cwd_map.get(sid)
                     hermes_by_id[sid] = {
                         "id": sid, "agent": "hermes",
@@ -8253,7 +8276,8 @@ def _scan_sessions_sync():
                         "project_inferred": cwd is not None,
                         "timestamp": ts, "display": display, "tokens": tokens,
                         "mcp_tools": mcp_tools, "has_plan": False, "plans": [],
-                        "model": model, "artifacts": [], "cost": cost,
+                        "model": model, "models_used": h_models_used,
+                        "artifacts": [], "cost": cost,
                         "source_subtype": srow["source"],
                         "cost_anomaly": cost_anomaly,
                         "parent_session_id": srow["parent_session_id"],
@@ -9414,11 +9438,17 @@ async def get_session_detail(session_id: str, agent: str):
                             # Hermes records tool results as role='tool'; surface as a separate
                             # event AND carry the originating call_id so the frontend can pair
                             # tool_call <-> tool_result (used by delegate_task subagent cards).
-                            events.append({"type": "tool_result", "payload": {
+                            # Hermes stores no failure flag, so classify here, once, and stamp
+                            # is_error — the trace UI and the condensed brief then count the
+                            # same thing instead of each grepping the body its own way.
+                            payload = {
                                 "tool": mrow["tool_name"],
                                 "content": content,
                                 "callID": mrow["tool_call_id"],
-                            }, **base})
+                            }
+                            if _summaries.is_tool_error(payload, content):
+                                payload["is_error"] = True
+                            events.append({"type": "tool_result", "payload": payload, **base})
                     return events
                 finally:
                     conn.close()
@@ -11992,7 +12022,37 @@ async def test_openai_compat(cfg: dict = Body(...)):
 @app.get("/sessions/{session_id}/summary")
 async def get_summary(session_id: str):
     cached = _summaries.get_cached(session_id)
-    return {"summary": cached}
+    if not cached:
+        return {"summary": cached}
+    brief = cached.get("brief") or {}
+    if not brief or brief.get("_v") == _summaries.BRIEF_VERSION:
+        return {"summary": cached}
+    # The brief was cached under an older condenser whose numbers we no longer
+    # stand behind. The brief is deterministic and cheap (no LLM), so rebuild it
+    # from the live trace and keep the narrative the user already paid for.
+    # Re-store so this costs one trace read per session, not one per page load.
+    agent = cached.get("agent")
+    if not agent:
+        return {"summary": cached}
+    try:
+        detail = await get_session_detail(session_id, agent)
+        events = _summaries.normalize_detail(detail)
+        if not events:
+            return {"summary": cached}
+        meta = await _session_meta(session_id, agent) or {"agent": agent}
+        refreshed = _summaries.store(
+            session_id, agent, _summaries.content_hash(session_id, events),
+            cached.get("backend") or "", cached.get("model"),
+            _summaries.condense_trace(events, meta),
+            cached.get("narrative") or {}, cached.get("summary_cost") or 0.0,
+        )
+        # store() stamps a fresh generated_at; the narrative is unchanged, so
+        # keep the original timestamp rather than implying a new summary run.
+        refreshed["generated_at"] = cached.get("generated_at") or refreshed["generated_at"]
+        return {"summary": refreshed}
+    except Exception:
+        # A recompute failure must not take the panel down — serve what we have.
+        return {"summary": cached}
 
 @app.post("/sessions/{session_id}/summary")
 async def make_summary(session_id: str, agent: str, force: bool = False):

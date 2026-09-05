@@ -906,3 +906,49 @@ def test_by_model_outcomes_are_capped_at_the_ten_largest():
     assert [r["total"] for r in o["by_model"]] == list(range(15, 5, -1))
     # by_source is a small closed-ish set and stays complete.
     assert len(o["by_source"]) == 1 and o["by_source"][0]["total"] == len(sessions)
+
+
+# --------------------------------------------------------------------------- #
+# models_used — sessions.model is the LAST model, not the only one
+# --------------------------------------------------------------------------- #
+
+def test_scan_reports_every_model_a_session_used(hermes_home):
+    """A session that switched models must not report only its last one.
+
+    sessions.model holds one value (the model configured last). Hermes swaps
+    models mid-session, so the trace UI showed a single model for a session that
+    actually used several. The per-call models are in agent.log; the scan reads
+    them from the same cached index it already uses for cwd recovery.
+    """
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "hermes"}
+
+    span = by_id[SID_SPAN]
+    # Temporal order: the older rotation's model first, the current log's last.
+    assert span["models_used"] == ["alpha-1", "omega-9"]
+    # The single-model field is untouched — it still reports what the DB says.
+    assert span["model"] == "claude-sonnet-4-6"
+
+
+def test_models_used_falls_back_to_the_db_model_when_logs_rotated_away(hermes_home):
+    """No log lines is not "no models" — report the one the DB recorded."""
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "hermes"}
+    assert by_id[SID_DARK]["models_used"] == ["claude-sonnet-4-6"]
+
+
+def test_models_used_is_distinct(hermes_home):
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "hermes"}
+    for sess in by_id.values():
+        assert len(sess["models_used"]) == len(set(sess["models_used"]))
+
+
+def test_log_coverage_wins_over_the_db_model(hermes_home):
+    """The DB model is a fallback, never an addition.
+
+    SID_SPAN's log records alpha-1 and omega-9 while the DB says
+    claude-sonnet-4-6. Appending the DB value would assert a call the session
+    never made, so a covered session reports exactly what the log saw.
+    """
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "hermes"}
+    span = by_id[SID_SPAN]
+    assert span["model"] == "claude-sonnet-4-6"
+    assert "claude-sonnet-4-6" not in span["models_used"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from collections import Counter
@@ -27,7 +28,62 @@ _FILE_TOOLS = {
     "write_file", "read_file", "replace", "read_many_files",  # gemini/qwen
 }
 _FILE_KEYS = ("file_path", "path", "filename", "file")
-_ERROR_MARKERS = ("error", "traceback", "exception", "failed", "fatal", "cannot ")
+
+# Bumped whenever the condenser's output changes shape or meaning, so briefs
+# cached under the old rules are recomputed instead of served forever.
+BRIEF_VERSION = 2
+
+# Markers that mean "this tool result is a failure" — but only when they lead
+# the first line. Scanning the whole body for the substring "error" flagged any
+# tool result that merely *mentioned* errors (a tool catalogue describing its
+# error codes, a scraped web page), which is how one real failure turned into
+# eight reported ones.
+_ERROR_LINE_RE = re.compile(
+    r"^\W{0,4}(error\b|errno\b|traceback \(most recent call last\)|exception\b"
+    r"|fatal\b|failed\b|failure\b|command failed\b|permission denied\b"
+    r"|no such file\b|not found\b|cannot \w|can't \w|unable to \w)",
+    re.IGNORECASE,
+)
+
+
+def is_tool_error(payload: Dict[str, Any], body: str) -> bool:
+    """Did this tool result represent a failure?
+
+    Three sources, in order of trust:
+
+    1. An explicit ``is_error`` flag set by the agent (or by our own trace
+       builders, which classify at normalization time).
+    2. A JSON body carrying a top-level ``error`` key. Structural, so a payload
+       that merely *contains* the word "error" deeper down (a tool catalogue, a
+       search result) is correctly left alone.
+    3. A plain-text body whose FIRST line opens with an error marker. Anchoring
+       to the first line is what separates "this failed" from "this discusses
+       failure".
+
+    A body that looks like JSON but won't parse stops at rule 2 rather than
+    falling through to the text scan — a truncated blob is one long line and
+    would match on any marker buried anywhere inside it.
+    """
+    if payload.get("is_error"):
+        return True
+    text = (body or "").strip()
+    if not text:
+        return False
+    if text[0] in "{[":
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return False
+        if isinstance(parsed, dict):
+            if parsed.get("is_error"):
+                return True
+            err = parsed.get("error")
+            if isinstance(err, str):
+                return bool(err.strip())
+            return err is not None and err is not False
+        return False
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    return bool(_ERROR_LINE_RE.match(first.strip()[:200]))
 
 
 # --------------------------------------------------------------------------- #
@@ -162,13 +218,13 @@ def condense_trace(events: List[Dict[str, Any]], meta: Dict[str, Any]) -> Dict[s
         elif etype == "tool_result" or role == "tool":
             payload = ev.get("payload") or {}
             body = _text_blocks(content) or str(payload.get("content") or "")
-            low = body.lower()
-            if payload.get("is_error") or any(m in low for m in _ERROR_MARKERS):
+            if is_tool_error(payload, body):
                 snippet = body.strip().splitlines()[0][:160] if body.strip() else "(error)"
                 if snippet and snippet not in errors:
                     errors.append(snippet)
 
     return {
+        "_v": BRIEF_VERSION,
         "intent": intent,
         "final_text": final_text,
         "user_turns": user_turns,
@@ -267,7 +323,10 @@ def content_hash(session_id: str, events: List[Dict[str, Any]]) -> str:
     if events:
         last = events[-1]
         last_ts = str(last.get("normalized_timestamp") or last.get("timestamp") or "")
-    sig = f"{session_id}:{len(events)}:{last_ts}"
+    # BRIEF_VERSION participates so that changing what the condenser *means* by
+    # a field (e.g. which tool results count as errors) invalidates briefs that
+    # were cached under the old definition.
+    sig = f"{session_id}:{len(events)}:{last_ts}:v{BRIEF_VERSION}"
     return hashlib.sha1(sig.encode()).hexdigest()
 
 

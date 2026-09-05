@@ -743,8 +743,14 @@ export default function SessionDetailPage() {
       if (k === "user") userTurns++;
       const ts = normalizeTs(e);
       if (ts) timestamps.push(ts);
+      // Count only an explicit is_error flag — set by the agent itself, or by
+      // our trace builders which classify at normalization time. The stringify
+      // scan is deliberate: Claude nests is_error inside message.content[]
+      // blocks, so a shallow payload check would miss it. Matching the bare
+      // word "exception" anywhere in the event used to count any tool result
+      // that merely quoted the word (a scraped page, a stack-trace example).
       const raw = JSON.stringify(e).toLowerCase();
-      if (raw.includes('"is_error":true') || raw.includes("exception")) errors++;
+      if (raw.includes('"is_error":true')) errors++;
     });
     let duration = "—";
     if (timestamps.length >= 2) {
