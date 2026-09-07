@@ -85,6 +85,7 @@ AGENT_PLANS: Dict[str, Tuple[str, ...]] = {
     "claude": ("pro", "max5x", "max20x"),
     "copilot": ("pro_plus", "business", "enterprise"),
     "cursor": ("pro", "pro_plus", "ultra"),
+    "kimi": ("moderato", "allegretto", "allegro", "vivace"),
 }
 
 
@@ -265,6 +266,24 @@ def _cursor_buckets(plan: str, today: _dt.date) -> List[Dict[str, Any]]:
     ]
 
 
+def _kimi_buckets(plan: str, today: _dt.date) -> List[Dict[str, Any]]:
+    return [
+        _bucket(
+            "membership", "Kimi membership", "included",
+            ("interactive", "programmatic"),
+            no_spillover=True,
+            note=(f"Your {plan} membership's weekly-refreshed Kimi Code "
+                  "allowance — marginal per-call cost is $0."),
+        ),
+        _bucket(
+            "api_paygo", "Moonshot API key", "api_rate",
+            ("interactive", "programmatic"),
+            note="Per-token Moonshot API rates when running on an API key "
+                 "instead of a membership.",
+        ),
+    ]
+
+
 def _api_only_buckets(plan: str, today: _dt.date) -> List[Dict[str, Any]]:
     # Grok (xAI key), Hermes (provider keys), OpenCode (BYO key): pure paygo.
     return [
@@ -294,6 +313,7 @@ _AGENT_BUILDERS = {
     "gemini": _gemini_buckets,
     "copilot": _copilot_buckets,
     "cursor": _cursor_buckets,
+    "kimi": _kimi_buckets,
     "grok": _api_only_buckets,
     "hermes": _api_only_buckets,
     "opencode": _api_only_buckets,

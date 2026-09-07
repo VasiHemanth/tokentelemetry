@@ -13,6 +13,7 @@ they actually record:
   prime     persisted Python kernel state, unique to this agent
   pi        MCP inventory and per-directory trust
   dsh       sandbox profiles and the workspace registry
+  kimi      the work-dir registry and loop-control config
 
 Nothing here reads a credential value or a prompt body. `~/.vibe/.env` holds a
 plaintext API key at the harness root, and `~/.qwen/ide/<port>.lock` carries a
@@ -668,6 +669,77 @@ def build_dsh(*, with_disk: bool = True) -> Dict[str, Any]:
         "dsh", root, sections=sections, not_available=not_avail,
         last_active=iso(newest_mtime([root / "sessions"])),
         disk=safe(lambda: _simple_disk(root), "dsh disk") if with_disk else None,
+    )
+
+
+# --- Kimi Code ---------------------------------------------------------------
+
+def build_kimi(*, with_disk: bool = True) -> Dict[str, Any]:
+    root = paths.KIMI_DIR
+    if not root.is_dir():
+        return not_installed("kimi")
+    sections: List[Dict[str, Any]] = []
+
+    # config.toml: default_model (top-level or [models]) and the loop-control
+    # limits Kimi Code enforces per turn. Credentials live in
+    # ~/.kimi/credentials/ and are never read.
+    cfg_doc = None
+    cfg = root / "config.toml"
+    if cfg.exists():
+        def _read_cfg() -> Optional[Dict[str, Any]]:
+            import tomllib
+            with open(cfg, "rb") as fh:
+                return tomllib.load(fh)
+        cfg_doc = safe(_read_cfg, "kimi config")
+    if isinstance(cfg_doc, dict):
+        fields = []
+        model = cfg_doc.get("default_model")
+        if not (isinstance(model, str) and model):
+            models = cfg_doc.get("models")
+            if isinstance(models, dict):
+                model = models.get("default_model")
+        if isinstance(model, str) and model:
+            fields.append(field("Default model", model))
+        loop = cfg_doc.get("loop_control")
+        if isinstance(loop, dict):
+            for key, label in (("max_steps_per_turn", "Max steps per turn"),
+                               ("max_retries_per_step", "Max retries per step")):
+                if loop.get(key) is not None:
+                    fields.append(field(label, loop[key]))
+        if fields:
+            sections.append(section(
+                "fields", "Configuration", tilde(cfg), fields=fields,
+                note="OAuth tokens live in ~/.kimi/credentials/ and are not read."))
+
+    # kimi.json is Kimi Code's own work-dir registry: which project each
+    # directory ran, and the last session there — the same mapping the scanner
+    # uses to give a session its project.
+    registry = safe(lambda: _json(root / "kimi.json"), "kimi registry")
+    if isinstance(registry, dict):
+        dirs = registry.get("work_dirs")
+        if isinstance(dirs, list) and dirs:
+            rows = []
+            for wd in dirs[:25]:
+                if not isinstance(wd, dict):
+                    continue
+                sid = wd.get("last_session_id")
+                rows.append([preview(wd.get("path")),
+                             str(sid)[:8] if sid else "—"])
+            if rows:
+                sections.append(section(
+                    "table", "Work directories", tilde(root / "kimi.json"),
+                    columns=["Path", "Last session"], rows=rows,
+                    note="Kimi Code keeps its own project registry; only the "
+                         "last session per directory is linked, so older "
+                         "sessions resolve their project from here only when "
+                         "they are that last session."))
+
+    return panel(
+        "kimi", root, sections=sections,
+        not_available=[unavailable(
+            "quota", "Kimi Code keeps no local record of plan or credit usage.")],
+        last_active=iso(newest_mtime([root / "sessions"])),
+        disk=safe(lambda: _simple_disk(root), "kimi disk") if with_disk else None,
     )
 
 

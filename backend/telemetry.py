@@ -171,7 +171,7 @@ _ENUMS: Dict[str, set] = {
 _KNOWN_AGENTS = {
     "claude", "codex", "gemini", "antigravity", "qwen", "vibe",
     "cursor", "copilot", "opencode", "hermes", "grok",
-    "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder",
+    "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder", "kimi",
 }
 
 # `agent` rides on harness.scanned and on page.viewed for an agent panel. It is

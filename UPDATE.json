@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-06",
+      "title": "Kimi Code support",
+      "highlights": [
+        {
+          "title": "Kimi Code agent support",
+          "description": "Add Kimi Code agent support (session scanning, token/cost tracking, panel, summarizer, billing plan). Moonshot AI's coding CLI is detected from its ~/.kimi directory and each session's wire.jsonl, rolled up under the projects in ~/.kimi/kimi.json.",
+          "href": "/docs/supported-agents"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-04",
       "title": "The menu bar command opens the new panel",
       "highlights": [

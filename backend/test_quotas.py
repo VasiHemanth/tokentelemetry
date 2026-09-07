@@ -712,7 +712,7 @@ def test_default_quota_providers_roster_is_exact_and_stable():
     assert [p.provider_id for p in providers] == [
         "codex", "claude", "cursor", "opencode", "copilot", "grok", "gemini",
         "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
-        "muse", "prime", "dsh", "qoder", "openai_compat",
+        "muse", "prime", "dsh", "qoder", "kimi", "openai_compat",
     ]
 
     native = [p for p in providers if not isinstance(p, StaticQuotaProvider)]
@@ -725,7 +725,7 @@ def test_default_quota_providers_roster_is_exact_and_stable():
     statics = {p.provider_id: p for p in providers if isinstance(p, StaticQuotaProvider)}
     assert set(statics) == {
         "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
-        "muse", "prime", "dsh", "qoder", "openai_compat",
+        "muse", "prime", "dsh", "qoder", "kimi", "openai_compat",
     }
     assert statics["qwen"].display_name == "Qwen CLI"
     assert statics["dsh"].display_name == "DeepSeek Harness"

@@ -46,10 +46,11 @@ export function AgentBadge({
   agent, withDot = true, withLabel = true, size = "xs", className, ...rest
 }: AgentBadgeProps) {
   const meta = getAgent(agent);
-  // Near-white brand marks (Grok, Pi, Qoder) get a theme-aware tint so their chip
-  // label and mark stay legible in light mode; the tinted background/border stay
-  // on the literal hex (they are translucent and fine in either theme).
-  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder";
+  // Monochrome brand marks (near-white Grok, Pi, Qoder; near-black Kimi) get a
+  // theme-aware tint so their chip label and mark stay legible in both themes;
+  // the tinted background/border stay on the literal hex (they are translucent
+  // and fine in either theme).
+  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder" || agent === "kimi";
   const foreground = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   return (
     <span

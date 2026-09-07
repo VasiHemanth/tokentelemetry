@@ -54,6 +54,9 @@
   --agent-prime:       #D4FF47;
   --agent-dsh:         #4D6BFE;
   --agent-qoder:       #e4e4e7;
+  /* Kimi's mark is black-on-white, so the var holds the dark-theme tint (a
+     light zinc) rather than the literal brand hex; flipped back in light mode. */
+  --agent-kimi:        #e4e4e7;
 
   /* Radii + shadow */
   --tt-radius-sm: 6px;
@@ -104,6 +107,7 @@
   --agent-grok: #52525b;
   --agent-pi:   #111827;
   --agent-qoder: #52525b;
+  --agent-kimi:  #18181b;
 
   --tt-shadow-soft:  0 1px 0 rgba(15,23,42,0.02) inset, 0 4px 12px -6px rgba(15,23,42,0.10);
   --tt-shadow-pop:   0 1px 0 rgba(15,23,42,0.03) inset, 0 18px 40px -18px rgba(15,23,42,0.15);

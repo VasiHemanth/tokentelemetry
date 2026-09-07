@@ -46,6 +46,7 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "prime": clis.build_prime,
     "pi": clis.build_pi,
     "dsh": clis.build_dsh,
+    "kimi": clis.build_kimi,
     "qoder": clis.build_qoder,
     "smallcode": clis.build_smallcode,
     "hermes": hermes.build_hermes,
