@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format } from "date-fns";
@@ -11,22 +12,52 @@ import {
 } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
 import { useScrollState } from "@/lib/useScrollState";
+import { splitSubagents, subagentSummary } from "@/lib/subagents";
+import { SubagentCount } from "@/components/SubagentCount";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 
 export default function ActivityTab() {
   const pathname = usePathname();
   const { sessions, loading } = useProject();
+  const [showSubagents, setShowSubagents] = useState(false);
 
-  // Restore scroll position when data fetch is complete
+  // Harnesses that write each delegated child as its own session file put those
+  // children in the parent's project, so an unfiltered feed here is mostly
+  // subagents (one Grok run in `quirky-borg` accounts for 158 rows). Totals on
+  // the project header stay unfiltered — only this table collapses.
+  const split = splitSubagents(sessions);
+  const visibleSessions = showSubagents ? split.all : split.parents;
+  const countLine = subagentSummary(sessions.length, split.hiddenCount);
+
+  // Restore scroll position when data fetch is complete. The table key carries
+  // the toggle state: collapsed and expanded are different-length lists, so a
+  // pixel offset saved against one must never be restored into the other.
   useScrollState(`key_project_activity_page`, !loading);
-  const { ref: sessionHistoryRef, onScroll: handleSessionHistoryScroll } = useScrollState(`key_project_activity_sessions`, !loading && sessions.length > 0);
+  const { ref: sessionHistoryRef, onScroll: handleSessionHistoryScroll } = useScrollState(
+    `key_project_activity_sessions_${showSubagents ? "all" : "parents"}`,
+    !loading && sessions.length > 0,
+  );
 
   return (
     <Card padding="none">
       <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
         <CardTitle><Activity size={14} className="text-[var(--tt-brand)]" /> Session history</CardTitle>
-        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">{sessions.length} sessions</span>
+        <div className="flex items-center gap-3">
+          {split.hiddenCount > 0 && (
+            <button
+              type="button"
+              aria-pressed={showSubagents}
+              onClick={() => setShowSubagents((v) => !v)}
+              className="text-[10px] uppercase tracking-[0.15em] text-[var(--tt-fg-dim)] hover:text-[var(--tt-brand)] transition-colors"
+            >
+              {showSubagents ? "Hide subagents" : "Show subagents"}
+            </button>
+          )}
+          <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] tabular-nums">
+            {countLine ?? `${sessions.length} sessions`}
+          </span>
+        </div>
       </div>
 
       {loading ? (
@@ -51,11 +82,12 @@ export default function ActivityTab() {
               </TR>
             </THead>
             <TBody>
-              {sessions.map((s, i) => (
-                <TR key={`${s.agent}-${s.id}-${i}`} interactive>
+              {visibleSessions.map((s) => (
+                <TR key={`${s.agent}-${s.id}`} interactive>
                   <TD className="pl-5">
                     <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                       <AgentBadge agent={s.agent} />
+                      <SubagentCount count={split.childCounts.get(s.id) ?? 0} />
                       {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                       {s.agent === "antigravity" && <AntigravitySourceBadge source={s.antigravity_source} size="xs" />}
                     </Link>

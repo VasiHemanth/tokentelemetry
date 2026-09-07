@@ -25,6 +25,8 @@ import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import { projectBasename } from "@/lib/paths";
 import type { PanelSummary } from "@/lib/agentPanel";
+import { splitSubagents, subagentSummary } from "@/lib/subagents";
+import { SubagentCount } from "@/components/SubagentCount";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
@@ -88,19 +90,23 @@ export default function Home() {
 
   const loading = sessionsRes.loading;
 
-  // Restore scroll position when data fetch is complete
-  useScrollState("key_dashboard_page", !loading);
-  const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState("key_dashboard_recent_activity", !loading && sessions.length > 0);
-
   const [showSubagents, setShowSubagents] = useState(false);
+
+  // Restore scroll position when data fetch is complete. The table key carries
+  // the toggle state: collapsed and expanded are different-length lists, so a
+  // pixel offset saved against one must never be restored into the other.
+  useScrollState("key_dashboard_page", !loading);
+  const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState(
+    `key_dashboard_recent_activity_${showSubagents ? "all" : "parents"}`,
+    !loading && sessions.length > 0,
+  );
 
   // Sessions whose parent exists in the list are subagents. Dangling
   // parent_session_id (parent pruned/missing) keeps the row visible.
-  const sessionIds = new Set(sessions.map((s) => s.id));
-  const visibleSessions = showSubagents
-    ? sessions
-    : sessions.filter((s) => !s.parent_session_id || !sessionIds.has(s.parent_session_id));
-  const hiddenSubagentCount = sessions.length - visibleSessions.length;
+  const split = splitSubagents(sessions);
+  const visibleSessions = showSubagents ? split.all : split.parents;
+  const hiddenSubagentCount = split.hiddenCount;
+  const countLine = subagentSummary(sessions.length, hiddenSubagentCount);
 
   const [showLocalPower, setShowLocalPower] = useState(false);
   useEffect(() => {
@@ -292,10 +298,8 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <Activity size={14} className="text-[var(--tt-brand)]" />
               <CardTitle className="!text-[13px]">Recent activity</CardTitle>
-              {hiddenSubagentCount > 0 && !showSubagents && (
-                <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">
-                  (+{hiddenSubagentCount} subagent{hiddenSubagentCount !== 1 ? "s" : ""} hidden)
-                </span>
+              {countLine && (
+                <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">{countLine}</span>
               )}
             </div>
             <div className="flex items-center gap-3">
@@ -341,6 +345,7 @@ export default function Home() {
                       <TD className="pl-5">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                           <AgentBadge agent={s.agent} />
+                          <SubagentCount count={split.childCounts.get(s.id) ?? 0} />
                           {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                           {s.agent === "antigravity" && <AntigravitySourceBadge source={s.antigravity_source} size="xs" />}
                         </Link>

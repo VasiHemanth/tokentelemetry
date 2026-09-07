@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-07",
+      "title": "Delegated sessions stop crowding the feed",
+      "highlights": [
+        {
+          "title": "Subagent sessions are collapsed by default",
+          "description": "Agents that write each delegated child as its own session could fill the activity list from one run. Children now fold into their parent, which shows how many. Thanks to slmingol for reporting and fixing this (PR #332).",
+          "href": "/"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-04",
       "title": "The menu bar command opens the new panel",
       "highlights": [
