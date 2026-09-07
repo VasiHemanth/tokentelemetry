@@ -22,6 +22,7 @@ jobs:
         run: pip install gspread google-auth requests
 
       - name: Run traffic sync
+        if: ${{ secrets.GCP_CREDENTIALS != '' && secrets.GH_PAT != '' && secrets.TT_SHEET_ID != '' }}
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}

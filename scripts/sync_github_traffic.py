@@ -20,7 +20,7 @@ import gspread
 import requests
 from google.oauth2.service_account import Credentials
 
-SPREADSHEET_ID = os.environ["TT_SHEET_ID"]
+SPREADSHEET_ID = os.environ.get("TT_SHEET_ID", "")
 
 REPOS_TO_TRACK = {
     "VasiHemanth/tokentelemetry": "TokenTelemetry",
@@ -48,6 +48,11 @@ def ensure_tab(spreadsheet, title, header):
 
 
 def main():
+    for var in ("GCP_CREDENTIALS", "GH_PAT", "TT_SHEET_ID"):
+        if not os.environ.get(var):
+            print(f"Skipping: {var} not set.")
+            return
+
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds_json = json.loads(os.environ["GCP_CREDENTIALS"])
     creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
