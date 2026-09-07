@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Archive, Trash2, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { CardTitle } from "@/components/ui";
+import { Badge, Card, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import {
   getRetention, setArchive, deleteTranscripts,
   type RetentionState, type AgentRetention,
@@ -57,7 +57,21 @@ export function RetentionSettings() {
     return () => { cancelled = true; };
   }, []);
 
-  if (!state) return null;
+  // Siblings render a Card with a skeleton while loading rather than
+  // collapsing to nothing, so the section does not pop in.
+  if (!state) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <Archive size={14} className="text-[var(--tt-brand)]" />
+            Transcript archiving
+          </CardTitle>
+        </CardHeader>
+        <Skeleton className="h-14 w-full" />
+      </Card>
+    );
+  }
 
   const refresh = () => getRetention().then(setState).catch(() => {});
 
@@ -74,10 +88,23 @@ export function RetentionSettings() {
   };
 
   const agents = Object.entries(state.agents);
+  const archivable = agents.filter(([, a]) => a.archivable).length;
+  const archivingOn = agents.filter(([, a]) => a.archive_enabled).length;
 
   return (
-    <div className="space-y-3">
-      <p className="text-[12px] text-[var(--tt-fg-dim)] max-w-[640px]">
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <Archive size={14} className="text-[var(--tt-brand)]" />
+          Transcript archiving
+        </CardTitle>
+        <Badge variant={archivingOn > 0 ? "success" : "neutral"} size="sm">
+          {archivingOn} of {archivable} archiving
+        </Badge>
+      </CardHeader>
+
+      <div className="space-y-4">
+      <p className="text-[13px] leading-relaxed text-[var(--tt-fg-dim)] max-w-[560px]">
         Coding agents prune their own session transcripts on a schedule, after which they vanish from
         analytics. TokenTelemetry always keeps a tiny <span className="text-[var(--tt-fg)]">core summary</span> of
         every session (tokens, cost, model — used for history & charts). For agents below you can also
@@ -86,13 +113,16 @@ export function RetentionSettings() {
         core stats</span> — your history stays intact.
       </p>
 
+      <div className="space-y-3">
       {agents.map(([id, a]) => {
         const st = state.storage.by_agent[id];
         const tbytes = st?.transcript_bytes ?? 0;
         return (
-          <div
+          <Card
             key={id}
-            className="flex items-start justify-between gap-4 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-4 py-3"
+            tone="sunken"
+            padding="sm"
+            className="flex items-start justify-between gap-4"
           >
             <div className="min-w-0">
               <CardTitle className="text-[13px] mb-0.5">{a.label}</CardTitle>
@@ -131,9 +161,11 @@ export function RetentionSettings() {
                 />
               </div>
             </div>
-          </div>
+          </Card>
         );
       })}
-    </div>
+      </div>
+      </div>
+    </Card>
   );
 }
