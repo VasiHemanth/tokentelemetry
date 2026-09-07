@@ -46,6 +46,7 @@ interface Session {
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
   hermes_profile?: string;
+  parent_session_id?: string | null;
 }
 
 interface AnalyticsResponse {
@@ -90,6 +91,16 @@ export default function Home() {
   // Restore scroll position when data fetch is complete
   useScrollState("key_dashboard_page", !loading);
   const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState("key_dashboard_recent_activity", !loading && sessions.length > 0);
+
+  const [showSubagents, setShowSubagents] = useState(false);
+
+  // Sessions whose parent exists in the list are subagents. Dangling
+  // parent_session_id (parent pruned/missing) keeps the row visible.
+  const sessionIds = new Set(sessions.map((s) => s.id));
+  const visibleSessions = showSubagents
+    ? sessions
+    : sessions.filter((s) => !s.parent_session_id || !sessionIds.has(s.parent_session_id));
+  const hiddenSubagentCount = sessions.length - visibleSessions.length;
 
   const [showLocalPower, setShowLocalPower] = useState(false);
   useEffect(() => {
@@ -281,10 +292,27 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <Activity size={14} className="text-[var(--tt-brand)]" />
               <CardTitle className="!text-[13px]">Recent activity</CardTitle>
+              {hiddenSubagentCount > 0 && !showSubagents && (
+                <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">
+                  (+{hiddenSubagentCount} subagent{hiddenSubagentCount !== 1 ? "s" : ""} hidden)
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
-              <Radio size={10} className="text-emerald-400" />
-              auto-sync 15s
+            <div className="flex items-center gap-3">
+              {hiddenSubagentCount > 0 || showSubagents ? (
+                <button
+                  type="button"
+                  aria-pressed={showSubagents}
+                  onClick={() => setShowSubagents((v) => !v)}
+                  className="text-[10px] uppercase tracking-[0.15em] text-[var(--tt-fg-dim)] hover:text-[var(--tt-brand)] transition-colors"
+                >
+                  {showSubagents ? "Hide subagents" : "Show subagents"}
+                </button>
+              ) : null}
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+                <Radio size={10} className="text-emerald-400" />
+                auto-sync 15s
+              </div>
             </div>
           </div>
 
@@ -308,8 +336,8 @@ export default function Home() {
                   </TR>
                 </THead>
                 <TBody>
-                  {sessions.slice(0, 50).map((s, i) => (
-                    <TR key={`${s.agent}-${s.id}-${i}`} interactive>
+                  {visibleSessions.slice(0, 50).map((s) => (
+                    <TR key={`${s.agent}-${s.id}`} interactive>
                       <TD className="pl-5">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                           <AgentBadge agent={s.agent} />
