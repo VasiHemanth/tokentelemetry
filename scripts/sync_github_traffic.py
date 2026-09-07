@@ -4,6 +4,7 @@
 Env vars:
   GCP_CREDENTIALS  JSON string of the service-account key (full contents).
   GH_PAT           GitHub PAT with `repo` (or admin:repo) scope for the target repos.
+  TT_SHEET_ID      ID of the target Google Spreadsheet (shared Editor with the service account).
 
 The target spreadsheet must already exist and be shared (Editor) with the
 service account email. Per-repo tabs expected:
@@ -19,8 +20,6 @@ from datetime import datetime
 import gspread
 import requests
 from google.oauth2.service_account import Credentials
-
-SPREADSHEET_ID = os.environ.get("TT_SHEET_ID", "")
 
 REPOS_TO_TRACK = {
     "VasiHemanth/tokentelemetry": "TokenTelemetry",
@@ -57,7 +56,7 @@ def main():
     creds_json = json.loads(os.environ["GCP_CREDENTIALS"])
     creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    spreadsheet = client.open_by_key(os.environ["TT_SHEET_ID"])
 
     gh_token = os.environ["GH_PAT"]
     headers = {
