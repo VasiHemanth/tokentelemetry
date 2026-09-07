@@ -128,6 +128,25 @@ def test_canonical_project_leaves_posix_backslashes_alone():
     assert canonical_project("/data/weird\\name") == "/data/weird\\name"
 
 
+def test_canonical_project_strips_vscode_leading_slash():
+    # VS Code on Windows stores file:///c%3A/Users/dev/proj, which unquotes
+    # to /c:/Users/dev/proj. The leading slash and lowercase drive letter must
+    # be normalised to match what Claude Code / Codex emit (C:/Users/dev/proj).
+    f = canonical_project
+    assert f("/c:/Users/dev/proj") == "C:/Users/dev/proj"
+    assert f("/C:/Users/dev/proj") == "C:/Users/dev/proj"   # upcase idempotent
+    assert f("/c:/Users/dev/proj/") == "C:/Users/dev/proj"  # trailing sep stripped
+
+
+def test_canonical_project_preserves_drive_root():
+    # "C:" (no trailing slash) means "current dir on drive C" on Windows —
+    # that is not the same as the drive root "C:/". Stripping the slash corrupts.
+    f = canonical_project
+    assert f("C:/") == "C:/"
+    assert f("c:/") == "c:/"   # POSIX-cased passthrough (not a VS Code path)
+    assert f("C:") == "C:"     # bare drive specifier must not gain a slash
+
+
 def test_canonical_project_passes_sentinels_through():
     f = canonical_project
     assert f("unknown") == "unknown"
