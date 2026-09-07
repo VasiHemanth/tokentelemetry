@@ -48,7 +48,7 @@ def ensure_tab(spreadsheet, title, header):
 
 def main():
     for var in ("GCP_CREDENTIALS", "GH_PAT", "TT_SHEET_ID"):
-        if not os.environ.get(var):
+        if not (os.environ.get(var) or "").strip():
             print(f"Skipping: {var} not set.")
             return
 
