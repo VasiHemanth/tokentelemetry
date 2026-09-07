@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, ArrowRight,
-  Radio, Terminal,
+  Radio, Terminal, Eye, EyeOff,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -25,6 +25,9 @@ import { profileColor } from "@/lib/profileColor";
 import { costFraming, type BillingConfig } from "@/lib/billing";
 import { projectBasename } from "@/lib/paths";
 import type { PanelSummary } from "@/lib/agentPanel";
+import { splitSubagents, subagentSummary } from "@/lib/subagents";
+import { useShowSubagents } from "@/lib/subagentPref";
+import { SubagentCount } from "@/components/SubagentCount";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
   Table, THead, TBody, TR, TH, TD, AgentBadge, Badge, Button, EmptyState, Skeleton,
@@ -46,6 +49,7 @@ interface Session {
   /** Hermes-only: cli / telegram / cron / etc. */
   source_subtype?: string;
   hermes_profile?: string;
+  parent_session_id?: string | null;
 }
 
 interface AnalyticsResponse {
@@ -87,9 +91,25 @@ export default function Home() {
 
   const loading = sessionsRes.loading;
 
-  // Restore scroll position when data fetch is complete
+  // Persisted in localStorage and shared with the project pages and Settings,
+  // so the choice survives a reload and only has to be made once.
+  const [showSubagents, setShowSubagents] = useShowSubagents();
+
+  // Restore scroll position when data fetch is complete. The table key carries
+  // the toggle state: collapsed and expanded are different-length lists, so a
+  // pixel offset saved against one must never be restored into the other.
   useScrollState("key_dashboard_page", !loading);
-  const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState("key_dashboard_recent_activity", !loading && sessions.length > 0);
+  const { ref: recentActivityRef, onScroll: handleRecentActivityScroll } = useScrollState(
+    `key_dashboard_recent_activity_${showSubagents ? "all" : "parents"}`,
+    !loading && sessions.length > 0,
+  );
+
+  // Sessions whose parent exists in the list are subagents. Dangling
+  // parent_session_id (parent pruned/missing) keeps the row visible.
+  const split = splitSubagents(sessions);
+  const visibleSessions = showSubagents ? split.all : split.parents;
+  const hiddenSubagentCount = split.hiddenCount;
+  const countLine = subagentSummary(sessions.length, hiddenSubagentCount);
 
   const [showLocalPower, setShowLocalPower] = useState(false);
   useEffect(() => {
@@ -281,10 +301,27 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <Activity size={14} className="text-[var(--tt-brand)]" />
               <CardTitle className="!text-[13px]">Recent activity</CardTitle>
+              {countLine && (
+                <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">{countLine}</span>
+              )}
             </div>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
-              <Radio size={10} className="text-emerald-400" />
-              auto-sync 15s
+            <div className="flex items-center gap-3">
+              {hiddenSubagentCount > 0 || showSubagents ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-pressed={showSubagents}
+                  title={showSubagents ? "Collapse delegated sessions into their parent" : "List delegated sessions individually"}
+                  onClick={() => setShowSubagents(!showSubagents)}
+                >
+                  {showSubagents ? <EyeOff size={12} /> : <Eye size={12} />}
+                  {showSubagents ? "Hide subagents" : "Show subagents"}
+                </Button>
+              ) : null}
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+                <Radio size={10} className="text-emerald-400" />
+                auto-sync 15s
+              </div>
             </div>
           </div>
 
@@ -308,11 +345,12 @@ export default function Home() {
                   </TR>
                 </THead>
                 <TBody>
-                  {sessions.slice(0, 50).map((s, i) => (
-                    <TR key={`${s.agent}-${s.id}-${i}`} interactive>
+                  {visibleSessions.slice(0, 50).map((s) => (
+                    <TR key={`${s.agent}-${s.id}`} interactive>
                       <TD className="pl-5">
                         <Link href={`/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`} className="flex items-center gap-1.5">
                           <AgentBadge agent={s.agent} />
+                          <SubagentCount count={split.childCounts.get(s.id) ?? 0} />
                           {s.agent === "copilot" && <CopilotSourceBadge source={s.copilot_source} size="xs" />}
                           {s.agent === "antigravity" && <AntigravitySourceBadge source={s.antigravity_source} size="xs" />}
                         </Link>
