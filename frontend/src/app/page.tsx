@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
   Activity, Clock, TrendingUp, Folders, DollarSign, Cpu, ArrowUpRight, ArrowRight,
-  Radio, Terminal,
+  Radio, Terminal, Eye, EyeOff,
 } from "lucide-react";
 
 import { useResource } from "@/lib/api";
@@ -26,6 +26,7 @@ import { costFraming, type BillingConfig } from "@/lib/billing";
 import { projectBasename } from "@/lib/paths";
 import type { PanelSummary } from "@/lib/agentPanel";
 import { splitSubagents, subagentSummary } from "@/lib/subagents";
+import { useShowSubagents } from "@/lib/subagentPref";
 import { SubagentCount } from "@/components/SubagentCount";
 import {
   PageHeader, StatTile, Section, Card, CardHeader, CardTitle, CardEyebrow,
@@ -90,7 +91,9 @@ export default function Home() {
 
   const loading = sessionsRes.loading;
 
-  const [showSubagents, setShowSubagents] = useState(false);
+  // Persisted in localStorage and shared with the project pages and Settings,
+  // so the choice survives a reload and only has to be made once.
+  const [showSubagents, setShowSubagents] = useShowSubagents();
 
   // Restore scroll position when data fetch is complete. The table key carries
   // the toggle state: collapsed and expanded are different-length lists, so a
@@ -304,14 +307,16 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-3">
               {hiddenSubagentCount > 0 || showSubagents ? (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   aria-pressed={showSubagents}
-                  onClick={() => setShowSubagents((v) => !v)}
-                  className="text-[10px] uppercase tracking-[0.15em] text-[var(--tt-fg-dim)] hover:text-[var(--tt-brand)] transition-colors"
+                  title={showSubagents ? "Collapse delegated sessions into their parent" : "List delegated sessions individually"}
+                  onClick={() => setShowSubagents(!showSubagents)}
                 >
+                  {showSubagents ? <EyeOff size={12} /> : <Eye size={12} />}
                   {showSubagents ? "Hide subagents" : "Show subagents"}
-                </button>
+                </Button>
               ) : null}
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
                 <Radio size={10} className="text-emerald-400" />
