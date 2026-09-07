@@ -3878,6 +3878,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
     db_path = CLINE_DIR / "data" / "db" / "sessions.db"
     if db_path.exists():
         rows = []
+        _cline_db_ok = False
         try:
             uri = _sqlite_ro_uri(db_path)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -3888,10 +3889,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 # columns are read defensively below rather than erroring the
                 # whole query to an empty result.
                 rows = conn.execute("SELECT * FROM sessions").fetchall()
+                _cline_db_ok = True
             finally:
                 conn.close()
-        except Exception:
-            rows = []
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.cline").warning(
+                "Cline SQLite scan failed (%s): %s", db_path.name, _exc, exc_info=True
+            )
 
         # Cline spawns subagents/teams: each subagent is its OWN row with
         # is_subagent=1 and parent_session_id set, while the parent's
@@ -3902,11 +3907,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
         # rows. Leaf/standalone sessions have usage == aggregateUsage.
         def _row_get(r, k, default=None):
             return r[k] if k in r.keys() else default
-        parents_with_children = {
-            _row_get(r, "parent_session_id")
-            for r in rows
-            if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
-        }
+        if _cline_db_ok:
+            parents_with_children = {
+                _row_get(r, "parent_session_id")
+                for r in rows
+                if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
+            }
+        else:
+            parents_with_children = set()
 
         for row in rows:
             sid = row["session_id"]
@@ -7009,6 +7017,7 @@ def _scan_sessions_sync():
             codex_site_calls: Dict[str, Dict[str, str]] = {}
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
+            _read_ok = False  # True once at least one rollout file is opened successfully
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -7042,6 +7051,7 @@ def _scan_sessions_sync():
             for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
+                        _read_ok = True
                         for line in f:
                             try:
                                 data = json.loads(line)
@@ -7192,7 +7202,11 @@ def _scan_sessions_sync():
                                                 sess["has_plan"] = True
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
-                except Exception: pass
+                except Exception as _exc:
+                    import logging
+                    logging.getLogger("tokentelemetry.codex").warning(
+                        "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
+                    )
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
@@ -7226,7 +7240,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None:
+            if source_mtime is not None and _read_ok:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():
@@ -8282,8 +8296,12 @@ def _scan_sessions_sync():
                     sessions.append(hermes_by_id[sid])
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.hermes").warning(
+                "Hermes SQLite scan failed (%s, profile=%s): %s",
+                db_path.name, h_profile, _exc, exc_info=True,
+            )
     # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
     # of their own, already in totals) — annotate parents, never re-sum.
     for h_sess in hermes_by_id.values():
