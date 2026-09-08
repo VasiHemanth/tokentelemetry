@@ -177,18 +177,87 @@ app = FastAPI(title="TokenTelemetry API")
 
 # Enable CORS for the Next.js frontend.
 #
-# We use a regex over an explicit allowlist so the frontend can pick any local
-# port (the user can pass --port to start.sh / bin/cli.js). Loopback is always
-# allowed; additional hosts (IPs / hostnames) can be opted in for remote access
-# via the TT_ALLOWED_ORIGINS env var (comma-separated) — bin/cli.js wires it up
-# from --allowed-origins. Default behavior is unchanged: loopback-only.
-def _cors_origin_regex() -> str:
-    hosts = ["localhost", r"127\.0\.0\.1"]
-    for h in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
-        h = h.strip()
+# The allowlist answers two different questions, so it is built from two
+# patterns rather than one:
+#
+#   1. Loopback, which is always allowed on any port. The user can move the
+#      frontend with --port, so the port genuinely varies and a pattern is the
+#      right tool for it.
+#   2. The hosts opted in via TT_ALLOWED_ORIGINS (comma-separated; bin/cli.js
+#      wires it up from --allowed-origins) for remote / tailnet access. This
+#      half is empty by default, so default behavior stays loopback-only.
+#
+# Keeping them apart means each half has one rule you can state in a sentence,
+# and the remote half can be absent entirely instead of being spliced into a
+# pattern that always has loopback in it.
+#
+# In every case the port is OPTIONAL. Browsers omit it from Origin when it is
+# the scheme default, so a deployment behind a proxy on :443 sends
+# "https://box.tailnet.ts.net" with no port at all; requiring ":<digits>" made
+# that origin impossible to allow, with no configuration workaround.
+
+# Loopback hosts, as they appear in an Origin header. ::1 is included so this
+# agrees with _is_loopback() below, which the auth gate uses; the two
+# disagreeing about what "loopback" means is a bug waiting to happen.
+_LOOPBACK_ORIGIN_HOSTS = ["localhost", r"127\.0\.0\.1", r"\[::1\]"]
+
+
+def _origin_host(raw: str) -> str:
+    """Normalise one TT_ALLOWED_ORIGINS entry down to a bare hostname.
+
+    The documented value is a hostname, because bin/cli.js also feeds this list
+    to Next's allowedDevOrigins and uses the first entry to build the connect /
+    QR URL. Writing a full origin ("https://box.ts.net/") is the natural
+    mistake though, and previously it was escaped verbatim into the pattern and
+    silently matched nothing. Accept both spellings and reduce them to the same
+    host. An explicit port is dropped: a listed host is allowed on any port,
+    which is the behaviour this list has always had.
+    """
+    h = raw.strip().lower()
+    if not h:
+        return ""
+    if "://" in h:
+        h = h.split("://", 1)[1]
+    h = h.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if h.startswith("["):  # bracketed IPv6 literal, e.g. [::1]:3000
+        end = h.find("]")
+        return h[: end + 1] if end != -1 else h
+    return h.split(":", 1)[0]
+
+
+def _loopback_origin_regex() -> str:
+    """Loopback on any port. Always active, never configurable."""
+    return r"^https?://(?:" + "|".join(_LOOPBACK_ORIGIN_HOSTS) + r")(?::\d+)?$"
+
+
+def _remote_origin_regex() -> Optional[str]:
+    """The TT_ALLOWED_ORIGINS hosts on any port, or None when none are set.
+
+    Entries are re.escape()d, so a dot in a hostname stays a literal dot rather
+    than becoming "any character". Without that, allowing "box.ts.net" would
+    also allow an attacker-registered "boxXtsYnet".
+    """
+    hosts = []
+    for raw in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
+        h = _origin_host(raw)
         if h:
             hosts.append(re.escape(h))
-    return r"^https?://(" + "|".join(hosts) + r")(?::\d+)?$"
+    if not hosts:
+        return None
+    return r"^https?://(?:" + "|".join(hosts) + r")(?::\d+)?$"
+
+
+def _cors_origin_regex() -> str:
+    """The two halves joined for Starlette, which takes a single pattern.
+
+    Both halves are individually anchored, so top-level alternation between
+    them is still an exact-origin test under fullmatch().
+    """
+    parts = [_loopback_origin_regex()]
+    remote = _remote_origin_regex()
+    if remote:
+        parts.append(remote)
+    return "|".join(parts)
 
 # --- Remote-access auth gate -------------------------------------------------
 # When TT_AUTH_TOKEN is set (bin/cli.js sets it automatically for a non-loopback

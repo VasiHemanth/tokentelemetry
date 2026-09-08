@@ -4,9 +4,23 @@ import type { NextConfig } from "next";
 // blocks non-localhost origins by default; TT_ALLOWED_ORIGINS (wired up by
 // bin/cli.js from --allowed-origins) opts specific hosts in for remote/tailnet
 // access. Empty by default, so local-only use is unaffected.
+// Next matches these as hostnames, but a full origin ("https://box.ts.net/") is
+// the natural thing to pass to --allowed-origins, so reduce each entry to its
+// host first. Mirrors _origin_host() in backend/main.py and originHost() in
+// bin/cli.js, so all three consumers of the list agree on what an entry means.
 const allowedDevOrigins = (process.env.TT_ALLOWED_ORIGINS || "")
   .split(",")
-  .map((s) => s.trim())
+  .map((s) => {
+    const h = s.trim().toLowerCase();
+    if (!h) return "";
+    const rest = h.includes("://") ? h.slice(h.indexOf("://") + 3) : h;
+    const hostPort = rest.split("/")[0].split("?")[0].split("#")[0];
+    if (hostPort.startsWith("[")) {
+      const end = hostPort.indexOf("]");
+      return end === -1 ? hostPort : hostPort.slice(0, end + 1);
+    }
+    return hostPort.split(":")[0];
+  })
   .filter(Boolean);
 
 const nextConfig: NextConfig = {
