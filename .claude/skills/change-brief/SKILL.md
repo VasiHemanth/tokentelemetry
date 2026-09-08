@@ -73,7 +73,13 @@ Never claim authorship you have not checked, and never let "we" blur it.
    it happens.
 4. **Why it happens.** The mechanism, now that the symptom is concrete, with
    `file:line` anchors so every claim can be checked.
-5. **What the change does about it**, and what it deliberately leaves alone.
+5. **What the change does about it** — including **the simpler fix it passed
+   over, and why**. There is almost always an obvious cheaper repair; naming it
+   and saying why the author went further is what turns "here is a diff" into
+   "here is a judgement I can agree or disagree with". For #331: you could tell
+   the one messy test to clean up after itself, but that leaves the next
+   contributor free to make the identical mistake. Also say what the change
+   deliberately leaves alone.
 6. **Who it actually affects** — see §4, never skip this.
 7. **Traps**, if any: version bumps that force a rescan, migrations, security
    gates, other open PRs on the same files, claims in the PR body that the diff
@@ -109,6 +115,18 @@ stacks — plus:
 
 - **Feature before defect.** A bug is only comprehensible once the reader knows
   what was supposed to happen. Never open with the failure.
+- **Give the moving parts names the reader can hold.** Two env vars with a
+  precedence rule become "the Boss and the Assistant — if the app sees both it
+  always obeys the Boss". A test that leaks state is "the messy roommate". A
+  snapshot-and-restore fixture "photographs the environment before each test and
+  puts it back afterwards". Introduce the name once, then use it consistently
+  and keep the real identifier beside it on first use, so the reader can still
+  grep for `TOKENTELEMETRY_DATA_DIR`. One analogy per brief, carried all the way
+  through — a pile of competing metaphors is worse than none, and an analogy
+  that has to be stretched to fit is a sign the mechanism isn't understood yet.
+- **Signpost with claims, not labels.** Headings should say something: "Why you
+  don't need to worry" beats "Impact"; "The messy roommate" beats "Root cause".
+  A reader skimming only the headings should still get the story.
 - **"In simple words" means fewer clauses, not fewer facts.** Strip jargon and
   shorten sentences; keep the specific variable names, numbers and paths. A
   simplified explanation that drops the mechanism is not simpler, it is emptier.
@@ -124,32 +142,45 @@ stacks — plus:
 > **Who wrote it.** Not me — slmingol's PR. The data-folder feature it touches
 > is pre-existing project code, yours. Nothing of mine is in this one.
 >
-> **The feature.** `backend/tt_paths.py:60` decides where TokenTelemetry keeps
-> its state, first match wins: `TOKENTELEMETRY_DATA_DIR` used verbatim, then
-> `TOKENTELEMETRY_HOME` with `.tokentelemetry` appended, then
-> `~/.tokentelemetry`. You reach for the first one when your home drive is
+> **The chain of command.** `backend/tt_paths.py:60` decides where
+> TokenTelemetry keeps its state, and it takes orders from two variables. The
+> Boss is `TOKENTELEMETRY_DATA_DIR`, used verbatim. The Assistant is
+> `TOKENTELEMETRY_HOME`, with `.tokentelemetry` appended. If both are set the
+> app always obeys the Boss and ignores the Assistant; with neither, it falls
+> back to `~/.tokentelemetry`. You promote the Boss when your home drive is
 > small, or `~` is roaming-profile synced and you don't want a growing SQLite
-> file in it. `export TOKENTELEMETRY_DATA_DIR=/Volumes/ext/tt-data` and the
-> whole store moves.
+> file in it — `export TOKENTELEMETRY_DATA_DIR=/Volumes/ext/tt-data` moves the
+> whole store.
 >
-> **The scenario.** You've moved your data folder. You pull new code and run
-> the tests.
+> **The messy roommate.** You've moved your data folder. You pull new code and
+> run the tests.
 > 1. 22 tests fail.
-> 2. They assert a value you can see in the config file you just wrote.
+> 2. They assert values you can see sitting in the config files they just wrote.
 > 3. Nothing in the app is actually broken.
 >
-> **Why.** `test_agent_retention.py` sets `TOKENTELEMETRY_DATA_DIR` to a temp
-> dir and never restores it. That variable is precedence #1, so it outranks
-> every later test's sandbox, which uses `TOKENTELEMETRY_HOME` — precedence #2.
-> Those tests write to one directory and read from another, empty one.
+> `test_agent_retention.py` needed a scratch folder, so it set the Boss to a
+> temp directory — and never put it back. Every later test politely sets up its
+> own sandbox using the Assistant. The app does exactly what it is told: it sees
+> the Boss still standing there from an hour ago and ignores the Assistant. So
+> those tests write to one folder and read from a different, empty one.
 >
-> **Who it affects.** Contributors only. The shipped app is untouched: your
-> relocated folder works fine at runtime. The leak lives and dies inside a
-> single `pytest` process.
+> **Why you don't need to worry.** Contributors only. The app is untouched —
+> your relocated folder works fine at runtime — and the bug exists *because*
+> the precedence rule works correctly. It needs many app states in one process
+> to bite, which only a test suite does.
+>
+> **The cheaper fix it passed over.** You could tell that one test to clean up
+> after itself. slmingol didn't, because it leaves the next contributor free to
+> repeat the mistake. Instead `backend/conftest.py` adds an autouse fixture that
+> photographs both variables before every test and restores them after, so no
+> test can leak into another again.
 
-Note what the example does. Authorship lands before anything else. The feature
-and the reason to use it come before the failure. The blast-radius line
-explicitly refuses the implication that a user is hurt.
+Note what the example does. Authorship lands before anything else. One analogy
+— the chain of command — is introduced early and carried through "obeys the
+Boss", with the real variable names kept beside it so the reader can still grep.
+Headings make claims. The blast-radius paragraph refuses the implication that a
+user is hurt, and gives the reason the bug is invisible rather than asserting
+it. The rejected cheaper fix turns the diff into a judgement.
 
 ## 7. Don't
 
