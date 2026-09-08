@@ -152,10 +152,12 @@ def _migrate(con: sqlite3.Connection) -> None:
                         (canon, r["project"]),
                     )
         except sqlite3.Error:
-            # Best-effort: any rows not updated here will be fixed at scan
-            # time (sessions are canonicalised on write). Always advance the
-            # version so v4 is never permanently blocked by a transient error.
-            _log.exception("history migrate v3 (project canonicalisation) failed — unfixed rows will self-heal at next scan")
+            # Best-effort: always advance the version so v4 is never
+            # permanently blocked by a transient error. Active sessions
+            # are re-canonicalised on the next write; pruned sessions
+            # (transcripts deleted by the agent) may retain non-canonical
+            # project paths and could stop matching project filters.
+            _log.exception("history migrate v3 (project canonicalisation) failed — active sessions will be fixed on next write; pruned rows may remain non-canonical")
         con.execute("PRAGMA user_version=3")
         con.commit()
     if ver < 4:
