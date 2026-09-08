@@ -164,6 +164,24 @@ A single `-L 3000:...` forward without `-L 8000:...` produces a blank dashboard.
 ./start.sh --host 0.0.0.0 --allowed-origins 192.168.1.42,box.tailnet.ts.net
 ```
 
+Pass the **host**, not a URL, though a full origin is accepted and reduced to
+its host. A listed host is allowed on any port.
+
+To confirm CORS is the actual problem, send the preflight yourself:
+
+```bash
+curl -i -X OPTIONS https://box.tailnet.ts.net/sessions \
+  -H 'Origin: https://box.tailnet.ts.net' \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: authorization'
+```
+
+`400 Disallowed CORS origin` means the origin isn't on the allowlist. A `200`
+means CORS is fine and the problem is elsewhere. Note that the dashboard sends
+`Authorization: Bearer`, which forces the browser to preflight, so a rejected
+origin fails at the `OPTIONS` request and the real request is never sent. That
+is why the backend log looks healthy while the dashboard stays empty.
+
 ### Token not accepted (HTTP 401)
 
 The remote browser is sending the wrong token or no token.
