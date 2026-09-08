@@ -718,6 +718,8 @@ def calculate_cost(
             # weeks, same class of bug as the Sonnet 5 / Opus 5 gap this table
             # was extended to cover.
             if m_norm not in _warned_unpriced_models:
+                if len(_warned_unpriced_models) >= 500:
+                    _warned_unpriced_models.clear()
                 _warned_unpriced_models.add(m_norm)
                 logger.warning(
                     "No pricing entry for model %r (provider=%r) — billing at "
