@@ -2025,7 +2025,7 @@ function ContextRow({ k, v, mono = true }: { k: string; v?: TraceValue; mono?: b
 // Project-scoped entries live in the repo's own .claude/ (or equivalent) and are
 // the ones a reader is usually looking for, so they sort above the user-scoped
 // ones inherited from ~/. Ties break alphabetically.
-const byScopeThenName = (a: any, b: any) =>
+const byScopeThenName = (a: TraceValue, b: TraceValue) =>
   (a?.scope === "project" ? 0 : 1) - (b?.scope === "project" ? 0 : 1) ||
   String(a?.name ?? "").localeCompare(String(b?.name ?? ""));
 
@@ -2122,13 +2122,13 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
               </summary>
               <ScopeLegend tone="cyan" />
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {[...(ctx.projectConfig.skills ?? [])].sort(byScopeThenName).map((s: any, i: number) => (
+                {[...(ctx.projectConfig.skills ?? [])].sort(byScopeThenName).map((s: TraceValue) => (
                   <span
-                    key={i}
-                    title={`${s.scope} · ${s.agent}${s.description ? "\n" + s.description : ""}`}
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded border ${s.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
+                    key={`${s?.scope}-${s?.agent}-${s?.name}`}
+                    title={`${s?.scope} · ${s?.agent}${s?.description ? "\n" + s?.description : ""}`}
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded border ${s?.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
                   >
-                    {s.name}
+                    {s?.name}
                   </span>
                 ))}
               </div>
@@ -2141,10 +2141,10 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
               </summary>
               <ScopeLegend tone="blue" />
               <div className="mt-2 space-y-1">
-                {[...(ctx.projectConfig.mcps ?? [])].sort(byScopeThenName).map((m: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
-                    <span className="text-[var(--tt-fg)] truncate" title={m.command || m.url || ""}>{m.name}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m.agent}</span>
+                {[...(ctx.projectConfig.mcps ?? [])].sort(byScopeThenName).map((m: TraceValue) => (
+                  <div key={`${m?.scope}-${m?.agent}-${m?.name}`} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
+                    <span className="text-[var(--tt-fg)] truncate" title={m?.command || m?.url || ""}>{m?.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m?.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m?.agent}</span>
                   </div>
                 ))}
               </div>
