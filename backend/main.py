@@ -11134,7 +11134,7 @@ async def get_analytics(
         # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
         # `input` badly understates the hit rate on long sessions. Agents without
         # `_cached_sum` fall back to `cached` (prior behavior).
-        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cache_reads
+        by_agent[agent]["cache_reads"] += (st["_cached_sum"] if "_cached_sum" in st else st.get("cached", 0) or 0) + d_cache_reads
         by_agent[agent]["input"] += d_input
         by_agent[agent]["output"] += d_output
         by_agent[agent]["cached"] += d_cached
