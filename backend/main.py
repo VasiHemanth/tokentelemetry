@@ -4710,25 +4710,21 @@ def _kimi_default_model() -> str:
         return "kimi-for-coding"
     if not isinstance(data, dict):
         return "kimi-for-coding"
+    models = data.get("models")
     model = data.get("default_model")
     if not (isinstance(model, str) and model):
-        models = data.get("models")
         if isinstance(models, dict):
             model = models.get("default_model")
     if not (isinstance(model, str) and model):
         return "kimi-for-coding"
-    entry = data.get("models", {}).get(model)
+    entry = models.get(model) if isinstance(models, dict) else None
     if isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"]:
         return entry["model"]
     return model
 
 
 def _kimi_project_by_session() -> Dict[str, str]:
-    """session-uuid -> project path from ~/.kimi/kimi.json's work_dirs registry.
-
-    The registry only remembers each work dir's LAST session, so older sessions
-    of a multi-session project resolve to "unknown" — the bucket dir name is a
-    hash of the work dir and can't be reversed."""
+    """Map Kimi session IDs and work-directory bucket hashes to project paths."""
     try:
         data = json.loads((KIMI_DIR / "kimi.json").read_text(
             encoding="utf-8", errors="replace"))
@@ -4736,8 +4732,11 @@ def _kimi_project_by_session() -> Dict[str, str]:
         return {}
     out: Dict[str, str] = {}
     for wd in (data.get("work_dirs") or []) if isinstance(data, dict) else []:
-        if isinstance(wd, dict) and wd.get("path") and wd.get("last_session_id"):
-            out[str(wd["last_session_id"])] = str(wd["path"])
+        if isinstance(wd, dict) and wd.get("path"):
+            path = str(wd["path"])
+            out[hashlib.md5(path.encode()).hexdigest()] = path
+            if wd.get("last_session_id"):
+                out[str(wd["last_session_id"])] = path
     return out
 
 
@@ -4849,7 +4848,9 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
             sess = {
                 "id": sid,
                 "agent": "kimi",
-                "project": aliases.get(projects.get(sid, ""), projects.get(sid, "unknown")),
+                "project": aliases.get(
+                    projects.get(sid) or projects.get(wire.parent.parent.name, ""),
+                    projects.get(sid) or projects.get(wire.parent.parent.name, "unknown")),
                 "timestamp": ts,
                 "display": display or f"Kimi Code session {sid[:8]}",
                 "text": display,

@@ -14,6 +14,7 @@ and is never read; all fixtures below are synthetic.
 Run: pytest backend/test_kimi_scan.py -q
 """
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -152,6 +153,16 @@ def test_scan_kimi_model_resolves_display_id_through_models_table(kimi_home):
     assert s["model"] == "kimi-for-coding"
 
 
+def test_scan_kimi_ignores_malformed_models_config(kimi_home):
+    """A valid but wrongly typed TOML table must not prevent session scans."""
+    _write_kimi_home(kimi_home)
+    (kimi_home / "config.toml").write_text(
+        'default_model = "kimi-code/kimi-for-coding"\nmodels = ["bad"]\n',
+        encoding="utf-8")
+
+    assert main._scan_kimi_sessions()[0]["model"] == "kimi-code/kimi-for-coding"
+
+
 def test_scan_kimi_missing_dir_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "KIMI_DIR", tmp_path / "nope")
     monkeypatch.setattr(main, "KIMI_SESSIONS_DIR", tmp_path / "nope" / "sessions")
@@ -193,6 +204,18 @@ def test_scan_kimi_session_without_registry_entry_is_unknown_project(kimi_home):
                                          encoding="utf-8")
     s = main._scan_kimi_sessions()[0]
     assert s["project"] == "unknown"
+
+
+def test_scan_kimi_maps_hashed_bucket_to_registered_project(kimi_home):
+    sess = _write_kimi_home(kimi_home)
+    bucket = kimi_home / "sessions" / hashlib.md5(PROJECT.encode()).hexdigest()
+    bucket.mkdir()
+    sess.rename(bucket / SID)
+    (kimi_home / "kimi.json").write_text(json.dumps({"work_dirs": [
+        {"path": PROJECT, "kaos": "local", "last_session_id": None},
+    ]}), encoding="utf-8")
+
+    assert main._scan_kimi_sessions()[0]["project"] == PROJECT
 
 
 # ---------------------------------------------------------------------------
