@@ -410,6 +410,59 @@ def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
         assert sum(s["tokens"]["total"] for s in rows) == 300
 
 
+def test_session_detail_uses_transcript_trace_when_there_is_no_sqlite_db():
+    """Newer agy builds write no conversations/<sid>.db at all.
+
+    _antigravity_cli_trace already falls back to transcript*.jsonl, but the
+    endpoint used to gate that call behind cli_db.exists() and so handed back
+    the much thinner brain markdown instead — the trace never rendered for
+    exactly the sessions the fallback was written for. Exercise the endpoint,
+    not the parser, because the parser was never the broken half.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        sid = "sid-transcript-only"
+        logs = root / "brain" / sid / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript.jsonl").write_text(
+            json.dumps({"type": "USER_INPUT", "content": "<USER_REQUEST>only in the transcript</USER_REQUEST>"})
+            + "\n",
+            encoding="utf-8",
+        )
+        # Brain markdown is present too, so this also pins the precedence:
+        # a real trajectory beats the synthesized markdown summary.
+        (root / "brain" / sid / "task.md").write_text("# Task\n\nbrain markdown\n", encoding="utf-8")
+        # conversations/ exists but deliberately holds no <sid>.db.
+        (root / "conversations").mkdir()
+
+        nowhere = root / "nowhere"
+        originals = (
+            main.ANTIGRAVITY_BRAIN_DIR,
+            main.ANTIGRAVITY_BRAIN_DIRS,
+            main.ANTIGRAVITY_CLI_DIR,
+            main.GEMINI_DIR,
+        )
+        main.ANTIGRAVITY_BRAIN_DIR = root / "brain"
+        main.ANTIGRAVITY_BRAIN_DIRS = [root / "brain"]
+        main.ANTIGRAVITY_CLI_DIR = root
+        main.GEMINI_DIR = nowhere
+        try:
+            assert not (root / "conversations" / f"{sid}.db").exists()
+            detail = asyncio.run(main.get_session_detail(sid, "antigravity"))
+        finally:
+            (
+                main.ANTIGRAVITY_BRAIN_DIR,
+                main.ANTIGRAVITY_BRAIN_DIRS,
+                main.ANTIGRAVITY_CLI_DIR,
+                main.GEMINI_DIR,
+            ) = originals
+
+        assert detail["kind"] == "antigravity_cli", f"fell through to {detail.get('kind')!r}"
+        msgs = detail["messages"]
+        assert len(msgs) == 1, msgs
+        assert msgs[0]["message"]["content"][0]["text"] == "only in the transcript"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
