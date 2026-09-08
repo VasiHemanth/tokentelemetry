@@ -364,7 +364,7 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
             "input": r["input"], "output": r["output"],
             "cached": r["cached"], "total": r["total"],
             "_cached_sum": cache_reads,
-            # Delegated (Claude subagent/workflow) spend (v3+) — round-tripped
+            # Delegated (Claude subagent/workflow) spend (v4+) — round-tripped
             # so /analytics's fold-in isn't a no-op for every non-"today" query,
             # which is served from this store rather than a live rescan.
             "delegated_input": r["delegated_input"] if "delegated_input" in r.keys() else 0,
