@@ -172,8 +172,9 @@ def _migrate(con: sqlite3.Connection) -> None:
         ):
             try:
                 con.execute(stmt)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.commit()
 
