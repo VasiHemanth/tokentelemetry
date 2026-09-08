@@ -552,14 +552,15 @@ async function start(options) {
   checkNode();
   ensureBackend();
   ensureFrontend();
+  // Fail fast if either required port is taken — otherwise Next bumps to N+1
+  // and the auto-opened browser lands on the wrong URL. Check ports first so a
+  // conflict never triggers a needless 30-60s build.
+  await ensurePortsFree([frontPort, apiPort]);
+
   // Serve a production build (next start) unless --dev asks for the dev server.
   // apiPort is baked into the build (NEXT_PUBLIC_API_PORT is build-time), so it
   // must be passed here, not just to the runtime spawn below.
   if (!dev) ensureFrontendBuild(apiPort);
-
-  // Fail fast if either required port is taken — otherwise Next bumps to N+1
-  // and the auto-opened browser lands on the wrong URL.
-  await ensurePortsFree([frontPort, apiPort]);
 
   // Loopback binds display as "localhost"; a specific interface IP shows as-is.
   const displayHost = (host === '0.0.0.0' || host === '127.0.0.1') ? 'localhost' : host;
