@@ -518,8 +518,8 @@ export default function AnalyticsPage() {
       {/* Per-day table */}
       <Card padding="none">
         <div className="px-5 py-4 border-b border-[var(--tt-border)] flex items-center justify-between">
-          <CardTitle><Calendar size={14} className="text-[var(--tt-brand)]" /> Cost by day</CardTitle>
-          <CardEyebrow>{dayRows.length} days</CardEyebrow>
+          <CardTitle><Calendar size={14} className="text-[var(--tt-brand)]" /> Cost by {granularity}</CardTitle>
+          <CardEyebrow>{dayRows.length} {granularity === "day" ? "days" : granularity === "week" ? "weeks" : "months"}</CardEyebrow>
         </div>
         <div className="overflow-x-auto">
           <Table>
