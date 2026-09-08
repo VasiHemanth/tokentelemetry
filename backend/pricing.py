@@ -481,6 +481,8 @@ _XAI_BANDS = {
 }
 
 PRICING_HISTORY: dict = {**_ANTHROPIC_BANDS, **_DEEPSEEK_BANDS, **_GPT56_BANDS, **_XAI_BANDS}
+# Pre-sorted longest-first for O(1) fuzzy prefix lookup in rates_for().
+_PRICING_HISTORY_KEYS_BY_LEN: list = sorted(PRICING_HISTORY.keys(), key=len, reverse=True)
 
 # Same bands, keyed by (provider, model) so a provider-qualified lookup gets the
 # historical rate too. Built from the same source so the two can never disagree.
@@ -545,8 +547,7 @@ def rates_for(model: str, provider: Optional[str] = None, at=None) -> Optional[D
     if bands:
         return _rates_at(bands, when)
     # Fuzzy prefix: "claude-sonnet-5-20260601" should resolve claude-sonnet-5's bands.
-    sorted_keys = sorted(PRICING_HISTORY.keys(), key=len, reverse=True)
-    for k in sorted_keys:
+    for k in _PRICING_HISTORY_KEYS_BY_LEN:
         if _fuzzy_key_matches(k, m):
             return _rates_at(PRICING_HISTORY[k], when)
     return None
