@@ -206,7 +206,7 @@ export default function AnalyticsPage() {
   // Most-recent-first for the breakdown table; the chart above wants ascending order.
   const dayRows = useMemo(() => {
     if (!data?.by_day) return [];
-    return [...data.by_day].sort((a, b) => (a.date < b.date ? 1 : -1));
+    return [...data.by_day].sort((a, b) => b.date.localeCompare(a.date));
   }, [data]);
 
   if (loading && !data) return <AnalyticsLoading />;

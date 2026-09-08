@@ -117,7 +117,7 @@ def _migrate(con: sqlite3.Connection) -> None:
             );
             """
         )
-        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.execute("PRAGMA user_version=1")
         con.commit()
     if ver < 2:
         # v2 adds `cache_reads`: the CUMULATIVE cache-read sum per session
@@ -131,7 +131,7 @@ def _migrate(con: sqlite3.Connection) -> None:
             con.execute("ALTER TABLE sessions ADD COLUMN cache_reads INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
-        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.execute("PRAGMA user_version=2")
         con.commit()
     if ver < 3:
         # v3 folds separator variants of the same project folder into the
