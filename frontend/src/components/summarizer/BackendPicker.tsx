@@ -304,6 +304,7 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
               <button
                 key={p.label}
                 type="button"
+                disabled={testing}
                 onClick={() => {
                   onChange?.({ ...config, endpoint: p.endpoint });
                   // Always reassign the model, including clearing it: a preset
@@ -311,9 +312,13 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
                   // Studio serves whatever is loaded). Leaving a stale hosted
                   // model id pointed at localhost is worse than an empty field.
                   onModelChange?.(p.model);
+                  // Clear any prior test result — it belongs to the previous
+                  // endpoint and would mislead the user into thinking this
+                  // preset has already been tested.
+                  setResult(null);
                 }}
                 className={cn(
-                  "h-6 px-2 rounded border text-[10.5px] font-medium transition-colors",
+                  "h-6 px-2 rounded border text-[10.5px] font-medium transition-colors disabled:opacity-50",
                   config.endpoint === p.endpoint
                     ? "border-[var(--tt-border-focus)] text-[var(--tt-fg)]"
                     : "border-[var(--tt-border-strong)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]",
