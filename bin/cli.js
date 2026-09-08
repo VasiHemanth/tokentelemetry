@@ -622,7 +622,6 @@ async function start(options) {
   // /_next/static to any origin — and the frontend loads chunks from the same
   // address the dashboard was opened on (window.location), so remote/tailnet
   // access keeps working without that knob.
-  if (!dev) ensureFrontendBuild();
   const frontendArgs = dev
     ? ['run', 'dev', '--', '--hostname', host, '-p', String(frontPort)]
     : ['run', 'start', '--', '-p', String(frontPort)];
