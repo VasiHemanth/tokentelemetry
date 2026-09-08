@@ -48,13 +48,13 @@ export const DEFAULT_OPENAI_COMPAT: OpenAICompatConfig = {
 export interface EndpointPreset {
   label: string;
   endpoint: string;
-  model: string;
+  model: string | null;
 }
 
 export const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
   { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
-  { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: "" },
+  { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: null },
 ];
 
 export interface SummarizerConfig {
