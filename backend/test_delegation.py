@@ -621,6 +621,33 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
 
 
+def test_analytics_folds_delegated_into_by_day_and_by_model(scan_env):
+    """get_analytics() must fold delegated_* spend into by_day totals/cost and
+    attribute subagent-only models (e.g. Haiku under a Sonnet parent) in
+    by_model — verifying the core analytics fold-in added in this PR."""
+    make_claude_tree(scan_env / ".claude")
+    a = _run(main.get_analytics())
+
+    # by_day: there should be exactly one day bucket (all sessions share a
+    # timestamp). Its total must include both parent tokens (100+50+1000=1150)
+    # and delegated tokens (inp=38, out=15, cached=340 → 393). Cost non-zero.
+    assert len(a["by_day"]) == 1
+    day = a["by_day"][0]
+    parent_own_total = 100 + 50 + 1000          # input + output + cached (HWM)
+    delegated_total  = 38 + 15 + 340            # delegated_input + output + cached
+    assert day["total"] == parent_own_total + delegated_total
+    assert day["cost"] > 0
+
+    # by_model: Haiku is ONLY used by subagents, not the parent session. It
+    # must appear in by_model via delegated_by_model attribution with non-zero
+    # totals and cost.
+    assert "claude-haiku-4-5-20251001" in a["by_model"], (
+        "Haiku subagent model missing from by_model — delegated_by_model fold-in not working")
+    haiku = a["by_model"]["claude-haiku-4-5-20251001"]
+    assert haiku["total"] > 0
+    assert haiku["cost"] > 0
+
+
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
 
 GROK_PARENT = "019eb056-455f-7442-bf79-000000000001"
