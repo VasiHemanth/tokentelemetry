@@ -482,10 +482,16 @@ function ensureFrontend() {
 function frontendBuildKey() {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' });
   if (head.status === 0 && head.stdout.trim()) return head.stdout.trim();
+  // No git metadata (tarball install): hash both package.json and package-lock.json
+  // so a lockfile-only dependency update still triggers a rebuild. package.json
+  // alone is not enough — a `npm audit fix` that only changes the lockfile would
+  // be invisible, silently leaving the old (possibly vulnerable) deps in place.
   try {
-    return crypto.createHash('sha1')
-      .update(fs.readFileSync(path.join(frontendDir, 'package.json')))
-      .digest('hex');
+    const h = crypto.createHash('sha1')
+      .update(fs.readFileSync(path.join(frontendDir, 'package.json')));
+    const lockPath = path.join(frontendDir, 'package-lock.json');
+    if (fs.existsSync(lockPath)) h.update(fs.readFileSync(lockPath));
+    return h.digest('hex');
   } catch { return ''; }
 }
 
@@ -624,7 +630,7 @@ async function start(options) {
   // access keeps working without that knob.
   const frontendArgs = dev
     ? ['run', 'dev', '--', '--hostname', host, '-p', String(frontPort)]
-    : ['run', 'start', '--', '-p', String(frontPort)];
+    : ['run', 'start', '--', '--hostname', host, '-p', String(frontPort)];
   const frontend = spawn('npm', frontendArgs, {
     cwd: frontendDir,
     stdio: 'inherit',
