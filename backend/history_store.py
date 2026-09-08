@@ -155,7 +155,7 @@ def _migrate(con: sqlite3.Connection) -> None:
             con.commit()
         except sqlite3.Error:
             _log.exception("history migrate v3 (project canonicalisation) failed")
-    if ver < 4:
+    if ver < 4 and con.execute("PRAGMA user_version").fetchone()[0] >= 3:
         # v4 adds delegated_* columns: Claude subagent/workflow spend that
         # exists NOWHERE else. Without persisting it, /analytics's fold-in
         # (by_agent/by_day/by_model/total) is a no-op for every day served
