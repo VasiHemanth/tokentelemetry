@@ -1,4 +1,4 @@
-# Price per 1M tokens in USD (Last Updated: 2026-08-07)
+# Price per 1M tokens in USD (Last Updated: 2026-08-29)
 #
 # Two-tier lookup:
 #   1. PRICING_BY_PROVIDER  — (provider, model_id_lower) → rates. Authoritative
@@ -61,19 +61,15 @@ PRICING = {
     "claude-mythos-5":   {"in": 10.00, "out": 50.00, "cached_read": 1.00},
     "claude-opus-5":     {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-8":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
-    "claude-sonnet-5":   {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
 
     "claude-opus-4-7":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-6":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-5":   {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     "claude-opus-4-1":   {"in": 15.00, "out": 75.00, "cached_read": 1.50},
     "claude-opus-4":     {"in": 15.00, "out": 75.00, "cached_read": 1.50},
-    # Sonnet 5 is INTRODUCTORY pricing, in effect only through 2026-08-31;
-    # standard pricing (3.00/15.00/0.30 — same as Sonnet 4.x) takes over
-    # 2026-09-01. Update this entry then, or sessions after that date will be
-    # silently UNDERcounted by ~33% — the exact bug class this table exists
-    # to prevent. No code here dates the cutover automatically.
-    "claude-sonnet-5":   {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
+    # Sonnet 5: standard rate from 2026-09-01. Introductory $2/$10 is in
+    # _ANTHROPIC_BANDS so pre-cutover sessions are still priced correctly.
+    "claude-sonnet-5":   {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
     "claude-sonnet-4-6": {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
     "claude-sonnet-4-5": {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
     "claude-sonnet-4":   {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
@@ -229,7 +225,7 @@ PRICING_BY_PROVIDER = {
     ("anthropic", "claude-mythos-5"):                {"in": 10.00, "out": 50.00, "cached_read": 1.00},
     ("anthropic", "claude-opus-5"):                  {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
     ("anthropic", "claude-opus-4-8"):                {"in": 5.00,  "out": 25.00, "cached_read": 0.50},
-    ("anthropic", "claude-sonnet-5"):                {"in": 2.00,  "out": 10.00, "cached_read": 0.20},
+    ("anthropic", "claude-sonnet-5"):                {"in": 3.00,  "out": 15.00, "cached_read": 0.30},
 
     # --- DeepSeek (direct) ---
     # These MUST exist even though they duplicate the flat table above.
@@ -394,6 +390,14 @@ _load_bundled_pricing()
 # OpenAI cuts were announced by date only, so those bands start at 00:00 UTC and
 # a session on the cut date itself may be off by up to a day. Recorded here
 # rather than hidden, because it is the one imprecise thing in this table.
+_ANTHROPIC_BANDS = {
+    # claude-sonnet-5: introductory $2/$10 through 2026-08-31; standard
+    # $3/$15 from 2026-09-01. https://docs.claude.com/en/docs/about-claude/pricing
+    "claude-sonnet-5": [
+        ("2000-01-01T00:00:00Z", {"in": 2.00, "out": 10.00, "cached_read": 0.20}),
+        ("2026-09-01T00:00:00Z", {"in": 3.00, "out": 15.00, "cached_read": 0.30}),
+    ],
+}
 _DEEPSEEK_BANDS = {
     # https://api-docs.deepseek.com/quick_start/pricing — V4 repricing, and the
     # point peak/off-peak was introduced. Post-cut rates are OFF-PEAK; see the
@@ -476,11 +480,13 @@ _XAI_BANDS = {
     ],
 }
 
-PRICING_HISTORY: dict = {**_DEEPSEEK_BANDS, **_GPT56_BANDS, **_XAI_BANDS}
+PRICING_HISTORY: dict = {**_ANTHROPIC_BANDS, **_DEEPSEEK_BANDS, **_GPT56_BANDS, **_XAI_BANDS}
 
 # Same bands, keyed by (provider, model) so a provider-qualified lookup gets the
 # historical rate too. Built from the same source so the two can never disagree.
 PRICING_BY_PROVIDER_HISTORY: dict = {}
+for _m, _b in _ANTHROPIC_BANDS.items():
+    PRICING_BY_PROVIDER_HISTORY[("anthropic", _m)] = _b
 for _m, _b in _DEEPSEEK_BANDS.items():
     PRICING_BY_PROVIDER_HISTORY[("deepseek", _m)] = _b
 for _m, _b in _GPT56_BANDS.items():
@@ -536,7 +542,14 @@ def rates_for(model: str, provider: Optional[str] = None, at=None) -> Optional[D
         if bands:
             return _rates_at(bands, when)
     bands = PRICING_HISTORY.get(m)
-    return _rates_at(bands, when) if bands else None
+    if bands:
+        return _rates_at(bands, when)
+    # Fuzzy prefix: "claude-sonnet-5-20260601" should resolve claude-sonnet-5's bands.
+    sorted_keys = sorted(PRICING_HISTORY.keys(), key=len, reverse=True)
+    for k in sorted_keys:
+        if _fuzzy_key_matches(k, m):
+            return _rates_at(PRICING_HISTORY[k], when)
+    return None
 
 
 # xAI long-context cliff: a request whose prompt reaches this many tokens is
@@ -703,8 +716,8 @@ def calculate_cost(
             # (searchable in server logs) instead of silently undercounting for
             # weeks, same class of bug as the Sonnet 5 / Opus 5 gap this table
             # was extended to cover.
-            if model_name not in _warned_unpriced_models:
-                _warned_unpriced_models.add(model_name)
+            if m_norm not in _warned_unpriced_models:
+                _warned_unpriced_models.add(m_norm)
                 logger.warning(
                     "No pricing entry for model %r (provider=%r) — billing at "
                     "_default rate ($%.2f/$%.2f per MTok in/out). Add a curated "

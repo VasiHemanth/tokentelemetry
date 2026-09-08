@@ -6952,6 +6952,7 @@ def _scan_sessions_sync():
                         sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
                         sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
                         sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
+                        sess["tokens"]["delegated_cache_reads"] = deleg["totals"]["_cached_sum"]
                         sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
                         sess["delegated_cost"] = deleg["cost"]
                         sess["delegated_by_model"] = deleg["by_model"]
@@ -11114,6 +11115,7 @@ async def get_analytics(
         d_input = st.get("delegated_input", 0) or 0
         d_output = st.get("delegated_output", 0) or 0
         d_cached = st.get("delegated_cached", 0) or 0
+        d_cache_reads = st.get("delegated_cache_reads", 0) or 0
         d_total = d_input + d_output + d_cached
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
@@ -11132,7 +11134,7 @@ async def get_analytics(
         # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
         # `input` badly understates the hit rate on long sessions. Agents without
         # `_cached_sum` fall back to `cached` (prior behavior).
-        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cached
+        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cache_reads
         by_agent[agent]["input"] += d_input
         by_agent[agent]["output"] += d_output
         by_agent[agent]["cached"] += d_cached

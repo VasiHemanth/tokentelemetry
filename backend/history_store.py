@@ -167,6 +167,7 @@ def _migrate(con: sqlite3.Connection) -> None:
             "ALTER TABLE sessions ADD COLUMN delegated_input INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN delegated_output INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN delegated_cached INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN delegated_cache_reads INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN delegated_by_model_json TEXT",
         ):
             try:
@@ -238,6 +239,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 deleg_input = int(tok.get("delegated_input", 0) or 0)
                 deleg_output = int(tok.get("delegated_output", 0) or 0)
                 deleg_cached = int(tok.get("delegated_cached", 0) or 0)
+                deleg_cache_reads = int(tok.get("delegated_cache_reads", 0) or 0)
                 deleg_by_model = r.get("delegated_by_model")
                 deleg_by_model_json = json.dumps(deleg_by_model) if deleg_by_model else None
                 # A stub row is a session we discovered on disk but did NOT fully
@@ -277,6 +279,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             delegated_input=excluded.delegated_input,
                             delegated_output=excluded.delegated_output,
                             delegated_cached=excluded.delegated_cached,
+                            delegated_cache_reads=excluded.delegated_cache_reads,
                             delegated_by_model_json=excluded.delegated_by_model_json
                     """
                 con.execute(
@@ -286,8 +289,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         first_ts, last_ts, input, output, cached, cache_reads, total, cost,
                         tok_per_sec, ecosystem_json, first_seen_at, last_seen_at,
                         source_present, delegated_cost, delegated_input, delegated_output,
-                        delegated_cached, delegated_by_model_json
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)
+                        delegated_cached, delegated_cache_reads, delegated_by_model_json
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)
                     {conflict_clause}
                     """,
                     (
@@ -300,7 +303,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                         float(r.get("cost", 0.0) or 0.0),
                         r.get("tok_per_sec"),
                         _ecosystem_blob(r), now, now,
-                        deleg_cost, deleg_input, deleg_output, deleg_cached, deleg_by_model_json,
+                        deleg_cost, deleg_input, deleg_output, deleg_cached, deleg_cache_reads, deleg_by_model_json,
                     ),
                 )
                 written += 1
@@ -367,6 +370,7 @@ def _rehydrate(r: sqlite3.Row) -> Dict[str, Any]:
             "delegated_input": r["delegated_input"] if "delegated_input" in r.keys() else 0,
             "delegated_output": r["delegated_output"] if "delegated_output" in r.keys() else 0,
             "delegated_cached": r["delegated_cached"] if "delegated_cached" in r.keys() else 0,
+            "delegated_cache_reads": r["delegated_cache_reads"] if "delegated_cache_reads" in r.keys() else 0,
         },
         "cost": r["cost"],
         "delegated_cost": (r["delegated_cost"] if "delegated_cost" in r.keys() else 0.0) or 0.0,
