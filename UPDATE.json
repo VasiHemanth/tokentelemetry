@@ -257,7 +257,7 @@
         {
           "title": "Agent brands are easier to scan",
           "description": "Connected agents, settings, project badges, trace headers, and the website now use each agent's own mark and color so mixed-agent work is easier to recognize at a glance.",
-          "href": "/"
+          "href": "/settings"
         }
       ]
     },

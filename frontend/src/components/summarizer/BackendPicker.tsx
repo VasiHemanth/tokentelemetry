@@ -308,9 +308,9 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
                   onChange?.({ ...config, endpoint: p.endpoint });
                   // Always reassign the model, including clearing it: a preset
                   // with no model id means "the server picks" (llama.cpp / LM
-                  // Studio serve whatever is loaded). Leaving a stale hosted
+                  // Studio serves whatever is loaded). Leaving a stale hosted
                   // model id pointed at localhost is worse than an empty field.
-                  onModelChange?.(p.model || null);
+                  onModelChange?.(p.model);
                 }}
                 className={cn(
                   "h-6 px-2 rounded border text-[10.5px] font-medium transition-colors",
