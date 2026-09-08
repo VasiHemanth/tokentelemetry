@@ -477,8 +477,9 @@ function ensureFrontend() {
 // A change key for the compiled frontend. Installs are `git clone` and updates
 // are pull / re-clone (install.sh), so the HEAD commit changes exactly when the
 // code does — one cheap call, no hashing the whole source tree. Falls back to a
-// hash of the frontend package.json when there's no git metadata (e.g. a tarball
-// download), so a dependency bump still forces a rebuild.
+// hash of frontend/package.json + package-lock.json when there's no git metadata
+// (e.g. a tarball download), so a lockfile-only dependency bump still forces a
+// rebuild.
 function frontendBuildKey() {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' });
   if (head.status === 0 && head.stdout.trim()) return head.stdout.trim();
@@ -883,6 +884,7 @@ module.exports = {
   UsageError,
   parseInvocation,
   parseArgs,
+  frontendBuildKey,
   printHelp,
   shouldOpenBrowser,
   openBrowser,
