@@ -109,10 +109,30 @@ function parseArgs(argv) {
 //   2. the first --allowed-origins entry (they told us how they'll reach it),
 //   3. the primary non-internal IPv4 of this box (best-effort autodetect).
 // Returns '' if nothing concrete is available.
+// Reduce one --allowed-origins entry to a bare host: strip any scheme, path
+// and port, keeping a bracketed IPv6 literal intact. Mirrors _origin_host() in
+// backend/main.py so all three consumers of the list agree on what an entry
+// means (CORS, Next's allowedDevOrigins, and the connect/QR URL below).
+function originHost(raw) {
+  let h = String(raw || '').trim().toLowerCase();
+  if (!h) return '';
+  const scheme = h.indexOf('://');
+  if (scheme !== -1) h = h.slice(scheme + 3);
+  h = h.split('/')[0].split('?')[0].split('#')[0];
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']');
+    return end === -1 ? h : h.slice(0, end + 1);
+  }
+  return h.split(':')[0];
+}
+
 function pickConnectHost(host, allowedOrigins) {
   if (host && !['0.0.0.0', '127.0.0.1', 'localhost'].includes(host)) return host;
   const first = (allowedOrigins || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
-  if (first) return first;
+  // The list is documented as hostnames, but a full origin is the natural
+  // thing to type. Reduce it to a host so the connect URL doesn't come out as
+  // "http://https://box.ts.net:3000". Matches backend _origin_host().
+  if (first) return originHost(first);
   for (const addrs of Object.values(os.networkInterfaces())) {
     for (const a of addrs || []) {
       if (a.family === 'IPv4' && !a.internal) return a.address;
