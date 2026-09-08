@@ -69,7 +69,7 @@
     "url": "https://github.com/VasiHemanth/tokentelemetry/issues"
   },
   "dependencies": {
-    "electron": "^44.1.0"
+    "electron": "^44.2.0"
   },
   "engines": {
     "node": ">=20.9.0"
