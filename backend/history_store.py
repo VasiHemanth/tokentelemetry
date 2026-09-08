@@ -151,11 +151,15 @@ def _migrate(con: sqlite3.Connection) -> None:
                         "UPDATE sessions SET project=? WHERE project=?",
                         (canon, r["project"]),
                     )
-            con.execute("PRAGMA user_version=3")
-            con.commit()
         except sqlite3.Error:
-            _log.exception("history migrate v3 (project canonicalisation) failed")
-    if con.execute("PRAGMA user_version").fetchone()[0] < 4:
+            # Best-effort: any rows not updated here will be fixed at scan
+            # time (sessions are canonicalised on write). Always advance the
+            # version so v4 is never permanently blocked by a transient error.
+            _log.exception("history migrate v3 (project canonicalisation) failed — unfixed rows will self-heal at next scan")
+        con.execute("PRAGMA user_version=3")
+        con.commit()
+    if ver < 4:
+        # v4 adds delegated_* columns: Claude subagent/workflow spend that
         # exists NOWHERE else. Without persisting it, /analytics's fold-in
         # (by_agent/by_day/by_model/total) is a no-op for every day served
         # from this store — which is EVERY day except "today" — silently
