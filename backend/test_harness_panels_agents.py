@@ -644,3 +644,37 @@ def test_hermes_billing_processes_and_dashboard_link(tmp_path, monkeypatch):
     sec = next(s for s in doc["sections"] if s["title"] == "Credential stores")
     assert "auth.json" in json.dumps(sec) and ".env" in json.dumps(sec)
     assert "sk-should-never-be-read" not in flat, "credential values are never read"
+
+
+def test_hermes_billing_tokens_survives_null_pair(tmp_path, monkeypatch):
+    """A NULL half of the input/output pair must not zero out the known half.
+
+    session_model_usage rows can have output_tokens unset while input_tokens
+    is recorded; SQLite's arithmetic SUM propagates that NULL through the
+    whole expression, discarding the known input tokens too (#342).
+    """
+    root = tmp_path / ".hermes"
+    root.mkdir(parents=True)
+    con = sqlite3.connect(root / "state.db")
+    con.execute(
+        "CREATE TABLE session_model_usage (session_id TEXT, model TEXT, "
+        "billing_provider TEXT, billing_mode TEXT, api_call_count INT, "
+        "input_tokens INT, output_tokens INT, cache_read_tokens INT, "
+        "cache_write_tokens INT, reasoning_tokens INT, "
+        "estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT)")
+    con.executemany(
+        "INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("s1", "gpt-5.4", "openai-codex", "subscription_included",
+             10, 100, None, 0, 0, 0, 0.0, 0.0, "included"),
+            ("s2", "gpt-5.4", "openai-codex", "subscription_included",
+             5, 50, 25, 0, 0, 0, 0.0, 0.0, "included"),
+        ])
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(hp_paths, "HERMES_DIR", root)
+    doc = hermes_panel.build_hermes(with_disk=False)
+
+    bill = next(s for s in doc["sections"] if s["title"] == "Billing by provider")
+    row = next(r for r in bill["rows"] if r[0] == "openai-codex")
+    assert row[3] == 175, "the 100 known input tokens from the NULL-output row must count"
