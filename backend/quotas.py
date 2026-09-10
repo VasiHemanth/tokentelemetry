@@ -30,6 +30,10 @@ from tt_paths import data_dir
 SCHEMA = "tokentelemetry.quotas.v1"
 FRESHNESS = timedelta(minutes=5)
 CACHE_LOCK_TIMEOUT_SECONDS = 15
+# A fetchedAt read off disk this far ahead of the loader's own clock cannot
+# be trusted; treat it as no cached snapshot rather than an indefinitely
+# fresh one.
+MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 # ``flock``/``msvcrt.locking`` coordinate separate processes, but their
 # same-process behaviour differs by platform. Keep a per-cache thread lock as
@@ -249,10 +253,12 @@ class QuotaSnapshot:
         }
 
     @classmethod
-    def from_wire(cls, provider_id: str, value: Dict[str, Any]) -> Optional["QuotaSnapshot"]:
+    def from_wire(cls, provider_id: str, value: Dict[str, Any], now: datetime) -> Optional["QuotaSnapshot"]:
         fetched_at = _date(value.get("fetchedAt"))
         resources = value.get("resources")
         if not fetched_at or not isinstance(resources, dict):
+            return None
+        if fetched_at > now + MAX_FUTURE_SKEW:
             return None
         parsed = {
             str(key): QuotaResource.from_wire(resource)
@@ -1379,10 +1385,11 @@ class QuotaService:
             providers = value.get("providers") if isinstance(value, dict) else None
             if not isinstance(providers, dict):
                 return
+            loaded_at = self.now()
             snapshots = {
                 provider_id: snapshot
                 for provider_id, raw in providers.items()
-                if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw))
+                if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw, loaded_at))
             }
         except (OSError, json.JSONDecodeError):
             return
