@@ -232,6 +232,30 @@ def test_helper_rollup(tmp_path):
     assert deleg["cost"] >= 0
 
 
+def test_helper_rollup_dedups_repeated_message_id(tmp_path):
+    """Claude Code writes one JSONL line per content block of a single turn
+    (thinking/text/tool_use), repeating the full message.usage on every line
+    with the SAME message.id. Without dedup, a 3-block turn triples its usage."""
+    sub = tmp_path / ".claude" / "projects" / PROJ / SID / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-one.jsonl").write_text(
+        # Turn 1: 3 content blocks, same message.id, same usage repeated 3x.
+        _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        # Turn 2: a genuinely distinct request — must still be counted.
+        + _assistant_line(inp=4, out=2, cache_read=50, cache_creation=0, message_id="msg_B"),
+        encoding="utf-8",
+    )
+    deleg = main._claude_subagent_usage(tmp_path / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    one = deleg["subagents"][0]
+    assert one["tokens"]["input"] == 10 + 4
+    assert one["tokens"]["output"] == 5 + 2
+    assert one["tokens"]["cached"] == max(100, 50)  # high-water-mark, not tripled
+    assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
+    assert one["tokens"]["cache_creation"] == 20
+
+
 def test_helper_costs_with_each_files_own_model(tmp_path, monkeypatch):
     sf = make_claude_tree(tmp_path / ".claude")
     seen = []
@@ -280,7 +304,8 @@ def test_scan_claude_delegation_summary(scan_env):
     assert d["supported"] is True and d["tokens_recorded"] is True
     assert d["spawn_count"] == 3
     assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (300 + 40)
-    # Per-type rollup for analytics: Explore file = 30+10+300 tokens.
+    # Per-type rollup for analytics: Explore file = 30+10+300 tokens (cached
+    # is the high-water-mark across its two turns, 100 vs 300 — not summed).
     assert d["by_type"]["Explore"] == {"count": 1, "total": 340,
                                        "cost": d["by_type"]["Explore"]["cost"]}
     assert set(d["by_type"]) == {"Explore", "general-purpose", "unknown"}
@@ -594,6 +619,33 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     # children counted once as their own sessions.
     assert a["by_agent"]["claude"]["total"] == 30
     assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
+
+
+def test_analytics_folds_delegated_into_by_day_and_by_model(scan_env):
+    """get_analytics() must fold delegated_* spend into by_day totals/cost and
+    attribute subagent-only models (e.g. Haiku under a Sonnet parent) in
+    by_model — verifying the core analytics fold-in added in this PR."""
+    make_claude_tree(scan_env / ".claude")
+    a = _run(main.get_analytics())
+
+    # by_day: there should be exactly one day bucket (all sessions share a
+    # timestamp). Its total must include both parent tokens (100+50+1000=1150)
+    # and delegated tokens (inp=38, out=15, cached=340 → 393). Cost non-zero.
+    assert len(a["by_day"]) == 1
+    day = a["by_day"][0]
+    parent_own_total = 100 + 50 + 1000          # input + output + cached (HWM)
+    delegated_total  = 38 + 15 + 340            # delegated_input + output + cached
+    assert day["total"] == parent_own_total + delegated_total
+    assert day["cost"] > 0
+
+    # by_model: Haiku is ONLY used by subagents, not the parent session. It
+    # must appear in by_model via delegated_by_model attribution with non-zero
+    # totals and cost.
+    assert "claude-haiku-4-5-20251001" in a["by_model"], (
+        "Haiku subagent model missing from by_model — delegated_by_model fold-in not working")
+    haiku = a["by_model"]["claude-haiku-4-5-20251001"]
+    assert haiku["total"] > 0
+    assert haiku["cost"] > 0
 
 
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
