@@ -22,6 +22,7 @@ from quotas import (
     QuotaService,
     QuotaSnapshot,
     StaticQuotaProvider,
+    _CacheFileLock,
     default_quota_providers,
 )
 
@@ -302,6 +303,30 @@ def test_service_keeps_last_good_snapshot_when_a_refresh_fails(tmp_path):
     assert second["providers"]["codex"]["fetchedAt"] == first["providers"]["codex"]["fetchedAt"]
     assert second["errors"] == [{"providerId": "codex", "message": "Could not refresh quota data."}]
     assert second["capabilities"]["codex"]["state"] == "refreshFailed"
+
+
+def test_service_reports_a_lock_timeout_as_an_error_not_an_empty_result(tmp_path, monkeypatch):
+    class Provider:
+        provider_id = "codex"
+        display_name = "Codex"
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            raise AssertionError("must not refresh while the cache lock is held elsewhere")
+
+    monkeypatch.setattr(_CacheFileLock, "__enter__", lambda self: False)
+    monkeypatch.setattr(_CacheFileLock, "__exit__", lambda self, *exc: None)
+
+    result = QuotaService([Provider()], cache_path=tmp_path / "quotas.json").collect(force=True)
+
+    assert result["providers"] == {}
+    assert result["capabilities"] == {}
+    assert result["errors"] == [{
+        "providerId": "quotaCache",
+        "message": "Could not acquire the quota cache lock; showing the last cached snapshot.",
+    }]
 
 
 def test_service_reports_not_signed_in_and_unsupported_harnesses(tmp_path):

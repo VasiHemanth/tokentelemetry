@@ -1317,7 +1317,10 @@ class QuotaService:
                     # means this read is either the prior complete cache or the
                     # next complete cache; never write a competing snapshot.
                     self._load(reload=True)
-                    return self._wire(self.now(), [])
+                    return self._wire(self.now(), [{
+                        "providerId": "quotaCache",
+                        "message": "Could not acquire the quota cache lock; showing the last cached snapshot.",
+                    }])
 
                 # Reload *inside* the process lock. A long-lived dashboard or
                 # menubar instance may have loaded a stale cache before another
