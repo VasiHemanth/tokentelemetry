@@ -417,6 +417,68 @@ def test_second_service_reloads_a_fresh_disk_cache_before_refreshing(tmp_path):
     assert result["providers"]["opencode"]["plan"] == "first"
 
 
+def test_load_discards_a_disk_cache_written_with_a_clock_ahead_of_now(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # A skewed clock (dual-boot RTC offset, a resumed VM snapshot) wrote a
+    # cache whose fetchedAt is months in the future.
+    skewed_at = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: skewed_at).collect(force=True)
+
+    corrected_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    reader = Provider()
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: corrected_at)
+
+    result = service.collect()
+
+    assert reader.calls == 1
+    assert result["providers"]["opencode"]["fetchedAt"] == "2026-09-10T00:00:00Z"
+    assert result["providers"]["opencode"]["stale"] is False
+
+
+def test_load_still_trusts_a_fetched_at_a_few_seconds_ahead_of_the_loading_clock(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # Ordinary jitter between two processes' clocks, well inside
+    # MAX_FUTURE_SKEW, must not be treated as a corrupted cache.
+    written_at = datetime(2026, 9, 10, 12, 0, 5, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: written_at).collect(force=True)
+
+    reader = Provider()
+    reader_now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: reader_now)
+
+    service.collect()
+
+    assert reader.calls == 0
+
+
 def test_second_service_never_saves_an_older_in_memory_snapshot_over_newer_disk_cache(tmp_path):
     class Provider:
         provider_id = "codex"
