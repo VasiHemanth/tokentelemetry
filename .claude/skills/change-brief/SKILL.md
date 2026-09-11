@@ -1,6 +1,6 @@
 ---
 name: change-brief
-description: Explain a change that already exists — a pull request, a merged commit, a closed issue's fix, or an uncommitted diff — in terms of the FEATURE it touches and how someone actually uses that feature, then the bug or gap it addresses. Always states who wrote it (Claude in an earlier session, an outside contributor, or the maintainer) before explaining anything else. Use when the user pastes a PR link or number, says explain this PR / what does this PR do / what is 331 / what's this commit / explain these changes / what did you change, asks "in simple words" or "explain the scenario", or wants to understand work they did not write themselves. Read-only: it reads the diff, the surrounding code and git history, and never runs the app, never checks out a branch, never edits. NOT for deciding whether to build something not yet written (use /issue-brief) and NOT for finding defects (use /code-review).
+description: Explain a change that already exists — a pull request, a merged commit, a closed issue's fix, or an uncommitted diff — in terms of the FEATURE it touches and how someone actually uses that feature, then the bug or gap it addresses. Always states who wrote it (Claude in an earlier session, an outside contributor, or the maintainer), right after the opening model and before any mechanism. Use when the user pastes a PR link or number, says explain this PR / what does this PR do / what is 331 / what's this commit / explain these changes / what did you change, asks "in simple words" or "explain the scenario", or wants to understand work they did not write themselves. Always opens with a concrete everyday analogy and a one-sentence plain statement of the defect; plain language is the DEFAULT output, never a mode the user has to ask for. Read-only: it reads the diff, the surrounding code and git history, and never runs the app, never checks out a branch, never edits. NOT for deciding whether to build something not yet written (use /issue-brief) and NOT for finding defects (use /code-review).
 ---
 
 # change-brief — explain a change that already exists
@@ -36,11 +36,17 @@ A `git diff main...` against a stale local `main` reports hundreds of unrelated
 files. If the stat looks absurdly large for the PR's description, that is the
 cause — fetch `origin/main` and re-diff before believing it.
 
-## 2. Establish authorship first — this is not optional
+## 2. Establish authorship — this is not optional
 
-The user asked for this explicitly: **say who wrote it before explaining what
-it does.** They need to know whether they are reading their own past decision,
+The user asked for this explicitly: **never explain a change without saying who
+wrote it.** They need to know whether they are reading their own past decision,
 a contributor's proposal, or Claude's output from a session they don't recall.
+
+It lands in position 2, immediately after the opening model (§3 step 1) and
+before any mechanism. That is a deliberate change: it used to go first, and a
+brief that opened with a username, three PR numbers and a timestamp got
+"explain it clearly, I still didn't understand" in reply. A name means nothing
+until the reader knows what the thing does. Two lines, still never skipped.
 
 - **The change itself:** `gh pr view <n> --json author`, or
   `git log -1 --format='%an <%ae>' <sha>`.
@@ -60,34 +66,63 @@ Never claim authorship you have not checked, and never let "we" blur it.
 
 ## 3. Answer in this order
 
-1. **Who wrote what.** Two or three lines. The change, the feature it touches,
-   and — if relevant — which parts Claude produced.
-2. **The feature, and how someone actually uses it.** Before any bug: what is
-   this capability *for*? Name the env var, the button, the endpoint, with a
-   `file.py:line` anchor. Give the real reason a person reaches for it ("your
-   home drive is small and you want the store on an external SSD"), not a
-   restatement of its name.
-3. **The scenario, walked.** One realistic setup, numbered, in the order the
-   person experiences it. What they do, what they expect, what they get.
-   Real paths, real ports, real variable names. Say what they *see* before why
-   it happens.
-4. **Why it happens.** The mechanism, now that the symptom is concrete, with
+The first thing on screen is a mental model the reader can hold without knowing
+the codebase. Not the authorship, not the file, not the constant. If they read
+only the first six lines, they should be able to state the bug back to you in
+their own words.
+
+1. **The model and the thesis.** Open with a concrete, everyday analogy for the
+   subsystem, then state the entire defect in ONE bolded sentence of plain
+   words. Then write "That's the whole thing. Everything below is just why."
+
+   **Hard budget for this section: zero `file:line`, zero constant names, zero
+   PR numbers, zero usernames, every sentence under 15 words.** If you cannot
+   write the thesis without an identifier in it, you do not yet understand the
+   change well enough to explain it. Go back to the diff.
+
+   Where the system has a small set of possible behaviours, enumerate the whole
+   set first, then say which one is wrong. Three rows of a table beats three
+   paragraphs:
+
+   > You ask: "how much of my quota is left?"
+   > There are only three honest answers:
+   >
+   > | Answer | Means |
+   > |---|---|
+   > | "You're at 95%" | Here's your data |
+   > | "You have no agents set up" | Nothing to report |
+   > | "I couldn't check just now" | Something went wrong |
+   >
+   > **The bug: it gives answer 2 when the truth is answer 3.**
+
+2. **Who wrote what.** Two or three lines. Still never skipped and never hedged
+   (§2), it just does not go first. A name and a PR number mean nothing until
+   the reader knows what the thing does.
+3. **The feature, and how someone actually uses it.** What is this capability
+   *for*? Give the real reason a person reaches for it ("your home drive is
+   small and you want the store on an external SSD"), not a restatement of its
+   name. One `file:line` anchor, at the end of the paragraph, not the start.
+4. **What you actually see.** Pure symptom, numbered, in the order the person
+   experiences it. **No mechanism in this section at all**, not a constant, not
+   a function name, not a reason. "The Plan-limits box disappears from your
+   sidebar" belongs here; "because the errors list was empty" does not.
+5. **Why it happens.** The mechanism, now that the symptom is concrete, with
    `file:line` anchors so every claim can be checked.
-5. **What the change does about it** — including **the simpler fix it passed
+6. **What the change does about it** — including **the simpler fix it passed
    over, and why**. There is almost always an obvious cheaper repair; naming it
    and saying why the author went further is what turns "here is a diff" into
    "here is a judgement I can agree or disagree with". For #331: you could tell
    the one messy test to clean up after itself, but that leaves the next
    contributor free to make the identical mistake. Also say what the change
    deliberately leaves alone.
-6. **Who it actually affects** — see §4, never skip this.
-7. **Traps**, if any: version bumps that force a rescan, migrations, security
+7. **Who it actually affects** — see §4, never skip this.
+8. **Traps**, if any: version bumps that force a rescan, migrations, security
    gates, other open PRs on the same files, claims in the PR body that the diff
    does not support.
-8. **A verdict and one next step.**
+9. **A verdict and one next step.**
 
-Steps 4, 5 and 7 collapse to a sentence each when the change is small. Steps 1,
-2, 3 and 6 are never skipped.
+Steps 5, 6 and 8 collapse to a sentence each when the change is small.
+Steps 1, 2, 3, 4 and 7 are never skipped, and step 1 is never reordered.
 
 ## 4. The blast-radius honesty check
 
@@ -113,6 +148,24 @@ Inherits `/issue-brief`'s rules — symptom before mechanism, expand every
 acronym once, cite `file:line` instead of pasting code, one verdict, no hedging
 stacks — plus:
 
+- **The analogy goes first, or it does not work.** An analogy introduced in
+  paragraph four is decoration; the reader has already tried and failed to build
+  their own model from your identifiers. Introduced in line two, it is the
+  scaffold everything else hangs on. Carry exactly one all the way through, and
+  keep the real identifier beside it on first use so the reader can still grep.
+- **Put the confusion in a table, not in prose.** Whenever two things are being
+  mistaken for each other, or behaviour changed from A to B, render it as two
+  columns. Prose comparison across two paragraphs is where readers lose the
+  thread. The columns must be the two CONCEPTS being confused, not raw evidence:
+  `Who's reading | What it checks | Does the fix help?` teaches; a ten-row dump
+  of test inputs does not.
+- **Plain language is the default, not a mode.** Never wait to be asked to
+  simplify. "In simple words" means fewer clauses, not fewer facts: strip the
+  jargon, shorten the sentences, keep every variable name, number and path, and
+  keep them where they belong, which is after the model and never before it. If
+  the reader has to ask "explain it clearly, I still didn't understand", the
+  brief failed, and the failure is almost always that identifiers arrived before
+  the mental model.
 - **Feature before defect.** A bug is only comprehensible once the reader knows
   what was supposed to happen. Never open with the failure.
 - **Give the moving parts names the reader can hold.** Two env vars with a
@@ -137,50 +190,71 @@ stacks — plus:
 - **Quote the PR body only to disagree with it.** Otherwise describe the diff.
   Descriptions drift from what was actually committed; the diff does not.
 
-## 6. Worked example (PR #331, test env leak)
+## 6. Worked example (PR #356, quota cache lock)
 
-> **Who wrote it.** Not me — slmingol's PR. The data-folder feature it touches
-> is pre-existing project code, yours. Nothing of mine is in this one.
+> ## Think of the app as a receptionist
 >
-> **The chain of command.** `backend/tt_paths.py:60` decides where
-> TokenTelemetry keeps its state, and it takes orders from two variables. The
-> Boss is `TOKENTELEMETRY_DATA_DIR`, used verbatim. The Assistant is
-> `TOKENTELEMETRY_HOME`, with `.tokentelemetry` appended. If both are set the
-> app always obeys the Boss and ignores the Assistant; with neither, it falls
-> back to `~/.tokentelemetry`. You promote the Boss when your home drive is
-> small, or `~` is roaming-profile synced and you don't want a growing SQLite
-> file in it — `export TOKENTELEMETRY_DATA_DIR=/Volumes/ext/tt-data` moves the
-> whole store.
+> You ask: "how much of my Claude quota is left?"
 >
-> **The messy roommate.** You've moved your data folder. You pull new code and
-> run the tests.
-> 1. 22 tests fail.
-> 2. They assert values you can see sitting in the config files they just wrote.
-> 3. Nothing in the app is actually broken.
+> There are only three honest answers:
 >
-> `test_agent_retention.py` needed a scratch folder, so it set the Boss to a
-> temp directory — and never put it back. Every later test politely sets up its
-> own sandbox using the Assistant. The app does exactly what it is told: it sees
-> the Boss still standing there from an hour ago and ignores the Assistant. So
-> those tests write to one folder and read from a different, empty one.
+> | Answer | Means |
+> |---|---|
+> | "You're at 95%" | Here's your data |
+> | "You have no agents set up" | Nothing to report |
+> | "I couldn't check just now" | Something went wrong |
 >
-> **Why you don't need to worry.** Contributors only. The app is untouched —
-> your relocated folder works fine at runtime — and the bug exists *because*
-> the precedence rule works correctly. It needs many app states in one process
-> to bite, which only a test suite does.
+> **The bug: it gives answer 2 when the truth is answer 3.**
 >
-> **The cheaper fix it passed over.** You could tell that one test to clean up
-> after itself. slmingol didn't, because it leaves the next contributor free to
-> repeat the mistake. Instead `backend/conftest.py` adds an autouse fixture that
-> photographs both variables before every test and restores them after, so no
-> test can leak into another again.
+> That's the whole thing. Everything below is just why.
+>
+> **Who wrote it.** Not me, this is AmirF194's PR. The bug report is mine, from
+> an earlier `/bug-audit` session. The quota feature itself is yours.
+>
+> ## Why the receptionist gets stuck
+>
+> You run two separate programs: the menubar app and the dashboard. Both save
+> quota data to the same file. Two programs writing one file at the same time
+> would corrupt it, so there's a rule: whoever gets there first locks the file,
+> the other one waits. The waiter gives up after 15 seconds
+> (`CACHE_LOCK_TIMEOUT_SECONDS`).
+>
+> ## What you actually see
+>
+> 1. Both try to refresh. One wins, one waits.
+> 2. The waiter gives up after 15 seconds.
+> 3. The Plan-limits box disappears from your sidebar.
+> 4. The menubar says `◔ No quota data`.
+>
+> You could be at 95% of your weekly limit and see nothing. No error. Just gone.
+>
+> ## Why "gave up" looks like "nothing configured"
+>
+> When the app answers, it fills in two lists: `capabilities` (what it found)
+> and `errors` (what went wrong). On a brand-new machine both are empty, and
+> that is correct. When the lock times out, the old code at `quotas.py:1314`
+> sent back **both lists empty**. Identical. Nothing downstream can tell the two
+> situations apart.
+>
+> ## Why it only half works
+>
+> | Who's reading | What it checks | Does the fix help? |
+> |---|---|---|
+> | Menubar (`presentation.py:294`) | the `errors` list | **Yes** |
+> | Sidebar (`QuotaIndicator.tsx:51`) | only `providers`/`capabilities` | **No** |
 
-Note what the example does. Authorship lands before anything else. One analogy
-— the chain of command — is introduced early and carried through "obeys the
-Boss", with the real variable names kept beside it so the reader can still grep.
-Headings make claims. The blast-radius paragraph refuses the implication that a
-user is hurt, and gives the reason the bug is invisible rather than asserting
-it. The rejected cheaper fix turns the diff into a judgement.
+Note the ordering. The analogy is the first thing on screen and the whole defect
+fits in one bolded sentence with no identifiers in it. Authorship lands second,
+in two lines, once the reader knows what they are being told about. The symptom
+list contains no mechanism at all. Every `file:line` appears only after the
+reader already has a model to hang it on. The two things being confused are a
+table, not two paragraphs.
+
+This matters more than any rule above it, because a worked example is what
+actually gets copied. An earlier version of this brief led with authorship,
+three PR numbers and a timestamp, and put the analogy in heading three. The
+reader replied "Break It down and explain it clearly still didn't understand."
+The content was identical. Only the order changed.
 
 ## 7. Don't
 
