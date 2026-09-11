@@ -1311,13 +1311,43 @@ class QuotaService:
 
     def collect(self, force: bool = False) -> Dict[str, Any]:
         with self._lock:
-            with _CacheFileLock(self.cache_path) as acquired:
+            # The interprocess lock guards *refreshing and writing*, not
+            # reading: writes are atomic replaces, so a read sees either the
+            # prior complete cache or the next one. It exists so two processes
+            # (dashboard + menubar) don't fetch the same quotas twice or
+            # overwrite a newer snapshot with an older one.
+            #
+            # A caller that loses the race does neither of those things: it
+            # reads the cache and returns. So a background poll should not
+            # queue behind a refresh it is not going to perform. Waiting the
+            # full timeout blocked the response for that long and then served
+            # the very same file it could have read immediately, which blanked
+            # the Plan-limits UI for no reason. Poll with no wait; an explicit
+            # refresh still waits, because someone is watching that one.
+            #
+            # Nothing is reported for the ordinary case: each snapshot already
+            # carries fetchedAt / expiresAt / stale, so the caller can see for
+            # itself how old the numbers are.
+            with _CacheFileLock(
+                self.cache_path,
+                timeout=CACHE_LOCK_TIMEOUT_SECONDS if force else 0,
+            ) as acquired:
                 if not acquired:
                     # Another process is still collecting. Its atomic replace
                     # means this read is either the prior complete cache or the
                     # next complete cache; never write a competing snapshot.
                     self._load(reload=True)
-                    return self._wire(self.now(), [])
+                    errors: List[Dict[str, str]] = []
+                    if not self._snapshots:
+                        # No cached snapshot exists yet, so the response would
+                        # otherwise be indistinguishable from "no agents
+                        # configured" and every surface would render empty.
+                        errors.append({
+                            "providerId": "quotaCache",
+                            "message": "Another process is refreshing the quota "
+                                       "cache and no snapshot has been stored yet.",
+                        })
+                    return self._wire(self.now(), errors)
 
                 # Reload *inside* the process lock. A long-lived dashboard or
                 # menubar instance may have loaded a stale cache before another
