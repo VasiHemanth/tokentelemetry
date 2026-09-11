@@ -12113,14 +12113,28 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         else:
             gen_error = f"summarizer '{backend_name}' is not available"
 
+    # Generation failed, so fall back to the narrative we already have. Showing
+    # the previous one beats showing nothing.
+    served_older_narrative = False
     if narrative is None and cached and cached.get("narrative"):
         narrative = cached["narrative"]
+        served_older_narrative = cached.get("content_hash") != chash
 
-    result = _summaries.store(
-        session_id, meta.get("agent", agent), chash,
-        backend_name or "", cfg.get("model"),
-        brief, narrative or {}, 0.0,
-    )
+    if served_older_narrative:
+        # Do NOT re-store it under the new content hash. That hash mismatch is
+        # the ONLY thing that makes a later call regenerate, so stamping the old
+        # narrative with the new hash would mark a stale summary fresh forever:
+        # every subsequent request short-circuits at the cache check above and
+        # the summarizer is never called again, even once it recovers (#352).
+        # Leaving the row on its old hash means the next attempt still sees the
+        # content as changed and retries by itself.
+        result = cached
+    else:
+        result = _summaries.store(
+            session_id, meta.get("agent", agent), chash,
+            backend_name or "", cfg.get("model"),
+            brief, narrative or {}, 0.0,
+        )
     error_info = None
     if gen_error:
         from summarizers.errors import classify as _classify_err
@@ -12132,7 +12146,14 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         })
     except Exception:
         pass
-    return {"summary": {**result, "stale": False}, "error": gen_error, "error_info": error_info}
+    # `stale` was previously hard-coded False on every path, so the "Stale"
+    # badge the panel already renders (SummaryPanel.tsx) could never fire. It
+    # fires exactly here: the narrative describes an earlier, shorter trace.
+    return {
+        "summary": {**result, "stale": served_older_narrative},
+        "error": gen_error,
+        "error_info": error_info,
+    }
 
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):
