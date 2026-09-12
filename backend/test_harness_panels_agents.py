@@ -38,7 +38,7 @@ def test_every_supported_agent_has_a_builder():
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "qoder", "hermes",
+        "prime", "dsh", "qoder", "hermes", "kimi",
     }
     assert supported == set(harness_panels.BUILDERS), (
         "every supported agent needs an extractor; "
@@ -566,6 +566,42 @@ def test_smallcode_reads_project_traces(tmp_path, monkeypatch):
     assert sec["rows"][0][:4] == ["gemma load", "gemma-3", 3, "myrepo"]
 
 
+# --- Kimi Code --------------------------------------------------------------
+
+def test_kimi_panel_reads_registry_and_config(tmp_path, monkeypatch):
+    root = tmp_path / ".kimi"
+    root.mkdir(parents=True)
+    (root / "kimi.json").write_text(json.dumps({"work_dirs": [
+        {"path": "/home/dev/proj", "kaos": "local",
+         "last_session_id": "11111111-2222-3333-4444-555555555555"},
+    ]}), encoding="utf-8")
+    (root / "config.toml").write_text(
+        'default_model = "kimi-k2.6"\n\n[loop_control]\nmax_steps_per_turn = 100\n',
+        encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "KIMI_DIR", root)
+
+    doc = clis.build_kimi()
+    assert doc["installed"] is True
+    cfg = next(s for s in doc["sections"] if s["title"] == "Configuration")
+    values = {f["label"]: f["value"] for f in cfg["fields"]}
+    assert values["Default model"] == "kimi-k2.6"
+    assert values["Max steps per turn"] == 100
+    dirs = next(s for s in doc["sections"] if s["title"] == "Work directories")
+    assert dirs["rows"][0][0] == "/home/dev/proj"
+    assert dirs["rows"][0][1] == "11111111"
+
+
+def test_kimi_panel_survives_malformed_config(tmp_path, monkeypatch):
+    root = tmp_path / ".kimi"
+    root.mkdir(parents=True)
+    (root / "config.toml").write_text("not = [toml", encoding="utf-8")
+    (root / "kimi.json").write_text("{nope", encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "KIMI_DIR", root)
+    doc = clis.build_kimi()
+    assert doc["installed"] is True
+    assert doc["sections"] == []
+
+
 # --- every agent ------------------------------------------------------------
 
 @pytest.mark.parametrize("agent", sorted(harness_panels.BUILDERS))
@@ -575,7 +611,7 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     for name in ("CLAUDE_DIR", "CODEX_DIR", "COPILOT_DIR", "GROK_DIR", "GEMINI_DIR",
                  "QWEN_DIR", "VIBE_DIR", "CURSOR_DIR", "PI_DIR", "DSH_DIR",
                  "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR",
-                 "QODER_DIR", "QODER_IDE_DIR"):
+                 "QODER_DIR", "QODER_IDE_DIR", "KIMI_DIR"):
         monkeypatch.setattr(hp_paths, name, absent, raising=False)
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)

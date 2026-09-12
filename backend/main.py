@@ -379,6 +379,17 @@ DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 # backend/omnigent_policy.py. Absent file = plugin not installed, which is the
 # normal case and must never be an error.
 DSH_LIFECYCLE_FILE = data_dir() / "dsh_lifecycle.jsonl"
+# Kimi Code (Moonshot AI, binary `kimi`) — sessions live one directory per
+# session under ~/.kimi/sessions/<workdir-hash>/<session-uuid>/: the event
+# stream is wire.jsonl (first line a {"type":"metadata"} header, then
+# {"timestamp", "message":{"type","payload"}} rows) and state.json carries the
+# title. Token usage rides on StatusUpdate payloads (payload.token_usage),
+# de-duped by payload.message_id. The bucket dir name is a hash of the work
+# dir, so the project comes from ~/.kimi/kimi.json's work_dirs registry
+# instead. ~/.kimi/credentials/ holds OAuth tokens and is never read. See
+# _scan_kimi_sessions.
+KIMI_DIR = Path(os.environ.get("KIMI_HOME") or (HOME / ".kimi")).expanduser()
+KIMI_SESSIONS_DIR = KIMI_DIR / "sessions"
 # Qoder (Alibaba) ships two surfaces over ONE set of sessions. The CLI writes
 # Claude-Code-shaped JSONL under ~/.qoder/projects/<slugged-cwd>/<uuid>.jsonl;
 # the Electron IDE keeps ~/Library/Application Support/com.qoder.app.stable/
@@ -2966,6 +2977,9 @@ def _list_available_agents() -> list:
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
     if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
     if DSH_DIR.exists(): agents.append("dsh")
+    # sessions/, not the root: the installer creates ~/.kimi ahead of the first
+    # session, so the root alone would advertise an empty agent.
+    if KIMI_SESSIONS_DIR.is_dir(): agents.append("kimi")
     # projects/, not the root: Qoder's installer creates ~/.qoder before the
     # first session exists, so the root alone would advertise an empty agent.
     if QODER_PROJECTS_DIR.is_dir(): agents.append("qoder")
@@ -4755,6 +4769,289 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
         out.append(sess)
 
     return out
+
+
+# ------------------------------------------------------------- Kimi Code --
+
+def _kimi_default_model() -> str:
+    """Model name from ~/.kimi/config.toml. `default_model` is a display id
+    (e.g. "kimi-code/kimi-for-coding") that resolves through
+    [models."<id>"].model to the API model id; wire.jsonl never records the
+    model, so this config value is the only on-disk source. Falls back to
+    "kimi-for-coding" when absent or unreadable."""
+    try:
+        import tomllib
+        with open(KIMI_DIR / "config.toml", "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        return "kimi-for-coding"
+    if not isinstance(data, dict):
+        return "kimi-for-coding"
+    models = data.get("models")
+    model = data.get("default_model")
+    if not (isinstance(model, str) and model):
+        if isinstance(models, dict):
+            model = models.get("default_model")
+    if not (isinstance(model, str) and model):
+        return "kimi-for-coding"
+    entry = models.get(model) if isinstance(models, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"]:
+        return entry["model"]
+    return model
+
+
+def _kimi_project_by_session() -> Dict[str, str]:
+    """Map Kimi session IDs and work-directory bucket hashes to project paths."""
+    try:
+        data = json.loads((KIMI_DIR / "kimi.json").read_text(
+            encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
+    out: Dict[str, str] = {}
+    for wd in (data.get("work_dirs") or []) if isinstance(data, dict) else []:
+        if isinstance(wd, dict) and wd.get("path"):
+            path = str(wd["path"])
+            out[hashlib.md5(path.encode()).hexdigest()] = path
+            if wd.get("last_session_id"):
+                out[str(wd["last_session_id"])] = path
+    return out
+
+
+def _scan_kimi_sessions() -> List[Dict[str, Any]]:
+    """Scan Kimi Code sessions under ~/.kimi/sessions/<workdir-hash>/<uuid>/.
+
+    wire.jsonl opens with {"type":"metadata","protocol_version":...}, then
+    {"timestamp": <epoch float>, "message": {"type", "payload"}} rows. Token
+    usage lives in StatusUpdate messages: payload.token_usage = {input_other,
+    output, input_cache_read, input_cache_creation}, and each StatusUpdate
+    carries a unique payload.message_id — the same usage sample can appear more
+    than once, so we de-dupe by message_id before summing. state.json's
+    custom_title is the display name; the first TurnBegin user text is the
+    fallback. Sessions with no wire.jsonl (or an unreadable one) are skipped,
+    never an error.
+    """
+    if not KIMI_SESSIONS_DIR.is_dir():
+        return []
+
+    aliases = _load_project_aliases()
+    projects = _kimi_project_by_session()
+    model = _kimi_default_model()
+
+    out: List[Dict[str, Any]] = []
+    for wire in KIMI_SESSIONS_DIR.glob("*/*/wire.jsonl"):
+        try:
+            sid = wire.parent.name
+            tokens = {"input": 0, "output": 0, "cached": 0,
+                      "cache_creation": 0, "total": 0}
+            seen_usage: set = set()
+            display = None
+            last_ts = None
+            num_status = 0
+            protocol_version = None
+            tool_counts: Dict[str, int] = {}
+
+            with open(wire, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("type") == "metadata":
+                        protocol_version = row.get("protocol_version") or protocol_version
+                        continue
+
+                    ts_raw = row.get("timestamp")
+                    if isinstance(ts_raw, (int, float)):
+                        try:
+                            _ts = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+                            if last_ts is None or _ts > last_ts:
+                                last_ts = _ts
+                        except Exception:
+                            pass
+
+                    msg = row.get("message")
+                    if not isinstance(msg, dict):
+                        continue
+                    mtype = msg.get("type")
+                    payload = msg.get("payload")
+                    if not isinstance(payload, dict):
+                        payload = {}
+
+                    if mtype == "StatusUpdate":
+                        usage = payload.get("token_usage")
+                        mid = payload.get("message_id")
+                        if isinstance(usage, dict) and mid and mid not in seen_usage:
+                            seen_usage.add(mid)
+                            num_status += 1
+                            tokens["input"] += usage.get("input_other", 0) or 0
+                            tokens["output"] += usage.get("output", 0) or 0
+                            tokens["cached"] += usage.get("input_cache_read", 0) or 0
+                            tokens["cache_creation"] += usage.get("input_cache_creation", 0) or 0
+
+                    elif mtype == "TurnBegin" and display is None:
+                        for part in (payload.get("user_input") or []):
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                preview = _strip_context_tags(str(part.get("text") or "")).strip()
+                                if preview:
+                                    display = preview[:120]
+                                    break
+
+                    elif mtype == "ToolCall":
+                        _count_tool(tool_counts,
+                                    payload.get("tool_name") or payload.get("name"))
+
+            # state.json's custom_title beats the first-prompt fallback.
+            try:
+                state = json.loads((wire.parent / "state.json").read_text(
+                    encoding="utf-8", errors="replace"))
+                if isinstance(state, dict) and state.get("custom_title"):
+                    display = str(state["custom_title"])[:120]
+            except Exception:
+                pass
+
+            ts = last_ts or _file_mtime_utc(wire)
+            tokens["total"] = (tokens["input"] + tokens["output"]
+                               + tokens["cached"] + tokens["cache_creation"])
+            cost = calculate_cost(
+                model, tokens["input"], tokens["output"], tokens["cached"],
+                cache_creation_tokens=tokens["cache_creation"], at=ts)
+            tokens["cost"] = cost
+
+            sess = {
+                "id": sid,
+                "agent": "kimi",
+                "project": aliases.get(
+                    projects.get(sid) or projects.get(wire.parent.parent.name, ""),
+                    projects.get(sid) or projects.get(wire.parent.parent.name, "unknown")),
+                "timestamp": ts,
+                "display": display or f"Kimi Code session {sid[:8]}",
+                "text": display,
+                "tokens": tokens,
+                "mcp_tools": [t for t in tool_counts
+                              if isinstance(t, str) and t.startswith("mcp")],
+                "has_plan": False,
+                "plans": [],
+                "model": model,
+                "artifacts": [{"name": "wire.jsonl", "path": str(wire),
+                               "type": "document"}],
+                "cost": cost,
+                "kimi": {
+                    "protocol_version": protocol_version,
+                    "num_status_updates": num_status,
+                },
+            }
+            _attach_tool_usage(sess, tool_counts)
+            out.append(sess)
+        except Exception:
+            continue
+
+    return out
+
+
+def _kimi_session_file(session_id: str) -> Optional[Path]:
+    """Locate one Kimi Code wire.jsonl by session id. The session dir IS the
+    id, so a direct glob resolves it without reversing the work-dir hash."""
+    if not KIMI_SESSIONS_DIR.is_dir() or not session_id or "/" in session_id:
+        return None
+    for match in KIMI_SESSIONS_DIR.glob(f"*/{session_id}/wire.jsonl"):
+        return match
+    return None
+
+
+def _kimi_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize a Kimi Code wire.jsonl into the shared Claude-shaped trace
+    events the EventCard renderer expects (same contract as the pi branch).
+
+    Only conversation rows are surfaced: TurnBegin (user text), ContentPart
+    (assistant text/thinking), ToolCall and ToolResult. StatusUpdate/StepBegin/
+    TurnEnd carry no conversation and are dropped. Payload shapes beyond the
+    documented ones are read defensively — an unknown row is skipped, never an
+    error.
+    """
+    events: List[Dict[str, Any]] = []
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return events
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(row, dict):
+                continue
+            msg = row.get("message")
+            if not isinstance(msg, dict):
+                continue
+            mtype = msg.get("type")
+            payload = msg.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            norm: Optional[Dict[str, Any]] = None
+
+            if mtype == "TurnBegin":
+                text = "".join(
+                    str(p.get("text") or "") for p in (payload.get("user_input") or [])
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+                if text.strip():
+                    norm = {"type": "user", "message": {"role": "user",
+                            "content": [{"type": "text", "text": text}]}}
+
+            elif mtype == "ContentPart":
+                part = payload.get("part") if isinstance(payload.get("part"), dict) else payload
+                ptype = part.get("type")
+                txt = part.get("text") or part.get("thinking") or ""
+                if isinstance(txt, str) and txt.strip():
+                    if ptype in ("think", "thinking"):
+                        norm = {"type": "assistant", "message": {"role": "assistant",
+                                "content": [{"type": "thinking", "thinking": txt}]}}
+                    else:
+                        norm = {"type": "assistant", "message": {"role": "assistant",
+                                "content": [{"type": "text", "text": txt}]}}
+
+            elif mtype == "ToolCall":
+                norm = {"type": "assistant", "message": {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": payload.get("tool_call_id") or payload.get("id"),
+                    "name": payload.get("tool_name") or payload.get("name"),
+                    "input": payload.get("arguments") or payload.get("input") or {},
+                }]}}
+
+            elif mtype == "ToolResult":
+                content = payload.get("content") or payload.get("result") or ""
+                if isinstance(content, list):
+                    content = "".join(
+                        str(c.get("text") or "") for c in content
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                norm = {"type": "user", "message": {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": payload.get("tool_call_id") or payload.get("id"),
+                    "content": content if isinstance(content, str) else str(content),
+                }]}}
+
+            if norm is None:
+                continue
+            ts_raw = row.get("timestamp")
+            if isinstance(ts_raw, (int, float)):
+                try:
+                    norm["normalized_timestamp"] = datetime.fromtimestamp(
+                        ts_raw, tz=timezone.utc).timestamp() * 1000
+                except Exception:
+                    pass
+            norm.setdefault("normalized_timestamp", len(events) * 1000)
+            events.append(norm)
+    return events
 
 
 # ------------------------------------------------------------------ Qoder --
@@ -8164,6 +8461,9 @@ def _scan_sessions_sync():
     # credits and records no token counts at all; see _scan_qoder_sessions.
     sessions.extend(_scan_qoder_sessions())
 
+    # 8b5. Kimi Code — per-session wire.jsonl under ~/.kimi/sessions/
+    sessions.extend(_scan_kimi_sessions())
+
     # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
     # cwd, so they naturally participate in project/worktree navigation.
     for sess in _scan_muse_sessions() + _scan_prime_sessions():
@@ -8471,6 +8771,8 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
         if agent == "codex":
             hits = list(CODEX_DIR.glob(f"sessions/**/*{session_id}*.jsonl"))
             return hits[0] if hits else None
+        if agent == "kimi":
+            return _kimi_session_file(session_id)
     except OSError:
         return None
     return None
@@ -8646,7 +8948,7 @@ async def get_artifact(path: str):
     # them explicitly so the allow-list survives any future narrowing of that
     # root (and documents that those artifacts are intentionally served).
     allowed = [CLAUDE_DIR, CODEX_DIR, GEMINI_DIR, QWEN_DIR, VIBE_DIR, CURSOR_DIR,
-               VSCODE_BASE, CURSOR_BASE, *ANTIGRAVITY_BRAIN_DIRS, ANTIGRAVITY_CLI_DIR]
+               VSCODE_BASE, CURSOR_BASE, KIMI_DIR, *ANTIGRAVITY_BRAIN_DIRS, ANTIGRAVITY_CLI_DIR]
     try:
         resolved = p.resolve()
     except Exception:
@@ -9104,6 +9406,15 @@ async def get_session_detail(session_id: str, agent: str):
         if not sess_file:
             return {"error": "Not found"}
         return _qoder_trace_events(sess_file)
+
+    elif agent == "kimi":
+        # Kimi Code — wire.jsonl normalized into the same Claude-shaped events
+        # the pi/dsh branches produce. StatusUpdate/StepBegin/TurnEnd rows carry
+        # no conversation and are dropped by the normalizer.
+        sess_file = _kimi_session_file(session_id)
+        if not sess_file:
+            return {"error": "Not found"}
+        return _kimi_trace_events(sess_file)
 
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
