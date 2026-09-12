@@ -133,6 +133,16 @@ Only use this if you understand the risk and have network-level access controls.
 1. **Backend CORS** — origins allowed to make cross-origin requests to the API.
 2. **Next.js dev server** — origins allowed to load the frontend chunks.
 
+Each value is a **hostname or IP**, not a URL. A full origin is accepted and
+reduced to its host, so `box.tailnet.ts.net`, `https://box.tailnet.ts.net` and
+`https://box.tailnet.ts.net/` all mean the same thing. A listed host is allowed
+on any port, including none: a deployment behind a proxy on `:443` or `:80`
+sends an `Origin` header with no port at all, and that is allowed without you
+having to write the port anywhere.
+
+Loopback (`localhost`, `127.0.0.1`, `[::1]`) is always allowed on any port and
+never needs to be listed.
+
 For the QR / connect URL, the launcher picks a concrete reachable address using this preference order:
 
 1. An explicit non-wildcard `--host` value.

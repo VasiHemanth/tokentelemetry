@@ -177,18 +177,87 @@ app = FastAPI(title="TokenTelemetry API")
 
 # Enable CORS for the Next.js frontend.
 #
-# We use a regex over an explicit allowlist so the frontend can pick any local
-# port (the user can pass --port to start.sh / bin/cli.js). Loopback is always
-# allowed; additional hosts (IPs / hostnames) can be opted in for remote access
-# via the TT_ALLOWED_ORIGINS env var (comma-separated) — bin/cli.js wires it up
-# from --allowed-origins. Default behavior is unchanged: loopback-only.
-def _cors_origin_regex() -> str:
-    hosts = ["localhost", r"127\.0\.0\.1"]
-    for h in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
-        h = h.strip()
+# The allowlist answers two different questions, so it is built from two
+# patterns rather than one:
+#
+#   1. Loopback, which is always allowed on any port. The user can move the
+#      frontend with --port, so the port genuinely varies and a pattern is the
+#      right tool for it.
+#   2. The hosts opted in via TT_ALLOWED_ORIGINS (comma-separated; bin/cli.js
+#      wires it up from --allowed-origins) for remote / tailnet access. This
+#      half is empty by default, so default behavior stays loopback-only.
+#
+# Keeping them apart means each half has one rule you can state in a sentence,
+# and the remote half can be absent entirely instead of being spliced into a
+# pattern that always has loopback in it.
+#
+# In every case the port is OPTIONAL. Browsers omit it from Origin when it is
+# the scheme default, so a deployment behind a proxy on :443 sends
+# "https://box.tailnet.ts.net" with no port at all; requiring ":<digits>" made
+# that origin impossible to allow, with no configuration workaround.
+
+# Loopback hosts, as they appear in an Origin header. ::1 is included so this
+# agrees with _is_loopback() below, which the auth gate uses; the two
+# disagreeing about what "loopback" means is a bug waiting to happen.
+_LOOPBACK_ORIGIN_HOSTS = ["localhost", r"127\.0\.0\.1", r"\[::1\]"]
+
+
+def _origin_host(raw: str) -> str:
+    """Normalise one TT_ALLOWED_ORIGINS entry down to a bare hostname.
+
+    The documented value is a hostname, because bin/cli.js also feeds this list
+    to Next's allowedDevOrigins and uses the first entry to build the connect /
+    QR URL. Writing a full origin ("https://box.ts.net/") is the natural
+    mistake though, and previously it was escaped verbatim into the pattern and
+    silently matched nothing. Accept both spellings and reduce them to the same
+    host. An explicit port is dropped: a listed host is allowed on any port,
+    which is the behaviour this list has always had.
+    """
+    h = raw.strip().lower()
+    if not h:
+        return ""
+    if "://" in h:
+        h = h.split("://", 1)[1]
+    h = h.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if h.startswith("["):  # bracketed IPv6 literal, e.g. [::1]:3000
+        end = h.find("]")
+        return h[: end + 1] if end != -1 else h
+    return h.split(":", 1)[0]
+
+
+def _loopback_origin_regex() -> str:
+    """Loopback on any port. Always active, never configurable."""
+    return r"^https?://(?:" + "|".join(_LOOPBACK_ORIGIN_HOSTS) + r")(?::\d+)?$"
+
+
+def _remote_origin_regex() -> Optional[str]:
+    """The TT_ALLOWED_ORIGINS hosts on any port, or None when none are set.
+
+    Entries are re.escape()d, so a dot in a hostname stays a literal dot rather
+    than becoming "any character". Without that, allowing "box.ts.net" would
+    also allow an attacker-registered "boxXtsYnet".
+    """
+    hosts = []
+    for raw in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
+        h = _origin_host(raw)
         if h:
             hosts.append(re.escape(h))
-    return r"^https?://(" + "|".join(hosts) + r"):\d+$"
+    if not hosts:
+        return None
+    return r"^https?://(?:" + "|".join(hosts) + r")(?::\d+)?$"
+
+
+def _cors_origin_regex() -> str:
+    """The two halves joined for Starlette, which takes a single pattern.
+
+    Both halves are individually anchored, so top-level alternation between
+    them is still an exact-origin test under fullmatch().
+    """
+    parts = [_loopback_origin_regex()]
+    remote = _remote_origin_regex()
+    if remote:
+        parts.append(remote)
+    return "|".join(parts)
 
 # --- Remote-access auth gate -------------------------------------------------
 # When TT_AUTH_TOKEN is set (bin/cli.js sets it automatically for a non-loopback
@@ -3892,6 +3961,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
     db_path = CLINE_DIR / "data" / "db" / "sessions.db"
     if db_path.exists():
         rows = []
+        _cline_db_ok = False
         try:
             uri = _sqlite_ro_uri(db_path)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -3902,10 +3972,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 # columns are read defensively below rather than erroring the
                 # whole query to an empty result.
                 rows = conn.execute("SELECT * FROM sessions").fetchall()
+                _cline_db_ok = True
             finally:
                 conn.close()
-        except Exception:
-            rows = []
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.cline").warning(
+                "Cline SQLite scan failed (%s): %s", db_path.name, _exc, exc_info=True
+            )
 
         # Cline spawns subagents/teams: each subagent is its OWN row with
         # is_subagent=1 and parent_session_id set, while the parent's
@@ -3916,11 +3990,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
         # rows. Leaf/standalone sessions have usage == aggregateUsage.
         def _row_get(r, k, default=None):
             return r[k] if k in r.keys() else default
-        parents_with_children = {
-            _row_get(r, "parent_session_id")
-            for r in rows
-            if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
-        }
+        if _cline_db_ok:
+            parents_with_children = {
+                _row_get(r, "parent_session_id")
+                for r in rows
+                if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
+            }
+        else:
+            parents_with_children = set()
 
         for row in rows:
             sid = row["session_id"]
@@ -7306,6 +7383,7 @@ def _scan_sessions_sync():
             codex_site_calls: Dict[str, Dict[str, str]] = {}
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
+            _read_ok = False  # True once at least one rollout file is opened successfully
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -7339,6 +7417,7 @@ def _scan_sessions_sync():
             for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
+                        _read_ok = True
                         for line in f:
                             try:
                                 data = json.loads(line)
@@ -7489,7 +7568,11 @@ def _scan_sessions_sync():
                                                 sess["has_plan"] = True
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
-                except Exception: pass
+                except Exception as _exc:
+                    import logging
+                    logging.getLogger("tokentelemetry.codex").warning(
+                        "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
+                    )
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
@@ -7523,7 +7606,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None:
+            if source_mtime is not None and _read_ok:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():
@@ -8582,8 +8665,12 @@ def _scan_sessions_sync():
                     sessions.append(hermes_by_id[sid])
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.hermes").warning(
+                "Hermes SQLite scan failed (%s, profile=%s): %s",
+                db_path.name, h_profile, _exc, exc_info=True,
+            )
     # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
     # of their own, already in totals) — annotate parents, never re-sum.
     for h_sess in hermes_by_id.values():
@@ -12337,14 +12424,28 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         else:
             gen_error = f"summarizer '{backend_name}' is not available"
 
+    # Generation failed, so fall back to the narrative we already have. Showing
+    # the previous one beats showing nothing.
+    served_older_narrative = False
     if narrative is None and cached and cached.get("narrative"):
         narrative = cached["narrative"]
+        served_older_narrative = cached.get("content_hash") != chash
 
-    result = _summaries.store(
-        session_id, meta.get("agent", agent), chash,
-        backend_name or "", cfg.get("model"),
-        brief, narrative or {}, 0.0,
-    )
+    if served_older_narrative:
+        # Do NOT re-store it under the new content hash. That hash mismatch is
+        # the ONLY thing that makes a later call regenerate, so stamping the old
+        # narrative with the new hash would mark a stale summary fresh forever:
+        # every subsequent request short-circuits at the cache check above and
+        # the summarizer is never called again, even once it recovers (#352).
+        # Leaving the row on its old hash means the next attempt still sees the
+        # content as changed and retries by itself.
+        result = cached
+    else:
+        result = _summaries.store(
+            session_id, meta.get("agent", agent), chash,
+            backend_name or "", cfg.get("model"),
+            brief, narrative or {}, 0.0,
+        )
     error_info = None
     if gen_error:
         from summarizers.errors import classify as _classify_err
@@ -12356,7 +12457,14 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         })
     except Exception:
         pass
-    return {"summary": {**result, "stale": False}, "error": gen_error, "error_info": error_info}
+    # `stale` was previously hard-coded False on every path, so the "Stale"
+    # badge the panel already renders (SummaryPanel.tsx) could never fire. It
+    # fires exactly here: the narrative describes an earlier, shorter trace.
+    return {
+        "summary": {**result, "stale": served_older_narrative},
+        "error": gen_error,
+        "error_info": error_info,
+    }
 
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):

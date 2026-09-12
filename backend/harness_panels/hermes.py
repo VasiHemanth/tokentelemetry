@@ -67,7 +67,7 @@ def _usage() -> Optional[Dict[str, Any]]:
         rows = conn.execute(
             "SELECT billing_provider, billing_mode, COUNT(*) sessions, "
             "       SUM(api_call_count) calls, "
-            "       SUM(input_tokens + output_tokens) tokens, "
+            "       SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) tokens, "
             "       SUM(cache_read_tokens) cache, "
             "       SUM(reasoning_tokens) reasoning, "
             "       SUM(COALESCE(actual_cost_usd, 0)) actual "

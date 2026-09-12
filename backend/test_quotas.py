@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import sys
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import quotas as quotas_module
 from quotas import (
+    CACHE_LOCK_TIMEOUT_SECONDS,
+    _CacheFileLock,
     ClaudeQuotaProvider,
     CodexQuotaProvider,
     CopilotQuotaProvider,
@@ -415,6 +419,151 @@ def test_second_service_reloads_a_fresh_disk_cache_before_refreshing(tmp_path):
 
     assert second_provider.calls == 0
     assert result["providers"]["opencode"]["plan"] == "first"
+
+
+def test_load_discards_a_disk_cache_written_with_a_clock_ahead_of_now(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # A skewed clock (dual-boot RTC offset, a resumed VM snapshot) wrote a
+    # cache whose fetchedAt is months in the future.
+    skewed_at = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: skewed_at).collect(force=True)
+
+    corrected_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    reader = Provider()
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: corrected_at)
+
+    result = service.collect()
+
+    assert reader.calls == 1
+    assert result["providers"]["opencode"]["fetchedAt"] == "2026-09-10T00:00:00Z"
+    assert result["providers"]["opencode"]["stale"] is False
+
+
+def test_load_still_trusts_a_fetched_at_a_few_seconds_ahead_of_the_loading_clock(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # Ordinary jitter between two processes' clocks, well inside
+    # MAX_FUTURE_SKEW, must not be treated as a corrupted cache.
+    written_at = datetime(2026, 9, 10, 12, 0, 5, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: written_at).collect(force=True)
+
+    reader = Provider()
+    reader_now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: reader_now)
+
+    service.collect()
+
+    assert reader.calls == 0
+
+
+# --- losing the cache lock -------------------------------------------------
+# The interprocess lock guards refreshing and writing, not reading. A caller
+# that loses it does neither, so it should serve the cache at once rather than
+# block for the timeout and then read that same file anyway.
+
+class _LockLoser:
+    """A provider that fails the test if it is ever asked to refresh."""
+
+    provider_id = "opencode"
+    display_name = "OpenCode"
+
+    def has_local_credentials(self):
+        return True
+
+    def refresh(self, now):
+        raise AssertionError("must not refresh while another process holds the lock")
+
+
+def _seed_cache(cache_path, at, plan="cached"):
+    class Writer(_LockLoser):
+        def refresh(self, now):
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=plan)
+
+    QuotaService([Writer()], cache_path=cache_path, now=lambda: at).collect(force=True)
+
+
+def test_a_poll_that_loses_the_lock_serves_the_cache_without_waiting(tmp_path):
+    cache_path = tmp_path / "quotas.json"
+    written_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    _seed_cache(cache_path, written_at)
+
+    # Stale enough that a poll would normally refresh; the held lock must stop it.
+    later = written_at + FRESHNESS + timedelta(seconds=1)
+    service = QuotaService([_LockLoser()], cache_path=cache_path, now=lambda: later)
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        started = time.monotonic()
+        result = service.collect()
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0, "a poll must not queue behind another process's refresh"
+    assert result["providers"]["opencode"]["plan"] == "cached"
+    # Nothing is reported: the snapshot carries its own fetchedAt/stale, so the
+    # caller can already see how old these numbers are.
+    assert result["errors"] == []
+    assert result["providers"]["opencode"]["stale"] is True
+
+
+def test_losing_the_lock_with_no_cache_reports_an_error_rather_than_looking_empty(tmp_path):
+    """Without this, the response is identical to "no agents configured"."""
+    cache_path = tmp_path / "quotas.json"
+    service = QuotaService([_LockLoser()], cache_path=cache_path,
+                           now=lambda: datetime(2026, 9, 10, tzinfo=timezone.utc))
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        result = service.collect()
+
+    assert result["providers"] == {}
+    assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
+    assert "no snapshot has been stored yet" in result["errors"][0]["message"]
+
+
+def test_a_poll_waits_not_at_all_but_an_explicit_refresh_still_waits(tmp_path, monkeypatch):
+    """Nobody is watching a background poll; someone is watching Refresh."""
+    seen = []
+    original = quotas_module._CacheFileLock
+
+    class Spy(original):
+        def __init__(self, path, timeout=CACHE_LOCK_TIMEOUT_SECONDS):
+            seen.append(timeout)
+            super().__init__(path, timeout=timeout)
+
+    monkeypatch.setattr(quotas_module, "_CacheFileLock", Spy)
+    service = QuotaService([], cache_path=tmp_path / "quotas.json")
+
+    service.collect()
+    service.collect(force=True)
+
+    assert seen == [0, CACHE_LOCK_TIMEOUT_SECONDS]
 
 
 def test_second_service_never_saves_an_older_in_memory_snapshot_over_newer_disk_cache(tmp_path):
