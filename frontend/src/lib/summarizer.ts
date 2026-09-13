@@ -50,15 +50,9 @@ export interface EndpointPreset {
   endpoint: string;
   model: string | null;
   /**
-   * Short marker shown beside the chips. A listing we are paid for says so
-   * here, in the same breath as the recommendation, so the two are never read
-   * apart.
-   */
-  badge?: string;
-  /**
    * Sign-up link for a hosted gateway. Ours is a referral link: TokenTelemetry
-   * earns a share of what referred workspaces spend, which `badge` and the note
-   * under the endpoint field both state outright.
+   * earns a share of what referred workspaces spend, which the preset's own
+   * label and the note under the endpoint field both state outright.
    */
   refUrl?: string;
 }
@@ -72,7 +66,6 @@ export const ENDPOINT_PRESETS: EndpointPreset[] = [
     label: "OrcaRouter (referral)",
     endpoint: "https://api.orcarouter.ai/v1",
     model: "orcarouter/fusion",
-    badge: "Recommended · referral",
     refUrl: "https://www.orcarouter.ai/ref/ref_cdcd52dcf72dbbc6f881",
   },
   { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: null },

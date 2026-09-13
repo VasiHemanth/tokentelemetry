@@ -376,7 +376,6 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
         )}
         {activePreset?.refUrl && (
           <p className="text-[10.5px] text-[var(--tt-fg-dim)] mt-1">
-            {activePreset.badge ? `${activePreset.badge}. ` : ""}
             Reaches many models through one key. The sign-up link is a referral, so
             TokenTelemetry earns a share of what referred workspaces spend.{" "}
             <a
