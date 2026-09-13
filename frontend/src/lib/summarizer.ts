@@ -49,12 +49,30 @@ export interface EndpointPreset {
   label: string;
   endpoint: string;
   model: string | null;
+  /**
+   * Short marker shown beside the chips. A listing we are paid for says so
+   * here, in the same breath as the recommendation, so the two are never read
+   * apart.
+   */
+  badge?: string;
+  /**
+   * Sign-up link for a hosted gateway. Ours is a referral link: TokenTelemetry
+   * earns a share of what referred workspaces spend, which `badge` and the note
+   * under the endpoint field both state outright.
+   */
+  refUrl?: string;
 }
 
 export const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
   { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
-  { label: "OrcaRouter", endpoint: "https://api.orcarouter.ai/v1", model: "orcarouter/fusion" },
+  {
+    label: "OrcaRouter",
+    endpoint: "https://api.orcarouter.ai/v1",
+    model: "orcarouter/fusion",
+    badge: "Recommended · referral",
+    refUrl: "https://www.orcarouter.ai/ref/ref_cdcd52dcf72dbbc6f881",
+  },
   { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: null },
 ];
 
