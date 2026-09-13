@@ -54,6 +54,37 @@ Non-OpenAI parameters (top_k, min_p, repetition_penalty, enable_thinking) are se
 
 The API key can also be set via the `OPENAI_COMPAT_API_KEY` environment variable. The env var takes precedence over the stored value, so secrets don't have to live in `summarizer.json`.
 
+## Endpoint presets
+
+The endpoint row carries one-click presets. Each fills in a base URL and a starting
+model id so you only have to paste a key:
+
+| Preset | Endpoint | Model |
+| --- | --- | --- |
+| **MiniMax** | `https://api.minimax.io/v1` | `MiniMax-M3` |
+| **MiniMax (China)** | `https://api.minimaxi.com/v1` | `MiniMax-M3` |
+| **OrcaRouter (referral)** | `https://api.orcarouter.ai/v1` | `orcarouter/fusion` |
+| **Local (llama.cpp)** | `http://localhost:8080/v1` | _(whatever the server has loaded)_ |
+
+A preset only fills the two fields. Any endpoint you type yourself keeps working
+exactly as it did before.
+
+### Trying several models for summaries
+
+Summary quality varies a lot by model, and the only way to find out which one suits
+your sessions is to run a few. Holding a separate key for every provider to do that
+is tedious, so a gateway is the shorter path: one key, many models, one
+OpenAI-compatible endpoint. [Explore models through OrcaRouter](/go/orcarouter) is
+the preset shipped for this.
+
+<Callout type="warn">
+Two things to know before you click. That link is a referral, so TokenTelemetry
+earns a share of what referred workspaces go on to spend; it costs you nothing, and
+the preset works the same whether you use the link or sign up directly. Separately,
+any hosted endpoint (a preset or one you typed) receives the prompts and responses
+of every session you summarize. A local server does not.
+</Callout>
+
 ## Timeout environment variables
 
 Long traces and slow models can exceed the backend's default timeout. Override per backend with:

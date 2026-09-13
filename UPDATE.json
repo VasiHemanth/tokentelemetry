@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-13",
+      "title": "Endpoint presets, and what leaves your machine",
+      "highlights": [
+        {
+          "title": "OrcaRouter preset, and a note on hosted endpoints",
+          "description": "The OpenAI-compatible backend gains an OrcaRouter preset next to MiniMax and local llama.cpp, filling in the base URL and a model id so you only paste a key. It also now tells you when the endpoint you picked is not local, because that is when a summarized session's prompts and responses are sent elsewhere. The OrcaRouter sign-up link is a referral we earn from, and says so.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-07",
       "title": "Delegated sessions stop crowding the feed",
       "highlights": [

@@ -49,11 +49,25 @@ export interface EndpointPreset {
   label: string;
   endpoint: string;
   model: string | null;
+  /**
+   * Sign-up link for a hosted gateway. Ours is a referral link: TokenTelemetry
+   * earns a share of what referred workspaces spend, which the preset's own
+   * label and the note under the endpoint field both state outright.
+   */
+  refUrl?: string;
 }
 
 export const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
   { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
+  {
+    // The chip carries the disclosure too: a reader who never gets as far as
+    // the note below still sees what the link is before clicking it.
+    label: "OrcaRouter (referral)",
+    endpoint: "https://api.orcarouter.ai/v1",
+    model: "orcarouter/fusion",
+    refUrl: "https://www.orcarouter.ai/ref/ref_cdcd52dcf72dbbc6f881",
+  },
   { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: null },
 ];
 
