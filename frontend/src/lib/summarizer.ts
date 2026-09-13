@@ -67,7 +67,9 @@ export const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
   { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
   {
-    label: "OrcaRouter",
+    // The chip carries the disclosure too: a reader who never gets as far as
+    // the note below still sees what the link is before clicking it.
+    label: "OrcaRouter (referral)",
     endpoint: "https://api.orcarouter.ai/v1",
     model: "orcarouter/fusion",
     badge: "Recommended · referral",
