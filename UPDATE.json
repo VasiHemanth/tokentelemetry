@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-13",
+      "title": "OrcaRouter preset for trace summaries",
+      "highlights": [
+        {
+          "title": "One-click OrcaRouter endpoint",
+          "description": "The OpenAI-compatible summarizer backend gains an OrcaRouter preset alongside MiniMax and local llama.cpp. It fills in the base URL and a starting model id so you only paste a key. Nothing else changes: your own endpoint still works exactly as before.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-07",
       "title": "Delegated sessions stop crowding the feed",
       "highlights": [

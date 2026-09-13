@@ -54,6 +54,7 @@ export interface EndpointPreset {
 export const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: "MiniMax", endpoint: "https://api.minimax.io/v1", model: "MiniMax-M3" },
   { label: "MiniMax (China)", endpoint: "https://api.minimaxi.com/v1", model: "MiniMax-M3" },
+  { label: "OrcaRouter", endpoint: "https://api.orcarouter.ai/v1", model: "orcarouter/fusion" },
   { label: "Local (llama.cpp)", endpoint: "http://localhost:8080/v1", model: null },
 ];
 
