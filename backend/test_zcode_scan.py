@@ -50,8 +50,8 @@ def _mk_zcode_db(path: Path, sessions=()):
                          (f"{spec['id']}-m{j}", spec["id"], ts, json.dumps(data)))
         for j, (data, ts) in enumerate(spec.get("parts", [])):
             conn.execute("INSERT INTO part VALUES (?,?,?,?,?)",
-                         (f"{spec['id']}-p{j}", spec["id"], data.get("_mid", f"{spec['id']}-m0"),
-                          ts, json.dumps(data)))
+                         (f"{spec['id']}-p{j}", data.get("_mid", f"{spec['id']}-m0"),
+                          spec["id"], ts, json.dumps(data)))
         for content, status, pos in spec.get("todos", []):
             conn.execute("INSERT INTO todo VALUES (?,?,?,?)",
                          (spec["id"], content, status, pos))
@@ -91,3 +91,99 @@ def test_db_for_session_finds_owning_db(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "_zcode_dbs", lambda: [db1, db2])
     assert main._zcode_db_for_session("s2") == db2
     assert main._zcode_db_for_session("missing") is None
+
+
+GLM_MSG = {"role": "assistant", "modelID": "GLM-5.3-Flash",
+           "providerID": "builtin:zai-start-plan"}
+
+
+def _step_finish(inp, out, cache_read, cache_write=0):
+    return {"type": "step-finish",
+            "tokens": {"input": inp, "output": out, "reasoning": 0,
+                       "cache": {"read": cache_read, "write": cache_write}}}
+
+
+def _seed_full_session(db: Path):
+    _mk_zcode_db(db, sessions=[{
+        "id": "sess_1", "directory": "D:\proj\demo", "title": "T",
+        "messages": [
+            ({"role": "user"}, 1000),
+            (dict(GLM_MSG), 1100),
+            ({"role": "assistant", "modelID": "GLM-5.3",
+              "providerID": "builtin:zai-coding-plan"}, 1200),
+        ],
+        "parts": [
+            ({"type": "text", "text": "fix the login bug"}, 1000),
+            ({"type": "tool", "tool": "Bash", "callID": "c1", "state": {}}, 1100),
+            (_step_finish(33205, 5079, 26496), 1150),
+            ({"type": "text", "text": "done"}, 1200),
+            (_step_finish(100, 10, 0, cache_write=25), 1250),
+        ],
+        "todos": [("write test", "completed", 0)],
+    }])
+
+
+def test_scan_zcode_sessions_full_shape(scan_env, monkeypatch, tmp_path):
+    db = tmp_path / "db.sqlite"
+    _seed_full_session(db)
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.123)
+    out = main._scan_zcode_sessions()
+    assert len(out) == 1
+    s = out[0]
+    assert s["agent"] == "zcode"
+    assert s["project"] == "D:\proj\demo"
+    assert s["model"] == "GLM-5.3-Flash"
+    assert s["models_used"] == ["GLM-5.3-Flash", "GLM-5.3"]
+    assert s["provider"] == "builtin:zai-start-plan"
+    # OpenCode-parity semantics: input/output summed as-is (inclusive of
+    # cache-read / reasoning), cached = high-water mark, cache writes cumulative.
+    assert s["tokens"]["input"] == 33205 + 100
+    assert s["tokens"]["output"] == 5079 + 10
+    assert s["tokens"]["cached"] == 26496
+    assert s["tokens"]["cache_creation"] == 25
+    assert s["tokens"]["total"] == s["tokens"]["input"] + s["tokens"]["output"] + s["tokens"]["cached"]
+    assert s["tokens"]["cost"] == 0.123
+    assert s["mcp_tools"] == ["Bash"]
+    assert s["has_plan"] is True
+    assert "write test" in s["plans"][0]["content"]
+    assert s["display"].startswith("fix the login bug")
+    assert "child_session_ids" not in s
+
+
+def test_scan_zcode_dedupes_shared_session_ids(scan_env, monkeypatch, tmp_path):
+    db1 = tmp_path / "a" / "db.sqlite"
+    db2 = tmp_path / "b" / "db.sqlite"
+    _seed_full_session(db1)
+    _seed_full_session(db2)
+    monkeypatch.setattr(main, "_zcode_dbs", lambda: [db1, db2])
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    assert len(main._scan_zcode_sessions()) == 1
+
+
+def test_scan_zcode_annotates_parent_delegation(scan_env, monkeypatch, tmp_path):
+    db = tmp_path / "db.sqlite"
+    _mk_zcode_db(db, sessions=[
+        {"id": "parent", "directory": "D:\p", "title": "P"},
+        {"id": "child", "directory": "D:\p", "title": "C", "parent_id": "parent"},
+    ])
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    out = {s["id"]: s for s in main._scan_zcode_sessions()}
+    assert out["child"]["parent_session_id"] == "parent"
+    assert out["parent"]["child_session_ids"] == ["child"]
+    assert out["parent"]["delegation"] == {"supported": True, "tokens_recorded": False,
+                                           "linked_children": 1}
+
+
+def test_scan_zcode_survives_corrupt_db(scan_env, monkeypatch, tmp_path):
+    db = tmp_path / "db.sqlite"
+    _seed_full_session(db)
+    garbage = tmp_path / "garbage.sqlite"
+    garbage.write_text("not a db", encoding="utf-8")
+    # sqlite3.connect succeeds lazily; the first execute raises DatabaseError,
+    # which the scanner's per-DB except must swallow so the good DB still yields
+    # its session — one corrupt store must not erase the whole agent.
+    monkeypatch.setattr(main, "_zcode_dbs", lambda: [garbage, db])
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    assert len(main._scan_zcode_sessions()) == 1
