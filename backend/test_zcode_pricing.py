@@ -34,3 +34,8 @@ def test_cache_read_uses_cached_rate():
     e = pricing.PRICING["glm-5.3-flash"]
     cost = pricing.calculate_cost("GLM-5.3-Flash", 1_000_000, 0, cached_tokens=1_000_000)
     assert cost == pytest.approx(e["in"] + e["cached_read"])
+
+
+def test_glm_5_3_billed_at_its_own_input_rate():
+    rate = pricing.PRICING["glm-5.3"]["in"]
+    assert pricing.calculate_cost("GLM-5.3", 1_000_000, 0) == pytest.approx(rate)
