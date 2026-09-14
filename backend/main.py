@@ -513,6 +513,79 @@ def _opencode_db_for_session(session_id: str) -> Optional[Path]:
         except Exception:
             continue
     return None
+
+
+# ---------------------------------------------------------------------------
+# ZCode (Z.ai). OpenCode-family SQLite store: ~/.zcode/cli/db/db.sqlite.
+# Schema verified against a live install — message/part carry the SAME JSON
+# shapes as OpenCode (see _scan_zcode_sessions), so discovery mirrors the
+# OpenCode helpers with one canonical filename instead of per-channel globs.
+# ---------------------------------------------------------------------------
+
+def _zcode_db_candidates() -> List[Path]:
+    """Every plausible location of ZCode's ``cli/db/db.sqlite``.
+
+    ``ZCODE_DATA_DIR`` overrides the ``.zcode`` directory itself (same role as
+    ``OPENCODE_DATA_DIR``); relocated installs otherwise stay invisible.
+    """
+    env = os.environ.get("ZCODE_DATA_DIR")
+    if env:
+        return [Path(env).expanduser() / "cli" / "db" / "db.sqlite"]
+    return [HOME / ".zcode" / "cli" / "db" / "db.sqlite"]
+
+
+def _zcode_db_path() -> Path:
+    for p in _zcode_db_candidates():
+        if p.exists():
+            return p
+    return HOME / ".zcode" / "cli" / "db" / "db.sqlite"
+
+
+ZCODE_DB = _zcode_db_path()
+
+
+def _zcode_dbs() -> List[Path]:
+    """Every ZCode DB to actually read, primary (``ZCODE_DB``) first.
+
+    ZCode writes a single canonical filename today, but the candidates can
+    overlap (env override equal to the default) — dedupe so a session is
+    never scanned twice, and keep a monkeypatched ``ZCODE_DB`` fully in play.
+    """
+    seen: Set[Path] = set()
+    out: List[Path] = []
+    for p in [ZCODE_DB, *_zcode_db_candidates()]:
+        try:
+            rp = p.resolve()
+        except OSError:
+            rp = p
+        if rp in seen:
+            continue
+        seen.add(rp)
+        if p.exists():
+            out.append(p)
+    return out
+
+
+def _zcode_db_for_session(session_id: str) -> Optional[Path]:
+    """The DB that actually holds ``session_id``, or None.
+
+    Mirrors ``_opencode_db_for_session``: session-detail endpoints must query
+    the same DB the scan found the session in, or they 404.
+    """
+    for db in _zcode_dbs():
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db), uri=True, timeout=1.0)
+            try:
+                if conn.execute("SELECT 1 FROM session WHERE id=?",
+                                (session_id,)).fetchone():
+                    return db
+            finally:
+                conn.close()
+        except Exception:
+            continue
+    return None
+
+
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -2958,6 +3031,7 @@ def _list_available_agents() -> list:
     if CURSOR_DIR.exists(): agents.append("cursor")
     if VSCODE_STORAGE.exists() or COPILOT_CLI_DIR.exists(): agents.append("copilot")
     if OPENCODE_DB.exists(): agents.append("opencode")
+    if ZCODE_DB.exists(): agents.append("zcode")
     if _hermes_dbs(): agents.append("hermes")
     if GROK_SESSIONS_DIR.exists(): agents.append("grok")
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
