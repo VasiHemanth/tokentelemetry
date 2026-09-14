@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- ZCode (Z.ai) support: sessions, tokens, cost, tool calls, plans, subagent delegation and traces read locally from `~/.zcode/cli/db/db.sqlite` (override the location with `ZCODE_DATA_DIR`)
+
 ## [1.0.0] - 2026-04-27
 
 ### Added
