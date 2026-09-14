@@ -160,6 +160,7 @@ def scan_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "CLAUDE_DIR", tmp_path / ".claude")
     monkeypatch.setattr(main, "CURSOR_DIR", tmp_path / ".cursor")
     monkeypatch.setattr(main, "OPENCODE_DB", tmp_path / "opencode.db")
+    monkeypatch.setattr(main, "ZCODE_DB", tmp_path / "zcode.db")
     monkeypatch.setattr(main, "HERMES_DB", tmp_path / "hermes-state.db")
     monkeypatch.setattr(main, "HERMES_PROFILES_DIR", missing / "hermes-profiles")
     monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")

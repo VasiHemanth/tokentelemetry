@@ -57,6 +57,7 @@ def _hermetic(tmp: str):
         "ANTIGRAVITY_CLI_DIR": missing / "ag-cli", "HERMES_DIR": missing / "hermes",
         "PI_SESSIONS_DIR": missing / "pi", "CLAUDE_DIR": Path(tmp) / ".claude",
         "CURSOR_DIR": Path(tmp) / ".cursor", "OPENCODE_DB": missing / "opencode.db",
+        "ZCODE_DB": missing / "zcode.db",
         "HERMES_DB": missing / "hermes-state.db",
         "HERMES_PROFILES_DIR": missing / "hermes-profiles",
         "PROJECT_ALIASES_FILE": Path(tmp) / "aliases.json",

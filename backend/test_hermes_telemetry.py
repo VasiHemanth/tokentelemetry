@@ -82,6 +82,7 @@ def _isolate_other_agents(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "CLAUDE_DIR", missing / "claude")
     monkeypatch.setattr(main, "CURSOR_DIR", missing / "cursor")
     monkeypatch.setattr(main, "OPENCODE_DB", missing / "opencode.db")
+    monkeypatch.setattr(main, "ZCODE_DB", missing / "zcode.db")
     monkeypatch.setattr(main, "CLINE_DIR", missing / "cline")
     monkeypatch.setattr(main, "CLINE_VSCODE_DIR", missing / "cline-vscode")
     # SmallCode traces are project-local and its roots are derived from the

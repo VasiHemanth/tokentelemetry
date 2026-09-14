@@ -61,6 +61,7 @@ def _isolate_other_agents(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "CLAUDE_DIR", tmp_path / ".claude")
     monkeypatch.setattr(main, "CURSOR_DIR", tmp_path / ".cursor")
     monkeypatch.setattr(main, "OPENCODE_DB", tmp_path / "opencode.db")
+    monkeypatch.setattr(main, "ZCODE_DB", tmp_path / "zcode.db")
     monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
 
