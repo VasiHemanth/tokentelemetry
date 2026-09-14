@@ -51,7 +51,8 @@ def _mk_zcode_db(path: Path, sessions=()):
         for j, (data, ts) in enumerate(spec.get("parts", [])):
             conn.execute("INSERT INTO part VALUES (?,?,?,?,?)",
                          (f"{spec['id']}-p{j}", data.get("_mid", f"{spec['id']}-m0"),
-                          spec["id"], ts, json.dumps(data)))
+                          spec["id"], ts,
+                          json.dumps({k: v for k, v in data.items() if k != "_mid"})))
         for content, status, pos in spec.get("todos", []):
             conn.execute("INSERT INTO todo VALUES (?,?,?,?)",
                          (spec["id"], content, status, pos))
