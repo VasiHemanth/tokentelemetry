@@ -106,7 +106,7 @@ def _step_finish(inp, out, cache_read, cache_write=0):
 
 def _seed_full_session(db: Path):
     _mk_zcode_db(db, sessions=[{
-        "id": "sess_1", "directory": "D:\proj\demo", "title": "T",
+        "id": "sess_1", "directory": r"D:\proj\demo", "title": "T",
         "messages": [
             ({"role": "user"}, 1000),
             (dict(GLM_MSG), 1100),
@@ -133,7 +133,7 @@ def test_scan_zcode_sessions_full_shape(scan_env, monkeypatch, tmp_path):
     assert len(out) == 1
     s = out[0]
     assert s["agent"] == "zcode"
-    assert s["project"] == "D:\proj\demo"
+    assert s["project"] == r"D:\proj\demo"
     assert s["model"] == "GLM-5.3-Flash"
     assert s["models_used"] == ["GLM-5.3-Flash", "GLM-5.3"]
     assert s["provider"] == "builtin:zai-start-plan"
@@ -165,8 +165,8 @@ def test_scan_zcode_dedupes_shared_session_ids(scan_env, monkeypatch, tmp_path):
 def test_scan_zcode_annotates_parent_delegation(scan_env, monkeypatch, tmp_path):
     db = tmp_path / "db.sqlite"
     _mk_zcode_db(db, sessions=[
-        {"id": "parent", "directory": "D:\p", "title": "P"},
-        {"id": "child", "directory": "D:\p", "title": "C", "parent_id": "parent"},
+        {"id": "parent", "directory": r"D:\p", "title": "P"},
+        {"id": "child", "directory": r"D:\p", "title": "C", "parent_id": "parent"},
     ])
     monkeypatch.setattr(main, "ZCODE_DB", db)
     monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
@@ -188,3 +188,24 @@ def test_scan_zcode_survives_corrupt_db(scan_env, monkeypatch, tmp_path):
     monkeypatch.setattr(main, "_zcode_dbs", lambda: [garbage, db])
     monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
     assert len(main._scan_zcode_sessions()) == 1
+
+
+def test_scan_zcode_resolves_model_from_degenerate_session(scan_env, monkeypatch, tmp_path):
+    """A session with only user-role rows carrying `model` as a dict must still
+    report its model (the ZCode shape OpenCode's resolver handles upstream)."""
+    db = tmp_path / "db.sqlite"
+    _mk_zcode_db(db, sessions=[{
+        "id": "sess_d", "directory": r"D:\p", "title": "T",
+        "messages": [
+            ({"role": "user", "model": {"providerID": "builtin:zai-coding-plan",
+                                        "modelID": "GLM-5.3-Flash"}}, 1000),
+        ],
+        "parts": [({"type": "text", "text": "hello"}, 1000)],
+    }])
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    out = main._scan_zcode_sessions()
+    assert len(out) == 1
+    assert out[0]["model"] == "GLM-5.3-Flash"
+    assert out[0]["tokens"]["total"] == 0
+    assert out[0]["has_plan"] is False

@@ -5300,6 +5300,9 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                     _sess_cols = set()
                 _has_parent = "parent_id" in _sess_cols
                 _parent_sel = ", parent_id" if _has_parent else ""
+                # Some providers store the model only on the session row, not
+                # on assistant messages (OpenCode issue #39 shape).
+                _has_sess_model = "model" in _sess_cols
                 zc_by_id: Dict[str, Dict[str, Any]] = {}
                 rows = conn.execute(
                     "SELECT id, directory, title, time_created, time_updated"
@@ -5335,11 +5338,20 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                             provider_id = mdata.get("providerID")
                         if not model:
                             model = mdata.get("modelID") or mdata.get("providerID")
-                        _mm = mdata.get("modelID")
+                            if not model:
+                                model = _opencode_resolve_model(mdata.get("model"))
+                        _mm = mdata.get("modelID") or _opencode_resolve_model(mdata.get("model"))
                         if _mm and _mm not in models_used:
                             models_used.append(_mm)
                         if mdata.get("mode") == "plan":
                             has_plan = True
+                    if not model and _has_sess_model:
+                        try:
+                            mrow = conn.execute("SELECT model FROM session WHERE id=?", (sid,)).fetchone()
+                            if mrow is not None:
+                                model = _opencode_resolve_model(mrow["model"])
+                        except Exception:
+                            pass
                     if not model:
                         # No assistant message yet (fresh/degenerate session) —
                         # fall back to any message's model, else None (cost 0).
@@ -5350,7 +5362,8 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                                 mdata = json.loads(mrow["data"] or "{}")
                             except Exception:
                                 continue
-                            model = mdata.get("modelID") or mdata.get("providerID")
+                            model = (_opencode_resolve_model(mdata.get("model"))
+                                     or mdata.get("modelID") or mdata.get("providerID"))
                             if model:
                                 break
                     if model and model not in models_used:
@@ -10159,6 +10172,9 @@ async def session_delegation(session_id: str, agent: str):
         try:
             conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
             try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+                if "parent_id" not in cols:
+                    return {"supported": False}
                 row = conn.execute("SELECT parent_id FROM session WHERE id=?", (session_id,)).fetchone()
                 if row is None:
                     return {"error": "Not found"}
