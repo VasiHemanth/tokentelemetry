@@ -51,11 +51,12 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "hermes": hermes.build_hermes,
 }
 
-# Every supported agent now has an extractor, so nothing is merely planned.
-# Kept as a named empty tuple rather than deleted: the frontend distinguishes
-# "installed: false, planned: true" (we support it, no panel yet) from a plain
-# "not installed", and a future agent should land here before it lands above.
-PLANNED: tuple[str, ...] = ()
+# ZCode is the only agent whose store carries nothing the session scan doesn't
+# already show, so it is merely planned. Kept as a named tuple rather than
+# deleted: the frontend distinguishes "installed: false, planned: true" (we
+# support it, no panel yet) from a plain "not installed", and a future agent
+# should land here before it lands above.
+PLANNED: tuple[str, ...] = ("zcode",)
 
 # Nothing is excluded. Hermes has a panel of its own now, but a narrow one:
 # it carries only what its /hermes/* pages do not already show, and links

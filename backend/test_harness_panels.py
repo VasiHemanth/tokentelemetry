@@ -660,14 +660,14 @@ def test_unsupported_agent_is_not_planned():
     assert doc["installed"] is False and doc.get("planned") is False
 
 
-def test_planned_is_empty_now_that_every_agent_has_a_builder():
-    """`planned` marks a supported agent with no extractor yet. There are none.
+def test_planned_holds_supported_agents_without_an_extractor():
+    """`planned` marks a supported agent with no extractor yet.
 
     Kept as a mechanism rather than deleted: the frontend renders
     "no panel yet" differently from "not installed", and a newly supported agent
     should land in PLANNED before it lands in BUILDERS.
     """
-    assert harness_panels.PLANNED == ()
+    assert tuple(harness_panels.PLANNED) == ("zcode",)
     assert not (set(harness_panels.PLANNED) & set(harness_panels.BUILDERS))
 
 

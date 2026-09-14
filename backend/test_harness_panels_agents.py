@@ -34,16 +34,21 @@ from harness_panels import paths as hp_paths
 
 
 def test_every_supported_agent_has_a_builder():
-    """Scope check: every agent in supported-agents.mdx, Hermes included."""
+    """Scope check: every agent in supported-agents.mdx, Hermes included.
+
+    An agent without an extractor yet must at least sit in PLANNED — that is
+    what keeps /agents/{agent}/panel reporting "planned" instead of a bare
+    "not installed" on machines where the agent's sessions already show up.
+    """
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "qoder", "hermes",
+        "prime", "dsh", "qoder", "hermes", "zcode",
     }
-    assert supported == set(harness_panels.BUILDERS), (
-        "every supported agent needs an extractor; "
-        f"missing={supported - set(harness_panels.BUILDERS)} "
-        f"unexpected={set(harness_panels.BUILDERS) - supported}"
+    assert supported == set(harness_panels.BUILDERS) | set(harness_panels.PLANNED), (
+        "every supported agent needs an extractor or a PLANNED entry; "
+        f"missing={supported - set(harness_panels.BUILDERS) - set(harness_panels.PLANNED)} "
+        f"unexpected={(set(harness_panels.BUILDERS) | set(harness_panels.PLANNED)) - supported}"
     )
     assert harness_panels.EXCLUDED == ()
 
