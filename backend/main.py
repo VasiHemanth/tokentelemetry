@@ -9684,6 +9684,60 @@ async def get_session_detail(session_id: str, agent: str):
             return events
         finally:
             conn.close()
+    elif agent == "zcode":
+        # Same part shapes as OpenCode, same event contract — the frontend
+        # renders zcode traces through the opencode-compatible code paths.
+        _zc_db = _zcode_db_for_session(session_id)
+        if _zc_db is None:
+            return {"error": "Not found"}
+        conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            srow = conn.execute("SELECT id FROM session WHERE id=?", (session_id,)).fetchone()
+            if not srow:
+                return {"error": "Not found"}
+            # Build a message_id → role map so each part can be tagged correctly.
+            role_by_msg: Dict[str, str] = {}
+            for mrow in conn.execute("SELECT id, data FROM message WHERE session_id=? ORDER BY time_created", (session_id,)):
+                try:
+                    md = json.loads(mrow["data"] or "{}")
+                except Exception:
+                    md = {}
+                role_by_msg[mrow["id"]] = md.get("role") or "assistant"
+            events: List[Dict[str, Any]] = []
+            for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
+                try:
+                    p = json.loads(prow["data"] or "{}")
+                except Exception:
+                    continue
+                role = role_by_msg.get(prow["message_id"], "assistant")
+                ts_ms = prow["time_created"]
+                base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+                ptype = p.get("type")
+                if ptype == "text":
+                    if role == "user":
+                        events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
+                    else:
+                        events.append({"type": "assistant", "payload": {"content": p.get("text", "")}, **base})
+                elif ptype == "reasoning":
+                    events.append({"type": "assistant_thinking", "payload": {"text": p.get("text", "")}, **base})
+                elif ptype == "tool":
+                    events.append({"type": "tool_call", "payload": {
+                        "tool": p.get("tool"),
+                        "callID": p.get("callID"),
+                        "state": p.get("state"),
+                    }, **base})
+                elif ptype == "step-finish":
+                    # Lifecycle marker, not its own trace event — but it carries
+                    # the step's token usage, so attach it to the step's last
+                    # emitted event for the per-step usage UI (#128).
+                    tk = p.get("tokens")
+                    if isinstance(tk, dict) and events:
+                        events[-1]["tokens"] = tk
+                # step-start is a lifecycle marker; skip in trace
+            return events
+        finally:
+            conn.close()
     elif agent == "hermes":
         for db_path in _hermes_dbs():
             try:
@@ -10084,6 +10138,27 @@ async def session_delegation(session_id: str, agent: str):
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
                 if "parent_id" not in cols:
                     return {"supported": False}
+                row = conn.execute("SELECT parent_id FROM session WHERE id=?", (session_id,)).fetchone()
+                if row is None:
+                    return {"error": "Not found"}
+                children = [r[0] for r in conn.execute(
+                    "SELECT id FROM session WHERE parent_id=?", (session_id,))]
+                return {"supported": True, "tokens_recorded": False,
+                        "parent_session_id": row[0],
+                        "child_session_ids": children,
+                        "linked_children": len(children)}
+            finally:
+                conn.close()
+        except Exception:
+            return {"error": "Not found"}
+
+    if agent == "zcode":
+        _zc_db = _zcode_db_for_session(session_id)
+        if _zc_db is None:
+            return {"error": "Not found"}
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
+            try:
                 row = conn.execute("SELECT parent_id FROM session WHERE id=?", (session_id,)).fetchone()
                 if row is None:
                     return {"error": "Not found"}
