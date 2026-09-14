@@ -608,10 +608,10 @@ export default function SessionDetailPage() {
 
       // 5. Delegation overlay: subagent spawns + delegated token/cost attribution.
       // Only agents whose logs record spawns at all (claude full, cursor count-only,
-      // grok/codex/antigravity/opencode/hermes parent-child links, dsh full via
+      // grok/codex/antigravity/opencode/zcode/hermes parent-child links, dsh full via
       // its children's own session logs, qoder full but in credits — it records
       // no token counts at all).
-      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh", "qoder"].includes(agent)) {
+      if (["claude", "cursor", "opencode", "hermes", "grok", "codex", "antigravity", "dsh", "qoder", "zcode"].includes(agent)) {
         apiFetch(`/sessions/${id}/delegation?agent=${agent}`)
           .then(res => res.json())
           .then(data => setDelegation(data && data.supported ? data : null))
@@ -2724,8 +2724,8 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
     );
   }
 
-  // 5. OPENCODE tool_call
-  if (agent === "opencode" && type === "tool_call" && payload && mode !== "dialogue") {
+  // 5. OPENCODE tool_call (ZCode emits the identical payload shape)
+  if ((agent === "opencode" || agent === "zcode") && type === "tool_call" && payload && mode !== "dialogue") {
     const state = payload.state || {};
     const status = state.status;
     const input = state.input;
