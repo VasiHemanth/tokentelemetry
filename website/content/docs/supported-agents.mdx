@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 17 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 18 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -26,6 +26,7 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Prime Agent** | Prime Intellect | `~/.prime/agent/sessions/` | tokens, traces, reported cost, model, active branch |
 | **DeepSeek Harness** | DeepSeek | `~/.dsh/sessions/` | tokens, traces, cost, model, provider, subagents, skills/tools, latency |
 | **Qoder** | Alibaba | `~/.qoder/projects/` | traces, credits, subagents, model, branch (no token counts — see below) |
+| **Kimi Code** | Moonshot AI | `~/.kimi/sessions/` | tokens, traces, cost, model, subagents |
 
 ## Autonomous agents
 
@@ -102,6 +103,12 @@ Qoder writes one JSONL transcript per session to `~/.qoder/projects/<slugged-cwd
 Two further things stay opaque by design: model ids are internal names such as `qmodel_38max`, and the catalogue that would resolve them (`.models/<uid>/catalog-v6`) is encrypted at rest; and each session's `state.json` is encrypted too, so resumable context and todos cannot be read. Both are listed on the agent page as unavailable, with the reason.
 
 Qoder also keeps an Electron store at `~/Library/Application Support/com.qoder.app.stable`. Its `main.sqlite` is a projection of the same sessions — the message rows are marked `sdk-projection` and reuse the transcript's ids — so TokenTelemetry reads it only for the human-readable session title, never as a second source of sessions. It counts towards the agent's disk footprint, which spans both directories.
+
+### Kimi Code
+
+Kimi Code (Moonshot AI's coding CLI, the `kimi` command) writes one JSONL wire log per session to `~/.kimi/sessions/<workdir-hash>/<session-uuid>/wire.jsonl`. TokenTelemetry detects the agent from the `~/.kimi/` directory, reads each `wire.jsonl` read-only for per-call usage, model, and the conversation trace, and rolls the sessions up under the project named by the `work_dirs` entries in `~/.kimi/kimi.json`. Subagent runs recorded in the wire log are folded into the parent session as delegation.
+
+`~/.kimi/` belongs to Kimi Code alone. Two sibling directories that look similar are different products and are not read as Kimi Code sessions: `~/.kimi-work/` (kimi-slides, a presentation tool) and `~/.kimi-webbridge/` (the browser-automation bridge).
 
 ### Hermes Agent
 

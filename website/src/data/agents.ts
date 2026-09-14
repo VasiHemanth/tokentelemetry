@@ -25,5 +25,7 @@ export const AGENTS: Agent[] = [
   { name: "Prime Agent",    vendor: "Prime Intellect", captures: ["tokens", "traces", "cost", "model", "branches"], logPath: "~/.prime/agent/sessions/",          hex: "#D4FF47" },
   { name: "DeepSeek Harness", vendor: "DeepSeek AI", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.dsh/sessions/",                  hex: "#4D6BFE" },
   { name: "Qoder",          vendor: "Alibaba",   captures: ["traces", "credits", "subagents", "model"],            logPath: "~/.qoder/projects/",              hex: "#e4e4e7" },
+  // Kimi's brand mark is black-on-white; zinc-400 keeps the chip legible on the site's dark surface.
+  { name: "Kimi Code",      vendor: "Moonshot AI", captures: ["tokens", "traces", "cost", "model"],              logPath: "~/.kimi/sessions/",               hex: "#a1a1aa" },
   { name: "Hermes Agent",   vendor: "Nous Research", captures: ["tokens", "traces", "cost", "subagents", "skills", "memory", "cron", "38 sources"], logPath: "~/.hermes/",                      hex: "#eab308" },
 ];

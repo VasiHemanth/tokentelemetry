@@ -140,11 +140,18 @@ _RETENTION: Dict[str, Dict[str, Any]] = {
         "settings_hint": None,
         "note": "JSONL transcripts under ~/.qoder/projects; no auto-pruning.",
     },
+    "kimi": {
+        "label": "Kimi Code",
+        "default_days": None,
+        "configurable": False,
+        "settings_hint": None,
+        "note": "Per-session wire.jsonl under ~/.kimi/sessions; no auto-pruning.",
+    },
 }
 
 # Which agents we can actually archive (single-file resolvable transcript).
 # Must stay in sync with main._resolve_transcript_path.
-_ARCHIVABLE = {"claude", "codex"}
+_ARCHIVABLE = {"claude", "codex", "kimi"}
 
 
 def _read_claude_cleanup_days() -> Optional[int]:

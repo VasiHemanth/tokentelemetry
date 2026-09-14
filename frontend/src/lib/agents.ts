@@ -1,6 +1,6 @@
 import {
   Terminal, Database, Sparkles, Orbit, Cpu, Zap, MousePointer2,
-  GitBranch, Code2, Server, Bot, Boxes, type LucideIcon,
+  GitBranch, Code2, Server, Bot, Boxes, Moon, type LucideIcon,
 } from "lucide-react";
 import HermesIcon from "@/components/icons/HermesIcon";
 import GrokIcon from "@/components/icons/GrokIcon";
@@ -13,7 +13,7 @@ export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
   | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime" | "dsh"
-  | "qoder";
+  | "qoder" | "kimi";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -45,6 +45,10 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   // Qoder's mark is white-on-black, so the tint follows the other monochrome
   // brands (grok, pi) rather than inventing a colour it doesn't use.
   qoder:       { key: "qoder",       label: "Qoder",       hex: "#e4e4e7", icon: Boxes },
+  // Kimi's mark is black-on-white (Moonshot AI), the mirror of Qoder's, so it
+  // gets the same theme-aware tint treatment with a dark hex rather than a
+  // blue that would collide with muse/dsh/qwen.
+  kimi:        { key: "kimi",        label: "Kimi Code",   hex: "#18181b", icon: Moon },
 };
 
 const FALLBACK: AgentMeta = {

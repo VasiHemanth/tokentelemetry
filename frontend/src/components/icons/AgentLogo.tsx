@@ -36,13 +36,15 @@ const COLOR_MARKS = {
 
 export function AgentLogo({ agent, size = 16, decorative = true, className, color = false }: LogoProps) {
   const meta = getAgent(agent);
-  // Near-white brand marks (Grok, Pi) are stored in globals.css as theme-aware
+  // Monochrome brand marks (near-white Grok, Pi, Qoder; near-black Kimi) are
+  // stored in globals.css as theme-aware
   // `--agent-<key>` variables so a light-mode build re-tints them to something
-  // visible instead of a white glyph on a white surface. These brands are always
+  // visible instead of a white glyph on a white surface (or Kimi's black glyph
+  // on a black one). These brands are always
   // tinted — even when `color` is false — because their intrinsic mark is white,
   // so inheriting `currentColor` from a container that uses the brand hex would
   // leave them invisible on a light background (and monochrome elsewhere).
-  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder";
+  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder" || agent === "kimi";
   const brandColor = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   const applyTint = color || isLightBrand;
   const props = {

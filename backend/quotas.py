@@ -1474,5 +1474,6 @@ def default_quota_providers() -> List[QuotaProvider]:
         StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
         StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("kimi", "Kimi Code", "Kimi Code keeps its membership usage allowance server-side; nothing local reports it."),
         StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
     ]

@@ -98,6 +98,7 @@ The first argument is a command only when it matches a known verb; anything else
 | `DSH_HOME` | DeepSeek Harness' own home-directory override. Default: `~/.dsh/`; TokenTelemetry reads sessions from `<DSH_HOME>/sessions/`. |
 | `QODER_HOME` | Path to Qoder's data directory. Default: `~/.qoder/`; sessions are read from `<QODER_HOME>/projects/`. Qoder itself has no relocation variable, so this is a TokenTelemetry-side override for a mounted or relocated directory. |
 | `QODER_IDE_HOME` | Path to the Qoder desktop app's data directory. Default: `~/Library/Application Support/com.qoder.app.stable` on macOS. Read only for session titles and the disk footprint; sessions always come from the transcripts. |
+| `KIMI_HOME` | Path to Kimi Code's data directory. Default: `~/.kimi/`; sessions are read from `<KIMI_HOME>/sessions/`. This is a TokenTelemetry-side override for a mounted or relocated directory. |
 
 ### Summarizer backends
 

@@ -4,7 +4,7 @@
 
 ## What is TokenTelemetry?
 
-TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, and Nous Research's Hermes Agent.
+TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, Kimi Code, and Nous Research's Hermes Agent.
 
 It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:3000.
 
@@ -22,7 +22,7 @@ It reads session logs and SQLite state directly from the filesystem (no SDK, no 
 
 ## Supported Agents
 
-### Coding agents (16)
+### Coding agents (18)
 
 - Claude Code (Anthropic)
 - OpenAI Codex CLI
@@ -41,6 +41,7 @@ It reads session logs and SQLite state directly from the filesystem (no SDK, no 
 - Prime Agent
 - DeepSeek Harness (DeepSeek AI)
 - Qoder (Alibaba)
+- Kimi Code (Moonshot AI)
 
 ### Autonomous agents (1)
 
@@ -167,6 +168,7 @@ Full docs site: https://tokentelemetry.com/docs
 - [Analytics](https://tokentelemetry.com/docs/features/analytics): Token trends by agent, model, and day with date-range filters, cache efficiency, and delegation graphs.
 - [Projects](https://tokentelemetry.com/docs/features/projects): Per-working-directory cards with activity heatmaps, tool usage, config overlays, a plans library, and git-worktree rollups.
 - [Budgets & Alerts](https://tokentelemetry.com/docs/features/budgets): Spend or token limits per project (and per agent), with 80% / 100% alerts — observational, never blocks an agent.
+- [Plan Limits](https://tokentelemetry.com/docs/features/plan-limits): Live session, weekly and monthly quota windows read from the coding-agent logins already on your machine — Claude Code, Codex, Copilot, OpenCode, Grok and more, with reset times.
 - [Traces](https://tokentelemetry.com/docs/features/traces): Replay every session step by step — events, messages, tool calls, artifacts, and plans.
 - [Summarization](https://tokentelemetry.com/docs/features/summarization): One-click LLM summaries of any session, cached by content hash, with classified error cards.
 - [Artifacts](https://tokentelemetry.com/docs/features/artifacts): Screenshots, browser recordings, and documents captured by your agents, viewable inline.
