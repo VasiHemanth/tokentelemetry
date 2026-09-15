@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import {
   Antigravity, ClaudeCode, Cline, Codex, Copilot, Cursor, GeminiCLI, Grok,
-  HermesAgent, OpenCode, Qoder, Qwen,
+  HermesAgent, OpenCode, Qoder, Qwen, ZAI,
 } from "@lobehub/icons";
 import { getAgent, type AgentKey } from "@/lib/agents";
 
@@ -20,7 +20,7 @@ type LogoProps = Pick<SVGProps<SVGSVGElement>, "className" | "aria-hidden"> & {
  */
 /**
  * Brands whose Lobe mark ships a full-colour variant. The rest — Cursor, Grok,
- * OpenCode, Cline, Hermes — are monochrome marks by design; for those, `color`
+ * OpenCode, Cline, Hermes, ZCode — are monochrome marks by design; for those, `color`
  * tints the mark with the brand's own hex rather than inventing a palette, so
  * the prop means "the brand's colours" for every agent either way.
  */
@@ -42,7 +42,8 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
   // tinted — even when `color` is false — because their intrinsic mark is white,
   // so inheriting `currentColor` from a container that uses the brand hex would
   // leave them invisible on a light background (and monochrome elsewhere).
-  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder";
+  const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder"
+    || agent === "zcode";
   const brandColor = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   const applyTint = color || isLightBrand;
   const props = {
@@ -71,6 +72,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
     case "grok": return <Grok {...props} />;
     case "cline": return <Cline {...props} />;
     case "qoder": return <Qoder {...props} />;
+    case "zcode": return <ZAI {...props} />;
     default: {
       const Fallback = meta.icon;
       return <Fallback {...props} color={meta.hex} />;

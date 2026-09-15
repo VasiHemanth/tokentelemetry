@@ -45,9 +45,9 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   // Qoder's mark is white-on-black, so the tint follows the other monochrome
   // brands (grok, pi) rather than inventing a colour it doesn't use.
   qoder:       { key: "qoder",       label: "Qoder",       hex: "#e4e4e7", icon: Boxes },
-  // ZCode's own mark is monochrome like Qoder's, so the tint takes an unused
-  // hue (rose) rather than a brand colour no two Z.ai surfaces agree on.
-  zcode:       { key: "zcode",       label: "ZCode",       hex: "#f43f5e", icon: SquareTerminal },
+  // Z.ai's mark is a white sliced Z on black, so ZCode takes Qoder's neutral
+  // treatment: a near-white hex plus a theme-aware `--agent-zcode` override.
+  zcode:       { key: "zcode",       label: "ZCode",       hex: "#e4e4e7", icon: SquareTerminal },
 };
 
 const FALLBACK: AgentMeta = {
