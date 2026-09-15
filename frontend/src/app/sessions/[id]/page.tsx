@@ -3684,21 +3684,32 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
       {/* OpenCode / Hermes: linked child sessions (already counted as sessions) */}
       {(children.some((cid) => !inlineChildIds.has(cid)) || parentId) && (
         <div className="space-y-1 text-[11px] font-mono">
+          {/* Same sigil as the Agents sidebar, and deliberately the same seed.
+              These agents carry no description or agent_id — OpenCode-family
+              stores link a child by session id alone — so the sidebar's seed
+              chain falls through to child_session_id, and passing anything
+              else here would draw two different marks for one child. */}
           {parentId && (
-            <div className="text-[var(--tt-fg-muted)]">
-              Spawned by{" "}
-              <Link href={`/sessions/${parentId}?agent=${agent}&from=${backTo}`} className="text-[var(--tt-brand)] hover:underline">{parentId}</Link>
+            <div className="text-[var(--tt-fg-muted)] flex items-center gap-2">
+              <AgentSigil seed={parentId} size={15} />
+              <span>
+                Spawned by{" "}
+                <Link href={`/sessions/${parentId}?agent=${agent}&from=${backTo}`} className="text-[var(--tt-brand)] hover:underline">{parentId}</Link>
+              </span>
             </div>
           )}
           {children.filter((cid) => !inlineChildIds.has(cid)).map((cid) => (
-            <div key={cid} className="text-[var(--tt-fg-muted)]">
-              Child session{" "}
-              {onOpenSubagent ? (
-                <button onClick={() => onOpenSubagent({ child_session_id: cid })} className="text-[var(--tt-brand)] hover:underline font-mono">{cid}</button>
-              ) : (
-                <Link href={`/sessions/${cid}?agent=${agent}&from=${backTo}`} className="text-[var(--tt-brand)] hover:underline">{cid}</Link>
-              )}
-              <span className="text-[var(--tt-fg-dim)]"> · tokens counted in its own session</span>
+            <div key={cid} className="text-[var(--tt-fg-muted)] flex items-center gap-2">
+              <AgentSigil seed={cid} size={15} />
+              <span className="min-w-0">
+                Child session{" "}
+                {onOpenSubagent ? (
+                  <button onClick={() => onOpenSubagent({ child_session_id: cid })} className="text-[var(--tt-brand)] hover:underline font-mono">{cid}</button>
+                ) : (
+                  <Link href={`/sessions/${cid}?agent=${agent}&from=${backTo}`} className="text-[var(--tt-brand)] hover:underline">{cid}</Link>
+                )}
+                <span className="text-[var(--tt-fg-dim)]"> · tokens counted in its own session</span>
+              </span>
             </div>
           ))}
         </div>
