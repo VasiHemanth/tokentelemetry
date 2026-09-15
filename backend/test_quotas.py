@@ -936,6 +936,10 @@ def test_antigravity_converts_remaining_fraction_into_consumed_percent(tmp_path)
     assert snapshot.resources["claude"].used == pytest.approx(10.0)
     assert snapshot.resources["claudeWeekly"].used == 0.0
     assert all(r.limit == 100 for r in snapshot.resources.values())
+    # An untouched pool has no window to reset, and the server answers
+    # `now + window` for it — a countdown that restarts on every refresh.
+    assert snapshot.resources["claudeWeekly"].resets_at is None
+    assert snapshot.resources["claudeWeekly"].wire().get("resetsAt") is None
     # The payload names its window but never states a length.
     assert snapshot.resources["session"].window_seconds == 5 * 3600
     assert snapshot.resources["weekly"].window_seconds == 7 * 24 * 3600

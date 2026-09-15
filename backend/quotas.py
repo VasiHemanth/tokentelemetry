@@ -1508,13 +1508,22 @@ class AntigravityQuotaProvider:
                 key = self.BUCKETS.get(bucket_id)
                 if key is None:
                     continue
+                # A pool with nothing spent has no window to reset: the server
+                # has no start to count from and answers `now + window`, so the
+                # value slides forward on every refresh. Copying it faithfully
+                # would render a countdown that never counts down. Dropping it
+                # is what makes the meter honest -- wire() omits the key, and
+                # both the panel and the gauge already render a window without
+                # a reset time. Exact 1 is the signal; any real usage gives
+                # 0.9999...
+                started = fraction < 1.0
                 # The payload reports what is LEFT; every other provider here
                 # reports what is SPENT. Inverting this renders a barely-used
                 # week as nearly exhausted, and looks entirely plausible.
                 resources[key] = QuotaResource(
                     kind="consumption", unit="percent",
                     used=min(100.0, max(0.0, (1.0 - fraction) * 100)), limit=100,
-                    resets_at=_date(bucket.get("resetTime")),
+                    resets_at=_date(bucket.get("resetTime")) if started else None,
                     window_seconds=self.WINDOW_SECONDS.get(str(bucket.get("window") or "")),
                 )
         if not resources:
