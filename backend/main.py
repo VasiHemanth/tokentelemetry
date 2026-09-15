@@ -535,9 +535,21 @@ def _zcode_db_candidates() -> List[Path]:
 
 
 def _zcode_db_path() -> Path:
+    """First existing ZCode DB among the candidates, else the canonical
+    default (so a not-yet-created DB still has a stable path to display).
+
+    ``Path.exists()`` is wrapped in ``OSError`` like ``_opencode_db_path``:
+    on Python <=3.12 it re-raises EACCES/ESTALE/ENAMETOOLONG, and this runs
+    at module import via ``ZCODE_DB = _zcode_db_path()``, so a stale NFS
+    mount or a mode-000 ``~/.zcode`` would otherwise refuse to boot the
+    backend for every agent, not just ZCode.
+    """
     for p in _zcode_db_candidates():
-        if p.exists():
-            return p
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
     return HOME / ".zcode" / "cli" / "db" / "db.sqlite"
 
 
@@ -551,8 +563,19 @@ def _zcode_dbs() -> List[Path]:
     one. Derived from ``ZCODE_DB`` rather than re-probing the candidate dirs,
     which keeps a monkeypatched ``ZCODE_DB`` fully in play — and the scan
     hermetic under tests. Kept as a list so the scan loop mirrors OpenCode's.
+    ``exists()`` is OSError-guarded for the same reason as ``_opencode_dbs``.
     """
-    return [ZCODE_DB] if ZCODE_DB.exists() else []
+    out: List[Path] = []
+    seen: set = set()
+    for p in [ZCODE_DB]:
+        try:
+            if p in seen or not p.exists():
+                continue
+        except OSError:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
 
 
 def _zcode_db_for_session(session_id: str) -> Optional[Path]:
@@ -5271,8 +5294,12 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
 
     message/part carry the SAME JSON shapes as OpenCode: step-finish parts hold
     {input, output, reasoning, cache{read, write}} with input INCLUSIVE of
-    cache.read and output INCLUSIVE of reasoning, so tokens are summed exactly
-    like the OpenCode scanner to keep the two same-schema agents comparable.
+    cache.read and output INCLUSIVE of reasoning. Input is stored NET of
+    cache.read (and ``tokens["total"]`` is built from that net) so
+    ``calculate_cost`` does not double-bill cache reads — every other caller
+    nets first. OpenCode's scanner still passes the gross input today
+    (tracked as a follow-up; do not "fix" both silently or the two agents'
+    historical numbers diverge mid-release for different reasons).
     message.data.cost stays 0 under coding-plan billing — cost comes from
     calculate_cost. Children (session.parent_id) are already full sessions:
     annotate the parent, never re-sum (count-once invariant).
@@ -5389,9 +5416,14 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                         if ptype == "step-finish":
                             tk = pdata.get("tokens") or {}
                             cache = tk.get("cache") or {}
-                            tokens["input"] += tk.get("input", 0) or 0
+                            # step-finish `input` is GROSS (includes cache.read);
+                            # calculate_cost expects NET input and adds cached
+                            # on top, so subtract before accumulating.
+                            gross_input = tk.get("input", 0) or 0
+                            cache_read = cache.get("read", 0) or 0
+                            tokens["input"] += max(0, gross_input - cache_read)
                             tokens["output"] += tk.get("output", 0) or 0
-                            tokens["cached"] = max(tokens["cached"], cache.get("read", 0) or 0)
+                            tokens["cached"] = max(tokens["cached"], cache_read)
                             # cache writes ARE billed per event → cumulative.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]

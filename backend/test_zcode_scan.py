@@ -137,9 +137,10 @@ def test_scan_zcode_sessions_full_shape(scan_env, monkeypatch, tmp_path):
     assert s["model"] == "GLM-5.3-Flash"
     assert s["models_used"] == ["GLM-5.3-Flash", "GLM-5.3"]
     assert s["provider"] == "builtin:zai-start-plan"
-    # OpenCode-parity semantics: input/output summed as-is (inclusive of
-    # cache-read / reasoning), cached = high-water mark, cache writes cumulative.
-    assert s["tokens"]["input"] == 33205 + 100
+    # step-finish `input` is GROSS (includes cache.read); the scanner nets it
+    # before storing so calculate_cost does not double-bill. Cached stays the
+    # high-water mark of cache.read; cache writes are cumulative.
+    assert s["tokens"]["input"] == (33205 - 26496) + 100
     assert s["tokens"]["output"] == 5079 + 10
     assert s["tokens"]["cached"] == 26496
     assert s["tokens"]["cache_creation"] == 25
@@ -150,6 +151,79 @@ def test_scan_zcode_sessions_full_shape(scan_env, monkeypatch, tmp_path):
     assert "write test" in s["plans"][0]["content"]
     assert s["display"].startswith("fix the login bug")
     assert "child_session_ids" not in s
+
+
+def test_zcode_db_path_swallows_oserror(monkeypatch, tmp_path):
+    """A candidate whose exists() raises must not abort path resolution.
+
+    Mirrors OpenCode: on Python <=3.12 pathlib.exists re-raises EACCES/ESTALE,
+    and ZCODE_DB = _zcode_db_path() runs at import, so an uncaught raise would
+    refuse to boot the backend for every agent.
+    """
+    _clear_zcode_env(monkeypatch)
+    bad = tmp_path / "bad" / "cli" / "db" / "db.sqlite"
+    good = tmp_path / "good" / "cli" / "db" / "db.sqlite"
+    _mk_zcode_db(good)
+    real_exists = Path.exists
+
+    def flaky_exists(self):
+        # Compare resolved strings so a relative/absolute mismatch can't leak.
+        if str(self) == str(bad):
+            raise OSError(13, "Permission denied")
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", flaky_exists)
+    monkeypatch.setattr(main, "_zcode_db_candidates", lambda: [bad, good])
+    assert main._zcode_db_path() == good
+
+
+def test_zcode_dbs_swallows_oserror(monkeypatch, tmp_path):
+    """exists() raising on the canonical DB must yield an empty scan list."""
+    _clear_zcode_env(monkeypatch)
+    db = tmp_path / "db.sqlite"
+    _mk_zcode_db(db)
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    real_exists = Path.exists
+
+    def boom(self):
+        if str(self) == str(db):
+            raise OSError(13, "Permission denied")
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", boom)
+    assert main._zcode_dbs() == []
+
+
+def test_scan_nets_cache_read_before_cost(scan_env, monkeypatch, tmp_path):
+    """calculate_cost must receive NET input, not gross inclusive of cache.read.
+
+    On the PR fixture (33205 input / 26496 cache.read), passing gross inflated
+    cost by ~1.9x because calculate_cost prices input_tokens at the full rate
+    and cached_tokens again at the cache-read rate.
+    """
+    db = tmp_path / "db.sqlite"
+    _seed_full_session(db)
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    calls = []
+
+    def spy(model, inp, out, cached, **kw):
+        calls.append({"model": model, "input": inp, "output": out,
+                      "cached": cached,
+                      "cache_creation": kw.get("cache_creation_tokens", 0)})
+        return 0.0
+
+    monkeypatch.setattr(main, "calculate_cost", spy)
+    out = main._scan_zcode_sessions()
+    assert len(out) == 1
+    assert len(calls) == 1
+    net_input = (33205 - 26496) + 100
+    assert calls[0]["input"] == net_input
+    assert calls[0]["cached"] == 26496
+    assert calls[0]["output"] == 5079 + 10
+    assert calls[0]["cache_creation"] == 25
+    # total must not re-add cache.read on top of the still-gross input
+    assert out[0]["tokens"]["total"] == net_input + (5079 + 10) + 26496
+    assert out[0]["tokens"]["input"] == net_input
 
 
 def test_scan_zcode_dedupes_shared_session_ids(scan_env, monkeypatch, tmp_path):
