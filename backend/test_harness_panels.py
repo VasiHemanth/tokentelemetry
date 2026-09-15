@@ -660,15 +660,20 @@ def test_unsupported_agent_is_not_planned():
     assert doc["installed"] is False and doc.get("planned") is False
 
 
-def test_planned_holds_supported_agents_without_an_extractor():
+def test_planned_marks_a_supported_agent_without_an_extractor(monkeypatch):
     """`planned` marks a supported agent with no extractor yet.
 
-    Kept as a mechanism rather than deleted: the frontend renders
-    "no panel yet" differently from "not installed", and a newly supported agent
-    should land in PLANNED before it lands in BUILDERS.
+    Every supported agent has a builder today, so PLANNED is empty — but the
+    mechanism is what this guards, not its current contents. The frontend
+    renders "no panel yet" differently from "not installed", and a newly
+    supported agent should land in PLANNED before it lands in BUILDERS.
     """
-    assert tuple(harness_panels.PLANNED) == ("zcode",)
-    assert not (set(harness_panels.PLANNED) & set(harness_panels.BUILDERS))
+    assert not (set(harness_panels.PLANNED) & set(harness_panels.BUILDERS)), \
+        "an agent cannot be both planned and built"
+
+    monkeypatch.setattr(harness_panels, "PLANNED", ("notyet",))
+    doc = harness_panels.build_panel("notyet")
+    assert doc["installed"] is False and doc["planned"] is True
 
 
 def test_hermes_has_a_panel_that_defers_to_its_own_dashboard():

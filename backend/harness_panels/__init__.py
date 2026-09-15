@@ -23,7 +23,7 @@ import logging
 import time
 from typing import Any, Callable, Dict
 
-from . import claude, clis, codex, copilot, grok, hermes, ides
+from . import claude, clis, codex, copilot, grok, hermes, ides, zcode
 from .base import not_installed
 
 logger = logging.getLogger("tokentelemetry.harness_panels")
@@ -49,14 +49,14 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "qoder": clis.build_qoder,
     "smallcode": clis.build_smallcode,
     "hermes": hermes.build_hermes,
+    "zcode": zcode.build,
 }
 
-# ZCode is the only agent whose store carries nothing the session scan doesn't
-# already show, so it is merely planned. Kept as a named tuple rather than
+# Nothing is merely planned right now. Kept as a named tuple rather than
 # deleted: the frontend distinguishes "installed: false, planned: true" (we
-# support it, no panel yet) from a plain "not installed", and a future agent
-# should land here before it lands above.
-PLANNED: tuple[str, ...] = ("zcode",)
+# support it, no panel yet) from a plain "not installed", and a new agent should
+# land here before it lands above.
+PLANNED: tuple[str, ...] = ()
 
 # Nothing is excluded. Hermes has a panel of its own now, but a narrow one:
 # it carries only what its /hermes/* pages do not already show, and links

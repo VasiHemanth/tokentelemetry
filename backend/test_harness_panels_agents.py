@@ -585,6 +585,11 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)
     monkeypatch.setattr(hp_paths, "opencode_data_dir", lambda: absent, raising=False)
+    # ZCode resolves its root per call (it honours $ZCODE_DATA_DIR), so the
+    # function is what has to be pinned — a machine with a real ~/.zcode would
+    # otherwise build a live panel here and fail the isolation this test exists
+    # to prove.
+    monkeypatch.setattr(hp_paths, "zcode_dir", lambda: absent, raising=False)
     # The four original modules hold their own constants.
     for mod, attr in ((codex_panel, "CODEX_DIR"), (claude_panel, "CLAUDE_DIR"),
                       (copilot_panel, "COPILOT_DIR"), (grok_panel, "GROK_DIR")):

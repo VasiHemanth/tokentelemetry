@@ -92,6 +92,23 @@ def opencode_data_dir() -> Path:
     return HOME / ".local" / "share" / "opencode"
 
 
+def zcode_dir() -> Path:
+    """ZCode's root, honouring $ZCODE_DATA_DIR like main.py's discovery does.
+
+    Resolved per call rather than at import: main.py binds ``ZCODE_DB`` once at
+    module load, and tests relocate the store by setting the env var, so a
+    constant here would pin the panel to the real store on a machine that has
+    one and break test isolation.
+    """
+    env = _env_path("ZCODE_DATA_DIR")
+    return env if env else HOME / ".zcode"
+
+
+def zcode_db() -> Path:
+    """The single canonical ZCode store. ZCode has no per-channel variants."""
+    return zcode_dir() / "cli" / "db" / "db.sqlite"
+
+
 def smallcode_roots() -> List[Path]:
     """Project directories that contain a `.smallcode/traces` folder.
 
