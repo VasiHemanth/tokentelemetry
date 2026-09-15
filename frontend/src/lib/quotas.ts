@@ -37,7 +37,11 @@ export type QuotaCapabilityState =
   | "sessionExpired"
   | "notEntitled"
   | "refreshFailed"
-  | "notSupported";
+  | "notSupported"
+  // Signed in and entitled, but the agent serves its quota from a process it
+  // only runs while open. Distinct from notSignedIn so the panel never tells
+  // someone to repair a login that is fine.
+  | "notRunning";
 
 export type QuotaCapability = {
   displayName: string;
@@ -52,6 +56,9 @@ const RESOURCE_NAMES: Record<string, string> = {
   sonnetWeekly: "Sonnet weekly",
   spark: "Spark",
   sparkWeekly: "Spark weekly",
+  // Antigravity's non-Gemini pool: Claude and GPT-OSS share one allowance.
+  claude: "Claude & GPT",
+  claudeWeekly: "Claude & GPT weekly",
   credits: "Credits",
   extraUsage: "Extra usage",
   rateLimitResets: "Rate-limit resets",

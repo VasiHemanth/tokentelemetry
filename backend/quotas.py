@@ -11,6 +11,7 @@ import json
 import re
 import os
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,10 @@ NOT_SIGNED_IN = "not logged in"
 SESSION_EXPIRED = "session expired"
 NOT_ENTITLED = "not entitled"
 LOGIN_REJECTED = "local login was rejected"
+# Distinct from NOT_SIGNED_IN: the agent keeps its quota behind a server it
+# only runs while it is open. The login is fine, so telling the user to sign
+# in again sends them to fix something that is not broken.
+AGENT_NOT_RUNNING = "agent not running"
 
 
 def _utc_now() -> datetime:
@@ -349,6 +354,74 @@ def _post_form(url: str, body: Dict[str, str]) -> tuple[int, Dict[str, Any]]:
     if not isinstance(decoded, dict):
         raise RuntimeError("invalid response")
     return status, decoded
+
+
+def _post_loopback_json(
+    port: int, path: str, headers: Dict[str, str], body: Dict[str, Any],
+) -> tuple[int, Dict[str, Any]]:
+    """POST JSON to an agent's own HTTPS server on this machine.
+
+    Some agents answer their UI over a local HTTPS listener whose certificate
+    is self-signed for a loopback address, so the usual chain check cannot
+    pass. That is why this is a separate helper instead of a flag on
+    ``_post_json``: relaxing the shared path would silently drop verification
+    for every *remote* provider too. The host is hardcoded here, so no caller
+    can point a verification-free request off this machine.
+    """
+    request = Request(
+        f"https://127.0.0.1:{int(port)}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            **headers,
+        },
+    )
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with urlopen(request, timeout=10, context=context) as response:
+            status, raw = response.status, response.read()
+    except HTTPError as error:
+        status, raw = error.code, error.read()
+    except (URLError, OSError) as error:
+        raise RuntimeError("network") from error
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("invalid response") from error
+    if not isinstance(decoded, dict):
+        raise RuntimeError("invalid response")
+    return status, decoded
+
+
+def _process_command_lines() -> List[str]:
+    """Full command lines of the running processes, or [] when unavailable.
+
+    A provider whose agent publishes its port on its own command line reads it
+    from here. Every failure degrades to an empty list, which the caller
+    reports as "not running" — a quota panel must not raise because a process
+    listing was slow or refused.
+    """
+    if os.name == "nt":
+        command = [
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
+        ]
+    else:
+        command = ["ps", "axo", "args="]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return result.stdout.splitlines()
 
 
 def _read_keychain(service: str) -> Optional[str]:
@@ -1261,6 +1334,185 @@ class GeminiQuotaProvider:
         return QuotaSnapshot(self.provider_id, self.display_name, now, resources, _title(tier))
 
 
+class AntigravityQuotaProvider:
+    """Antigravity's pool quotas, read from the server it already runs locally.
+
+    Antigravity is Google's rebuild of the Codeium/Windsurf stack and it kept
+    that lineage's local RPC server: each surface (the IDE, the 2.0 app, the
+    ``agy`` CLI) launches a ``language_server`` child that answers the very
+    quota call Antigravity's own UI renders. Both the port and the CSRF token
+    guarding it sit on that process's command line, so this provider reads no
+    credential of the user's, stores none and refreshes none — the reason it
+    needs no keychain access and works the same on every platform.
+
+    The header name is the giveaway for that history: the server still wants
+    ``x-codeium-csrf-token``, not an Antigravity-branded one.
+
+    The catch is that only a surface started with a real ``--https_server_port``
+    serves it; one launched with ``--https_server_port 0`` (the 2.0 hub, and
+    ``agy`` on its own) has no listener at all. So quota is readable while
+    Antigravity is open and not otherwise, and that is reported as its own
+    state rather than as "signed out", which would send the user off to repair
+    a login that is perfectly fine.
+    """
+
+    provider_id = "antigravity"
+    display_name = "Antigravity"
+    service = "exa.language_server_pb.LanguageServerService"
+    csrf_header = "x-codeium-csrf-token"
+    not_running_hint = (
+        "Antigravity reports quota only while it is running. "
+        "Open Antigravity and refresh."
+    )
+    entitlement_hint = "This Antigravity account reports no pool quotas."
+
+    # ``bucketId`` -> the resource key the dashboard labels. Antigravity pools
+    # every Gemini model into one allowance and every third-party model
+    # ("3p": Claude, GPT-OSS) into another, each with a rolling five-hour and a
+    # weekly window. Using either Gemini model drains the one Gemini pool, so
+    # there is deliberately no per-model meter to show.
+    #
+    # An unrecognised bucket id is skipped rather than guessed: drawing a new
+    # pool as one of these four would overwrite a real meter with someone
+    # else's number, which is worse than the bucket simply not appearing.
+    BUCKETS = {
+        "gemini-5h": "session",
+        "gemini-weekly": "weekly",
+        "3p-5h": "claude",
+        "3p-weekly": "claudeWeekly",
+    }
+    # The payload names its window but never says how long one is, so the
+    # length comes from the name. Anything else is left unset rather than
+    # assumed.
+    WINDOW_SECONDS = {"5h": 5 * 3600.0, "weekly": 7 * 24 * 3600.0}
+
+    def __init__(
+        self,
+        home: Optional[Path] = None,
+        command_lines: Callable[[], List[str]] = _process_command_lines,
+        post_json: Callable[
+            [int, str, Dict[str, str], Dict[str, Any]], tuple[int, Dict[str, Any]]
+        ] = _post_loopback_json,
+    ) -> None:
+        self.home = home or Path.home()
+        self.command_lines = command_lines
+        self.post_json = post_json
+
+    def _servers(self) -> List[tuple[int, str]]:
+        """Every local language server that is actually serving HTTPS."""
+        found: List[tuple[int, str]] = []
+        for line in self.command_lines():
+            if "language_server" not in line:
+                continue
+            port = re.search(r"--https_server_port[= ](\d+)", line)
+            # The same line also carries --extension_server_csrf_token, which
+            # opens a different port and is rejected by this one. Requiring the
+            # two leading dashes is what keeps them apart: the decoy has an
+            # underscore in front of "csrf_token".
+            csrf = re.search(r"--csrf_token[= ]([^\s]+)", line)
+            if not port or not csrf or port.group(1) == "0":
+                continue
+            found.append((int(port.group(1)), csrf.group(1)))
+        return found
+
+    def has_local_credentials(self) -> bool:
+        """True once Antigravity is installed, whether or not it is running.
+
+        Answering False while it is closed would report "no local credentials
+        found", which is both wrong and unactionable. Claiming it instead lets
+        ``refresh`` fail with the accurate reason.
+        """
+        root = self.home / ".gemini"
+        return any(
+            (root / name).is_dir()
+            for name in ("antigravity", "antigravity-cli", "antigravity-ide")
+        )
+
+    def _call(self, port: int, csrf: str, method: str) -> tuple[int, Dict[str, Any]]:
+        return self.post_json(
+            port, f"/{self.service}/{method}", {self.csrf_header: csrf}, {},
+        )
+
+    def refresh(self, now: datetime) -> QuotaSnapshot:
+        servers = self._servers()
+        if not servers:
+            raise RuntimeError(AGENT_NOT_RUNNING)
+        # Several surfaces can be open at once and they do not all belong to
+        # the same signed-in state, so a rejection by one is not an answer for
+        # all: keep trying and report the last failure only if none worked.
+        failure: Optional[Exception] = None
+        for port, csrf in servers:
+            try:
+                return self._snapshot(port, csrf, now)
+            except RuntimeError as error:
+                failure = error
+        raise failure or RuntimeError(AGENT_NOT_RUNNING)
+
+    def _snapshot(self, port: int, csrf: str, now: datetime) -> QuotaSnapshot:
+        status, payload = self._call(port, csrf, "RetrieveUserQuotaSummary")
+        if status in (401, 403):
+            raise RuntimeError(LOGIN_REJECTED)
+        if not 200 <= status < 300:
+            raise RuntimeError("usage request failed")
+        response = payload.get("response")
+        groups = response.get("groups") if isinstance(response, dict) else None
+        if not isinstance(groups, list):
+            raise RuntimeError("invalid response")
+
+        resources: Dict[str, QuotaResource] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            buckets = group.get("buckets")
+            if not isinstance(buckets, list):
+                continue
+            for bucket in buckets:
+                if not isinstance(bucket, dict):
+                    continue
+                key = self.BUCKETS.get(str(bucket.get("bucketId") or ""))
+                fraction = _number(bucket.get("remainingFraction"))
+                if key is None or fraction is None:
+                    continue
+                # The payload reports what is LEFT; every other provider here
+                # reports what is SPENT. Inverting this renders a barely-used
+                # week as nearly exhausted, and looks entirely plausible.
+                resources[key] = QuotaResource(
+                    kind="consumption", unit="percent",
+                    used=min(100.0, max(0.0, (1.0 - fraction) * 100)), limit=100,
+                    resets_at=_date(bucket.get("resetTime")),
+                    window_seconds=self.WINDOW_SECONDS.get(str(bucket.get("window") or "")),
+                )
+        if not resources:
+            raise RuntimeError(NOT_ENTITLED)
+        return QuotaSnapshot(
+            self.provider_id, self.display_name, now, resources, self._plan(port, csrf),
+        )
+
+    def _plan(self, port: int, csrf: str) -> Optional[str]:
+        """The plan label, from the status call the same server answers.
+
+        Never fatal: a snapshot carrying real numbers and no plan name is far
+        more useful than no snapshot, so every failure here degrades to None.
+        """
+        try:
+            status, payload = self._call(port, csrf, "GetUserStatus")
+        except RuntimeError:
+            return None
+        if not 200 <= status < 300:
+            return None
+        user = payload.get("userStatus")
+        if not isinstance(user, dict):
+            return None
+        # Antigravity's own tier wins over the Windsurf plan field it
+        # inherited, which older builds still fill in with a stale name.
+        tier = user.get("userTier")
+        if isinstance(tier, str) and tier.strip():
+            return _title(tier)
+        status_block = user.get("planStatus")
+        info = status_block.get("planInfo") if isinstance(status_block, dict) else None
+        return _title(info.get("planName")) if isinstance(info, dict) else None
+
+
 class StaticQuotaProvider:
     """An explicitly visible harness with no safe native quota source yet."""
 
@@ -1292,6 +1544,11 @@ def _classify(provider: Any, error: Exception) -> tuple[str, str]:
         return "notEntitled", hint or "This account has no plan quota to report."
     if reason == LOGIN_REJECTED:
         return "notSignedIn", "The saved login was rejected. Sign in with this agent again."
+    if reason == AGENT_NOT_RUNNING:
+        # Its own state, because none of the others are true: the user is
+        # signed in and entitled, and nothing failed. The agent is just shut.
+        hint = getattr(provider, "not_running_hint", None)
+        return "notRunning", hint or "This agent reports quota only while it is running."
     return "refreshFailed", "Could not refresh quota data."
 
 
@@ -1463,7 +1720,7 @@ def default_quota_providers() -> List[QuotaProvider]:
         CopilotQuotaProvider(),
         GrokQuotaProvider(),
         GeminiQuotaProvider(),
-        StaticQuotaProvider("antigravity", "Antigravity", "Antigravity keeps its plan and usage state server-side; nothing local reports it."),
+        AntigravityQuotaProvider(),
         StaticQuotaProvider("qwen", "Qwen CLI", "Qwen's OAuth free tier was discontinued and its Coding Plan key exposes no account-quota endpoint."),
         StaticQuotaProvider("vibe", "Vibe", "Vibe routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),

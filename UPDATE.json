@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-15",
+      "title": "Antigravity joins the plan-limits panel",
+      "highlights": [
+        {
+          "title": "Live Antigravity pool quotas",
+          "description": "Antigravity used to sit in the plan-limits panel with a note that its usage was only visible server-side. It now reports real numbers: Gemini models share one allowance and Claude and GPT-OSS share another, each with a rolling five-hour and a weekly window, plus your plan name. The figures come from the server Antigravity already runs on your machine, so no account credential is read or stored. Quota is readable while Antigravity is open; when it is closed the panel says so instead of claiming you are signed out.",
+          "href": "/agents"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-13",
       "title": "Endpoint presets, and what leaves your machine",
       "highlights": [

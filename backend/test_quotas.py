@@ -9,10 +9,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import quotas as quotas_module
 from quotas import (
+    AGENT_NOT_RUNNING,
+    AntigravityQuotaProvider,
     CACHE_LOCK_TIMEOUT_SECONDS,
     _CacheFileLock,
     ClaudeQuotaProvider,
@@ -849,6 +853,192 @@ def test_every_supported_agent_has_a_quota_entry():
     assert reported - roster == set(), f"quota entries for unknown agents: {sorted(reported - roster)}"
 
 
+def _antigravity_home(tmp_path: Path, surface: str = "antigravity-ide") -> Path:
+    """A home that looks like Antigravity is installed."""
+    home = tmp_path / "home"
+    (home / ".gemini" / surface).mkdir(parents=True)
+    return home
+
+
+# One Gemini pool and one third-party pool, each with a five-hour and a weekly
+# window. Values are invented: the real response carries the signed-in user's
+# own numbers, and GetUserStatus carries their name and email besides.
+ANTIGRAVITY_SUMMARY = {
+    "response": {
+        "groups": [
+            {
+                "displayName": "Gemini Models",
+                "buckets": [
+                    {"bucketId": "gemini-weekly", "window": "weekly",
+                     "remainingFraction": 0.75, "resetTime": "2026-09-20T17:13:10Z"},
+                    {"bucketId": "gemini-5h", "window": "5h",
+                     "remainingFraction": 0.5, "resetTime": "2026-09-15T14:29:33Z"},
+                ],
+            },
+            {
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    {"bucketId": "3p-weekly", "window": "weekly",
+                     "remainingFraction": 1, "resetTime": "2026-09-22T14:21:11Z"},
+                    {"bucketId": "3p-5h", "window": "5h",
+                     "remainingFraction": 0.9, "resetTime": "2026-09-15T19:21:11Z"},
+                ],
+            },
+        ],
+    },
+}
+
+
+def _antigravity_stub(summary=None, user_status=None, expect_csrf="live-token"):
+    """A post_json double that answers the two language-server calls."""
+    calls: list[tuple[int, str, str]] = []
+
+    def post_json(port, path, headers, body):
+        calls.append((port, path, headers.get("x-codeium-csrf-token", "")))
+        if headers.get("x-codeium-csrf-token") != expect_csrf:
+            return 401, {"code": "unauthenticated", "message": "missing CSRF token"}
+        if path.endswith("/RetrieveUserQuotaSummary"):
+            return 200, summary if summary is not None else ANTIGRAVITY_SUMMARY
+        if path.endswith("/GetUserStatus"):
+            if user_status is None:
+                return 500, {}
+            return 200, user_status
+        return 404, {}
+
+    return post_json, calls
+
+
+def test_antigravity_converts_remaining_fraction_into_consumed_percent(tmp_path):
+    """The payload reports what is LEFT; every quota surface shows what is SPENT.
+
+    An inversion here is invisible by inspection — a barely-touched week simply
+    renders as nearly exhausted — so the conversion is pinned per bucket.
+    """
+    post_json, _ = _antigravity_stub(user_status={
+        "userStatus": {"planStatus": {"planInfo": {"planName": "Pro"}}},
+    })
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: [
+            "/Applications/Antigravity.app/Contents/Resources/bin/language_server "
+            "--https_server_port 51096 --csrf_token live-token --app_data_dir antigravity-ide",
+        ],
+        post_json=post_json,
+    )
+    now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+
+    snapshot = provider.refresh(now)
+
+    assert snapshot.plan == "Pro"
+    assert set(snapshot.resources) == {"session", "weekly", "claude", "claudeWeekly"}
+    assert snapshot.resources["session"].used == 50.0
+    assert snapshot.resources["weekly"].used == 25.0
+    assert snapshot.resources["claude"].used == pytest.approx(10.0)
+    assert snapshot.resources["claudeWeekly"].used == 0.0
+    assert all(r.limit == 100 for r in snapshot.resources.values())
+    # The payload names its window but never states a length.
+    assert snapshot.resources["session"].window_seconds == 5 * 3600
+    assert snapshot.resources["weekly"].window_seconds == 7 * 24 * 3600
+    assert snapshot.resources["weekly"].resets_at == datetime(
+        2026, 9, 20, 17, 13, 10, tzinfo=timezone.utc,
+    )
+
+
+def test_antigravity_picks_the_serving_process_and_the_servers_own_token(tmp_path):
+    """Only a surface with a real --https_server_port has an HTTPS listener.
+
+    The 2.0 hub and a bare `agy` both launch with `--https_server_port 0`, and
+    every line also carries --extension_server_csrf_token, which this port
+    rejects. Picking either wrong value yields a 401 that reads like a broken
+    login rather than a parsing bug.
+    """
+    post_json, calls = _antigravity_stub(user_status=None)
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: [
+            "/Applications/Antigravity.app/Contents/Resources/bin/language_server "
+            "--standalone --https_server_port 0 --csrf_token hub-token",
+            "language_server_macos_arm --enable_lsp --csrf_token live-token "
+            "--extension_server_port 51095 --extension_server_csrf_token decoy-token "
+            "--https_server_port 51096 --lsp_port 51110",
+        ],
+        post_json=post_json,
+    )
+
+    snapshot = provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+
+    assert {port for port, _, _ in calls} == {51096}
+    assert {csrf for _, _, csrf in calls} == {"live-token"}
+    # GetUserStatus answered 500; a plan label is a nicety, the numbers are not.
+    assert snapshot.plan is None
+    assert snapshot.resources["session"].used == 50.0
+
+
+def test_antigravity_skips_pools_it_does_not_recognise(tmp_path):
+    """A new bucket id must not be drawn as one of the four known meters."""
+    post_json, _ = _antigravity_stub(summary={"response": {"groups": [{
+        "displayName": "Gemini Models",
+        "buckets": [
+            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.25},
+            {"bucketId": "imagen-daily", "window": "daily", "remainingFraction": 0.1},
+        ],
+    }]}})
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: ["language_server --https_server_port 51096 --csrf_token live-token"],
+        post_json=post_json,
+    )
+
+    snapshot = provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+
+    assert set(snapshot.resources) == {"session"}
+    assert snapshot.resources["session"].used == 75.0
+
+
+def test_antigravity_closed_reports_not_running_rather_than_signed_out(tmp_path):
+    """Installed but shut is not a login problem, and must not read as one.
+
+    has_local_credentials stays True so the collector calls refresh at all;
+    refresh then fails with the reason that is actually true. Reporting
+    "no local credentials found" would send the user to fix a working login.
+    """
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path, "antigravity-cli"),
+        command_lines=lambda: ["/usr/bin/some-other-process --flag"],
+        post_json=lambda *args: (_ for _ in ()).throw(AssertionError("must not call")),
+    )
+    assert provider.has_local_credentials() is True
+
+    service = QuotaService([provider], cache_path=tmp_path / "quotas.json")
+    capability = service.collect(force=True)["capabilities"]["antigravity"]
+
+    assert capability["state"] == "notRunning"
+    assert "Open Antigravity" in capability["detail"]
+    # Not a fault, so it must not raise the dashboard's error banner.
+    assert service.collect(force=True)["errors"] == []
+
+
+def test_antigravity_not_installed_has_no_credentials(tmp_path):
+    provider = AntigravityQuotaProvider(
+        home=tmp_path / "empty",
+        command_lines=lambda: [],
+        post_json=lambda *args: (0, {}),
+    )
+    assert provider.has_local_credentials() is False
+
+
+def test_antigravity_rejected_token_is_reported_as_a_login_problem(tmp_path):
+    post_json, _ = _antigravity_stub(expect_csrf="a-different-token")
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: ["language_server --https_server_port 51096 --csrf_token stale-token"],
+        post_json=post_json,
+    )
+    with pytest.raises(RuntimeError) as caught:
+        provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+    assert str(caught.value) != AGENT_NOT_RUNNING
+
+
 def test_default_quota_providers_roster_is_exact_and_stable():
     """The factory is the single source of truth for the /quotas roster.
 
@@ -868,12 +1058,12 @@ def test_default_quota_providers_roster_is_exact_and_stable():
     assert [type(p) for p in native] == [
         CodexQuotaProvider, ClaudeQuotaProvider, CursorQuotaProvider,
         OpenCodeQuotaProvider, CopilotQuotaProvider, GrokQuotaProvider,
-        GeminiQuotaProvider,
+        GeminiQuotaProvider, AntigravityQuotaProvider,
     ]
 
     statics = {p.provider_id: p for p in providers if isinstance(p, StaticQuotaProvider)}
     assert set(statics) == {
-        "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
+        "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
         "muse", "prime", "dsh", "qoder", "openai_compat",
     }
     assert statics["qwen"].display_name == "Qwen CLI"
