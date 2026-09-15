@@ -995,6 +995,96 @@ def test_antigravity_skips_pools_it_does_not_recognise(tmp_path):
     assert snapshot.resources["session"].used == 75.0
 
 
+@pytest.mark.parametrize("fraction", [5, -1, float("nan"), float("inf"), "x", None])
+def test_antigravity_refuses_an_impossible_fraction(tmp_path, fraction):
+    """An out-of-range or non-finite fraction must not be clamped into a number.
+
+    Clamping is what makes this dangerous: a fraction of 5 would render as a
+    confident "0% used" and -1 as "100% used", with nothing on screen to say
+    the value was nonsense. A missing meter is visible; a wrong one is not.
+    """
+    post_json, _ = _antigravity_stub(summary={"response": {"groups": [{
+        "buckets": [{"bucketId": "gemini-5h", "window": "5h", "remainingFraction": fraction}],
+    }]}})
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: ["/opt/ag/language_server --https_server_port 51096 --csrf_token live-token"],
+        post_json=post_json,
+    )
+    with pytest.raises(RuntimeError) as caught:
+        provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+    # Buckets arrived and none parsed: the schema moved, which is a fault.
+    assert str(caught.value) == "invalid response"
+
+
+def test_antigravity_unrecognised_pools_are_not_a_fault(tmp_path):
+    """Well-formed buckets we simply don't map is an account fact, not a fault."""
+    post_json, _ = _antigravity_stub(summary={"response": {"groups": [{
+        "buckets": [{"bucketId": "imagen-daily", "window": "daily", "remainingFraction": 0.4}],
+    }]}})
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: ["/opt/ag/language_server --https_server_port 51096 --csrf_token live-token"],
+        post_json=post_json,
+    )
+    with pytest.raises(RuntimeError) as caught:
+        provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+    assert str(caught.value) != "invalid response"
+
+
+def test_antigravity_ignores_a_process_that_merely_mentions_a_language_server(tmp_path):
+    """Only the executable decides, never text quoted in someone's arguments.
+
+    A shell or test runner echoing one of these command lines would otherwise
+    be treated as a server, and its port used to address an unrelated local
+    listener.
+    """
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: [
+            "/bin/zsh -lc echo 'language_server --https_server_port 9999 --csrf_token stolen'",
+            "/usr/bin/grep language_server --https_server_port 8888 --csrf_token stolen",
+        ],
+        post_json=lambda *args: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+    assert provider._servers() == []
+    with pytest.raises(RuntimeError) as caught:
+        provider.refresh(datetime(2026, 9, 15, tzinfo=timezone.utc))
+    assert str(caught.value) == AGENT_NOT_RUNNING
+
+
+def test_antigravity_reads_an_install_path_containing_spaces(tmp_path):
+    """The real macOS path is unquoted and has a space in it.
+
+    `ps` prints "/Applications/Antigravity IDE.app/.../language_server_macos_arm"
+    with no quoting, so treating the first space as the end of the executable
+    finds "/Applications/Antigravity" and rejects the one real server.
+    """
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: [
+            "/Applications/Antigravity IDE.app/Contents/Resources/app/extensions/"
+            "antigravity/bin/language_server_macos_arm --enable_lsp --csrf_token live-token "
+            "--extension_server_csrf_token decoy-token --https_server_port 51096 --lsp_port 51110",
+        ],
+        post_json=lambda *args: (0, {}),
+    )
+    assert provider._servers() == [(51096, "live-token")]
+
+
+def test_antigravity_reads_a_quoted_windows_command_line(tmp_path):
+    """Windows paths carry spaces, so the executable arrives quoted."""
+    provider = AntigravityQuotaProvider(
+        home=_antigravity_home(tmp_path),
+        command_lines=lambda: [
+            '"C:\\Program Files\\Antigravity\\language_server_windows_x64.exe" '
+            '--https_server_port 51096 --csrf_token "live-token"',
+        ],
+        post_json=lambda *args: (0, {}),
+    )
+    assert provider._servers() == [(51096, "live-token")]
+
+
 def test_antigravity_closed_reports_not_running_rather_than_signed_out(tmp_path):
     """Installed but shut is not a login problem, and must not read as one.
 

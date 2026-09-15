@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import (
-    dir_size, drop_empty_columns, field, human_bytes, iso, iso_ms, newest_mtime,
-    not_installed, panel, preview, ro_sqlite, safe, section, table_exists,
-    tilde, unavailable,
+    dir_size, drop_empty_columns, field, human_bytes, iso, iso_ms, live_quota,
+    newest_mtime, not_installed, panel, preview, ro_sqlite, safe, section,
+    table_exists, tilde, unavailable,
 )
 from . import paths
 
@@ -155,6 +155,13 @@ def build_antigravity(*, with_disk: bool = True) -> Dict[str, Any]:
         return not_installed("antigravity")
     root = present[0][0]
     sections: List[Dict[str, Any]] = []
+
+    # The pool meters lead, as they do on every agent that has them. This reads
+    # the quota service's own snapshot rather than asking Antigravity again, so
+    # the panel and the sidebar gauge cannot disagree.
+    quota = safe(lambda: live_quota("antigravity"), "antigravity quota")
+    if quota:
+        sections.append(quota)
 
     # conversation_summaries.db is a derived index over the .pb conversation
     # files, so it gives us everything without parsing protobuf.
@@ -313,8 +320,12 @@ def build_antigravity(*, with_disk: bool = True) -> Dict[str, Any]:
 
     return panel(
         "antigravity", root, sections=sections,
-        not_available=[unavailable(
-            "quota", "Antigravity's plan and usage state is held server-side.")],
+        # Only claim the meters are missing when they actually are. Antigravity
+        # serves them from a process it runs while open, so a closed editor is
+        # the usual reason there is nothing to show — not an absent feature.
+        not_available=[] if quota else [unavailable(
+            "quota", "Antigravity reports its pool quotas only while it is "
+                     "running. Open Antigravity and refresh.")],
         last_active=iso(newest_mtime([d / "conversation_summaries.db" for d, _ in present]
                                      + [d / "brain" for d, _ in present])),
         disk=disk,

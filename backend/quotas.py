@@ -407,9 +407,14 @@ def _process_command_lines() -> List[str]:
     listing was slow or refused.
     """
     if os.name == "nt":
+        # Written through [Console]::Out rather than PowerShell's own pipeline
+        # output: the default formatter wraps strings at the host's buffer
+        # width, which would split a long command line mid-flag and separate
+        # an argument from its value.
         command = [
             "powershell", "-NoProfile", "-NonInteractive", "-Command",
-            "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
+            "Get-CimInstance Win32_Process | ForEach-Object "
+            "{ if ($_.CommandLine) { [Console]::Out.WriteLine($_.CommandLine) } }",
         ]
     else:
         command = ["ps", "axo", "args="]
@@ -1398,18 +1403,37 @@ class AntigravityQuotaProvider:
         self.command_lines = command_lines
         self.post_json = post_json
 
+    @staticmethod
+    def _is_language_server(line: str) -> bool:
+        """True when the line's own executable is a language server.
+
+        Matching anywhere in the line would also accept a shell, an editor or
+        a test runner that merely quotes one of these commands in its
+        arguments — which could then point the request at an unrelated
+        loopback listener. Only the executable decides.
+        """
+        if line.startswith('"'):
+            end = line.find('"', 1)
+            executable = line[1:end] if end > 0 else line[1:]
+        else:
+            # Split at the first flag, not the first space: the real install
+            # path is "/Applications/Antigravity IDE.app/.../language_server",
+            # which `ps` prints unquoted, spaces and all.
+            executable = line.split(" --", 1)[0]
+        return executable.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].startswith("language_server")
+
     def _servers(self) -> List[tuple[int, str]]:
         """Every local language server that is actually serving HTTPS."""
         found: List[tuple[int, str]] = []
         for line in self.command_lines():
-            if "language_server" not in line:
+            if not self._is_language_server(line):
                 continue
             port = re.search(r"--https_server_port[= ](\d+)", line)
             # The same line also carries --extension_server_csrf_token, which
             # opens a different port and is rejected by this one. Requiring the
             # two leading dashes is what keeps them apart: the decoy has an
             # underscore in front of "csrf_token".
-            csrf = re.search(r"--csrf_token[= ]([^\s]+)", line)
+            csrf = re.search(r"--csrf_token[=\s]+\"?([^\s\"]+)", line)
             if not port or not csrf or port.group(1) == "0":
                 continue
             found.append((int(port.group(1)), csrf.group(1)))
@@ -1460,6 +1484,7 @@ class AntigravityQuotaProvider:
             raise RuntimeError("invalid response")
 
         resources: Dict[str, QuotaResource] = {}
+        offered = sound = 0
         for group in groups:
             if not isinstance(group, dict):
                 continue
@@ -1467,11 +1492,21 @@ class AntigravityQuotaProvider:
             if not isinstance(buckets, list):
                 continue
             for bucket in buckets:
+                offered += 1
                 if not isinstance(bucket, dict):
                     continue
-                key = self.BUCKETS.get(str(bucket.get("bucketId") or ""))
+                bucket_id = bucket.get("bucketId")
                 fraction = _number(bucket.get("remainingFraction"))
-                if key is None or fraction is None:
+                # Rejects NaN and either infinity as well as a plainly
+                # impossible fraction: every comparison against NaN is False,
+                # so the chain collapses and the negation throws it out. Left
+                # to the clamp below, a fraction of 5 would render as a
+                # confident "0% used" and a fraction of -1 as "100% used".
+                if not isinstance(bucket_id, str) or fraction is None or not 0.0 <= fraction <= 1.0:
+                    continue
+                sound += 1
+                key = self.BUCKETS.get(bucket_id)
+                if key is None:
                     continue
                 # The payload reports what is LEFT; every other provider here
                 # reports what is SPENT. Inverting this renders a barely-used
@@ -1483,7 +1518,12 @@ class AntigravityQuotaProvider:
                     window_seconds=self.WINDOW_SECONDS.get(str(bucket.get("window") or "")),
                 )
         if not resources:
-            raise RuntimeError(NOT_ENTITLED)
+            # Empty for two very different reasons, and the user acts on each
+            # differently. Buckets that arrived but none of which parsed means
+            # the schema moved under us — a fault worth an error row. Buckets
+            # that parsed but are all unrecognised, or none offered at all, is
+            # an account that reports no pools, which is not a fault.
+            raise RuntimeError("invalid response" if offered and not sound else NOT_ENTITLED)
         return QuotaSnapshot(
             self.provider_id, self.display_name, now, resources, self._plan(port, csrf),
         )

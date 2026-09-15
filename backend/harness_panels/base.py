@@ -455,6 +455,9 @@ QUOTA_LABELS = {
     "weekly": "Weekly",
     "monthly": "Monthly",
     "sonnetWeekly": "Sonnet weekly",
+    # Antigravity's non-Gemini pool: Claude and GPT-OSS share one allowance.
+    "claude": "Claude & GPT",
+    "claudeWeekly": "Claude & GPT weekly",
     "chat": "Chat",
     "completions": "Completions",
     "cursorModels": "Cursor models",
