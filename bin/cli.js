@@ -66,7 +66,7 @@ function parseInvocation(argv) {
 // { help, options }: help is true when -h/--help was seen (the caller prints
 // help and exits 0).
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false };
+  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false, dev: false };
   const fail = (msg) => { throw new UsageError(msg); };
   const take = (i) => {
     if (i + 1 >= argv.length) fail(`expected a value after ${argv[i]}`);
@@ -96,6 +96,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--auth-token='))    { out.authToken = a.slice('--auth-token='.length); }
     else if (a === '--insecure-no-auth')       { out.insecureNoAuth = true; }
     else if (a === '--no-open')                { out.noOpen = true; }
+    else if (a === '--dev')                    { out.dev = true; }
     else if (a === '-d' || a === '--data-dir') { setDataDir(take(i)); i++; }
     else if (a.startsWith('--data-dir='))      { setDataDir(a.slice('--data-dir='.length)); }
     else fail(`unknown argument: ${a}\nRun with --help for usage.`);
@@ -168,6 +169,9 @@ function printHelp() {
     '                            on a fully trusted private network (e.g. a tailnet).',
     '      --no-open             Do not open the dashboard in a browser. Useful from',
     '                            scripts; AGENT_HARNESS_NO_OPEN still works too.',
+    '      --dev                 Run the Next.js dev server (HMR) instead of a',
+    '                            production build. For developing TokenTelemetry',
+    '                            itself; normal use serves a faster compiled build.',
     '  -h, --help               Show this help.',
     '',
     'Examples:',
@@ -490,8 +494,72 @@ function ensureFrontend() {
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
 
+// A change key for the compiled frontend. Installs are `git clone` and updates
+// are pull / re-clone (install.sh), so the HEAD commit changes exactly when the
+// code does — one cheap call, no hashing the whole source tree. Falls back to a
+// hash of frontend/package.json + package-lock.json when there's no git metadata
+// (e.g. a tarball download), so a lockfile-only dependency bump still forces a
+// rebuild.
+function frontendBuildKey() {
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' });
+  if (head.status === 0 && head.stdout.trim()) return head.stdout.trim();
+  // No git metadata (tarball install): hash both package.json and package-lock.json
+  // so a lockfile-only dependency update still triggers a rebuild. package.json
+  // alone is not enough — a `npm audit fix` that only changes the lockfile would
+  // be invisible, silently leaving the old (possibly vulnerable) deps in place.
+  try {
+    const h = crypto.createHash('sha1')
+      .update(fs.readFileSync(path.join(frontendDir, 'package.json')));
+    const lockPath = path.join(frontendDir, 'package-lock.json');
+    if (fs.existsSync(lockPath)) h.update(fs.readFileSync(lockPath));
+    return h.digest('hex');
+  } catch { return ''; }
+}
+
+// Compile a production build and serve THAT (next start), instead of running the
+// dev server as the app. `next dev` recompiles every route on demand — the first
+// hit on a page (the trace view especially) JIT-compiles unminified bundles, so
+// loads are seconds not milliseconds — and it grows an unbounded
+// .next/cache/webpack cache, which is where the "why is this ~1GB?" reports come
+// from. A production build serves pre-minified bundles in ~15ms and keeps .next
+// around ~20MB. The one-time cost is a `next build` (~30-60s) on first run and
+// after each update; the build key below skips it on every unchanged launch.
+// `--dev` opts back into the dev server (HMR) for working on the repo itself.
+function ensureFrontendBuild(apiPort) {
+  const buildIdPath = path.join(frontendDir, '.next', 'BUILD_ID');
+  // Stamp lives in node_modules (gitignored, untouched by `next build`, and wiped
+  // on reinstall — a dep change then correctly forces a rebuild), mirroring the
+  // .package-json.sha convention in ensureFrontend().
+  const stampPath = path.join(frontendDir, 'node_modules', '.tt-build-key');
+  // NEXT_PUBLIC_* values are inlined at BUILD time — unlike `next dev`, which
+  // re-reads them per request — so anything api.ts reads from env is frozen when
+  // we build. Fold every such value into the key so changing it triggers a
+  // rebuild that re-inlines the current value:
+  //   - apiPort (NEXT_PUBLIC_API_PORT): the backend port the client calls.
+  //   - apiBase (NEXT_PUBLIC_API_BASE): the documented explicit-base override
+  //     (e.g. SSH-tunnel setups). Without it in the key, a value baked into an
+  //     earlier build would silently win on later launches — the launch-time
+  //     override would be ignored, and a stale localhost base would break remote
+  //     access with no rebuild to recover. The host is NOT baked (api.ts derives
+  //     it from window.location), so one build still serves localhost/LAN/tailnet.
+  const base = frontendBuildKey();
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
+  const key = base ? `${base}:${apiPort}:${apiBase}` : '';
+  let cachedKey = null;
+  try { cachedKey = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
+  if (fs.existsSync(buildIdPath) && key && cachedKey === key) return;
+  console.log(fs.existsSync(buildIdPath)
+    ? '→ building frontend (code changed; this can take a minute)…'
+    : '→ building frontend (first run can take a minute)…');
+  run('npm', ['run', 'build'], {
+    cwd: frontendDir,
+    env: { ...process.env, NEXT_PUBLIC_API_PORT: String(apiPort) },
+  });
+  try { fs.writeFileSync(stampPath, key); } catch {}
+}
+
 async function start(options) {
-  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir } = options;
+  const { frontPort, apiPort, host, allowedOrigins, authToken, insecureNoAuth, dataDir, noOpen, dev } = options;
 
   // --data-dir is just a friendly front-end for TOKENTELEMETRY_DATA_DIR, which
   // the Python backend reads (tt_paths.data_dir). An explicit flag wins over an
@@ -505,10 +573,15 @@ async function start(options) {
   checkNode();
   ensureBackend();
   ensureFrontend();
-
   // Fail fast if either required port is taken — otherwise Next bumps to N+1
-  // and the auto-opened browser lands on the wrong URL.
+  // and the auto-opened browser lands on the wrong URL. Check ports first so a
+  // conflict never triggers a needless 30-60s build.
   await ensurePortsFree([frontPort, apiPort]);
+
+  // Serve a production build (next start) unless --dev asks for the dev server.
+  // apiPort is baked into the build (NEXT_PUBLIC_API_PORT is build-time), so it
+  // must be passed here, not just to the runtime spawn below.
+  if (!dev) ensureFrontendBuild(apiPort);
 
   // Loopback binds display as "localhost"; a specific interface IP shows as-is.
   const displayHost = (host === '0.0.0.0' || host === '127.0.0.1') ? 'localhost' : host;
@@ -570,11 +643,17 @@ async function start(options) {
     },
   });
 
-  // Next dev otherwise listens on every interface even when the API is
-  // loopback-only. Bind both services to the same explicit host so the default
-  // launch is actually localhost-only and remote mode stays opt-in.
-  const npmCommand = isWindows ? 'npm.cmd' : 'npm';
-  const frontend = spawn(npmCommand, ['run', 'dev', '--', '--hostname', host, '--port', String(frontPort)], {
+  // Production: serve the compiled build (fast, small). --dev: run the dev
+  // server (HMR) for hacking on the repo. Both take the port via -p; the dev
+  // server additionally honors TT_ALLOWED_ORIGINS (allowedDevOrigins) to serve
+  // chunks to non-localhost origins. `next start` has no such gate — it serves
+  // /_next/static to any origin — and the frontend loads chunks from the same
+  // address the dashboard was opened on (window.location), so remote/tailnet
+  // access keeps working without that knob.
+  const frontendArgs = dev
+    ? ['run', 'dev', '--', '--hostname', host, '-p', String(frontPort)]
+    : ['run', 'start', '--', '--hostname', host, '-p', String(frontPort)];
+  const frontend = spawn('npm', frontendArgs, {
     cwd: frontendDir,
     stdio: 'inherit',
     // Windows: .cmd files cannot be spawned directly (EINVAL); shell:true routes
@@ -584,10 +663,10 @@ async function start(options) {
     // The frontend derives its API base from window.location at runtime (see
     // frontend/src/lib/api.ts), so it only needs the API *port* — the host
     // follows whatever address the dashboard was opened on (localhost, LAN IP,
-    // tailnet, …). TT_ALLOWED_ORIGINS feeds Next's allowedDevOrigins so the dev
-    // server serves its chunks to those non-localhost origins.
+    // tailnet, …).
     env: {
       ...process.env,
+      NODE_ENV: dev ? 'development' : 'production',
       PORT: String(frontPort),
       NEXT_PUBLIC_API_PORT: String(apiPort),
       TT_ALLOWED_ORIGINS: allowed,
@@ -825,6 +904,7 @@ module.exports = {
   UsageError,
   parseInvocation,
   parseArgs,
+  frontendBuildKey,
   printHelp,
   shouldOpenBrowser,
   openBrowser,

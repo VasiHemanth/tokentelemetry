@@ -187,6 +187,24 @@ test('path-hint is not a recognized verb', () => {
   assert.throws(() => cli.parseArgs(['path-hint']), /unknown argument: path-hint/);
 });
 
+test('--dev defaults to false; --dev flag sets it to true', () => {
+  assert.strictEqual(cli.parseArgs([]).options.dev, false);
+  assert.strictEqual(cli.parseArgs(['--dev']).options.dev, true);
+  // --dev survives alongside other flags
+  const { options } = cli.parseArgs(['--dev', '--no-open', '--port', '4000']);
+  assert.strictEqual(options.dev, true);
+  assert.strictEqual(options.noOpen, true);
+  assert.strictEqual(options.frontPort, 4000);
+});
+
+test('frontendBuildKey returns a non-empty string in a git repo', () => {
+  const key = cli.frontendBuildKey();
+  assert.ok(typeof key === 'string' && key.length > 0, `expected non-empty key, got: ${JSON.stringify(key)}`);
+  // In a git repo the key is a 40-char hex SHA; in a tarball install it's a
+  // shorter sha1 hex. Either way it must be hex-only.
+  assert.match(key, /^[0-9a-f]+$/i, `expected hex, got: ${key}`);
+});
+
 test('install.sh selects the rc file locally instead of calling path-hint', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', 'install.sh'), 'utf8');
   assert.ok(!script.includes('path-hint'), 'install.sh must not reach a CLI subcommand for PATH guidance');
