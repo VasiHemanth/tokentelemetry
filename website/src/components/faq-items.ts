@@ -14,7 +14,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "How do I monitor Google Antigravity, Codex, and Gemini CLI costs?",
-    a: "TokenTelemetry auto-reads logs from Google Antigravity, OpenAI Codex CLI, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, and Qoder. Token counts and dollar costs appear in the local dashboard automatically when each agent records them.",
+    a: "TokenTelemetry auto-reads logs from Google Antigravity, OpenAI Codex CLI, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, and ZCode. Token counts and dollar costs appear in the local dashboard automatically when each agent records them.",
   },
   {
     q: "Can I see how much of my Claude Code or Codex plan is left?",
@@ -34,7 +34,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Which agents does it support?",
-    a: "Seventeen coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, and Qoder) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
+    a: "Eighteen coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, and ZCode) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
   },
   {
     q: "Why does Hermes Agent get its own page?",

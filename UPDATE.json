@@ -1,6 +1,26 @@
 {
   "releases": [
     {
+      "tag": "2026-09-15",
+      "title": "ZCode brand, harness panel, and docs catch-up",
+      "highlights": [
+        {
+          "title": "ZCode's real brand mark",
+          "description": "ZCode now uses Z.ai's own mark in the agent roster, badges, and menu bar instead of a generic terminal icon.",
+          "href": "/agents/zcode"
+        },
+        {
+          "title": "ZCode harness panel from its telemetry ledger",
+          "description": "The ZCode agent page shows reasoning-level latency, tool safety labels (read-only or destructive), and the permission posture in force per project — numbers ZCode already writes locally that the session list never surfaced.",
+          "href": "/agents/zcode"
+        },
+        {
+          "title": "Docs and FAQ agree on 18 coding agents",
+          "description": "FAQ answers, the docs index, billing notes, and troubleshooting paths all list ZCode with the rest, matching the site metadata that already said 18."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-13",
       "title": "Endpoint presets, and what leaves your machine",
       "highlights": [
