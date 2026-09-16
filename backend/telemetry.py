@@ -155,6 +155,11 @@ _ENUMS: Dict[str, set] = {
         # "budget-set" = saved a budget (the configuring action). No limit
         # value/cost ever rides along — only these two enum labels.
         "budgets", "budget-set",
+        # A hosted-gateway sign-up link in the summarizer settings was clicked.
+        # One label for every gateway: which vendor is already implied by the
+        # preset the user picked, and naming them here would turn an adoption
+        # counter into a partner-by-partner revenue signal.
+        "gateway-referral",
         "other",
     },
     "tier": {"full", "rollup", "other"},
@@ -171,7 +176,8 @@ _ENUMS: Dict[str, set] = {
 _KNOWN_AGENTS = {
     "claude", "codex", "gemini", "antigravity", "qwen", "vibe",
     "cursor", "copilot", "opencode", "hermes", "grok",
-    "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder", "kimi",
+    "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder",
+    "zcode", "kimi",
 }
 
 # `agent` rides on harness.scanned and on page.viewed for an agent panel. It is

@@ -58,6 +58,7 @@ DEFAULT_MODES: Dict[str, str] = {
     # Credit-metered plan. Qoder records no token counts at all and bills in
     # its own credits, so $0.00 is the correct API-equivalent cost, not a gap.
     "qoder": "subscription",
+    "zcode": "subscription",       # Z.ai coding plan (builtin:zai-* providers)
     "kimi": "subscription",        # flat membership (weekly usage allowance)
 }
 

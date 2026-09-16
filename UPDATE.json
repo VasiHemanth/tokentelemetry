@@ -1,6 +1,46 @@
 {
   "releases": [
     {
+      "tag": "2026-09-15",
+      "title": "ZCode brand, harness panel, and docs catch-up",
+      "highlights": [
+        {
+          "title": "ZCode's real brand mark",
+          "description": "ZCode now uses Z.ai's own mark in the agent roster, badges, and menu bar instead of a generic terminal icon.",
+          "href": "/agents/zcode"
+        },
+        {
+          "title": "ZCode harness panel from its telemetry ledger",
+          "description": "The ZCode agent page shows reasoning-level latency, tool safety labels (read-only or destructive), and the permission posture in force per project — numbers ZCode already writes locally that the session list never surfaced.",
+          "href": "/agents/zcode"
+        },
+        {
+          "title": "Docs and FAQ agree on 18 coding agents",
+          "description": "FAQ answers, the docs index, billing notes, and troubleshooting paths all list ZCode with the rest, matching the site metadata that already said 18."
+        },
+        {
+          "title": "ZCode costs no longer double-count cache reads",
+          "description": "ZCode sessions were priced with cache reads counted twice, which inflated the estimate. Your ZCode cost will drop sharply after this update: on a real store the fleet total went from $4.46 to $0.67. The lower number is the correct one.",
+          "href": "/agents/zcode"
+        },
+        {
+          "title": "Subagent marks on delegated work",
+          "description": "Linked child sessions in a trace now carry the same generated mark the Agents sidebar uses, so a fan-out of a dozen children is readable at a glance instead of a column of near-identical session ids."
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-13",
+      "title": "Endpoint presets, and what leaves your machine",
+      "highlights": [
+        {
+          "title": "OrcaRouter preset, and a note on hosted endpoints",
+          "description": "The OpenAI-compatible backend gains an OrcaRouter preset next to MiniMax and local llama.cpp, filling in the base URL and a model id so you only paste a key. It also now tells you when the endpoint you picked is not local, because that is when a summarized session's prompts and responses are sent elsewhere. The OrcaRouter sign-up link is a referral we earn from, and says so.",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-07",
       "title": "Delegated sessions stop crowding the feed",
       "highlights": [

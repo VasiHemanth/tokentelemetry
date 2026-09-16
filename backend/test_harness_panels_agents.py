@@ -34,16 +34,21 @@ from harness_panels import paths as hp_paths
 
 
 def test_every_supported_agent_has_a_builder():
-    """Scope check: every agent in supported-agents.mdx, Hermes included."""
+    """Scope check: every agent in supported-agents.mdx, Hermes included.
+
+    An agent without an extractor yet must at least sit in PLANNED — that is
+    what keeps /agents/{agent}/panel reporting "planned" instead of a bare
+    "not installed" on machines where the agent's sessions already show up.
+    """
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "qoder", "hermes", "kimi",
+        "prime", "dsh", "qoder", "hermes", "zcode", "kimi",
     }
-    assert supported == set(harness_panels.BUILDERS), (
-        "every supported agent needs an extractor; "
-        f"missing={supported - set(harness_panels.BUILDERS)} "
-        f"unexpected={set(harness_panels.BUILDERS) - supported}"
+    assert supported == set(harness_panels.BUILDERS) | set(harness_panels.PLANNED), (
+        "every supported agent needs an extractor or a PLANNED entry; "
+        f"missing={supported - set(harness_panels.BUILDERS) - set(harness_panels.PLANNED)} "
+        f"unexpected={(set(harness_panels.BUILDERS) | set(harness_panels.PLANNED)) - supported}"
     )
     assert harness_panels.EXCLUDED == ()
 
@@ -616,6 +621,11 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)
     monkeypatch.setattr(hp_paths, "opencode_data_dir", lambda: absent, raising=False)
+    # ZCode resolves its root per call (it honours $ZCODE_DATA_DIR), so the
+    # function is what has to be pinned — a machine with a real ~/.zcode would
+    # otherwise build a live panel here and fail the isolation this test exists
+    # to prove.
+    monkeypatch.setattr(hp_paths, "zcode_dir", lambda: absent, raising=False)
     # The four original modules hold their own constants.
     for mod, attr in ((codex_panel, "CODEX_DIR"), (claude_panel, "CLAUDE_DIR"),
                       (copilot_panel, "COPILOT_DIR"), (grok_panel, "GROK_DIR")):

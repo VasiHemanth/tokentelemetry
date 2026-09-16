@@ -33362,6 +33362,16 @@
       "in": 1.2,
       "out": 4.2
     },
+    "glm-5.3": {
+      "cached_read": 0.26,
+      "in": 1.4,
+      "out": 4.4
+    },
+    "glm-5.3-flash": {
+      "cached_read": 0.03,
+      "in": 0.15,
+      "out": 0.5
+    },
     "glm-5v-turbo": {
       "cached_read": null,
       "in": 0.72,

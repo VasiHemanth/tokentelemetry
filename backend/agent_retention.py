@@ -140,6 +140,13 @@ _RETENTION: Dict[str, Dict[str, Any]] = {
         "settings_hint": None,
         "note": "JSONL transcripts under ~/.qoder/projects; no auto-pruning.",
     },
+    "zcode": {
+        "label": "ZCode",
+        "default_days": None,
+        "configurable": False,
+        "settings_hint": None,
+        "note": "SQLite store under ~/.zcode/cli/db; no auto-pruning.",
+    },
     "kimi": {
         "label": "Kimi Code",
         "default_days": None,

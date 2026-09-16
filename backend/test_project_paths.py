@@ -58,6 +58,7 @@ def _hermetic(tmp: str):
         "PI_SESSIONS_DIR": missing / "pi", "CLAUDE_DIR": Path(tmp) / ".claude",
         "KIMI_DIR": missing / "kimi", "KIMI_SESSIONS_DIR": missing / "kimi-sessions",
         "CURSOR_DIR": Path(tmp) / ".cursor", "OPENCODE_DB": missing / "opencode.db",
+        "ZCODE_DB": missing / "zcode.db",
         "HERMES_DB": missing / "hermes-state.db",
         "HERMES_PROFILES_DIR": missing / "hermes-profiles",
         "PROJECT_ALIASES_FILE": Path(tmp) / "aliases.json",
