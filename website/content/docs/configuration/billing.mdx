@@ -40,6 +40,7 @@ TokenTelemetry detects the billing mode for each agent automatically:
 | DeepSeek Harness | `api` (bring-your-own-key; a session can route to several providers) |
 | Qoder | `subscription` (credit-metered; see below) |
 | ZCode | `subscription` (Z.ai coding / start plan) |
+| Kimi Code | `subscription` (Moonshot membership allowance) |
 | Hermes Agent | `api` or `local` depending on provider config |
 
 Detection is best-effort. If the agent's auth configuration can't be read, the mode defaults to `unknown`.
