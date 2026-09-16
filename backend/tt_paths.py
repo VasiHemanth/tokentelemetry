@@ -31,6 +31,8 @@ DEFAULT_DIRNAME = ".tokentelemetry"
 
 # Windows-shaped path prefixes: a drive letter (`C:`) or a UNC root (`\\`).
 _WIN_PATH_RE = re.compile(r"^(?:[A-Za-z]:|\\\\)")
+# VS Code on Windows stores file URIs as /c:/... after unquoting.
+_VSCODE_WIN_PATH_RE = re.compile(r"^/([A-Za-z]):/")
 
 
 def canonical_project(path: str | None) -> str | None:
@@ -43,17 +45,35 @@ def canonical_project(path: str | None) -> str | None:
     slashes; every path loses trailing separators. A backslash inside a POSIX
     path is a legal filename character there, so it is never rewritten.
 
-    Not folded on purpose: letter case (``C:\\Repo`` vs ``c:/repo`` stay
-    distinct — folding would merge different directories on case-sensitive
-    filesystems). Non-path values ("unknown", agent sentinels, ``None``,
-    ``""``) pass through unchanged.
+    Exception: VS Code on Windows emits ``file:///c%3A/...`` which
+    URL-decodes to ``/c:/...``; the leading slash is stripped and the drive
+    letter is uppercased to match what other agents emit (``C:/...``).
+    That single normalisation intentionally changes case for that prefix.
+
+    Not folded on purpose: letter case elsewhere (``C:\\Repo`` vs ``c:/repo``
+    stay distinct — folding would merge different directories on
+    case-sensitive filesystems). Non-path values ("unknown", agent sentinels,
+    ``None``, ``""``) pass through unchanged.
     """
     if not isinstance(path, str) or not path:
         return path
+    # VS Code on Windows produces file:///c%3A/... which unquotes to /c:/...
+    # Strip the spurious leading slash and upcase the drive letter so it
+    # matches what Claude Code and other agents emit (C:/...).
+    m = _VSCODE_WIN_PATH_RE.match(path)
+    if m:
+        path = m.group(1).upper() + ":/" + path[len(m.group(0)):]
     if _WIN_PATH_RE.match(path):
         path = path.replace("\\", "/")
+    had_trailing_slash = path.endswith("/") or path.endswith("\\")
     trimmed = path.rstrip("/")
     # A lone "/" or "//" must not collapse to "".
+    # "C:/" (drive root) must stay "C:/" — "C:" means "current dir on
+    # drive C" in Windows, which is semantically different. Only restore
+    # the slash when the input actually had one (i.e. this was a root path,
+    # not a bare drive specifier).
+    if re.match(r"^[A-Za-z]:$", trimmed) and had_trailing_slash:
+        return trimmed + "/"
     return trimmed if trimmed else path
 
 
