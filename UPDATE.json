@@ -1,6 +1,26 @@
 {
   "releases": [
     {
+      "tag": "2026-09-16",
+      "title": "Kimi Code support",
+      "highlights": [
+        {
+          "title": "Kimi Code is now tracked",
+          "description": "Moonshot AI's Kimi Code CLI joins the roster. TokenTelemetry reads the per-session wire log it already writes to ~/.kimi/sessions and reports tokens, cost, models, tool calls and the full session trace, grouped under the right project. Thanks to kthreatt for reporting and fixing this (PR #329).",
+          "href": "/agents/kimi"
+        },
+        {
+          "title": "Kimi Code harness panel",
+          "description": "The Kimi Code agent page shows the per-turn loop limits it enforces (max steps, max retries) and its own work-directory registry, so you can see which project each directory ran. Its OAuth tokens are never read.",
+          "href": "/agents/kimi"
+        },
+        {
+          "title": "Docs and FAQ agree on 19 coding agents",
+          "description": "The FAQ, docs index, billing table, dashboard panel list and troubleshooting paths all list Kimi Code alongside ZCode, and the agent counts across the site moved up together instead of drifting apart."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-15",
       "title": "ZCode brand, harness panel, and docs catch-up",
       "highlights": [
