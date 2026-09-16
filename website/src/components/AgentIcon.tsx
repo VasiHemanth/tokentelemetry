@@ -1,9 +1,9 @@
 import type { SVGProps } from "react";
 import {
   Antigravity, ClaudeCode, Cline, Codex, Copilot, Cursor, GeminiCLI, Grok,
-  HermesAgent, OpenCode, Qoder, Qwen, ZAI,
+  HermesAgent, Kimi, OpenCode, Qoder, Qwen, ZAI,
 } from "@lobehub/icons";
-import { Bot, Boxes, Moon, Zap } from "lucide-react";
+import { Bot, Boxes, Zap } from "lucide-react";
 
 type Props = { name: string; size?: number };
 type MarkProps = Pick<SVGProps<SVGSVGElement>, "className" | "aria-hidden"> & { size?: number };
@@ -46,7 +46,7 @@ export default function AgentIcon({ name, size = 16 }: Props) {
     case "DeepSeek Harness": return <DshMark {...props} />;
     case "Qoder": return <Qoder {...props} />;
     case "ZCode": return <ZAI {...props} />;
-    case "Kimi Code": return <Moon {...props} />;
+    case "Kimi Code": return <Kimi {...props} />;
     case "Vibe": return <Zap {...props} />;
     case "SmallCode": return <Boxes {...props} />;
     default: return <Bot {...props} />;

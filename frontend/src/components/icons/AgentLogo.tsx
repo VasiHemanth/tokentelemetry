@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import {
   Antigravity, ClaudeCode, Cline, Codex, Copilot, Cursor, GeminiCLI, Grok,
-  HermesAgent, OpenCode, Qoder, Qwen, ZAI,
+  HermesAgent, Kimi, OpenCode, Qoder, Qwen, ZAI,
 } from "@lobehub/icons";
 import { getAgent, type AgentKey } from "@/lib/agents";
 
@@ -32,6 +32,7 @@ const COLOR_MARKS = {
   qwen: Qwen.Color,
   copilot: Copilot.Color,
   qoder: Qoder.Color,
+  kimi: Kimi.Color,
 } as const;
 
 export function AgentLogo({ agent, size = 16, decorative = true, className, color = false }: LogoProps) {
@@ -74,6 +75,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
     case "cline": return <Cline {...props} />;
     case "qoder": return <Qoder {...props} />;
     case "zcode": return <ZAI {...props} />;
+    case "kimi": return <Kimi {...props} />;
     default: {
       const Fallback = meta.icon;
       return <Fallback {...props} color={meta.hex} />;
