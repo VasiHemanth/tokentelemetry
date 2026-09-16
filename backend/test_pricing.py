@@ -11,6 +11,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import power_config
+import pricing
 from pricing import calculate_cost
 
 
@@ -106,6 +108,55 @@ def test_subscription_model_returns_zero():
                 os.environ.pop("TOKENTELEMETRY_HOME", None)
             else:
                 os.environ["TOKENTELEMETRY_HOME"] = prev
+
+
+def test_claude_5_series_curated_pricing():
+    """Sonnet 5 / Opus 5 / Fable 5 must be priced from the curated table, not
+    _default. Sonnet 5 has two bands: introductory $2/$10 through 2026-08-31,
+    standard $3/$15 from 2026-09-01 (date-banded in _ANTHROPIC_BANDS)."""
+    assert calculate_cost("claude-opus-5", MTOK, 0, 0) == 5.00
+    assert calculate_cost("claude-opus-5", 0, MTOK, 0) == 25.00
+    assert calculate_cost("claude-opus-5", 0, 0, MTOK) == 0.50
+    # Sonnet 5 introductory rate (pre-cutover session)
+    assert calculate_cost("claude-sonnet-5", MTOK, 0, 0, at="2026-08-15T12:00:00Z") == 2.00
+    assert calculate_cost("claude-sonnet-5", 0, MTOK, 0, at="2026-08-15T12:00:00Z") == 10.00
+    assert calculate_cost("claude-sonnet-5", 0, 0, MTOK, at="2026-08-15T12:00:00Z") == 0.20
+    # Sonnet 5 standard rate (post-cutover session)
+    assert calculate_cost("claude-sonnet-5", MTOK, 0, 0, at="2026-09-07T12:00:00Z") == 3.00
+    assert calculate_cost("claude-sonnet-5", 0, MTOK, 0, at="2026-09-07T12:00:00Z") == 15.00
+    assert calculate_cost("claude-sonnet-5", 0, 0, MTOK, at="2026-09-07T12:00:00Z") == 0.30
+    assert calculate_cost("claude-fable-5", MTOK, 0, 0) == 10.00
+    # Date-suffixed model ids (as actually reported by the API) must still
+    # resolve via the fuzzy prefix match, not fall through to _default.
+    assert calculate_cost("claude-sonnet-5-20260601", MTOK, 0, 0, at="2026-08-15T12:00:00Z") == 2.00
+    assert calculate_cost("claude-sonnet-5-20260601", MTOK, 0, 0, at="2026-09-07T12:00:00Z") == 3.00
+
+
+def test_unpriced_model_logs_warning_once(monkeypatch):
+    """A model with no curated/overlay/fuzzy match must fall through to
+    _default AND log a visible warning — so a future new-model release
+    degrades loudly instead of silently undercounting for weeks (issue: the
+    Sonnet 5 / Opus 5 pricing gap this table was extended to cover)."""
+    # Hermetic against other tests' TOKENTELEMETRY_HOME/power.json leakage —
+    # this test is about the _default fallback, not the local-power branches.
+    monkeypatch.setattr(power_config, "local_power_enabled", lambda: False)
+    monkeypatch.setattr(power_config, "is_local_session", lambda *a, **k: False)
+    monkeypatch.setattr(power_config, "is_subscription_model", lambda *a, **k: False)
+    monkeypatch.setattr(power_config, "is_subscription_endpoint", lambda *a, **k: False)
+    pricing._warned_unpriced_models.discard("totally-unknown-model-xyz")
+    calls = []
+    original_warning = pricing.logger.warning
+    pricing.logger.warning = lambda *a, **k: calls.append(a)
+    try:
+        cost = calculate_cost("totally-unknown-model-xyz", MTOK, MTOK, 0)
+        assert cost == pricing.PRICING["_default"]["in"] + pricing.PRICING["_default"]["out"]
+        assert len(calls) == 1
+        # A second call for the SAME model must not log again.
+        calculate_cost("totally-unknown-model-xyz", MTOK, MTOK, 0)
+        assert len(calls) == 1
+    finally:
+        pricing.logger.warning = original_warning
+        pricing._warned_unpriced_models.discard("totally-unknown-model-xyz")
 
 
 if __name__ == "__main__":
