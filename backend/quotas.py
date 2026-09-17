@@ -925,9 +925,14 @@ class CursorQuotaProvider:
                     )
         spend = payload.get("spendLimitUsage")
         if isinstance(spend, dict):
-            limit = _number(spend.get("individualLimit")) or _number(spend.get("pooledLimit"))
-            remaining = _number(spend.get("individualRemaining")) or _number(spend.get("pooledRemaining"))
-            used = _number(spend.get("individualUsed")) or _number(spend.get("pooledUsed"))
+            # A present individual field of 0 is a real reading, not an absent one:
+            # `or` treats it as falsy and substitutes the team pool's figure instead.
+            individual_limit = _number(spend.get("individualLimit"))
+            individual_remaining = _number(spend.get("individualRemaining"))
+            individual_used = _number(spend.get("individualUsed"))
+            limit = individual_limit if individual_limit is not None else _number(spend.get("pooledLimit"))
+            remaining = individual_remaining if individual_remaining is not None else _number(spend.get("pooledRemaining"))
+            used = individual_used if individual_used is not None else _number(spend.get("pooledUsed"))
             if used is None and limit is not None and remaining is not None:
                 used = max(0, limit - remaining)
             if used is not None:

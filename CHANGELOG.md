@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 - ZCode (Z.ai) support: sessions, tokens, cost, tool calls, plans, subagent delegation and traces read locally from `~/.zcode/cli/db/db.sqlite` (override the location with `ZCODE_DATA_DIR`)
 
+### Fixed
+- Cursor on-demand spend: a genuine zero on an individual spend field no longer falls back to the team pool's figure, so a team member with on-demand spend disabled is no longer shown the pool's usage as their own; a fully-zeroed individual reading now shows a $0 row instead of disappearing
+
 ## [1.0.0] - 2026-04-27
 
 ### Added
