@@ -167,6 +167,63 @@ def test_cursor_provider_reads_its_local_state_db_and_maps_monthly_quota(tmp_pat
     assert snapshot.resources["onDemand"].limit == 10
 
 
+def _cursor_home_with_token(tmp_path):
+    import sqlite3
+
+    home = tmp_path / "home"
+    db = home / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    db.parent.mkdir(parents=True)
+    connection = sqlite3.connect(db)
+    connection.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+    connection.executemany("INSERT INTO ItemTable VALUES (?, ?)", [
+        ("cursorAuth/accessToken", "cursor-token"),
+        ("cursorAuth/stripeMembershipType", "pro"),
+    ])
+    connection.commit()
+    connection.close()
+    return home
+
+
+def test_cursor_provider_does_not_attribute_pooled_spend_to_a_zeroed_individual(tmp_path):
+    home = _cursor_home_with_token(tmp_path)
+
+    def post(url, headers):
+        return 200, {
+            "enabled": True,
+            "billingCycleStart": 1_788_307_200_000,
+            "billingCycleEnd": 1_790_985_600_000,
+            "planUsage": {"totalPercentUsed": 27},
+            "spendLimitUsage": {
+                "individualLimit": 0, "individualUsed": 0, "individualRemaining": 0,
+                "pooledLimit": 50_000, "pooledUsed": 31_000, "pooledRemaining": 19_000,
+            },
+        }
+
+    snapshot = CursorQuotaProvider(home=home, post_json=post).refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    assert snapshot.resources["onDemand"].used == 0
+    assert snapshot.resources["onDemand"].limit == 0
+
+
+def test_cursor_provider_reports_a_zero_ondemand_row_instead_of_dropping_it(tmp_path):
+    home = _cursor_home_with_token(tmp_path)
+
+    def post(url, headers):
+        return 200, {
+            "enabled": True,
+            "billingCycleStart": 1_788_307_200_000,
+            "billingCycleEnd": 1_790_985_600_000,
+            "planUsage": {"totalPercentUsed": 27},
+            "spendLimitUsage": {"individualLimit": 0, "individualUsed": 0, "individualRemaining": 0},
+        }
+
+    snapshot = CursorQuotaProvider(home=home, post_json=post).refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    assert "onDemand" in snapshot.resources
+    assert snapshot.resources["onDemand"].used == 0
+    assert snapshot.resources["onDemand"].limit == 0
+
+
 def test_grok_provider_maps_its_weekly_credit_pool(tmp_path):
     home = tmp_path / "home"
     auth = home / ".grok" / "auth.json"
