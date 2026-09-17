@@ -365,9 +365,9 @@ PI_SESSIONS_DIR = PI_DIR / "sessions"
 # DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
 # multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
 # compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
-# session.jsonl.zstd; each file's own header carries `cwd`, so we don't need
-# to reverse DSH's lossy path-slugging to resolve the project. See
-# _scan_dsh_sessions.
+# session[.vN].jsonl.zstd; each file's own header carries `cwd`, so we don't
+# need to reverse DSH's lossy path-slugging to resolve the project. See
+# _dsh_log_in_dir and _scan_dsh_sessions.
 DSH_DIR = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")).expanduser()
 DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 # Plugin-lifecycle sidecar. DSH's persisted session log has a CLOSED vocabulary
@@ -4458,8 +4458,72 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+# DSH gives every session-format generation its own immutable log file
+# (packages/session/session-format/src/filename.ts): generation 0 is
+# `session.jsonl`, later ones `session.vN.jsonl`. When DSH upgrades its format
+# it writes the new generation beside the old file instead of rewriting it, so
+# one session directory can hold both and only the highest generation is
+# current. Reading the v0 name alone silently drops every session written after
+# the upgrade.
+_DSH_LOG_NAME = re.compile(r"^session(?:\.v([1-9][0-9]*))?\.jsonl\.zstd$")
+
+
+def _dsh_log_in_dir(sess_dir: Path) -> Optional[Path]:
+    """Return the highest-generation log in one DSH session directory."""
+    best: Optional[Path] = None
+    best_gen = -1
+    try:
+        entries = list(sess_dir.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        m = _DSH_LOG_NAME.match(entry.name)
+        if not m:
+            continue
+        gen = int(m.group(1)) if m.group(1) else 0
+        if gen > best_gen:
+            best, best_gen = entry, gen
+    return best
+
+
+def _dsh_session_logs() -> List[Path]:
+    """One current log per DSH session directory (see _dsh_log_in_dir)."""
+    if not DSH_SESSIONS_DIR.exists():
+        return []
+    logs: List[Path] = []
+    for sess_dir in DSH_SESSIONS_DIR.glob("*/*"):
+        if sess_dir.is_dir():
+            log = _dsh_log_in_dir(sess_dir)
+            if log is not None:
+                logs.append(log)
+    return logs
+
+
+def _dsh_expand_streams(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Unfold v3's embedded stream records into legacy `assistant/chunk` rows.
+
+    Through format v2 each streaming chunk was its own `assistant/chunk` event.
+    v3 stops logging them separately and embeds the step's records in
+    `assistant/message.data.stream`, each with its own arrival `time`. Emitting
+    them as chunk rows just ahead of the message keeps one code path for both
+    formats: TTFT and throughput read the real chunk times, and the message's
+    `usage` still lands last for its (turn, step), so usage is not doubled.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        data = row.get("data")
+        if row.get("type") == "assistant/message" and isinstance(data, dict):
+            for rec in data.get("stream") or []:
+                if isinstance(rec, dict) and rec.get("type") == "chunk":
+                    out.append({"type": "assistant/chunk", "time": rec.get("time"),
+                                "data": {"turn": data.get("turn"), "step": data.get("step"),
+                                         "chunk": rec.get("chunk")}})
+        out.append(row)
+    return out
+
+
 def _dsh_read_events(path: Path) -> Optional[List[Dict[str, Any]]]:
-    """Decompress + parse one DSH session.jsonl.zstd into JSON rows.
+    """Decompress + parse one DSH session log (any generation) into JSON rows.
 
     Returns None if the optional `zstandard` dependency isn't installed or the
     file can't be read/decoded -- callers must treat that as "skip this
@@ -4521,7 +4585,10 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(sid, str) or not sid:
         return None
 
-    usage_by_step: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    # Keyed by (turn, step), plus (turn, step, "attempt", n) for failed attempts
+    # (see the assistant/attempt branch below).
+    usage_by_step: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    attempts_seen = 0
     cur_provider = cur_model = None
     last_provider = last_model = None
     display = None
@@ -4566,7 +4633,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     tool_ms_total = 0.0
     turns = steps = 0
 
-    for row in rows[1:]:
+    for row in _dsh_expand_streams(rows[1:]):
         rtype = row.get("type")
         data = row.get("data")
         if not isinstance(data, dict):
@@ -4671,6 +4738,30 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
                 usage_by_step[key] = {**usage, "provider": msg_provider, "model": msg_model}
                 last_provider, last_model = msg_provider, msg_model
 
+        elif rtype == "assistant/attempt":
+            # v3: a model attempt that committed no message (failed, retried or
+            # cancelled). Whatever it reported is spend on top of the step's
+            # eventual successful message, so it gets its own key instead of
+            # being overwritten by that message. Its chunks are left out of
+            # the latency figures: a rate-limited attempt that fails in 1ms is
+            # not a time-to-first-token. A zero-usage attempt is still recorded
+            # under the step key (a later message replaces it), so a session
+            # whose every attempt failed keeps the model it tried, as it did
+            # when failed attempts were plain assistant/chunk events.
+            attempts_seen += 1
+            step_key = (data.get("turn"), data.get("step"))
+            for rec in data.get("stream") or []:
+                chunk = rec.get("chunk") if isinstance(rec, dict) else None
+                if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                    usage = chunk.get("usage") or {}
+                    entry = {**usage, "provider": cur_provider, "model": cur_model}
+                    if any(int(usage.get(f) or 0) for f in ("inputTokens", "outputTokens",
+                                                            "cacheReadTokens", "cacheWriteTokens")):
+                        usage_by_step[step_key + ("attempt", attempts_seen)] = entry
+                    else:
+                        usage_by_step.setdefault(step_key, entry)
+                    last_provider, last_model = cur_provider, cur_model
+
     tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0, "total": 0}
     # Resolve the session timestamp BEFORE the cost loop: calculate_cost prices
     # date-banded models by when the tokens were generated, and `ts` used to be
@@ -4755,7 +4846,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
 def _scan_dsh_sessions() -> List[Dict[str, Any]]:
     """Scan DeepSeek Harness (DSH) sessions under ~/.dsh/sessions/.
 
-    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session.jsonl.zstd
+    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session[.vN].jsonl.zstd
     Each file's own header carries `cwd`, so we glob for session files directly
     rather than reversing DSH's lossy (251-char-truncated) path slug. Requires
     the optional `zstandard` dependency; DSH is skipped silently, like any
@@ -4777,7 +4868,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
     aliases = _load_project_aliases()
 
     by_id: Dict[str, Dict[str, Any]] = {}
-    for sess_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+    for sess_file in _dsh_session_logs():
         parsed = _dsh_parse_session(sess_file)
         if parsed:
             by_id[parsed["id"]] = parsed
@@ -4833,7 +4924,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             "plans": [],
             "model": parsed["model"],
             "provider": parsed["provider"],
-            "artifacts": [{"name": "session.jsonl.zstd", "path": str(parsed["path"]), "type": "document"}],
+            "artifacts": [{"name": parsed["path"].name, "path": str(parsed["path"]), "type": "document"}],
             "cost": parsed["cost"],
             # Runtime capability set, read from this session's own log -- DSH
             # resolves skills/plugins/tools dynamically, so these are per-session
@@ -5990,8 +6081,11 @@ def _dsh_session_file(session_id: str) -> Optional[Path]:
     direct glob resolves it without reversing DSH's lossy cwd slug."""
     if not DSH_SESSIONS_DIR.exists() or not session_id or "/" in session_id:
         return None
-    for match in DSH_SESSIONS_DIR.glob(f"*/{session_id}/session.jsonl.zstd"):
-        return match
+    for sess_dir in DSH_SESSIONS_DIR.glob(f"*/{session_id}"):
+        if sess_dir.is_dir():
+            log = _dsh_log_in_dir(sess_dir)
+            if log is not None:
+                return log
     return None
 
 
@@ -10456,7 +10550,7 @@ async def session_delegation(session_id: str, agent: str):
         if parent_file is None:
             return {"error": "Not found"}
         subagents = []
-        for child_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+        for child_file in _dsh_session_logs():
             if child_file == parent_file:
                 continue
             child = _dsh_parse_session(child_file)

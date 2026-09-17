@@ -655,7 +655,10 @@ def build_dsh(*, with_disk: bool = True) -> Dict[str, Any]:
         import zstandard  # noqa: F401
     except ImportError:
         sess_dir = root / "sessions"
-        found = (len(list(sess_dir.glob("*/*/session.jsonl.zstd")))
+        # One directory per session; since format v3 a directory can hold a
+        # log per format generation (session.jsonl.zstd, session.v3...), so
+        # count directories rather than files.
+        found = (len({f.parent for f in sess_dir.glob("*/*/session*.jsonl.zstd")})
                  if sess_dir.is_dir() else 0)
         not_avail.append(unavailable(
             "sessions",
