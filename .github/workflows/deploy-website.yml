@@ -7,11 +7,19 @@ on:
       - "website/**"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
+  # Weekly rebuild so the contributor wall picks up new contributors without
+  # needing a website change to trigger a deploy.
+  schedule:
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  # Read-only, for scripts/fetch-contributors.mjs.
+  issues: read
+  pull-requests: read
+  discussions: read
 
 concurrency:
   group: pages
@@ -31,6 +39,11 @@ jobs:
       
           
       - run: npm ci || npm install
+      # Refresh src/data/contributors.json and the avatar copies. Fails soft and
+      # keeps the committed snapshot if the API is unavailable.
+      - run: node scripts/fetch-contributors.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run build
         env:
           BING_VERIFICATION: ${{ secrets.BING_VERIFICATION }}

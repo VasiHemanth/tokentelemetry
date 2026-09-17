@@ -1,0 +1,442 @@
+{
+  "generated_at": "2026-09-17T04:32:43.380Z",
+  "total": 43,
+  "counts": {
+    "code": 18,
+    "pr": 3,
+    "issue": 15,
+    "discussion": 7
+  },
+  "contributors": [
+    {
+      "login": "VasiHemanth",
+      "commits": 469,
+      "merged_prs": 133,
+      "open_or_closed_prs": 34,
+      "issues": 16,
+      "discussions": 17,
+      "role": "code",
+      "avatar": "/contributors/vasihemanth.png"
+    },
+    {
+      "login": "hwantage",
+      "commits": 16,
+      "merged_prs": 10,
+      "open_or_closed_prs": 3,
+      "issues": 11,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/hwantage.png"
+    },
+    {
+      "login": "slmingol",
+      "commits": 14,
+      "merged_prs": 8,
+      "open_or_closed_prs": 2,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/slmingol.png"
+    },
+    {
+      "login": "Yagnasena1999",
+      "commits": 0,
+      "merged_prs": 1,
+      "open_or_closed_prs": 3,
+      "issues": 16,
+      "discussions": 2,
+      "role": "code",
+      "avatar": "/contributors/yagnasena1999.jpg"
+    },
+    {
+      "login": "Rub3nCT",
+      "commits": 14,
+      "merged_prs": 2,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/rub3nct.jpg"
+    },
+    {
+      "login": "mariadb-KyleHutchinson",
+      "commits": 12,
+      "merged_prs": 1,
+      "open_or_closed_prs": 1,
+      "issues": 1,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/mariadb-kylehutchinson.jpg"
+    },
+    {
+      "login": "AmirF194",
+      "commits": 2,
+      "merged_prs": 2,
+      "open_or_closed_prs": 2,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/amirf194.jpg"
+    },
+    {
+      "login": "JoshHobbs",
+      "commits": 3,
+      "merged_prs": 2,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/joshhobbs.png"
+    },
+    {
+      "login": "JorgeDroid",
+      "commits": 2,
+      "merged_prs": 2,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/jorgedroid.png"
+    },
+    {
+      "login": "jjoanna2-debug",
+      "commits": 3,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/jjoanna2-debug.jpg"
+    },
+    {
+      "login": "tom-swift-tech",
+      "commits": 1,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/tom-swift-tech.png"
+    },
+    {
+      "login": "fanyi-zhao",
+      "commits": 0,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/fanyi-zhao.jpg"
+    },
+    {
+      "login": "kthreatt",
+      "commits": 1,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/kthreatt.png"
+    },
+    {
+      "login": "manoj652",
+      "commits": 1,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/manoj652.jpg"
+    },
+    {
+      "login": "sirenexcelsior",
+      "commits": 1,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/sirenexcelsior.jpg"
+    },
+    {
+      "login": "Tharun-tharun",
+      "commits": 0,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/tharun-tharun.png"
+    },
+    {
+      "login": "Iversondwx",
+      "commits": 0,
+      "merged_prs": 1,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/iversondwx.png"
+    },
+    {
+      "login": "felro40",
+      "commits": 1,
+      "merged_prs": 0,
+      "open_or_closed_prs": 1,
+      "issues": 0,
+      "discussions": 0,
+      "role": "code",
+      "avatar": "/contributors/felro40.png"
+    },
+    {
+      "login": "Jiaocz",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 1,
+      "issues": 1,
+      "discussions": 0,
+      "role": "pr",
+      "avatar": "/contributors/jiaocz.jpg"
+    },
+    {
+      "login": "octo-patch",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 1,
+      "issues": 0,
+      "discussions": 0,
+      "role": "pr",
+      "avatar": "/contributors/octo-patch.png"
+    },
+    {
+      "login": "semyonfox",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 1,
+      "issues": 0,
+      "discussions": 0,
+      "role": "pr",
+      "avatar": "/contributors/semyonfox.png"
+    },
+    {
+      "login": "Pauliehedron",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 2,
+      "discussions": 6,
+      "role": "issue",
+      "avatar": "/contributors/pauliehedron.png"
+    },
+    {
+      "login": "andresako",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 4,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/andresako.png"
+    },
+    {
+      "login": "andrewkangkr",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 4,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/andrewkangkr.png"
+    },
+    {
+      "login": "ddiall",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 2,
+      "discussions": 1,
+      "role": "issue",
+      "avatar": "/contributors/ddiall.jpg"
+    },
+    {
+      "login": "h121b",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 2,
+      "role": "issue",
+      "avatar": "/contributors/h121b.png"
+    },
+    {
+      "login": "bv5396",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/bv5396.png"
+    },
+    {
+      "login": "bwilli123",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/bwilli123.png"
+    },
+    {
+      "login": "cachemoney",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/cachemoney.jpg"
+    },
+    {
+      "login": "cobrabr",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/cobrabr.jpg"
+    },
+    {
+      "login": "MumuTW",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/mumutw.jpg"
+    },
+    {
+      "login": "mvinca-bandwidth",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/mvinca-bandwidth.png"
+    },
+    {
+      "login": "nujovich",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/nujovich.jpg"
+    },
+    {
+      "login": "putraperdana1207-pixel",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/putraperdana1207-pixel.png"
+    },
+    {
+      "login": "vipentti",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/vipentti.jpg"
+    },
+    {
+      "login": "yannschepens",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 1,
+      "discussions": 0,
+      "role": "issue",
+      "avatar": "/contributors/yannschepens.jpg"
+    },
+    {
+      "login": "Aakif-Kohari",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 2,
+      "role": "discussion",
+      "avatar": "/contributors/aakif-kohari.png"
+    },
+    {
+      "login": "ipatalas",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 2,
+      "role": "discussion",
+      "avatar": "/contributors/ipatalas.jpg"
+    },
+    {
+      "login": "awdemos",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 1,
+      "role": "discussion",
+      "avatar": "/contributors/awdemos.png"
+    },
+    {
+      "login": "bobleer",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 1,
+      "role": "discussion",
+      "avatar": "/contributors/bobleer.jpg"
+    },
+    {
+      "login": "endorama",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 1,
+      "role": "discussion",
+      "avatar": "/contributors/endorama.png"
+    },
+    {
+      "login": "rabbix07",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 1,
+      "role": "discussion",
+      "avatar": "/contributors/rabbix07.jpg"
+    },
+    {
+      "login": "snappytux",
+      "commits": 0,
+      "merged_prs": 0,
+      "open_or_closed_prs": 0,
+      "issues": 0,
+      "discussions": 1,
+      "role": "discussion",
+      "avatar": "/contributors/snappytux.jpg"
+    }
+  ]
+}

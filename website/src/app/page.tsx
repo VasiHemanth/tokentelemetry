@@ -7,6 +7,7 @@ import HermesSpotlight from "@/components/HermesSpotlight";
 import Privacy from "@/components/Privacy";
 import AgentsGrid from "@/components/AgentsGrid";
 import FAQ from "@/components/FAQ";
+import Contributors from "@/components/Contributors";
 import FinalCTA from "@/components/FinalCTA";
 import Footer from "@/components/Footer";
 
@@ -22,6 +23,7 @@ export default function Page() {
       <Privacy />
       <AgentsGrid />
       <FAQ />
+      <Contributors />
       <FinalCTA />
       <Footer />
     </main>
