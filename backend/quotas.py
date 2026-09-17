@@ -1031,7 +1031,7 @@ class GrokQuotaProvider:
             raise RuntimeError("invalid response")
         percent = _number(config.get("creditUsagePercent"))
         if percent is None:
-            percent = 0
+            raise RuntimeError("invalid response")
         try:
             settings_status, settings = self.fetch_json(self.settings_url, headers)
         except RuntimeError:

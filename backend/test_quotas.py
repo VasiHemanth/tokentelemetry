@@ -190,6 +190,29 @@ def test_grok_provider_maps_its_weekly_credit_pool(tmp_path):
     assert snapshot.resources["weekly"].resets_at == datetime(2026, 9, 8, tzinfo=timezone.utc)
 
 
+def test_grok_provider_reports_invalid_response_when_credit_usage_percent_is_absent(tmp_path):
+    home = tmp_path / "home"
+    auth = home / ".grok" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(json.dumps({"https://auth.x.ai::account": {"key": "grok-token"}}))
+
+    def fetch(url, headers):
+        if url.endswith("/settings"):
+            return 200, {"subscription_tier_display": "SuperGrok"}
+        return 200, {"config": {"currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-09-01T00:00:00Z",
+            "end": "2026-09-08T00:00:00Z",
+        }}}
+
+    provider = GrokQuotaProvider(home=home, fetch_json=fetch)
+    try:
+        provider.refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+        raise AssertionError("expected invalid response")
+    except RuntimeError as error:
+        assert str(error) == "invalid response"
+
+
 def test_gemini_provider_discovers_project_and_maps_per_model_buckets(tmp_path):
     home = tmp_path / "home"
     credentials = home / ".gemini" / "oauth_creds.json"
