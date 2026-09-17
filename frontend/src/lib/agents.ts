@@ -1,6 +1,6 @@
 import {
   Terminal, Database, Sparkles, Orbit, Cpu, Zap, MousePointer2,
-  GitBranch, Code2, Server, Bot, Boxes, SquareTerminal, type LucideIcon,
+  GitBranch, Code2, Server, Bot, Boxes, SquareTerminal, Moon, type LucideIcon,
 } from "lucide-react";
 import HermesIcon from "@/components/icons/HermesIcon";
 import GrokIcon from "@/components/icons/GrokIcon";
@@ -13,7 +13,7 @@ export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
   | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime" | "dsh"
-  | "qoder" | "zcode";
+  | "qoder" | "zcode" | "kimi";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -48,6 +48,10 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   // Z.ai's mark is a white sliced Z on black, so ZCode takes Qoder's neutral
   // treatment: a near-white hex plus a theme-aware `--agent-zcode` override.
   zcode:       { key: "zcode",       label: "ZCode",       hex: "#e4e4e7", icon: SquareTerminal },
+  // Kimi's mark is black-on-white (Moonshot AI), the mirror of Qoder's, so it
+  // gets the same theme-aware tint treatment with a dark hex rather than a
+  // blue that would collide with muse/dsh/qwen.
+  kimi:        { key: "kimi",        label: "Kimi Code",   hex: "#18181b", icon: Moon },
 };
 
 const FALLBACK: AgentMeta = {

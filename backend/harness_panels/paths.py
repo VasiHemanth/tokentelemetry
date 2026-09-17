@@ -41,6 +41,9 @@ VIBE_DIR = HOME / ".vibe"
 CURSOR_DIR = HOME / ".cursor"
 PI_DIR = HOME / ".pi" / "agent"
 DSH_DIR = _env_path("DSH_HOME") or (HOME / ".dsh")
+# Same contract as main.py's KIMI_DIR. ~/.kimi/credentials/ holds OAuth tokens
+# and is never read.
+KIMI_DIR = _env_path("KIMI_HOME") or (HOME / ".kimi")
 CLINE_DIR = _env_path("TT_CLINE_DIR") or (HOME / ".cline")
 # Same contract as main.py's QODER_DIR / QODER_IDE_DIR. Qoder keeps its CLI
 # transcripts under ~/.qoder and a separate Electron store in Application

@@ -56,6 +56,7 @@ def _hermetic(tmp: str):
         "COPILOT_CLI_DIR": missing / "copilot-cli", "ANTIGRAVITY_BRAIN_DIR": missing / "ag-brain",
         "ANTIGRAVITY_CLI_DIR": missing / "ag-cli", "HERMES_DIR": missing / "hermes",
         "PI_SESSIONS_DIR": missing / "pi", "CLAUDE_DIR": Path(tmp) / ".claude",
+        "KIMI_DIR": missing / "kimi", "KIMI_SESSIONS_DIR": missing / "kimi-sessions",
         "CURSOR_DIR": Path(tmp) / ".cursor", "OPENCODE_DB": missing / "opencode.db",
         "ZCODE_DB": missing / "zcode.db",
         "HERMES_DB": missing / "hermes-state.db",

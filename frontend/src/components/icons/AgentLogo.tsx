@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import {
   Antigravity, ClaudeCode, Cline, Codex, Copilot, Cursor, GeminiCLI, Grok,
-  HermesAgent, OpenCode, Qoder, Qwen, ZAI,
+  HermesAgent, Kimi, OpenCode, Qoder, Qwen, ZAI,
 } from "@lobehub/icons";
 import { getAgent, type AgentKey } from "@/lib/agents";
 
@@ -32,18 +32,20 @@ const COLOR_MARKS = {
   qwen: Qwen.Color,
   copilot: Copilot.Color,
   qoder: Qoder.Color,
+  kimi: Kimi.Color,
 } as const;
 
 export function AgentLogo({ agent, size = 16, decorative = true, className, color = false }: LogoProps) {
   const meta = getAgent(agent);
-  // Near-white brand marks (Grok, Pi) are stored in globals.css as theme-aware
-  // `--agent-<key>` variables so a light-mode build re-tints them to something
-  // visible instead of a white glyph on a white surface. These brands are always
-  // tinted — even when `color` is false — because their intrinsic mark is white,
-  // so inheriting `currentColor` from a container that uses the brand hex would
-  // leave them invisible on a light background (and monochrome elsewhere).
+  // Monochrome brand marks (near-white Grok, Pi, Qoder, ZCode; near-black Kimi)
+  // are stored in globals.css as theme-aware `--agent-<key>` variables so a
+  // light-mode build re-tints them to something visible instead of a white glyph
+  // on a white surface (or Kimi's black glyph on a black one). These brands are
+  // always tinted — even when `color` is false — because inheriting
+  // `currentColor` from a container that uses the brand hex would leave them
+  // invisible against a background of their own tone.
   const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder"
-    || agent === "zcode";
+    || agent === "zcode" || agent === "kimi";
   const brandColor = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   const applyTint = color || isLightBrand;
   const props = {
@@ -73,6 +75,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
     case "cline": return <Cline {...props} />;
     case "qoder": return <Qoder {...props} />;
     case "zcode": return <ZAI {...props} />;
+    case "kimi": return <Kimi {...props} />;
     default: {
       const Fallback = meta.icon;
       return <Fallback {...props} color={meta.hex} />;

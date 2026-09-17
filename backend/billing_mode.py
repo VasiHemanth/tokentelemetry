@@ -59,6 +59,7 @@ DEFAULT_MODES: Dict[str, str] = {
     # its own credits, so $0.00 is the correct API-equivalent cost, not a gap.
     "qoder": "subscription",
     "zcode": "subscription",       # Z.ai coding plan (builtin:zai-* providers)
+    "kimi": "subscription",        # flat membership (weekly usage allowance)
 }
 
 # Human-readable note on where a detected value came from (shown in Settings so

@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 18 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 19 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -27,6 +27,7 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **DeepSeek Harness** | DeepSeek | `~/.dsh/sessions/` | tokens, traces, cost, model, provider, subagents, skills/tools, latency |
 | **Qoder** | Alibaba | `~/.qoder/projects/` | traces, credits, subagents, model, branch (no token counts — see below) |
 | **ZCode** | Z.ai | `~/.zcode/cli/db/db.sqlite` | tokens, traces, cost, model, provider, subagents |
+| **Kimi Code** | Moonshot AI | `~/.kimi/sessions/` | tokens, traces, cost, model |
 
 ## Autonomous agents
 
@@ -109,6 +110,11 @@ Qoder also keeps an Electron store at `~/Library/Application Support/com.qoder.a
 ZCode (Z.ai) keeps its state in an OpenCode-family SQLite store at `~/.zcode/cli/db/db.sqlite` (override the location with `ZCODE_DATA_DIR`). TokenTelemetry reads it read-only — never taking a write lock on the live TUI's database: sessions and projects from the `session` table, models and plan mode from the `message` rows, per-step token totals, tool names and user prompts from the `part` rows, and plan artifacts from the `todo` table. Child sessions recorded in `session.parent_id` are folded into the parent as delegation rather than re-summed.
 
 Tokens are summed with the same semantics as OpenCode, whose store shares this schema. Sessions billed through the Z.ai coding plan report a $0.00 cost from ZCode itself, so TokenTelemetry estimates API-equivalent cost at Z.ai's list rates for the session's models. The dashboard has no plan-quota gauge for ZCode yet — its usage numbers live in the Z.ai account API, which needs your account credentials and is not read today.
+### Kimi Code
+
+Kimi Code (Moonshot AI's coding CLI, the `kimi` command) writes one JSONL wire log per session to `~/.kimi/sessions/<workdir-hash>/<session-uuid>/wire.jsonl`. TokenTelemetry detects the agent from the `~/.kimi/` directory, reads each `wire.jsonl` read-only for per-call usage, model, and the conversation trace, and rolls the sessions up under the project named by the `work_dirs` entries in `~/.kimi/kimi.json`. TokenTelemetry surfaces no delegation breakdown for Kimi Code: the scanner records no subagent links, so a Kimi session reports delegation as unsupported and its trace carries no subagent overlay. A run writes everything to one `wire.jsonl`, so a session's totals already cover whatever that run did.
+
+`~/.kimi/` belongs to Kimi Code alone. Two sibling directories that look similar are different products and are not read as Kimi Code sessions: `~/.kimi-work/` (kimi-slides, a presentation tool) and `~/.kimi-webbridge/` (the browser-automation bridge).
 
 ### Hermes Agent
 

@@ -41,7 +41,7 @@ def scan_env(tmp_path, monkeypatch):
         "CLAUDE_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
         "GROK_SESSIONS_DIR", "GROK_UNIFIED_LOG", "VSCODE_STORAGE", "CURSOR_STORAGE",
         "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
-        "HERMES_DIR", "PI_SESSIONS_DIR",
+        "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR",
     ):
         monkeypatch.setattr(main, attr, missing / attr.lower())
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [])
