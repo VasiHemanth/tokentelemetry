@@ -597,6 +597,65 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
 
 
+def test_analytics_stub_does_not_clobber_stored_real_row(tmp_path, monkeypatch):
+    """A live scan that produced a zero-value stub (e.g. the on-disk transcript
+    was pruned) must not overwrite a durable row already holding real
+    accumulated tokens/cost, the same invariant history_store.upsert_sessions
+    already enforces on the write side (see test_upsert_stub_does_not_crush_real_row)."""
+    from datetime import timezone
+    hs = _hist_env(tmp_path, monkeypatch)
+    real = {"agent": "claude", "id": "s1", "project": "/p", "model": "claude-opus-4-8",
+            "timestamp": datetime.now(timezone.utc).isoformat(), "cost": 4.2,
+            "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                       "_cached_sum": 3000}}
+    assert hs.upsert_sessions([real]) == 1
+    stub_live = {"id": "s1", "agent": "claude", "project": "/p", "model": None,
+                 "timestamp": datetime.now(timezone.utc), "cost": 0.0,
+                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                 "stub": True}
+    # A live session outside the filtered agent list exercises the "does not
+    # even reach the stub check" branch, distinct from the stub-skip above.
+    out_of_filter = {"id": "s2", "agent": "codex", "project": "/p", "model": None,
+                     "timestamp": datetime.now(timezone.utc), "cost": 1.0,
+                     "tokens": {"input": 1, "output": 1, "cached": 0, "total": 2},
+                     "stub": False}
+
+    async def fake_sessions(fresh: bool = False):
+        return [stub_live, out_of_filter]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=["claude"], models=[], projects=[]))
+    assert a["by_agent"]["claude"]["cost"] == 4.2
+    assert a["by_agent"]["claude"]["total"] == 1150
+    assert "codex" not in a["by_agent"]
+
+
+def test_analytics_fresh_live_session_still_overwrites_stored(tmp_path, monkeypatch):
+    """Control for the test above: an ordinary (non-stub) live session must
+    still win over a stale stored row; only a stub is barred from clobbering."""
+    from datetime import timezone
+    hs = _hist_env(tmp_path, monkeypatch)
+    real = {"agent": "claude", "id": "s1", "project": "/p", "model": "claude-opus-4-8",
+            "timestamp": datetime.now(timezone.utc).isoformat(), "cost": 4.2,
+            "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                       "_cached_sum": 3000}}
+    assert hs.upsert_sessions([real]) == 1
+    fresh_live = {"id": "s1", "agent": "claude", "project": "/p", "model": "claude-opus-4-8",
+                 "timestamp": datetime.now(timezone.utc), "cost": 9.9,
+                 "tokens": {"input": 500, "output": 500, "cached": 0, "total": 1000},
+                 "stub": False}
+
+    async def fake_sessions(fresh: bool = False):
+        return [fresh_live]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert a["by_agent"]["claude"]["cost"] == 9.9
+    assert a["by_agent"]["claude"]["total"] == 1000
+
+
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
 
 GROK_PARENT = "019eb056-455f-7442-bf79-000000000001"

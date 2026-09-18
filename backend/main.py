@@ -11931,8 +11931,12 @@ async def get_analytics(
     window_includes_today = (to_b is None) or (to is None) or (to >= today_local)
     if window_includes_today:
         for s in await get_sessions_cached():
-            if _session_in_filters(s, from_b, to_b, agents, models, projects):
-                merged[(s.get("agent"), s.get("id"))] = s  # live wins over stored
+            if not _session_in_filters(s, from_b, to_b, agents, models, projects):
+                continue
+            key = (s.get("agent"), s.get("id"))
+            if s.get("stub") and key in merged:
+                continue  # a zero-value stub must never overwrite a persisted real row
+            merged[key] = s  # live wins over stored
     sessions = list(merged.values())
     by_agent = {}; by_day = {}; by_model = {}
     for s in sessions:
