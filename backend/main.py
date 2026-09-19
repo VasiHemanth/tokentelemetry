@@ -6557,9 +6557,10 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
 
     Each transcript runs its own context and often a DIFFERENT model than the
     parent (e.g. Explore on Haiku under an Opus session), so cost is computed
-    per file with that file's model. ``cached`` remains the per-transcript
-    high-water mark for display, while ``_cached_sum`` is the cumulative billed
-    cache-read volume. Cache writes are billed per event and accumulate.
+    per file with that file's model. ``cached`` is the cumulative cache-read
+    volume (``_cached_sum`` holds the same value for older readers). Cache
+    writes are billed per event and accumulate. ``total`` counts every token
+    the model processed: input + output + cache reads + cache writes.
     Returns None if the file can't be read.
 
     Shared by _claude_subagent_usage (flat Task/Agent transcripts) and
@@ -6610,13 +6611,14 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                 cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                 tokens["input"] += usage.get("input_tokens", 0) or 0
                 tokens["output"] += usage.get("output_tokens", 0) or 0
-                tokens["cached"] = max(tokens["cached"], cr)
+                tokens["cached"] += cr
                 tokens["_cached_sum"] += cr
                 tokens["cache_creation"] += cc
                 tokens["cache_creation_1h"] += cc_1h
     except Exception:
         return None
-    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    tokens["total"] = (tokens["input"] + tokens["output"] + tokens["cached"]
+                       + tokens["cache_creation"])
     cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["_cached_sum"],
                           cache_creation_tokens=tokens["cache_creation"],
                           cache_creation_1h_tokens=tokens["cache_creation_1h"])
@@ -7165,6 +7167,22 @@ _CODEX_CACHE_FIELDS = (
 )
 
 
+def _codex_usage_parts(u: Dict[str, Any]) -> Tuple[int, int, int]:
+    """(gross_input, cached_input, billable_output) from a Codex usage dict.
+
+    Codex input_tokens is GROSS (it already includes cached_input_tokens), and
+    total_tokens = input + output. Reasoning is usually folded into
+    output_tokens; it is added separately only when total_tokens says it was
+    reported on top.
+    """
+    gross = u.get("input_tokens", 0) or 0
+    cached = u.get("cached_input_tokens", 0) or 0
+    output = u.get("output_tokens", 0) or 0
+    reasoning = u.get("reasoning_output_tokens", 0) or 0
+    total = u.get("total_tokens", 0) or 0
+    return gross, cached, output + (reasoning if total > gross + output else 0)
+
+
 def _codex_cache_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
     """Snapshot the expensive-to-reparse fields of a fully-parsed Codex
     session for the sidecar cache. Excludes `project` (always recomputed
@@ -7409,7 +7427,11 @@ def _scan_sessions_sync():
                                         cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                                         sess["tokens"]["input"]  += usage.get("input_tokens", 0) or 0
                                         sess["tokens"]["output"] += usage.get("output_tokens", 0) or 0
-                                        sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cr)
+                                        # Every turn re-reads the cached prefix and is billed
+                                        # for it, so cache reads add up like input does.
+                                        # `cached` used to keep only the largest single read,
+                                        # which made `total` roughly 100x too small.
+                                        sess["tokens"]["cached"] += cr
                                         sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
                                         sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
                                         sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
@@ -7418,7 +7440,7 @@ def _scan_sessions_sync():
                                             # usage is the loop's OWN footprint (not the whole session).
                                             loop_usage["input"] += usage.get("input_tokens", 0) or 0
                                             loop_usage["output"] += usage.get("output_tokens", 0) or 0
-                                            loop_usage["cached"] = max(loop_usage["cached"], cr)
+                                            loop_usage["cached"] += cr
                                             loop_usage["_cached_sum"] += cr
                                             loop_usage["cache_creation"] += cc
                                             loop_usage["cache_creation_1h"] += cc_1h
@@ -7431,11 +7453,13 @@ def _scan_sessions_sync():
                                                 "cache_creation": 0, "cache_creation_1h": 0})
                                             gu["input"] += usage.get("input_tokens", 0) or 0
                                             gu["output"] += usage.get("output_tokens", 0) or 0
-                                            gu["cached"] = max(gu["cached"], cr)
+                                            gu["cached"] += cr
                                             gu["_cached_sum"] += cr
                                             gu["cache_creation"] += cc
                                             gu["cache_creation_1h"] += cc_1h
-                                    sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
+                                    sess["tokens"]["total"] = (sess["tokens"]["input"] + sess["tokens"]["output"]
+                                                               + sess["tokens"]["cached"]
+                                                               + sess["tokens"].get("cache_creation", 0))
                                     sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]), cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0), at=sess["timestamp"])
                                     for item in msg.get("content", []):
                                         if item.get("type") == "tool_use":
@@ -7627,8 +7651,7 @@ def _scan_sessions_sync():
                         # Loop's OWN footprint: usage from the fire-response turns only, NOT
                         # the whole session (a session may do lots of non-loop work).
                         lu = loop_usage
-                        # Cost uses cumulative cache reads, while the visible cached count
-                        # remains the context high-water mark used by the session header.
+                        # Cost uses cumulative cache reads (`cached` and `_cached_sum` agree).
                         footprint_cost = calculate_cost(sess.get("model"), lu["input"], lu["output"],
                             lu.get("_cached_sum", lu["cached"]), cache_creation_tokens=lu["cache_creation"],
                             cache_creation_1h_tokens=lu["cache_creation_1h"])
@@ -7752,7 +7775,15 @@ def _scan_sessions_sync():
                 sess["stub"] = False
                 continue
 
-            day_snap = {}
+            # Codex logs a RUNNING total per thread, so a session's usage is the
+            # sum of the increases between snapshots, not its largest snapshot.
+            # Summing increases also survives the counter occasionally dropping
+            # mid-file, and repeated identical snapshots add nothing.
+            usage_prev: Optional[Tuple[int, int, int]] = None
+            usage_acc = [0, 0, 0]          # gross input, cached input, output
+            day_acc: Dict[str, List[int]] = {}
+            forked = False                 # rollout forked from another thread
+            saw_response_item = False
             codex_site_calls: Dict[str, Dict[str, str]] = {}
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
@@ -7795,7 +7826,11 @@ def _scan_sessions_sync():
                             try:
                                 data = json.loads(line)
                             except Exception: continue
+                            if data.get("type") == "response_item":
+                                saw_response_item = True
                             if data.get("type") == "session_meta":
+                                if data["payload"].get("forked_from_id"):
+                                    forked = True
                                 sess["_raw_cwd"] = data["payload"].get("cwd", "unknown")
                                 sess["project"] = apply_alias(sess["_raw_cwd"])
                                 record_codex_model(data["payload"].get("model"))
@@ -7859,30 +7894,39 @@ def _scan_sessions_sync():
                                     _um = data["payload"].get("message")
                                     if isinstance(_um, str) and _um.strip():
                                         sess["text"] = _um.strip()[:120]
-                                usage = ((data.get("payload") or {}).get("info") or {}).get("total_token_usage") or {}
+                                _info = (data.get("payload") or {}).get("info") or {}
+                                usage = _info.get("total_token_usage") or {}
                                 if usage:
-                                    # OpenAI/Codex semantics differ from Anthropic:
-                                    #   input_tokens is the GROSS input — it already includes cached_input_tokens.
-                                    #   total_tokens = input_tokens + output_tokens (cached is a breakdown, not an
-                                    #   independent bucket). Reasoning is typically already in output_tokens for
-                                    #   Chat-Completions-style APIs; we add reasoning explicitly only if the record's
-                                    #   total_tokens doesn't already account for it.
-                                    gross_input = usage.get("input_tokens", 0) or 0
-                                    cached_tok  = usage.get("cached_input_tokens", 0) or 0
-                                    output      = usage.get("output_tokens", 0) or 0
-                                    reasoning   = usage.get("reasoning_output_tokens", 0) or 0
-                                    total_record = usage.get("total_tokens", 0) or 0
-                                    net_input   = max(0, gross_input - cached_tok)
-                                    # If total_tokens > gross_input + output, the API is reporting reasoning as
-                                    # extra (not folded into output_tokens). Otherwise reasoning is implicit.
-                                    output_billable = output + (reasoning if total_record > gross_input + output else 0)
-
+                                    cur = _codex_usage_parts(usage)
+                                    if usage_prev is None:
+                                        usage_prev = (0, 0, 0)
+                                        _last_raw = _info.get("last_token_usage") or {}
+                                        if forked and _last_raw:
+                                            # A forked thread (subagent spawn or `codex fork`)
+                                            # can open with a snapshot of the PARENT's running
+                                            # total. Counting from zero bills the parent's
+                                            # tokens a second time. Anything above this
+                                            # snapshot's own last turn was carried over; if
+                                            # nothing of this thread ran before the snapshot,
+                                            # the last turn is the parent's too.
+                                            last = _codex_usage_parts(_last_raw)
+                                            inherited = tuple(max(0, c - l) for c, l in zip(cur, last))
+                                            if not saw_response_item and any(inherited):
+                                                usage_prev = cur
+                                            else:
+                                                usage_prev = inherited
+                                    delta = [max(0, c - p) for c, p in zip(cur, usage_prev)]
+                                    usage_prev = cur
+                                    for k in range(3):
+                                        usage_acc[k] += delta[k]
                                     if event_day:
-                                        day_snap[event_day] = (gross_input, cached_tok, output_billable)
+                                        bucket = day_acc.setdefault(event_day, [0, 0, 0])
+                                        for k in range(3):
+                                            bucket[k] += delta[k]
 
-                                    sess["tokens"]["input"]  = max(sess["tokens"]["input"],  net_input)
-                                    sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cached_tok)
-                                    sess["tokens"]["output"] = max(sess["tokens"]["output"], output_billable)
+                                    sess["tokens"]["input"]  = max(0, usage_acc[0] - usage_acc[1])
+                                    sess["tokens"]["cached"] = usage_acc[1]
+                                    sess["tokens"]["output"] = usage_acc[2]
                                     sess["tokens"]["total"]  = sess["tokens"]["input"] + sess["tokens"]["cached"] + sess["tokens"]["output"]
                                     # Codex/OpenAI usage has no cache-write field (only cached read); nothing to pass.
                                     # _provider comes from the rollout's session_meta (model_provider).
@@ -7951,18 +7995,15 @@ def _scan_sessions_sync():
                 sess["published_artifacts"] = sorted(
                     published_sites.values(), key=lambda a: str(a.get("timestamp") or ""), reverse=True)
             
-            if day_snap:
+            if day_acc:
                 tbd = {}
-                pg = pc = po = 0
                 # NB: no `or sess.get("_provider")` fallback here. That put a
                 # provider id ("openai", "deepseek") into the MODEL slot, where it
                 # either matched nothing and fell to _default anyway, or fuzzy-hit
                 # an unrelated key. An unknown model should reach _default plainly.
                 model_for_cost = sess.get("model")
-                for day in sorted(day_snap.keys()):
-                    g, c, o = day_snap[day]
-                    dg, dc, do = max(0, g - pg), max(0, c - pc), max(0, o - po)
-                    pg, pc, po = max(pg, g), max(pc, c), max(po, o)
+                for day in sorted(day_acc.keys()):
+                    dg, dc, do = day_acc[day]
                     net_in = max(0, dg - dc)
                     tbd[day] = {
                         "input": net_in,
@@ -11960,11 +12001,10 @@ async def get_analytics(
             savings = savings_vs_cloud(scost, cloud_cost)
             co2 = co2_for_session(st.get("output", 0), config=pc, tok_per_sec=tps)
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
-        # Cumulative cache reads for the hit-rate metric. Claude-style scanners
-        # keep `cached` as a per-session high-water mark (unique prefix size) and
-        # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
-        # `input` badly understates the hit rate on long sessions. Agents without
-        # `_cached_sum` fall back to `cached` (prior behavior).
+        # Cumulative cache reads for the hit-rate metric. Some scanners (Qwen,
+        # Cursor, ZCode) still keep `cached` as a per-session high-water mark and
+        # the per-turn read sum in `_cached_sum`; prefer the sum. Claude's
+        # `cached` is already the sum.
         by_agent[agent]["cache_reads"] += st.get("_cached_sum") or st.get("cached", 0) or 0
         by_agent[agent]["cost"] += scost
         by_agent[agent]["energy_wh"] += energy

@@ -158,10 +158,11 @@ def test_workflow_agents_attributed(tmp_path):
     # Tokens fold into the by_type bucket and totals.
     assert "workflow-subagent" in deleg["by_type"]
     assert deleg["by_type"]["workflow-subagent"]["count"] == 3
-    # wfa: in100+out200+cached1000 = 1300; wfb: 10+20+100=130; wfc: 5+5+0=10
-    assert by_id["wfa"]["tokens"]["total"] == 1300
+    # total = input + output + cache reads + cache writes
+    # wfa: 100+200+1000+500 = 1800; wfb: 10+20+100+50 = 180; wfc: 5+5 = 10
+    assert by_id["wfa"]["tokens"]["total"] == 1800
     wf_total = sum(e["tokens"]["total"] for e in wf)
-    assert wf_total == 1440
+    assert wf_total == 1990
     # Count-once: the workflow tokens are additive on top of the flat totals.
     task_total = sum(e["tokens"]["total"] for e in tasks)
     assert deleg["totals"]["total"] == task_total + wf_total
@@ -211,14 +212,14 @@ def test_helper_rollup(tmp_path):
     assert one["description"] == "look around"
     assert one["tool_use_id"] == "toolu_1"
     assert one["model"] == "claude-haiku-4-5-20251001"
-    # input/output cumulative; cached = high-water-mark (NOT 100+300), while
-    # _cached_sum tracks the billed per-turn reads. Cache creation is cumulative.
+    # Every bucket is cumulative: each turn re-reads the cache and is billed
+    # for it, so cached = 100+300 (not the 300 high-water mark).
     assert one["tokens"]["input"] == 30
     assert one["tokens"]["output"] == 10
-    assert one["tokens"]["cached"] == 300
+    assert one["tokens"]["cached"] == 400
     assert one["tokens"]["_cached_sum"] == 400
     assert one["tokens"]["cache_creation"] == 100
-    assert one["tokens"]["total"] == 30 + 10 + 300
+    assert one["tokens"]["total"] == 30 + 10 + 400 + 100
     assert one["cost"] == pytest.approx(main.calculate_cost(
         "claude-haiku-4-5-20251001", 30, 10, 400, cache_creation_tokens=100))
     # meta fallbacks
@@ -227,7 +228,7 @@ def test_helper_rollup(tmp_path):
     # totals sum across entries
     assert deleg["totals"]["input"] == 30 + 7 + 1
     assert deleg["totals"]["output"] == 10 + 3 + 2
-    assert deleg["totals"]["cached"] == 300 + 40 + 0
+    assert deleg["totals"]["cached"] == 400 + 40 + 0
     assert deleg["totals"]["_cached_sum"] == 400 + 40 + 0
     assert deleg["cost"] >= 0
 
@@ -280,21 +281,22 @@ def test_scan_claude_delegation_summary(scan_env):
     d = s["delegation"]
     assert d["supported"] is True and d["tokens_recorded"] is True
     assert d["spawn_count"] == 3
-    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (300 + 40)
-    # Per-type rollup for analytics: Explore file = 30+10+300 tokens.
-    assert d["by_type"]["Explore"] == {"count": 1, "total": 340,
+    # input + output + cache reads + cache writes across the three files
+    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (400 + 40) + 100
+    # Per-type rollup for analytics: Explore file = 30+10+400+100 tokens.
+    assert d["by_type"]["Explore"] == {"count": 1, "total": 540,
                                        "cost": d["by_type"]["Explore"]["cost"]}
     assert set(d["by_type"]) == {"Explore", "general-purpose", "unknown"}
     assert s["tokens"]["delegated_input"] == 38
     assert s["tokens"]["delegated_output"] == 15
-    assert s["tokens"]["delegated_cached"] == 340
+    assert s["tokens"]["delegated_cached"] == 440
     assert s["tokens"]["delegated_cache_creation"] == 100
     assert s["delegated_cost"] >= 0
     # Count-once invariant: the parent's own buckets reflect ONLY the parent file.
     assert s["tokens"]["input"] == 100
     assert s["tokens"]["output"] == 50
     assert s["tokens"]["cached"] == 1000
-    assert s["tokens"]["total"] == 100 + 50 + 1000
+    assert s["tokens"]["total"] == 100 + 50 + 1000 + 200
 
 
 def test_scan_claude_without_spawns(scan_env):
@@ -331,7 +333,7 @@ def test_claude_scan_dedupes_usage_and_records_unpriced_background_activity(scan
     first = next(s for s in main._scan_sessions_sync() if s["agent"] == "claude" and s["id"] == sid)
 
     assert first["tokens"] == {
-        "input": 150, "output": 15, "cached": 30, "_cached_sum": 50, "total": 195,
+        "input": 150, "output": 15, "cached": 50, "_cached_sum": 50, "total": 215,
         "cache_creation": 0, "cache_creation_1h": 0,
     }
     assert first["cost"] == pytest.approx(main.calculate_cost("claude-sonnet-4-6", 150, 15, 50))
@@ -1415,3 +1417,75 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def _codex_snapshot(ts, total, last=None):
+    """token_count event: running total (and optionally this turn's usage),
+    each given as (gross_input, cached_input, output)."""
+    def u(t):
+        g, c, o = t
+        return {"input_tokens": g, "cached_input_tokens": c,
+                "output_tokens": o, "total_tokens": g + o}
+    info = {"total_token_usage": u(total)}
+    if last is not None:
+        info["last_token_usage"] = u(last)
+    return json.dumps({"timestamp": ts, "type": "event_msg",
+                       "payload": {"type": "token_count", "info": info}}) + "\n"
+
+
+def test_codex_usage_sums_increases_and_drops_inherited_fork_usage(scan_env, monkeypatch):
+    """A Codex rollout logs a running total. The session's usage is the sum of
+    its increases: a forked thread's opening snapshot of the parent's total is
+    not its own, a repeated snapshot adds nothing, and a drop in the counter
+    doesn't erase what came before or after it."""
+    codex_dir = scan_env / ".codex"
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+    day = codex_dir / "sessions" / "2026" / "08" / "05"
+    day.mkdir(parents=True)
+    parent = "019fd28e-0000-7000-8000-000000000001"
+    child = "019fd31b-0000-7000-8000-000000000002"
+
+    def meta(sid, extra):
+        return json.dumps({"timestamp": "2026-08-05T10:00:00.000Z", "type": "session_meta",
+                           "payload": {"id": sid, "cwd": "/tmp/x", "model_provider": "openai",
+                                       **extra}}) + "\n"
+
+    own_turn = json.dumps({"timestamp": "2026-08-05T10:00:02.000Z", "type": "response_item",
+                           "payload": {"type": "message", "role": "assistant", "content": []}}) + "\n"
+    # Parent: two turns on 5 Aug, the same snapshot logged twice, then the
+    # counter drops to 900 and climbs to 1500 on 6 Aug.
+    (day / f"rollout-2026-08-05T15-30-00-{parent}.jsonl").write_text(
+        meta(parent, {"thread_source": "user"})
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:00:03.000Z", (400, 100, 50), (400, 100, 50))
+        + _codex_snapshot("2026-08-05T10:00:04.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-05T10:00:05.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-06T10:00:00.000Z", (900, 600, 100), (0, 0, 0))
+        + _codex_snapshot("2026-08-06T10:00:01.000Z", (1500, 900, 160), (600, 300, 60)))
+    # Child: forked subagent whose first snapshot carries the parent's total
+    # (1000/600/100) before any turn of its own, then one own turn of 300/200/40.
+    (day / f"rollout-2026-08-05T15-40-00-{child}.jsonl").write_text(
+        meta(child, {"thread_source": "subagent", "forked_from_id": parent,
+                     "source": {"subagent": {"thread_spawn": {
+                         "parent_thread_id": parent, "depth": 1}}}})
+        + json.dumps({"timestamp": "2026-08-05T10:10:00.000Z", "type": "compacted",
+                      "payload": {}}) + "\n"
+        + _codex_snapshot("2026-08-05T10:10:01.000Z", (1000, 600, 100), (600, 500, 50))
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:10:05.000Z", (1300, 800, 140), (300, 200, 40)))
+
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+
+    # Parent increases: (400,100,50) + (600,500,50) + drop + (600,300,60)
+    p = by_id[parent]["tokens"]
+    assert (p["input"], p["cached"], p["output"]) == (1600 - 900, 900, 160)
+    assert p["total"] == 1600 + 160
+    # Child: only its own turn, not the parent's 1100 it opened with.
+    c = by_id[child]["tokens"]
+    assert (c["input"], c["cached"], c["output"]) == (100, 200, 40)
+    assert c["total"] == 340
+    # The per-day split adds up to the session total.
+    for sid in (parent, child):
+        s = by_id[sid]
+        assert sum(d["total"] for d in s["tokens_by_day"].values()) == s["tokens"]["total"]
+    assert by_id[parent]["tokens_by_day"]["2026-08-06"]["total"] == (600 - 300) + 300 + 60
