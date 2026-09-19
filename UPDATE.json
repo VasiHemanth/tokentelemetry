@@ -16,6 +16,10 @@
         {
           "title": "Plugin names on skills, MCP servers and subagents",
           "description": "Calls that come from a Claude Code plugin are tagged with that plugin's name, so plugin_grok_grok, grok:search and grok:grok-rescue all show up as the grok plugin. The Delegated work card at the top of a session now gives each plugin a passed/failed row, so a plugin that stopped working is visible as soon as you open the session."
+        },
+        {
+          "title": "Every agent's memory files for a project",
+          "description": "A project's Config tab now finds the memory and instruction file of each coding agent: CLAUDE.md (including .claude/, nested folders and Claude Code's auto memory), shared AGENTS.md with the agents that read it, GEMINI.md, QWEN.md, Cursor rules, Copilot instructions, and the user-level OpenCode and Hermes files. Filter chips show one agent's files at a time."
         }
       ]
     },

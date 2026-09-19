@@ -12442,6 +12442,120 @@ def _memory_preview(p: Path, scope: str, agent: str):
     except Exception: return None
     return {"scope": scope, "agent": agent, "path": str(p), "name": p.name, "preview": txt[:2000], "truncated": len(txt) > 2000, "size": len(txt)}
 
+
+# AGENTS.md is a shared convention rather than one agent's file. These are the
+# supported agents documented to read it; `agent` stays "codex" on the row so
+# older frontends keep rendering it.
+_AGENTS_MD_READERS = ["codex", "cursor", "opencode", "copilot"]
+
+# Per-agent instruction ("memory") files, by the name each agent looks for.
+# Nested copies (frontend/CLAUDE.md) are read too, when the agent works there.
+_MEMORY_FILENAMES = {"CLAUDE.md": "claude", "AGENTS.md": "codex", "GEMINI.md": "gemini", "QWEN.md": "qwen"}
+# Directories never worth walking for nested memory files. `.claude` holds
+# worktrees, which are full copies of the repo and would repeat every file.
+_MEMORY_SKIP_DIRS = {"node_modules", ".git", ".claude", "venv", ".venv", "__pycache__",
+                     ".next", "dist", "build", "target", ".tox", ".mypy_cache", ".pytest_cache"}
+_MEMORY_NESTED_DEPTH = 3
+_MEMORY_MAX_FILES = 60
+
+
+def _claude_project_key(project: Path) -> str:
+    """Claude Code's ~/.claude/projects/<key> name for a project path: every
+    non-alphanumeric character becomes '-' (so '/.claude/' -> '--claude-')."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project))
+
+
+def _collect_memory(project: Optional[Path]) -> List[dict]:
+    """Every agent's memory / instruction files for user scope + one project.
+
+    A project touched by several coding agents carries one file per agent
+    (CLAUDE.md, AGENTS.md, GEMINI.md, …), plus Claude Code's own auto memory
+    kept under ~/.claude/projects/<key>/memory. Each row names its agent;
+    AGENTS.md rows also list every agent that reads it in `agents`.
+    """
+    out: List[dict] = []
+    seen: Set[str] = set()
+
+    def add(p: Path, scope: str, agent: str, name: Optional[str] = None, **extra) -> None:
+        if len(out) >= _MEMORY_MAX_FILES:
+            return
+        try:
+            if not p.is_file():
+                return
+            key = str(p.resolve())
+        except OSError:
+            return
+        if key in seen:
+            return
+        m = _memory_preview(p, scope, agent)
+        if not m:
+            return
+        seen.add(key)
+        if name:
+            m["name"] = name
+        # Only a project AGENTS.md is shared; ~/.codex/AGENTS.md is Codex's own.
+        if scope == "project" and agent == "codex" and p.name == "AGENTS.md":
+            m["agents"] = list(_AGENTS_MD_READERS)
+        m.update(extra)
+        out.append(m)
+
+    # ---- user scope ----
+    add(CLAUDE_DIR / "CLAUDE.md", "user", "claude")
+    add(CODEX_DIR / "AGENTS.md", "user", "codex")
+    add(GEMINI_DIR / "GEMINI.md", "user", "gemini")
+    add(QWEN_DIR / "QWEN.md", "user", "qwen")
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")).expanduser()
+    add(xdg / "opencode" / "AGENTS.md", "user", "opencode", name="AGENTS.md (OpenCode global)")
+    # Hermes keeps its long-term memory as plain files in its home.
+    add(HERMES_DIR / "memories" / "MEMORY.md", "user", "hermes")
+    add(HERMES_DIR / "memories" / "USER.md", "user", "hermes")
+    add(HERMES_DIR / "SOUL.md", "user", "hermes")
+
+    if not project:
+        return out
+
+    # ---- project scope ----
+    # Claude Code auto memory for this project (MEMORY.md indexes the notes).
+    auto_dir = CLAUDE_DIR / "projects" / _claude_project_key(project) / "memory"
+    try:
+        notes = len([f for f in auto_dir.glob("*.md") if f.name != "MEMORY.md"])
+    except OSError:
+        notes = 0
+    add(auto_dir / "MEMORY.md", "project", "claude", name="MEMORY.md (auto memory)", note_count=notes)
+
+    add(project / ".claude" / "CLAUDE.md", "project", "claude", name=".claude/CLAUDE.md")
+    add(project / "CLAUDE.local.md", "project", "claude")
+    add(project / ".github" / "copilot-instructions.md", "project", "copilot",
+        name=".github/copilot-instructions.md")
+    try:
+        for f in sorted((project / ".github" / "instructions").glob("*.instructions.md")):
+            add(f, "project", "copilot", name=f".github/instructions/{f.name}")
+    except OSError:
+        pass
+    add(project / ".cursorrules", "project", "cursor")
+    try:
+        for f in sorted((project / ".cursor" / "rules").glob("*.mdc")):
+            add(f, "project", "cursor", name=f".cursor/rules/{f.name}")
+    except OSError:
+        pass
+
+    # Root and nested CLAUDE.md / AGENTS.md / GEMINI.md / QWEN.md. Root first
+    # so the cap never drops the files that matter most.
+    try:
+        for dirpath, dirnames, filenames in os.walk(project):
+            rel = Path(dirpath).relative_to(project)
+            depth = len(rel.parts)
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d not in _MEMORY_SKIP_DIRS and depth < _MEMORY_NESTED_DEPTH)
+            for fn in sorted(filenames):
+                agent = _MEMORY_FILENAMES.get(fn)
+                if agent:
+                    add(Path(dirpath) / fn, "project", agent,
+                        name=str(rel / fn) if depth else None)
+    except OSError:
+        pass
+    return out
+
 # ---- Plugin/extension collection (v1) ---------------------------------------
 # Each harness exposes a "plugin"/"extension" surface in its own way. We
 # normalize to: {name, version, description, scope, agent, source, installPath,
@@ -12721,7 +12835,6 @@ async def get_config(project: Optional[str] = None):
     """Return skills, MCPs, and memory files for user scope + optional project scope."""
     skills: List[dict] = []
     mcps: List[dict] = []
-    memory: List[dict] = []
     commands: List[dict] = []
     subagents: List[dict] = []
 
@@ -12741,9 +12854,6 @@ async def get_config(project: Optional[str] = None):
                 skills.append(row)
     for p in [CLAUDE_DIR / "settings.json", Path(HOME) / ".claude.json"]:
         mcps += _mcps_from_claude_settings(p, "user")
-    claude_md = CLAUDE_DIR / "CLAUDE.md"
-    m = _memory_preview(claude_md, "user", "claude") if claude_md.exists() else None
-    if m: memory.append(m)
 
     commands += _collect_commands(CLAUDE_DIR, "user", "claude")
     subagents += _collect_subagents(CLAUDE_DIR, "user", "claude")
@@ -12773,9 +12883,6 @@ async def get_config(project: Optional[str] = None):
     # Codex
     mcps += _mcps_from_codex_toml(CODEX_DIR / "config.toml", "user")
     commands += _collect_commands(CODEX_DIR, "user", "codex")
-    codex_agents = CODEX_DIR / "AGENTS.md"
-    m = _memory_preview(codex_agents, "user", "codex") if codex_agents.exists() else None
-    if m: memory.append(m)
 
     # Cursor
     mcps += _mcps_from_json(CURSOR_DIR / "mcp.json", "user", "cursor")
@@ -12800,10 +12907,6 @@ async def get_config(project: Optional[str] = None):
             subagents += _collect_subagents(proj / ".claude", "project", "claude")
             for p in [proj / ".claude" / "settings.json", proj / ".claude" / "settings.local.json", proj / ".mcp.json"]:
                 mcps += _mcps_from_claude_settings(p, "project")
-            for fname in ["CLAUDE.md", "AGENTS.md"]:
-                fp = proj / fname
-                m = _memory_preview(fp, "project", "claude" if fname == "CLAUDE.md" else "codex") if fp.exists() else None
-                if m: memory.append(m)
 
             # Cursor
             mcps += _mcps_from_json(proj / ".cursor" / "mcp.json", "project", "cursor")
@@ -12835,8 +12938,9 @@ async def get_config(project: Optional[str] = None):
         if key in seen: continue
         seen.add(key); deduped.append(m)
 
-    # Plugins (project arg already validated above)
+    # Plugins and memory (project arg already validated above)
     plugins = _collect_all_plugins(Path(project) if project_valid else None)
+    memory = _collect_memory(Path(project) if project_valid else None)
 
     # Stamp pluginRef on items whose source falls inside a plugin's installPath.
     # Inline-set refs (Claude plugin-bundled blocks) are preserved by _tag_plugin_refs.
