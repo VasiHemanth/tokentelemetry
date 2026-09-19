@@ -13,6 +13,7 @@ import {
   EmptyState, Skeleton,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { getAgent } from "@/lib/agents";
 import BudgetEditor from "@/components/budgets/BudgetEditor";
 import { useProject } from "../_lib/project-context";
 import {
@@ -30,7 +31,13 @@ type CommandItem = ConfigItem;
 type SkillItem = ConfigItem;
 interface McpItem extends ConfigItem { command?: string; url?: string; type?: string }
 interface PluginItem extends ConfigItem { version?: string; marketplace?: string; enabled?: boolean; components?: string[] }
-interface MemoryItem extends ConfigItem { path?: string; preview?: string; truncated?: boolean }
+interface MemoryItem extends ConfigItem {
+  path?: string; preview?: string; truncated?: boolean;
+  /** Every agent that reads this file (shared AGENTS.md); absent = just `agent`. */
+  agents?: string[];
+  /** Claude Code auto memory: how many notes MEMORY.md indexes. */
+  note_count?: number;
+}
 
 interface ProjectConfig {
   project: string;
@@ -83,8 +90,19 @@ export default function ConfigTab() {
     const plugin = x.pluginRef ? String(x.pluginRef).split("@")[0] : null;
     return plugin ? m[`${plugin}:${x.name}`] : undefined;
   };
-  const mcpUse = (x: ConfigItem) => usage?.by_mcp_server?.[x.name];
-  const subagentUse = (x: ConfigItem) => usage?.by_subagent_type?.[x.name];
+  // Plugin-provided MCP servers are called as mcp__plugin_<plugin>_<server>__…
+  // and plugin agents as "<plugin>:<name>", so the bare name never matches.
+  const pluginOfItem = (x: ConfigItem) => (x.pluginRef ? String(x.pluginRef).split("@")[0] : null);
+  const mcpUse = (x: ConfigItem) => {
+    const m = usage?.by_mcp_server || {};
+    const plugin = pluginOfItem(x);
+    return m[x.name] ?? (plugin ? m[`plugin_${plugin}_${x.name}`] : undefined);
+  };
+  const subagentUse = (x: ConfigItem) => {
+    const m = usage?.by_subagent_type || {};
+    const plugin = pluginOfItem(x);
+    return m[x.name] ?? (plugin ? m[`${plugin}:${x.name}`] : undefined);
+  };
 
   if (loading) {
     return (
@@ -158,7 +176,7 @@ export default function ConfigTab() {
             {sb.project.length  > 0 && <Group label="Skills"    icon={<BookOpen size={12} className="text-cyan-400" />}    items={sb.project}  render={(x) => renderSkill(x, skillUse(x), usage !== null)} />}
             {cb.project.length  > 0 && <Group label="Commands"  icon={<Terminal size={12} className="text-emerald-400" />} items={cb.project}  render={(x) => renderCommand(x, skillUse(x), usage !== null)} />}
             {mb.project.length  > 0 && <Group label="MCP servers" icon={<Wrench size={12} className="text-emerald-400" />} items={mb.project} render={(x) => renderMcp(x, mcpUse(x), usage !== null)} />}
-            {mem.project.length > 0 && <Group label="Memory files" icon={<FileText size={12} className="text-amber-400" />} items={mem.project} render={renderMemory} cols={1} />}
+            {mem.project.length > 0 && <MemoryGroup items={mem.project as MemoryItem[]} />}
           </div>
         )}
       </Section>
@@ -190,7 +208,7 @@ export default function ConfigTab() {
             {sb.user.length  > 0 && <Group label="Skills"    icon={<BookOpen size={12} className="text-cyan-400" />}    items={sb.user}  render={(x) => renderSkill(x, skillUse(x), usage !== null)} />}
             {cb.user.length  > 0 && <Group label="Commands"  icon={<Terminal size={12} className="text-emerald-400" />} items={cb.user}  render={(x) => renderCommand(x, skillUse(x), usage !== null)} />}
             {mb.user.length  > 0 && <Group label="MCP servers" icon={<Wrench size={12} className="text-emerald-400" />} items={mb.user}  render={(x) => renderMcp(x, mcpUse(x), usage !== null)} />}
-            {mem.user.length > 0 && <Group label="Memory files" icon={<FileText size={12} className="text-amber-400" />} items={mem.user} render={renderMemory} cols={1} />}
+            {mem.user.length > 0 && <MemoryGroup items={mem.user as MemoryItem[]} />}
           </div>
         </details>
       )}
@@ -350,14 +368,61 @@ const renderPlugin = (p: ConfigItem) => {
   );
 };
 
+/* Memory files grouped by the coding agent that reads them. A project worked
+   on by several agents carries one instructions file per agent, so the chips
+   narrow the list to one agent's view of the project. */
+function MemoryGroup({ items }: { items: MemoryItem[] }) {
+  const [only, setOnly] = useState<string | null>(null);
+  const readers = (m: MemoryItem) => m.agents ?? [m.agent];
+  const counts = new Map<string, number>();
+  for (const m of items) for (const a of readers(m)) counts.set(a, (counts.get(a) ?? 0) + 1);
+  const agents = [...counts.keys()].sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
+  const shown = only ? items.filter((m) => readers(m).includes(only)) : items;
+  const chip = (key: string | null, label: string, n: number) => (
+    <button
+      key={key ?? "all"}
+      onClick={() => setOnly(key)}
+      className={cn(
+        "text-[10px] px-2 py-0.5 rounded-full border tabular transition-colors",
+        only === key
+          ? "border-amber-400/60 bg-amber-400/10 text-[var(--tt-fg)]"
+          : "border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]",
+      )}
+    >
+      {label} {n}
+    </button>
+  );
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 mb-2.5">
+        <FileText size={12} className="text-amber-400" />
+        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">Memory files</span>
+        {agents.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 ml-1">
+            {chip(null, "All", items.length)}
+            {agents.map((a) => chip(a, getAgent(a).label, counts.get(a)!))}
+          </div>
+        )}
+        {agents.length <= 1 && <span className="text-[10px] tabular text-[var(--tt-fg-faint)]">{items.length}</span>}
+      </div>
+      <div className="grid grid-cols-1 gap-3">
+        {shown.map((m) => <div key={m.path ?? m.name}>{renderMemory(m)}</div>)}
+      </div>
+    </div>
+  );
+}
+
 const renderMemory = (m: ConfigItem) => {
   const mm = m as MemoryItem;
   return (
     <details className="rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] overflow-hidden">
       <summary className="px-4 py-3 cursor-pointer hover:tt-tint-1 flex items-center justify-between gap-3 list-none">
         <div className="flex items-center gap-2.5 min-w-0">
-          <AgentBadge agent={mm.agent} />
+          {(mm.agents ?? [mm.agent]).map((a) => <AgentBadge key={a} agent={a} />)}
           <span className="text-[13px] font-semibold text-[var(--tt-fg)] truncate">{mm.name}</span>
+          {mm.note_count ? (
+            <span className="text-[10px] tabular text-[var(--tt-fg-dim)] shrink-0">{mm.note_count} note{mm.note_count === 1 ? "" : "s"}</span>
+          ) : null}
         </div>
         {mm.path && (
           <span className="text-[10px] font-mono text-[var(--tt-fg-faint)] truncate max-w-[420px]" title={mm.path}>{mm.path}</span>

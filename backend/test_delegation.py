@@ -72,7 +72,9 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
         + _jl(type="user", message={"role": "user", "content":
               "<command-name>/code-review</command-name><command-args>high</command-args>"})
         + _jl(type="user", message={"role": "user", "content":
-              "<command-name>/model</command-name>"}),
+              "<command-name>/model</command-name>"})
+        + _jl(type="user", message={"role": "user", "content":
+              "<command-name>/remote-control</command-name>"}),
         encoding="utf-8",
     )
     if not with_subagents:
@@ -543,6 +545,107 @@ def test_scan_claude_skills_and_mcp(scan_env):
     assert s["tool_counts"]["mcp__chrome__navigate"] == 3
     assert s["tool_counts"]["Skill"] == 2
     assert s["mcp_usage"] == {"chrome": {"navigate": 3}}
+    # Nothing failed → no error keys invented.
+    assert "tool_errors" not in s and "mcp_errors" not in s
+    assert all("errors" not in sk for sk in s["skills_used"])
+
+
+def _tool_result(tool_use_id, text, is_error=False):
+    blk = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
+    if is_error:
+        blk["is_error"] = True
+    return blk
+
+
+def make_failing_plugin_tree(claude_dir: Path, sid: str = SID) -> Path:
+    """Mirrors a real session: the grok plugin's MCP search and a grok skill
+    both fail on a broken sandbox, and a background grok:grok-rescue subagent
+    dies on its only call while the parent's Agent result reads "launched"."""
+    proj = claude_dir / "projects" / PROJ
+    proj.mkdir(parents=True, exist_ok=True)
+    session_file = proj / f"{sid}.jsonl"
+    use = lambda name, tid, **kw: {"type": "tool_use", "name": name, "id": tid, "input": kw}
+    session_file.write_text(
+        _jl(type="user", cwd="/tmp/proj", message={"role": "user", "content": "search x"})
+        + _assistant_line(inp=10, out=5, message_id="m1", content=[
+            use("mcp__plugin_grok_grok__grok_search", "t1", query="a"),
+            use("mcp__plugin_grok_grok__grok_search", "t2", query="b"),
+            use("Bash", "t3", command="ls"),
+            use("Skill", "t4", skill="grok:search"),
+            use("Skill", "t5", skill="graphify"),
+            use("Agent", "t6", subagent_type="grok:grok-rescue")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t1", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t2", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t3", "file.txt"),
+            _tool_result("t4", "skill failed to load", True),
+            _tool_result("t5", "ok"),
+            _tool_result("t6", "Async agent launched successfully."),
+        ]})
+        # A tool result quoting a transcript must not count as a slash command.
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t3", "grep hit: <command-name>/leaked</command-name>")]}),
+        encoding="utf-8",
+    )
+    sub = proj / sid / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-rescue.meta.json").write_text(json.dumps(
+        {"agentType": "grok:grok-rescue", "description": "rescue", "toolUseId": "t6"}))
+    (sub / "agent-rescue.jsonl").write_text(
+        _jl(type="user", message={"role": "user", "content": "investigate"})
+        + _assistant_line(inp=5, out=5, message_id="r1",
+                          content=[use("Bash", "r-t1", command="node grok-companion.mjs")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("r-t1", "Exit code 1\nGrok run failed", True)]}),
+        encoding="utf-8",
+    )
+    # Partial failure: one of two calls errored → counted, but the run isn't "failed".
+    (sub / "agent-explore.meta.json").write_text(json.dumps(
+        {"agentType": "Explore", "description": "look", "toolUseId": "t7"}))
+    (sub / "agent-explore.jsonl").write_text(
+        _assistant_line(inp=5, out=5, message_id="e1",
+                        content=[use("Read", "e-t1"), use("Grep", "e-t2")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("e-t1", "File does not exist.", True),
+            _tool_result("e-t2", "3 matches")]}),
+        encoding="utf-8",
+    )
+    return session_file
+
+
+def test_scan_claude_records_tool_failures(scan_env):
+    make_failing_plugin_tree(scan_env / ".claude")
+    s = [s for s in main._scan_sessions_sync() if s["agent"] == "claude"][0]
+    # Failed calls still count as calls.
+    assert s["mcp_usage"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["tool_errors"] == {"mcp__plugin_grok_grok__grok_search": 2, "Skill": 1}
+    assert s["mcp_errors"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["skills_used"] == [{"name": "graphify", "count": 1},
+                                {"name": "grok:search", "count": 1, "errors": 1}]
+    by_type = s["delegation"]["by_type"]
+    assert by_type["grok:grok-rescue"]["failed"] == 1
+    assert by_type["grok:grok-rescue"]["tool_errors"] == 1
+    assert "failed" not in by_type["Explore"]
+    assert by_type["Explore"]["tool_errors"] == 1
+
+    deleg = main._claude_subagent_usage(
+        scan_env / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    subs = {e["agent_type"]: e for e in deleg["subagents"]}
+    assert subs["grok:grok-rescue"]["status"] == "failed"
+    assert subs["grok:grok-rescue"]["tool_calls"] == 1
+    assert "status" not in subs["Explore"]
+    assert (subs["Explore"]["tool_calls"], subs["Explore"]["tool_errors"]) == (2, 1)
+
+
+def test_plugin_of():
+    assert main._plugin_of("plugin_grok_grok") == "grok"
+    assert main._plugin_of("plugin_gemini_gemini") == "gemini"
+    assert main._plugin_of("plugin_my_tool_my_tool") == "my_tool"   # symmetric wins
+    assert main._plugin_of("plugin_acme_search") == "acme"
+    assert main._plugin_of("grok:grok-rescue") == "grok"
+    assert main._plugin_of("codex:rescue") == "codex"
+    for plain in ("chrome", "graphify", "Explore", "", None, "plugin_"):
+        assert main._plugin_of(plain) is None
 
 
 def test_scan_agents_without_signal_lack_keys(scan_env):
@@ -556,8 +659,10 @@ def test_scan_agents_without_signal_lack_keys(scan_env):
 
 # --- /analytics ecosystem aggregates -----------------------------------------
 
-def test_analytics_ecosystem_aggregates(monkeypatch):
+def test_analytics_ecosystem_aggregates(tmp_path, monkeypatch):
     from datetime import datetime, timezone
+    # /analytics merges the persisted history store; keep the real one out.
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
     base = {"project": "/tmp/x", "timestamp": datetime.now(timezone.utc),
             "tokens": {"input": 10, "output": 5, "cached": 0, "total": 15},
             "cost": 0.01, "model": "claude-opus-4-8", "mcp_tools": []}
@@ -569,6 +674,15 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
                         "delegated_total": 500,
                         "by_type": {"Explore": {"count": 2, "total": 500, "cost": 0.2}}},
          "delegated_cost": 0.2},
+        # A plugin-backed session where everything the plugin did failed.
+        {**base, "id": "p", "agent": "claude",
+         "skills_used": [{"name": "grok:search", "count": 2, "errors": 1}],
+         "mcp_usage": {"plugin_grok_grok": {"grok_search": 2}},
+         "mcp_errors": {"plugin_grok_grok": {"grok_search": 2}},
+         "delegation": {"supported": True, "tokens_recorded": True, "spawn_count": 1,
+                        "delegated_total": 0,
+                        "by_type": {"grok:grok-rescue": {"count": 1, "total": 0, "cost": 0.0,
+                                                         "failed": 1, "tool_errors": 1}}}},
         {**base, "id": "b", "agent": "claude",
          "skills_used": [{"name": "graphify", "count": 1}],
          "mcp_usage": {"chrome": {"navigate": 1, "find": 2}},
@@ -594,15 +708,26 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
         return sessions
 
     monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
-    a = _run(main.get_analytics())
-    assert a["by_skill"] == {"graphify": {"invocations": 3, "session_count": 2,
-                                          "agents": ["claude"]}}
-    assert a["by_mcp_server"] == {"chrome": {"calls": 6, "session_count": 2,
-                                             "tools": {"navigate": 4, "find": 2},
-                                             "agents": ["claude"]}}
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert a["by_skill"]["graphify"] == {"invocations": 3, "session_count": 2,
+                                         "agents": ["claude"], "errors": 0, "plugin": None}
+    assert a["by_skill"]["grok:search"] == {"invocations": 2, "session_count": 1,
+                                            "agents": ["claude"], "errors": 1, "plugin": "grok"}
+    assert a["by_mcp_server"]["chrome"] == {"calls": 6, "session_count": 2,
+                                            "tools": {"navigate": 4, "find": 2},
+                                            "agents": ["claude"], "errors": 0,
+                                            "tool_errors": {}, "plugin": None}
+    assert a["by_mcp_server"]["plugin_grok_grok"] == {
+        "calls": 2, "session_count": 1, "tools": {"grok_search": 2}, "agents": ["claude"],
+        "errors": 2, "tool_errors": {"grok_search": 2}, "plugin": "grok"}
     assert a["by_subagent_type"]["Explore"] == {
         "spawns": 2, "tokens": 500, "cost": 0.2, "session_count": 1,
-        "tokens_recorded": True, "agents": ["claude"]}
+        "tokens_recorded": True, "agents": ["claude"], "failed": 0, "tool_errors": 0,
+        "plugin": None}
+    assert a["by_subagent_type"]["grok:grok-rescue"]["failed"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["tool_errors"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["plugin"] == "grok"
     # grok type rows attribute the child session's tokens.
     assert a["by_subagent_type"]["general-purpose"]["tokens"] == 100
     assert a["by_subagent_type"]["general-purpose"]["agents"] == ["grok"]
@@ -611,15 +736,15 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     assert a["by_subagent_type"]["explorer"]["tokens"] == 70
     d = a["delegation"]
     assert d["delegated_tokens"] == 500 and d["delegated_cost"] == 0.2
-    assert d["sessions_with_spawns"] == 3          # claude a + grok gp + codex cp
+    assert d["sessions_with_spawns"] == 4          # claude a + p + grok gp + codex cp
     assert d["linked_children"] == 2 and d["linked_child_tokens"] == 170
     assert d["by_agent"]["grok"] == {"parents": 1, "spawns": 1, "children": 1,
                                      "child_tokens": 100, "child_cost": 0.05,
                                      "delegated_tokens": 0, "delegated_cost": 0.0}
     # Existing aggregates unchanged in shape: delegated usage NOT folded in,
     # children counted once as their own sessions.
-    assert a["by_agent"]["claude"]["total"] == 30
-    assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
+    assert a["by_agent"]["claude"]["total"] == 45
+    assert a["total"]["total"] == 45 + 15 + 100 + 15 + 70
 
 
 def test_analytics_folds_delegated_into_by_day_and_by_model(scan_env):

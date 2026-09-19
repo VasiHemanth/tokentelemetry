@@ -1,6 +1,29 @@
 {
   "releases": [
     {
+      "tag": "2026-09-19",
+      "title": "See what a session used, and what failed",
+      "highlights": [
+        {
+          "title": "Used this session",
+          "description": "A session's Context panel now lists the skills, MCP servers and subagents that run actually called, with counts. It works for every agent whose logs record skill or MCP calls. The old list is renamed Installed in Project, because it shows what is on disk for the project, not what the session used."
+        },
+        {
+          "title": "Failed calls are counted",
+          "description": "For Claude Code sessions, tool calls that returned an error are now counted per MCP server, skill and subagent, and shown in red. A plugin that fails every time, such as a broken sandbox killing each Grok search, used to look like normal usage. A subagent whose every call failed is marked failed, even when it ran in the background.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Plugin names on skills, MCP servers and subagents",
+          "description": "Calls that come from a Claude Code plugin are tagged with that plugin's name, so plugin_grok_grok, grok:search and grok:grok-rescue all show up as the grok plugin. The Delegated work card at the top of a session now gives each plugin a passed/failed row, so a plugin that stopped working is visible as soon as you open the session."
+        },
+        {
+          "title": "Every agent's memory files for a project",
+          "description": "A project's Config tab now finds the memory and instruction file of each coding agent: CLAUDE.md (including .claude/, nested folders and Claude Code's auto memory), shared AGENTS.md with the agents that read it, GEMINI.md, QWEN.md, Cursor rules, Copilot instructions, and the user-level OpenCode and Hermes files. Filter chips show one agent's files at a time."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-16",
       "title": "Kimi Code support",
       "highlights": [

@@ -6435,6 +6435,9 @@ _BUILTIN_CLI_COMMANDS = {
     "migrate-installer", "model", "output-style", "permissions", "plan", "plugin",
     "privacy-settings", "quit", "release-notes", "resume", "rewind", "status",
     "statusline", "terminal-setup", "theme", "todos", "upgrade", "usage", "vim",
+    # Newer built-ins seen as <command-name> tags in real transcripts.
+    "advisor", "autocompact", "effort", "feedback", "goal", "remote-control",
+    "rename", "skills", "teleport", "voice",
 }
 
 
@@ -6533,18 +6536,65 @@ def _mcp_usage_from_counts(tool_counts: Dict[str, int]) -> Dict[str, Dict[str, i
     return out
 
 
+def _errored_tool_use_ids(content: Any) -> List[str]:
+    """tool_use ids whose tool_result in this user-record content is_error."""
+    if not isinstance(content, list):
+        return []
+    return [b["tool_use_id"] for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+            and b.get("is_error") is True and b.get("tool_use_id")]
+
+
+def _plugin_of(name: Any) -> Optional[str]:
+    """Owning Claude Code plugin of a skill, subagent type or MCP server name.
+
+    Claude Code namespaces plugin-provided pieces two ways (verified in real
+    transcripts): skills and subagent types as "<plugin>:<name>"
+    ("grok:grok-rescue"), and MCP servers as "plugin_<plugin>_<server>" inside
+    the tool name ("mcp__plugin_grok_grok__grok_search" -> server
+    "plugin_grok_grok"). The server form is ambiguous when a name contains an
+    underscore; the common case is a plugin whose one server shares its name,
+    so a symmetric split wins, else the first underscore. None = not a plugin.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    if name.startswith("plugin_"):
+        rest = name[len("plugin_"):]
+        half = (len(rest) - 1) // 2
+        if len(rest) % 2 == 1 and rest[half] == "_" and rest[:half] == rest[half + 1:]:
+            return rest[:half] or None
+        return rest.split("_", 1)[0] or None
+    if ":" in name:
+        return name.split(":", 1)[0] or None
+    return None
+
+
 def _attach_tool_usage(sess: Dict[str, Any], tool_counts: Dict[str, int],
-                       skill_counts: Optional[Dict[str, int]] = None) -> None:
+                       skill_counts: Optional[Dict[str, int]] = None,
+                       tool_errors: Optional[Dict[str, int]] = None,
+                       skill_errors: Optional[Dict[str, int]] = None) -> None:
     """Attach tool_counts / mcp_usage / skills_used to a session dict (only when
-    non-empty, so agents without the signal simply lack the keys)."""
+    non-empty, so agents without the signal simply lack the keys).
+
+    ``tool_errors`` counts tool calls whose result came back is_error, keyed
+    like ``tool_counts``; it also yields ``mcp_errors`` (same shape as
+    ``mcp_usage``). ``skill_errors`` adds an ``errors`` count to the matching
+    ``skills_used`` entry. A call that failed is still a call, so the usage
+    counts include it."""
     if tool_counts:
         sess["tool_counts"] = tool_counts
         mcp = _mcp_usage_from_counts(tool_counts)
         if mcp:
             sess["mcp_usage"] = mcp
+    if tool_errors:
+        sess["tool_errors"] = tool_errors
+        mcp_err = _mcp_usage_from_counts(tool_errors)
+        if mcp_err:
+            sess["mcp_errors"] = mcp_err
     if skill_counts:
+        skill_errors = skill_errors or {}
         sess["skills_used"] = [
-            {"name": k, "count": v}
+            {"name": k, "count": v, **({"errors": skill_errors[k]} if skill_errors.get(k) else {})}
             for k, v in sorted(skill_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ]
 
@@ -6572,6 +6622,8 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     seen_message_ids: set = set()
+    tool_use_ids: set = set()
+    errored_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -6588,9 +6640,15 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                     if first_ts is None:
                         first_ts = ts
                     last_ts = ts
+                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                if data.get("type") == "user":
+                    errored_ids.update(_errored_tool_use_ids(msg.get("content")))
+                    continue
                 if data.get("type") != "assistant":
                     continue
-                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                for item in msg.get("content") or []:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("id"):
+                        tool_use_ids.add(item["id"])
                 m = msg.get("model")
                 if m and m != "<synthetic>" and not model:
                     model = m
@@ -6643,6 +6701,18 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
         "duration_ms": (round((ended - started).total_seconds() * 1000)
                         if started and ended else None),
     }
+    # A subagent's own failures never reach the parent transcript: a
+    # background spawn's Agent result is just "launched", so a plugin agent
+    # whose only call died (grok:grok-rescue on a broken sandbox) would read
+    # as a normal run. Count its errored tool results here; when every call
+    # it made failed, the run as a whole failed.
+    tool_errors = len(errored_ids & tool_use_ids)
+    if tool_use_ids:
+        entry["tool_calls"] = len(tool_use_ids)
+    if tool_errors:
+        entry["tool_errors"] = tool_errors
+        if tool_errors == len(tool_use_ids):
+            entry["status"] = "failed"
     if extra:
         entry.update(extra)
     return entry
@@ -6778,6 +6848,11 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         for k in ("input", "output", "cached", "total"):
             bm[k] += e["tokens"][k]
         bm["cost"] = round(bm["cost"] + (e["cost"] or 0), 6)
+        # Only-if-present, like the session-level usage keys.
+        if e.get("status") == "failed":
+            bt["failed"] = bt.get("failed", 0) + 1
+        if e.get("tool_errors"):
+            bt["tool_errors"] = bt.get("tool_errors", 0) + e["tool_errors"]
     return {
         "spawn_count": len(entries),
         "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
@@ -7129,7 +7204,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "delegated_by_model", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts", "goals", "untracked_background",
+    "tool_errors", "mcp_errors", "loop", "published_artifacts", "goals", "untracked_background",
 )
 
 
@@ -7356,6 +7431,8 @@ def _scan_sessions_sync():
                 else:
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
+                    tool_use_names: Dict[str, Tuple[str, Optional[str]]] = {}  # tool_use id -> (tool, skill)
+                    errored_tool_use_ids: set = set()        # tool_use ids whose result is_error
                     last_real_ts = None
                     loop_sched: List[Dict[str, Any]] = []   # scheduling tool calls (CronCreate/ScheduleWakeup)
                     loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
@@ -7453,10 +7530,13 @@ def _scan_sessions_sync():
                                             tool = item.get("name")
                                             if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                             _count_tool(tool_counts, tool)
+                                            skill = None
                                             if tool == "Skill":
                                                 skill = (item.get("input") or {}).get("skill")
                                                 if skill:
                                                     skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                                            if tool and item.get("id"):
+                                                tool_use_names[item["id"]] = (tool, skill)
                                             if tool == "ExitPlanMode":
                                                 plan_text = (item.get("input") or {}).get("plan") or ""
                                                 if plan_text:
@@ -7527,7 +7607,15 @@ def _scan_sessions_sync():
                                             _goal_block_now = True
                                     if "/plan" in str(u_content):
                                         sess["has_plan"] = True
-                                    for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
+                                    errored_tool_use_ids.update(_errored_tool_use_ids(u_content))
+                                    # Slash-command tags only from what the user sent: a
+                                    # tool_result that quotes a transcript (or this code)
+                                    # carries the same tag and is not an invocation.
+                                    _cmd_text = u_content if isinstance(u_content, str) else " ".join(
+                                        b.get("text", "") for b in u_content
+                                        if isinstance(b, dict) and b.get("type") == "text"
+                                    ) if isinstance(u_content, list) else ""
+                                    for cmd in _COMMAND_NAME_RE.findall(_cmd_text):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
                                     # Published Claude artifacts: pair each Artifact tool_use with
@@ -7686,7 +7774,16 @@ def _scan_sessions_sync():
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
-                    _attach_tool_usage(sess, tool_counts, skill_counts)
+                    tool_errors: Dict[str, int] = {}
+                    skill_errors: Dict[str, int] = {}
+                    for _tid in errored_tool_use_ids:
+                        _named = tool_use_names.get(_tid)
+                        if not _named:
+                            continue
+                        _count_tool(tool_errors, _named[0])
+                        if _named[1]:
+                            skill_errors[_named[1]] = skill_errors.get(_named[1], 0) + 1
+                    _attach_tool_usage(sess, tool_counts, skill_counts, tool_errors, skill_errors)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
                         "supported": True,
@@ -12085,7 +12182,8 @@ async def get_analytics(
     def _subagent_row(t: str) -> Dict[str, Any]:
         return by_subagent_type.setdefault(t, {
             "spawns": 0, "tokens": 0, "cost": 0.0, "session_count": 0,
-            "tokens_recorded": False, "agents": []})
+            "tokens_recorded": False, "agents": [], "failed": 0, "tool_errors": 0,
+            "plugin": _plugin_of(t)})
 
     def _deleg_agent_row(agent: str) -> Dict[str, Any]:
         return delegation_totals["by_agent"].setdefault(agent, {
@@ -12124,19 +12222,27 @@ async def get_analytics(
                 "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
-            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
+            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": [],
+                                                    "errors": 0, "plugin": _plugin_of(sk["name"])})
             row["invocations"] += sk["count"]
+            row["errors"] += sk.get("errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
+        mcp_errors = s.get("mcp_errors") or {}
         for server, tools in (s.get("mcp_usage") or {}).items():
-            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": []})
+            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": [],
+                                                    "errors": 0, "tool_errors": {},
+                                                    "plugin": _plugin_of(server)})
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
             for tool, n in tools.items():
                 row["calls"] += n
                 row["tools"][tool] = row["tools"].get(tool, 0) + n
+            for tool, n in (mcp_errors.get(server) or {}).items():
+                row["errors"] += n
+                row["tool_errors"][tool] = row["tool_errors"].get(tool, 0) + n
 
         deleg = s.get("delegation") or {}
         spawns_here = deleg.get("spawn_count") or deleg.get("linked_children") or 0
@@ -12148,6 +12254,8 @@ async def get_analytics(
         for t, d in (deleg.get("by_type") or {}).items():
             row = _subagent_row(t)
             row["spawns"] += d.get("count", 0)
+            row["failed"] += d.get("failed", 0) or 0
+            row["tool_errors"] += d.get("tool_errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
@@ -12378,6 +12486,120 @@ def _memory_preview(p: Path, scope: str, agent: str):
     try: txt = p.read_text(errors="ignore")
     except Exception: return None
     return {"scope": scope, "agent": agent, "path": str(p), "name": p.name, "preview": txt[:2000], "truncated": len(txt) > 2000, "size": len(txt)}
+
+
+# AGENTS.md is a shared convention rather than one agent's file. These are the
+# supported agents documented to read it; `agent` stays "codex" on the row so
+# older frontends keep rendering it.
+_AGENTS_MD_READERS = ["codex", "cursor", "opencode", "copilot"]
+
+# Per-agent instruction ("memory") files, by the name each agent looks for.
+# Nested copies (frontend/CLAUDE.md) are read too, when the agent works there.
+_MEMORY_FILENAMES = {"CLAUDE.md": "claude", "AGENTS.md": "codex", "GEMINI.md": "gemini", "QWEN.md": "qwen"}
+# Directories never worth walking for nested memory files. `.claude` holds
+# worktrees, which are full copies of the repo and would repeat every file.
+_MEMORY_SKIP_DIRS = {"node_modules", ".git", ".claude", "venv", ".venv", "__pycache__",
+                     ".next", "dist", "build", "target", ".tox", ".mypy_cache", ".pytest_cache"}
+_MEMORY_NESTED_DEPTH = 3
+_MEMORY_MAX_FILES = 60
+
+
+def _claude_project_key(project: Path) -> str:
+    """Claude Code's ~/.claude/projects/<key> name for a project path: every
+    non-alphanumeric character becomes '-' (so '/.claude/' -> '--claude-')."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project))
+
+
+def _collect_memory(project: Optional[Path]) -> List[dict]:
+    """Every agent's memory / instruction files for user scope + one project.
+
+    A project touched by several coding agents carries one file per agent
+    (CLAUDE.md, AGENTS.md, GEMINI.md, …), plus Claude Code's own auto memory
+    kept under ~/.claude/projects/<key>/memory. Each row names its agent;
+    AGENTS.md rows also list every agent that reads it in `agents`.
+    """
+    out: List[dict] = []
+    seen: Set[str] = set()
+
+    def add(p: Path, scope: str, agent: str, name: Optional[str] = None, **extra) -> None:
+        if len(out) >= _MEMORY_MAX_FILES:
+            return
+        try:
+            if not p.is_file():
+                return
+            key = str(p.resolve())
+        except OSError:
+            return
+        if key in seen:
+            return
+        m = _memory_preview(p, scope, agent)
+        if not m:
+            return
+        seen.add(key)
+        if name:
+            m["name"] = name
+        # Only a project AGENTS.md is shared; ~/.codex/AGENTS.md is Codex's own.
+        if scope == "project" and agent == "codex" and p.name == "AGENTS.md":
+            m["agents"] = list(_AGENTS_MD_READERS)
+        m.update(extra)
+        out.append(m)
+
+    # ---- user scope ----
+    add(CLAUDE_DIR / "CLAUDE.md", "user", "claude")
+    add(CODEX_DIR / "AGENTS.md", "user", "codex")
+    add(GEMINI_DIR / "GEMINI.md", "user", "gemini")
+    add(QWEN_DIR / "QWEN.md", "user", "qwen")
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")).expanduser()
+    add(xdg / "opencode" / "AGENTS.md", "user", "opencode", name="AGENTS.md (OpenCode global)")
+    # Hermes keeps its long-term memory as plain files in its home.
+    add(HERMES_DIR / "memories" / "MEMORY.md", "user", "hermes")
+    add(HERMES_DIR / "memories" / "USER.md", "user", "hermes")
+    add(HERMES_DIR / "SOUL.md", "user", "hermes")
+
+    if not project:
+        return out
+
+    # ---- project scope ----
+    # Claude Code auto memory for this project (MEMORY.md indexes the notes).
+    auto_dir = CLAUDE_DIR / "projects" / _claude_project_key(project) / "memory"
+    try:
+        notes = len([f for f in auto_dir.glob("*.md") if f.name != "MEMORY.md"])
+    except OSError:
+        notes = 0
+    add(auto_dir / "MEMORY.md", "project", "claude", name="MEMORY.md (auto memory)", note_count=notes)
+
+    add(project / ".claude" / "CLAUDE.md", "project", "claude", name=".claude/CLAUDE.md")
+    add(project / "CLAUDE.local.md", "project", "claude")
+    add(project / ".github" / "copilot-instructions.md", "project", "copilot",
+        name=".github/copilot-instructions.md")
+    try:
+        for f in sorted((project / ".github" / "instructions").glob("*.instructions.md")):
+            add(f, "project", "copilot", name=f".github/instructions/{f.name}")
+    except OSError:
+        pass
+    add(project / ".cursorrules", "project", "cursor")
+    try:
+        for f in sorted((project / ".cursor" / "rules").glob("*.mdc")):
+            add(f, "project", "cursor", name=f".cursor/rules/{f.name}")
+    except OSError:
+        pass
+
+    # Root and nested CLAUDE.md / AGENTS.md / GEMINI.md / QWEN.md. Root first
+    # so the cap never drops the files that matter most.
+    try:
+        for dirpath, dirnames, filenames in os.walk(project):
+            rel = Path(dirpath).relative_to(project)
+            depth = len(rel.parts)
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d not in _MEMORY_SKIP_DIRS and depth < _MEMORY_NESTED_DEPTH)
+            for fn in sorted(filenames):
+                agent = _MEMORY_FILENAMES.get(fn)
+                if agent:
+                    add(Path(dirpath) / fn, "project", agent,
+                        name=str(rel / fn) if depth else None)
+    except OSError:
+        pass
+    return out
 
 # ---- Plugin/extension collection (v1) ---------------------------------------
 # Each harness exposes a "plugin"/"extension" surface in its own way. We
@@ -12658,7 +12880,6 @@ async def get_config(project: Optional[str] = None):
     """Return skills, MCPs, and memory files for user scope + optional project scope."""
     skills: List[dict] = []
     mcps: List[dict] = []
-    memory: List[dict] = []
     commands: List[dict] = []
     subagents: List[dict] = []
 
@@ -12678,9 +12899,6 @@ async def get_config(project: Optional[str] = None):
                 skills.append(row)
     for p in [CLAUDE_DIR / "settings.json", Path(HOME) / ".claude.json"]:
         mcps += _mcps_from_claude_settings(p, "user")
-    claude_md = CLAUDE_DIR / "CLAUDE.md"
-    m = _memory_preview(claude_md, "user", "claude") if claude_md.exists() else None
-    if m: memory.append(m)
 
     commands += _collect_commands(CLAUDE_DIR, "user", "claude")
     subagents += _collect_subagents(CLAUDE_DIR, "user", "claude")
@@ -12710,9 +12928,6 @@ async def get_config(project: Optional[str] = None):
     # Codex
     mcps += _mcps_from_codex_toml(CODEX_DIR / "config.toml", "user")
     commands += _collect_commands(CODEX_DIR, "user", "codex")
-    codex_agents = CODEX_DIR / "AGENTS.md"
-    m = _memory_preview(codex_agents, "user", "codex") if codex_agents.exists() else None
-    if m: memory.append(m)
 
     # Cursor
     mcps += _mcps_from_json(CURSOR_DIR / "mcp.json", "user", "cursor")
@@ -12737,10 +12952,6 @@ async def get_config(project: Optional[str] = None):
             subagents += _collect_subagents(proj / ".claude", "project", "claude")
             for p in [proj / ".claude" / "settings.json", proj / ".claude" / "settings.local.json", proj / ".mcp.json"]:
                 mcps += _mcps_from_claude_settings(p, "project")
-            for fname in ["CLAUDE.md", "AGENTS.md"]:
-                fp = proj / fname
-                m = _memory_preview(fp, "project", "claude" if fname == "CLAUDE.md" else "codex") if fp.exists() else None
-                if m: memory.append(m)
 
             # Cursor
             mcps += _mcps_from_json(proj / ".cursor" / "mcp.json", "project", "cursor")
@@ -12772,8 +12983,9 @@ async def get_config(project: Optional[str] = None):
         if key in seen: continue
         seen.add(key); deduped.append(m)
 
-    # Plugins (project arg already validated above)
+    # Plugins and memory (project arg already validated above)
     plugins = _collect_all_plugins(Path(project) if project_valid else None)
+    memory = _collect_memory(Path(project) if project_valid else None)
 
     # Stamp pluginRef on items whose source falls inside a plugin's installPath.
     # Inline-set refs (Claude plugin-bundled blocks) are preserved by _tag_plugin_refs.
