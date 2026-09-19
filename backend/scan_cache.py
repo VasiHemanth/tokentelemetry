@@ -64,7 +64,7 @@ def cache_path(agent: str, session_id: str) -> Path:
 
 
 def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dict[str, Any]]:
-    """Return the cached payload if fresh (stored _mtime >= source_mtime AND
+    """Return the cached payload if fresh (stored _mtime == source_mtime AND
     written by this CACHE_VERSION), else None.
 
     Never raises — any OSError/JSONDecodeError/missing-key/unsafe-id is
@@ -78,7 +78,10 @@ def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dic
         if data.get("_version") != CACHE_VERSION:
             return None
         cached_mtime = data["_mtime"]
-        if cached_mtime >= source_mtime:
+        # Only equality means "unchanged since write"; a smaller source_mtime
+        # is a clock regression (NTP step, NAS/SMB skew), not evidence the
+        # cached payload is still valid, so `>=` pinned it forever.
+        if cached_mtime == source_mtime:
             return data
         return None
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
