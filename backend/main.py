@@ -6533,18 +6533,65 @@ def _mcp_usage_from_counts(tool_counts: Dict[str, int]) -> Dict[str, Dict[str, i
     return out
 
 
+def _errored_tool_use_ids(content: Any) -> List[str]:
+    """tool_use ids whose tool_result in this user-record content is_error."""
+    if not isinstance(content, list):
+        return []
+    return [b["tool_use_id"] for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+            and b.get("is_error") is True and b.get("tool_use_id")]
+
+
+def _plugin_of(name: Any) -> Optional[str]:
+    """Owning Claude Code plugin of a skill, subagent type or MCP server name.
+
+    Claude Code namespaces plugin-provided pieces two ways (verified in real
+    transcripts): skills and subagent types as "<plugin>:<name>"
+    ("grok:grok-rescue"), and MCP servers as "plugin_<plugin>_<server>" inside
+    the tool name ("mcp__plugin_grok_grok__grok_search" -> server
+    "plugin_grok_grok"). The server form is ambiguous when a name contains an
+    underscore; the common case is a plugin whose one server shares its name,
+    so a symmetric split wins, else the first underscore. None = not a plugin.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    if name.startswith("plugin_"):
+        rest = name[len("plugin_"):]
+        half = (len(rest) - 1) // 2
+        if len(rest) % 2 == 1 and rest[half] == "_" and rest[:half] == rest[half + 1:]:
+            return rest[:half] or None
+        return rest.split("_", 1)[0] or None
+    if ":" in name:
+        return name.split(":", 1)[0] or None
+    return None
+
+
 def _attach_tool_usage(sess: Dict[str, Any], tool_counts: Dict[str, int],
-                       skill_counts: Optional[Dict[str, int]] = None) -> None:
+                       skill_counts: Optional[Dict[str, int]] = None,
+                       tool_errors: Optional[Dict[str, int]] = None,
+                       skill_errors: Optional[Dict[str, int]] = None) -> None:
     """Attach tool_counts / mcp_usage / skills_used to a session dict (only when
-    non-empty, so agents without the signal simply lack the keys)."""
+    non-empty, so agents without the signal simply lack the keys).
+
+    ``tool_errors`` counts tool calls whose result came back is_error, keyed
+    like ``tool_counts``; it also yields ``mcp_errors`` (same shape as
+    ``mcp_usage``). ``skill_errors`` adds an ``errors`` count to the matching
+    ``skills_used`` entry. A call that failed is still a call, so the usage
+    counts include it."""
     if tool_counts:
         sess["tool_counts"] = tool_counts
         mcp = _mcp_usage_from_counts(tool_counts)
         if mcp:
             sess["mcp_usage"] = mcp
+    if tool_errors:
+        sess["tool_errors"] = tool_errors
+        mcp_err = _mcp_usage_from_counts(tool_errors)
+        if mcp_err:
+            sess["mcp_errors"] = mcp_err
     if skill_counts:
+        skill_errors = skill_errors or {}
         sess["skills_used"] = [
-            {"name": k, "count": v}
+            {"name": k, "count": v, **({"errors": skill_errors[k]} if skill_errors.get(k) else {})}
             for k, v in sorted(skill_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ]
 
@@ -6572,6 +6619,8 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     seen_message_ids: set = set()
+    tool_use_ids: set = set()
+    errored_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -6588,9 +6637,15 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                     if first_ts is None:
                         first_ts = ts
                     last_ts = ts
+                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                if data.get("type") == "user":
+                    errored_ids.update(_errored_tool_use_ids(msg.get("content")))
+                    continue
                 if data.get("type") != "assistant":
                     continue
-                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                for item in msg.get("content") or []:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("id"):
+                        tool_use_ids.add(item["id"])
                 m = msg.get("model")
                 if m and m != "<synthetic>" and not model:
                     model = m
@@ -6643,6 +6698,18 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
         "duration_ms": (round((ended - started).total_seconds() * 1000)
                         if started and ended else None),
     }
+    # A subagent's own failures never reach the parent transcript: a
+    # background spawn's Agent result is just "launched", so a plugin agent
+    # whose only call died (grok:grok-rescue on a broken sandbox) would read
+    # as a normal run. Count its errored tool results here; when every call
+    # it made failed, the run as a whole failed.
+    tool_errors = len(errored_ids & tool_use_ids)
+    if tool_use_ids:
+        entry["tool_calls"] = len(tool_use_ids)
+    if tool_errors:
+        entry["tool_errors"] = tool_errors
+        if tool_errors == len(tool_use_ids):
+            entry["status"] = "failed"
     if extra:
         entry.update(extra)
     return entry
@@ -6768,6 +6835,11 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         bt["count"] += 1
         bt["total"] += e["tokens"]["total"]
         bt["cost"] = round(bt["cost"] + (e["cost"] or 0), 6)
+        # Only-if-present, like the session-level usage keys.
+        if e.get("status") == "failed":
+            bt["failed"] = bt.get("failed", 0) + 1
+        if e.get("tool_errors"):
+            bt["tool_errors"] = bt.get("tool_errors", 0) + e["tool_errors"]
     return {
         "spawn_count": len(entries),
         "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
@@ -7118,7 +7190,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts", "goals", "untracked_background",
+    "tool_errors", "mcp_errors", "loop", "published_artifacts", "goals", "untracked_background",
 )
 
 
@@ -7345,6 +7417,8 @@ def _scan_sessions_sync():
                 else:
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
+                    tool_use_names: Dict[str, Tuple[str, Optional[str]]] = {}  # tool_use id -> (tool, skill)
+                    errored_tool_use_ids: set = set()        # tool_use ids whose result is_error
                     last_real_ts = None
                     loop_sched: List[Dict[str, Any]] = []   # scheduling tool calls (CronCreate/ScheduleWakeup)
                     loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
@@ -7442,10 +7516,13 @@ def _scan_sessions_sync():
                                             tool = item.get("name")
                                             if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                             _count_tool(tool_counts, tool)
+                                            skill = None
                                             if tool == "Skill":
                                                 skill = (item.get("input") or {}).get("skill")
                                                 if skill:
                                                     skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                                            if tool and item.get("id"):
+                                                tool_use_names[item["id"]] = (tool, skill)
                                             if tool == "ExitPlanMode":
                                                 plan_text = (item.get("input") or {}).get("plan") or ""
                                                 if plan_text:
@@ -7516,7 +7593,15 @@ def _scan_sessions_sync():
                                             _goal_block_now = True
                                     if "/plan" in str(u_content):
                                         sess["has_plan"] = True
-                                    for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
+                                    errored_tool_use_ids.update(_errored_tool_use_ids(u_content))
+                                    # Slash-command tags only from what the user sent: a
+                                    # tool_result that quotes a transcript (or this code)
+                                    # carries the same tag and is not an invocation.
+                                    _cmd_text = u_content if isinstance(u_content, str) else " ".join(
+                                        b.get("text", "") for b in u_content
+                                        if isinstance(b, dict) and b.get("type") == "text"
+                                    ) if isinstance(u_content, list) else ""
+                                    for cmd in _COMMAND_NAME_RE.findall(_cmd_text):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
                                     # Published Claude artifacts: pair each Artifact tool_use with
@@ -7675,7 +7760,16 @@ def _scan_sessions_sync():
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
-                    _attach_tool_usage(sess, tool_counts, skill_counts)
+                    tool_errors: Dict[str, int] = {}
+                    skill_errors: Dict[str, int] = {}
+                    for _tid in errored_tool_use_ids:
+                        _named = tool_use_names.get(_tid)
+                        if not _named:
+                            continue
+                        _count_tool(tool_errors, _named[0])
+                        if _named[1]:
+                            skill_errors[_named[1]] = skill_errors.get(_named[1], 0) + 1
+                    _attach_tool_usage(sess, tool_counts, skill_counts, tool_errors, skill_errors)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
                         "supported": True,
@@ -12040,7 +12134,8 @@ async def get_analytics(
     def _subagent_row(t: str) -> Dict[str, Any]:
         return by_subagent_type.setdefault(t, {
             "spawns": 0, "tokens": 0, "cost": 0.0, "session_count": 0,
-            "tokens_recorded": False, "agents": []})
+            "tokens_recorded": False, "agents": [], "failed": 0, "tool_errors": 0,
+            "plugin": _plugin_of(t)})
 
     def _deleg_agent_row(agent: str) -> Dict[str, Any]:
         return delegation_totals["by_agent"].setdefault(agent, {
@@ -12079,19 +12174,27 @@ async def get_analytics(
                 "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
-            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
+            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": [],
+                                                    "errors": 0, "plugin": _plugin_of(sk["name"])})
             row["invocations"] += sk["count"]
+            row["errors"] += sk.get("errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
+        mcp_errors = s.get("mcp_errors") or {}
         for server, tools in (s.get("mcp_usage") or {}).items():
-            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": []})
+            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": [],
+                                                    "errors": 0, "tool_errors": {},
+                                                    "plugin": _plugin_of(server)})
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
             for tool, n in tools.items():
                 row["calls"] += n
                 row["tools"][tool] = row["tools"].get(tool, 0) + n
+            for tool, n in (mcp_errors.get(server) or {}).items():
+                row["errors"] += n
+                row["tool_errors"][tool] = row["tool_errors"].get(tool, 0) + n
 
         deleg = s.get("delegation") or {}
         spawns_here = deleg.get("spawn_count") or deleg.get("linked_children") or 0
@@ -12103,6 +12206,8 @@ async def get_analytics(
         for t, d in (deleg.get("by_type") or {}).items():
             row = _subagent_row(t)
             row["spawns"] += d.get("count", 0)
+            row["failed"] += d.get("failed", 0) or 0
+            row["tool_errors"] += d.get("tool_errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)

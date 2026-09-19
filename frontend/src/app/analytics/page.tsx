@@ -26,9 +26,10 @@ interface AnalyticsData {
   by_agent: Record<string, AgentStats>;
   by_day: { date: string; total: number; input: number; output: number; cached: number; cost: number }[];
   by_model?: Record<string, AgentStats & { agent: string }>;
-  by_skill?: Record<string, { invocations: number; session_count: number; agents?: string[] }>;
-  by_mcp_server?: Record<string, { calls: number; tools: Record<string, number>; session_count: number; agents?: string[] }>;
-  by_subagent_type?: Record<string, { spawns: number; tokens: number; cost: number; session_count: number; tokens_recorded?: boolean; agents?: string[] }>;
+  // `errors` / `failed` / `plugin` are absent on responses from older backends.
+  by_skill?: Record<string, { invocations: number; session_count: number; agents?: string[]; errors?: number; plugin?: string | null }>;
+  by_mcp_server?: Record<string, { calls: number; tools: Record<string, number>; session_count: number; agents?: string[]; errors?: number; tool_errors?: Record<string, number>; plugin?: string | null }>;
+  by_subagent_type?: Record<string, { spawns: number; tokens: number; cost: number; session_count: number; tokens_recorded?: boolean; agents?: string[]; failed?: number; tool_errors?: number; plugin?: string | null }>;
   delegation?: {
     delegated_tokens: number; delegated_cost: number; sessions_with_spawns: number;
     linked_children?: number; linked_child_tokens?: number; linked_child_cost?: number;
@@ -852,6 +853,8 @@ function EcosystemSection({ data }: { data: AnalyticsData }) {
                     <span className="font-mono text-[var(--tt-fg)] truncate" title={t.name}>{t.name}</span>
                     <span className="text-[var(--tt-fg-dim)]">
                       {t.spawns} spawn{t.spawns === 1 ? "" : "s"}
+                      {t.failed ? <span className="text-[var(--tt-danger-fg)]"> · {t.failed} failed</span> : null}
+                      {t.plugin && <> · {t.plugin} plugin</>}
                       {t.agents && t.agents.length > 0 && <> · {t.agents.join(", ")}</>}
                     </span>
                   </span>
@@ -883,10 +886,13 @@ function EcosystemSection({ data }: { data: AnalyticsData }) {
                   <span className="min-w-0">
                     <span className="font-mono text-[var(--tt-fg)] truncate block" title={s.name}>/{s.name}</span>
                     {s.agents && s.agents.length > 0 && (
-                      <span className="text-[10px] text-[var(--tt-fg-dim)]">{s.agents.join(", ")}</span>
+                      <span className="text-[10px] text-[var(--tt-fg-dim)]">
+                        {s.agents.join(", ")}{s.plugin && ` · ${s.plugin} plugin`}
+                      </span>
                     )}
                   </span>
                   <span className="tabular text-[var(--tt-fg-dim)] whitespace-nowrap shrink-0">
+                    {s.errors ? <span className="text-[var(--tt-danger-fg)]">{s.errors} failed · </span> : null}
                     ×{s.invocations} · {s.session_count} session{s.session_count === 1 ? "" : "s"}
                   </span>
                 </li>
@@ -909,10 +915,12 @@ function EcosystemSection({ data }: { data: AnalyticsData }) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-[var(--tt-fg)] truncate" title={m.name}>{m.name}</span>
                       <span className="tabular text-[var(--tt-fg-dim)] whitespace-nowrap">
+                        {m.errors ? <span className="text-[var(--tt-danger-fg)]">{m.errors} failed · </span> : null}
                         {m.calls} calls · {m.session_count} session{m.session_count === 1 ? "" : "s"}
                       </span>
                     </div>
                     <div className="mt-0.5 text-[10px] text-[var(--tt-fg-dim)] truncate">
+                      {m.plugin && <span className="text-violet-400">{m.plugin} plugin · </span>}
                       {m.agents && m.agents.length > 0 && <span className="text-[var(--tt-fg-muted)]">{m.agents.join(", ")} · </span>}
                       {topTools.map(([tool, n]) => `${tool} ×${n}`).join(" · ")}
                       {Object.keys(m.tools).length > 3 && ` · +${Object.keys(m.tools).length - 3} more`}
