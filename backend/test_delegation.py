@@ -72,7 +72,9 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
         + _jl(type="user", message={"role": "user", "content":
               "<command-name>/code-review</command-name><command-args>high</command-args>"})
         + _jl(type="user", message={"role": "user", "content":
-              "<command-name>/model</command-name>"}),
+              "<command-name>/model</command-name>"})
+        + _jl(type="user", message={"role": "user", "content":
+              "<command-name>/remote-control</command-name>"}),
         encoding="utf-8",
     )
     if not with_subagents:

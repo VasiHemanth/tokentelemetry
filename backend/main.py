@@ -6435,6 +6435,9 @@ _BUILTIN_CLI_COMMANDS = {
     "migrate-installer", "model", "output-style", "permissions", "plan", "plugin",
     "privacy-settings", "quit", "release-notes", "resume", "rewind", "status",
     "statusline", "terminal-setup", "theme", "todos", "upgrade", "usage", "vim",
+    # Newer built-ins seen as <command-name> tags in real transcripts.
+    "advisor", "autocompact", "effort", "feedback", "goal", "remote-control",
+    "rename", "skills", "teleport", "voice",
 }
 
 

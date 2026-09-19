@@ -83,8 +83,19 @@ export default function ConfigTab() {
     const plugin = x.pluginRef ? String(x.pluginRef).split("@")[0] : null;
     return plugin ? m[`${plugin}:${x.name}`] : undefined;
   };
-  const mcpUse = (x: ConfigItem) => usage?.by_mcp_server?.[x.name];
-  const subagentUse = (x: ConfigItem) => usage?.by_subagent_type?.[x.name];
+  // Plugin-provided MCP servers are called as mcp__plugin_<plugin>_<server>__…
+  // and plugin agents as "<plugin>:<name>", so the bare name never matches.
+  const pluginOfItem = (x: ConfigItem) => (x.pluginRef ? String(x.pluginRef).split("@")[0] : null);
+  const mcpUse = (x: ConfigItem) => {
+    const m = usage?.by_mcp_server || {};
+    const plugin = pluginOfItem(x);
+    return m[x.name] ?? (plugin ? m[`plugin_${plugin}_${x.name}`] : undefined);
+  };
+  const subagentUse = (x: ConfigItem) => {
+    const m = usage?.by_subagent_type || {};
+    const plugin = pluginOfItem(x);
+    return m[x.name] ?? (plugin ? m[`${plugin}:${x.name}`] : undefined);
+  };
 
   if (loading) {
     return (
