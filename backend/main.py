@@ -5958,9 +5958,8 @@ _DSH_FIBER_STATES: Dict[int, str] = {
 
 
 def _dsh_lifecycle_events(since_ms: Optional[float] = None,
-                          until_ms: Optional[float] = None,
-                          limit: int = 500) -> List[Dict[str, Any]]:
-    """Read plugin lifecycle transitions from the sidecar, newest last.
+                          until_ms: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Read plugin lifecycle transitions from the sidecar, newest last, unclipped.
 
     The file is append-only JSONL written by the TT DSH plugin. It is read
     defensively: a missing file (plugin not installed) yields [], and a torn
@@ -5969,6 +5968,10 @@ def _dsh_lifecycle_events(since_ms: Optional[float] = None,
     `from`/`to` are Cordis FiberState values. They arrive as ints because
     FiberState is a `const enum` and inlines numerically, but the plugin writes
     the names too; we accept either and normalise to names.
+
+    Callers that need a display-sized page of events must slice the result
+    themselves; this function never truncates, since `_dsh_lifecycle_summary`
+    needs the full set to roll up true totals.
     """
     if not DSH_LIFECYCLE_FILE.exists():
         return []
@@ -6009,7 +6012,7 @@ def _dsh_lifecycle_events(since_ms: Optional[float] = None,
     except OSError:
         return []
     out.sort(key=lambda r: r["ts"])
-    return out[-limit:] if limit and len(out) > limit else out
+    return out
 
 
 def _dsh_lifecycle_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -6067,12 +6070,14 @@ async def dsh_lifecycle(session_id: Optional[str] = None, limit: int = 500):
                 since = created
             until = parsed["timestamp"].timestamp() * 1000
             correlation = "time-window"
-    events = _dsh_lifecycle_events(since_ms=since, until_ms=until, limit=limit)
+    events = _dsh_lifecycle_events(since_ms=since, until_ms=until)
+    summary = _dsh_lifecycle_summary(events)
+    page = events[-limit:] if limit and len(events) > limit else events
     return {
         "installed": DSH_LIFECYCLE_FILE.exists(),
         "correlation": correlation,
-        "events": events,
-        **_dsh_lifecycle_summary(events),
+        "events": page,
+        **summary,
     }
 
 
