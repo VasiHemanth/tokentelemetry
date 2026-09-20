@@ -121,6 +121,9 @@ def build_menu_presentation(
         resources = snapshot.get("resources")
         if not isinstance(resources, Mapping):
             continue
+        if snapshot.get("stale"):
+            # Past its freshness window; don't report it as this run's number.
+            continue
         for resource_id, resource in sorted(resources.items(), key=lambda item: str(item[0])):
             if not isinstance(resource_id, str) or not isinstance(resource, Mapping):
                 continue
