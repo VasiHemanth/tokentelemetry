@@ -1,6 +1,6 @@
 # Token Telemetry (TokenTelemetry)
 
-> **Local observability for AI coding agents and autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Muse Code, Prime Agent, Qoder, _and_ Nous Research's Hermes Agent.**
+> **Local observability for AI coding agents and autonomous agents — Claude Code, Codex, Gemini CLI, Cursor, Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Muse Code, Prime Agent, Qoder, ZCode, Kimi Code, _and_ Nous Research's Hermes Agent.**
 
 **Token Telemetry** (one word: **TokenTelemetry**) — free, open-source, 100% local.
 
@@ -61,6 +61,8 @@ TokenTelemetry reads session logs from these agents automatically.
 | **Muse Code** (Meta)        | ✅ Fully supported |
 | **Prime Agent**             | ✅ Fully supported |
 | **Qoder** (Alibaba)         | ✅ Fully supported — credits, not tokens (Qoder records none) |
+| **ZCode** (Z.ai)            | ✅ Fully supported |
+| **Kimi Code** (Moonshot AI) | ✅ Fully supported |
 
 ### Autonomous agents
 
@@ -314,7 +316,7 @@ This pattern is common when your agents (and their logs) run on a remote VPS or 
 NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
 ```
 
-The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is inherited by the Next.js dev server.
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is baked into the frontend build, so setting, changing, or clearing it triggers a rebuild on the next `./start.sh`.
 
 **On your laptop:**
 

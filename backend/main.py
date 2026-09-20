@@ -177,18 +177,87 @@ app = FastAPI(title="TokenTelemetry API")
 
 # Enable CORS for the Next.js frontend.
 #
-# We use a regex over an explicit allowlist so the frontend can pick any local
-# port (the user can pass --port to start.sh / bin/cli.js). Loopback is always
-# allowed; additional hosts (IPs / hostnames) can be opted in for remote access
-# via the TT_ALLOWED_ORIGINS env var (comma-separated) — bin/cli.js wires it up
-# from --allowed-origins. Default behavior is unchanged: loopback-only.
-def _cors_origin_regex() -> str:
-    hosts = ["localhost", r"127\.0\.0\.1"]
-    for h in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
-        h = h.strip()
+# The allowlist answers two different questions, so it is built from two
+# patterns rather than one:
+#
+#   1. Loopback, which is always allowed on any port. The user can move the
+#      frontend with --port, so the port genuinely varies and a pattern is the
+#      right tool for it.
+#   2. The hosts opted in via TT_ALLOWED_ORIGINS (comma-separated; bin/cli.js
+#      wires it up from --allowed-origins) for remote / tailnet access. This
+#      half is empty by default, so default behavior stays loopback-only.
+#
+# Keeping them apart means each half has one rule you can state in a sentence,
+# and the remote half can be absent entirely instead of being spliced into a
+# pattern that always has loopback in it.
+#
+# In every case the port is OPTIONAL. Browsers omit it from Origin when it is
+# the scheme default, so a deployment behind a proxy on :443 sends
+# "https://box.tailnet.ts.net" with no port at all; requiring ":<digits>" made
+# that origin impossible to allow, with no configuration workaround.
+
+# Loopback hosts, as they appear in an Origin header. ::1 is included so this
+# agrees with _is_loopback() below, which the auth gate uses; the two
+# disagreeing about what "loopback" means is a bug waiting to happen.
+_LOOPBACK_ORIGIN_HOSTS = ["localhost", r"127\.0\.0\.1", r"\[::1\]"]
+
+
+def _origin_host(raw: str) -> str:
+    """Normalise one TT_ALLOWED_ORIGINS entry down to a bare hostname.
+
+    The documented value is a hostname, because bin/cli.js also feeds this list
+    to Next's allowedDevOrigins and uses the first entry to build the connect /
+    QR URL. Writing a full origin ("https://box.ts.net/") is the natural
+    mistake though, and previously it was escaped verbatim into the pattern and
+    silently matched nothing. Accept both spellings and reduce them to the same
+    host. An explicit port is dropped: a listed host is allowed on any port,
+    which is the behaviour this list has always had.
+    """
+    h = raw.strip().lower()
+    if not h:
+        return ""
+    if "://" in h:
+        h = h.split("://", 1)[1]
+    h = h.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if h.startswith("["):  # bracketed IPv6 literal, e.g. [::1]:3000
+        end = h.find("]")
+        return h[: end + 1] if end != -1 else h
+    return h.split(":", 1)[0]
+
+
+def _loopback_origin_regex() -> str:
+    """Loopback on any port. Always active, never configurable."""
+    return r"^https?://(?:" + "|".join(_LOOPBACK_ORIGIN_HOSTS) + r")(?::\d+)?$"
+
+
+def _remote_origin_regex() -> Optional[str]:
+    """The TT_ALLOWED_ORIGINS hosts on any port, or None when none are set.
+
+    Entries are re.escape()d, so a dot in a hostname stays a literal dot rather
+    than becoming "any character". Without that, allowing "box.ts.net" would
+    also allow an attacker-registered "boxXtsYnet".
+    """
+    hosts = []
+    for raw in os.environ.get("TT_ALLOWED_ORIGINS", "").split(","):
+        h = _origin_host(raw)
         if h:
             hosts.append(re.escape(h))
-    return r"^https?://(" + "|".join(hosts) + r"):\d+$"
+    if not hosts:
+        return None
+    return r"^https?://(?:" + "|".join(hosts) + r")(?::\d+)?$"
+
+
+def _cors_origin_regex() -> str:
+    """The two halves joined for Starlette, which takes a single pattern.
+
+    Both halves are individually anchored, so top-level alternation between
+    them is still an exact-origin test under fullmatch().
+    """
+    parts = [_loopback_origin_regex()]
+    remote = _remote_origin_regex()
+    if remote:
+        parts.append(remote)
+    return "|".join(parts)
 
 # --- Remote-access auth gate -------------------------------------------------
 # When TT_AUTH_TOKEN is set (bin/cli.js sets it automatically for a non-loopback
@@ -296,9 +365,9 @@ PI_SESSIONS_DIR = PI_DIR / "sessions"
 # DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
 # multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
 # compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
-# session.jsonl.zstd; each file's own header carries `cwd`, so we don't need
-# to reverse DSH's lossy path-slugging to resolve the project. See
-# _scan_dsh_sessions.
+# session[.vN].jsonl.zstd; each file's own header carries `cwd`, so we don't
+# need to reverse DSH's lossy path-slugging to resolve the project. See
+# _dsh_log_in_dir and _scan_dsh_sessions.
 DSH_DIR = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")).expanduser()
 DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 # Plugin-lifecycle sidecar. DSH's persisted session log has a CLOSED vocabulary
@@ -310,6 +379,17 @@ DSH_SESSIONS_DIR = DSH_DIR / "sessions"
 # backend/omnigent_policy.py. Absent file = plugin not installed, which is the
 # normal case and must never be an error.
 DSH_LIFECYCLE_FILE = data_dir() / "dsh_lifecycle.jsonl"
+# Kimi Code (Moonshot AI, binary `kimi`) — sessions live one directory per
+# session under ~/.kimi/sessions/<workdir-hash>/<session-uuid>/: the event
+# stream is wire.jsonl (first line a {"type":"metadata"} header, then
+# {"timestamp", "message":{"type","payload"}} rows) and state.json carries the
+# title. Token usage rides on StatusUpdate payloads (payload.token_usage),
+# de-duped by payload.message_id. The bucket dir name is a hash of the work
+# dir, so the project comes from ~/.kimi/kimi.json's work_dirs registry
+# instead. ~/.kimi/credentials/ holds OAuth tokens and is never read. See
+# _scan_kimi_sessions.
+KIMI_DIR = Path(os.environ.get("KIMI_HOME") or (HOME / ".kimi")).expanduser()
+KIMI_SESSIONS_DIR = KIMI_DIR / "sessions"
 # Qoder (Alibaba) ships two surfaces over ONE set of sessions. The CLI writes
 # Claude-Code-shaped JSONL under ~/.qoder/projects/<slugged-cwd>/<uuid>.jsonl;
 # the Electron IDE keeps ~/Library/Application Support/com.qoder.app.stable/
@@ -444,6 +524,91 @@ def _opencode_db_for_session(session_id: str) -> Optional[Path]:
         except Exception:
             continue
     return None
+
+
+# ---------------------------------------------------------------------------
+# ZCode (Z.ai). OpenCode-family SQLite store: ~/.zcode/cli/db/db.sqlite.
+# Schema verified against a live install — message/part carry the SAME JSON
+# shapes as OpenCode (see _scan_zcode_sessions), so discovery mirrors the
+# OpenCode helpers with one canonical filename instead of per-channel globs.
+# ---------------------------------------------------------------------------
+
+def _zcode_db_candidates() -> List[Path]:
+    """Every plausible location of ZCode's ``cli/db/db.sqlite``.
+
+    ``ZCODE_DATA_DIR`` overrides the ``.zcode`` directory itself (same role as
+    ``OPENCODE_DATA_DIR``); relocated installs otherwise stay invisible.
+    """
+    env = os.environ.get("ZCODE_DATA_DIR")
+    if env:
+        return [Path(env).expanduser() / "cli" / "db" / "db.sqlite"]
+    return [HOME / ".zcode" / "cli" / "db" / "db.sqlite"]
+
+
+def _zcode_db_path() -> Path:
+    """First existing ZCode DB among the candidates, else the canonical
+    default (so a not-yet-created DB still has a stable path to display).
+
+    ``Path.exists()`` is wrapped in ``OSError`` like ``_opencode_db_path``:
+    on Python <=3.12 it re-raises EACCES/ESTALE/ENAMETOOLONG, and this runs
+    at module import via ``ZCODE_DB = _zcode_db_path()``, so a stale NFS
+    mount or a mode-000 ``~/.zcode`` would otherwise refuse to boot the
+    backend for every agent, not just ZCode.
+    """
+    for p in _zcode_db_candidates():
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return HOME / ".zcode" / "cli" / "db" / "db.sqlite"
+
+
+ZCODE_DB = _zcode_db_path()
+
+
+def _zcode_dbs() -> List[Path]:
+    """Every ZCode DB to actually read: the canonical store itself.
+
+    Unlike OpenCode, ZCode has no per-channel DB variants, so there is exactly
+    one. Derived from ``ZCODE_DB`` rather than re-probing the candidate dirs,
+    which keeps a monkeypatched ``ZCODE_DB`` fully in play — and the scan
+    hermetic under tests. Kept as a list so the scan loop mirrors OpenCode's.
+    ``exists()`` is OSError-guarded for the same reason as ``_opencode_dbs``.
+    """
+    out: List[Path] = []
+    seen: set = set()
+    for p in [ZCODE_DB]:
+        try:
+            if p in seen or not p.exists():
+                continue
+        except OSError:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def _zcode_db_for_session(session_id: str) -> Optional[Path]:
+    """The DB that actually holds ``session_id``, or None.
+
+    Mirrors ``_opencode_db_for_session``: session-detail endpoints must query
+    the same DB the scan found the session in, or they 404.
+    """
+    for db in _zcode_dbs():
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db), uri=True, timeout=1.0)
+            try:
+                if conn.execute("SELECT 1 FROM session WHERE id=?",
+                                (session_id,)).fetchone():
+                    return db
+            finally:
+                conn.close()
+        except Exception:
+            continue
+    return None
+
+
 # Hermes installs to ~/.hermes by default, but the agent honors HERMES_HOME for
 # users who relocate their data dir (shared hosts, containerized setups, etc.).
 # Mirror that contract so we read from wherever the agent actually writes.
@@ -2889,6 +3054,7 @@ def _list_available_agents() -> list:
     if CURSOR_DIR.exists(): agents.append("cursor")
     if VSCODE_STORAGE.exists() or COPILOT_CLI_DIR.exists(): agents.append("copilot")
     if OPENCODE_DB.exists(): agents.append("opencode")
+    if ZCODE_DB.exists(): agents.append("zcode")
     if _hermes_dbs(): agents.append("hermes")
     if GROK_SESSIONS_DIR.exists(): agents.append("grok")
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
@@ -2897,6 +3063,9 @@ def _list_available_agents() -> list:
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
     if PRIME_SESSIONS_DIR.is_dir(): agents.append("prime")
     if DSH_DIR.exists(): agents.append("dsh")
+    # sessions/, not the root: the installer creates ~/.kimi ahead of the first
+    # session, so the root alone would advertise an empty agent.
+    if KIMI_SESSIONS_DIR.is_dir(): agents.append("kimi")
     # projects/, not the root: Qoder's installer creates ~/.qoder before the
     # first session exists, so the root alone would advertise an empty agent.
     if QODER_PROJECTS_DIR.is_dir(): agents.append("qoder")
@@ -3878,6 +4047,7 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
     db_path = CLINE_DIR / "data" / "db" / "sessions.db"
     if db_path.exists():
         rows = []
+        _cline_db_ok = False
         try:
             uri = _sqlite_ro_uri(db_path)
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -3888,10 +4058,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
                 # columns are read defensively below rather than erroring the
                 # whole query to an empty result.
                 rows = conn.execute("SELECT * FROM sessions").fetchall()
+                _cline_db_ok = True
             finally:
                 conn.close()
-        except Exception:
-            rows = []
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.cline").warning(
+                "Cline SQLite scan failed (%s): %s", db_path.name, _exc, exc_info=True
+            )
 
         # Cline spawns subagents/teams: each subagent is its OWN row with
         # is_subagent=1 and parent_session_id set, while the parent's
@@ -3902,11 +4076,14 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
         # rows. Leaf/standalone sessions have usage == aggregateUsage.
         def _row_get(r, k, default=None):
             return r[k] if k in r.keys() else default
-        parents_with_children = {
-            _row_get(r, "parent_session_id")
-            for r in rows
-            if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
-        }
+        if _cline_db_ok:
+            parents_with_children = {
+                _row_get(r, "parent_session_id")
+                for r in rows
+                if _row_get(r, "is_subagent") and _row_get(r, "parent_session_id")
+            }
+        else:
+            parents_with_children = set()
 
         for row in rows:
             sid = row["session_id"]
@@ -4281,8 +4458,72 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+# DSH gives every session-format generation its own immutable log file
+# (packages/session/session-format/src/filename.ts): generation 0 is
+# `session.jsonl`, later ones `session.vN.jsonl`. When DSH upgrades its format
+# it writes the new generation beside the old file instead of rewriting it, so
+# one session directory can hold both and only the highest generation is
+# current. Reading the v0 name alone silently drops every session written after
+# the upgrade.
+_DSH_LOG_NAME = re.compile(r"^session(?:\.v([1-9][0-9]*))?\.jsonl\.zstd$")
+
+
+def _dsh_log_in_dir(sess_dir: Path) -> Optional[Path]:
+    """Return the highest-generation log in one DSH session directory."""
+    best: Optional[Path] = None
+    best_gen = -1
+    try:
+        entries = list(sess_dir.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        m = _DSH_LOG_NAME.match(entry.name)
+        if not m:
+            continue
+        gen = int(m.group(1)) if m.group(1) else 0
+        if gen > best_gen:
+            best, best_gen = entry, gen
+    return best
+
+
+def _dsh_session_logs() -> List[Path]:
+    """One current log per DSH session directory (see _dsh_log_in_dir)."""
+    if not DSH_SESSIONS_DIR.exists():
+        return []
+    logs: List[Path] = []
+    for sess_dir in DSH_SESSIONS_DIR.glob("*/*"):
+        if sess_dir.is_dir():
+            log = _dsh_log_in_dir(sess_dir)
+            if log is not None:
+                logs.append(log)
+    return logs
+
+
+def _dsh_expand_streams(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Unfold v3's embedded stream records into legacy `assistant/chunk` rows.
+
+    Through format v2 each streaming chunk was its own `assistant/chunk` event.
+    v3 stops logging them separately and embeds the step's records in
+    `assistant/message.data.stream`, each with its own arrival `time`. Emitting
+    them as chunk rows just ahead of the message keeps one code path for both
+    formats: TTFT and throughput read the real chunk times, and the message's
+    `usage` still lands last for its (turn, step), so usage is not doubled.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        data = row.get("data")
+        if row.get("type") == "assistant/message" and isinstance(data, dict):
+            for rec in data.get("stream") or []:
+                if isinstance(rec, dict) and rec.get("type") == "chunk":
+                    out.append({"type": "assistant/chunk", "time": rec.get("time"),
+                                "data": {"turn": data.get("turn"), "step": data.get("step"),
+                                         "chunk": rec.get("chunk")}})
+        out.append(row)
+    return out
+
+
 def _dsh_read_events(path: Path) -> Optional[List[Dict[str, Any]]]:
-    """Decompress + parse one DSH session.jsonl.zstd into JSON rows.
+    """Decompress + parse one DSH session log (any generation) into JSON rows.
 
     Returns None if the optional `zstandard` dependency isn't installed or the
     file can't be read/decoded -- callers must treat that as "skip this
@@ -4344,7 +4585,10 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(sid, str) or not sid:
         return None
 
-    usage_by_step: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    # Keyed by (turn, step), plus (turn, step, "attempt", n) for failed attempts
+    # (see the assistant/attempt branch below).
+    usage_by_step: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    attempts_seen = 0
     cur_provider = cur_model = None
     last_provider = last_model = None
     display = None
@@ -4389,7 +4633,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
     tool_ms_total = 0.0
     turns = steps = 0
 
-    for row in rows[1:]:
+    for row in _dsh_expand_streams(rows[1:]):
         rtype = row.get("type")
         data = row.get("data")
         if not isinstance(data, dict):
@@ -4494,6 +4738,30 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
                 usage_by_step[key] = {**usage, "provider": msg_provider, "model": msg_model}
                 last_provider, last_model = msg_provider, msg_model
 
+        elif rtype == "assistant/attempt":
+            # v3: a model attempt that committed no message (failed, retried or
+            # cancelled). Whatever it reported is spend on top of the step's
+            # eventual successful message, so it gets its own key instead of
+            # being overwritten by that message. Its chunks are left out of
+            # the latency figures: a rate-limited attempt that fails in 1ms is
+            # not a time-to-first-token. A zero-usage attempt is still recorded
+            # under the step key (a later message replaces it), so a session
+            # whose every attempt failed keeps the model it tried, as it did
+            # when failed attempts were plain assistant/chunk events.
+            attempts_seen += 1
+            step_key = (data.get("turn"), data.get("step"))
+            for rec in data.get("stream") or []:
+                chunk = rec.get("chunk") if isinstance(rec, dict) else None
+                if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                    usage = chunk.get("usage") or {}
+                    entry = {**usage, "provider": cur_provider, "model": cur_model}
+                    if any(int(usage.get(f) or 0) for f in ("inputTokens", "outputTokens",
+                                                            "cacheReadTokens", "cacheWriteTokens")):
+                        usage_by_step[step_key + ("attempt", attempts_seen)] = entry
+                    else:
+                        usage_by_step.setdefault(step_key, entry)
+                    last_provider, last_model = cur_provider, cur_model
+
     tokens = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "reasoning": 0, "total": 0}
     # Resolve the session timestamp BEFORE the cost loop: calculate_cost prices
     # date-banded models by when the tokens were generated, and `ts` used to be
@@ -4578,7 +4846,7 @@ def _dsh_parse_session(path: Path) -> Optional[Dict[str, Any]]:
 def _scan_dsh_sessions() -> List[Dict[str, Any]]:
     """Scan DeepSeek Harness (DSH) sessions under ~/.dsh/sessions/.
 
-    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session.jsonl.zstd
+    Layout: ~/.dsh/sessions/<slugged-cwd>/<session-<uuid> | <uuid>>/session[.vN].jsonl.zstd
     Each file's own header carries `cwd`, so we glob for session files directly
     rather than reversing DSH's lossy (251-char-truncated) path slug. Requires
     the optional `zstandard` dependency; DSH is skipped silently, like any
@@ -4600,7 +4868,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
     aliases = _load_project_aliases()
 
     by_id: Dict[str, Dict[str, Any]] = {}
-    for sess_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+    for sess_file in _dsh_session_logs():
         parsed = _dsh_parse_session(sess_file)
         if parsed:
             by_id[parsed["id"]] = parsed
@@ -4656,7 +4924,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
             "plans": [],
             "model": parsed["model"],
             "provider": parsed["provider"],
-            "artifacts": [{"name": "session.jsonl.zstd", "path": str(parsed["path"]), "type": "document"}],
+            "artifacts": [{"name": parsed["path"].name, "path": str(parsed["path"]), "type": "document"}],
             "cost": parsed["cost"],
             # Runtime capability set, read from this session's own log -- DSH
             # resolves skills/plugins/tools dynamically, so these are per-session
@@ -4678,6 +4946,289 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
         out.append(sess)
 
     return out
+
+
+# ------------------------------------------------------------- Kimi Code --
+
+def _kimi_default_model() -> str:
+    """Model name from ~/.kimi/config.toml. `default_model` is a display id
+    (e.g. "kimi-code/kimi-for-coding") that resolves through
+    [models."<id>"].model to the API model id; wire.jsonl never records the
+    model, so this config value is the only on-disk source. Falls back to
+    "kimi-for-coding" when absent or unreadable."""
+    try:
+        import tomllib
+        with open(KIMI_DIR / "config.toml", "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        return "kimi-for-coding"
+    if not isinstance(data, dict):
+        return "kimi-for-coding"
+    models = data.get("models")
+    model = data.get("default_model")
+    if not (isinstance(model, str) and model):
+        if isinstance(models, dict):
+            model = models.get("default_model")
+    if not (isinstance(model, str) and model):
+        return "kimi-for-coding"
+    entry = models.get(model) if isinstance(models, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"]:
+        return entry["model"]
+    return model
+
+
+def _kimi_project_by_session() -> Dict[str, str]:
+    """Map Kimi session IDs and work-directory bucket hashes to project paths."""
+    try:
+        data = json.loads((KIMI_DIR / "kimi.json").read_text(
+            encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
+    out: Dict[str, str] = {}
+    for wd in (data.get("work_dirs") or []) if isinstance(data, dict) else []:
+        if isinstance(wd, dict) and wd.get("path"):
+            path = str(wd["path"])
+            out[hashlib.md5(path.encode()).hexdigest()] = path
+            if wd.get("last_session_id"):
+                out[str(wd["last_session_id"])] = path
+    return out
+
+
+def _scan_kimi_sessions() -> List[Dict[str, Any]]:
+    """Scan Kimi Code sessions under ~/.kimi/sessions/<workdir-hash>/<uuid>/.
+
+    wire.jsonl opens with {"type":"metadata","protocol_version":...}, then
+    {"timestamp": <epoch float>, "message": {"type", "payload"}} rows. Token
+    usage lives in StatusUpdate messages: payload.token_usage = {input_other,
+    output, input_cache_read, input_cache_creation}, and each StatusUpdate
+    carries a unique payload.message_id — the same usage sample can appear more
+    than once, so we de-dupe by message_id before summing. state.json's
+    custom_title is the display name; the first TurnBegin user text is the
+    fallback. Sessions with no wire.jsonl (or an unreadable one) are skipped,
+    never an error.
+    """
+    if not KIMI_SESSIONS_DIR.is_dir():
+        return []
+
+    aliases = _load_project_aliases()
+    projects = _kimi_project_by_session()
+    model = _kimi_default_model()
+
+    out: List[Dict[str, Any]] = []
+    for wire in KIMI_SESSIONS_DIR.glob("*/*/wire.jsonl"):
+        try:
+            sid = wire.parent.name
+            tokens = {"input": 0, "output": 0, "cached": 0,
+                      "cache_creation": 0, "total": 0}
+            seen_usage: set = set()
+            display = None
+            last_ts = None
+            num_status = 0
+            protocol_version = None
+            tool_counts: Dict[str, int] = {}
+
+            with open(wire, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("type") == "metadata":
+                        protocol_version = row.get("protocol_version") or protocol_version
+                        continue
+
+                    ts_raw = row.get("timestamp")
+                    if isinstance(ts_raw, (int, float)):
+                        try:
+                            _ts = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+                            if last_ts is None or _ts > last_ts:
+                                last_ts = _ts
+                        except Exception:
+                            pass
+
+                    msg = row.get("message")
+                    if not isinstance(msg, dict):
+                        continue
+                    mtype = msg.get("type")
+                    payload = msg.get("payload")
+                    if not isinstance(payload, dict):
+                        payload = {}
+
+                    if mtype == "StatusUpdate":
+                        usage = payload.get("token_usage")
+                        mid = payload.get("message_id")
+                        if isinstance(usage, dict) and mid and mid not in seen_usage:
+                            seen_usage.add(mid)
+                            num_status += 1
+                            tokens["input"] += usage.get("input_other", 0) or 0
+                            tokens["output"] += usage.get("output", 0) or 0
+                            tokens["cached"] += usage.get("input_cache_read", 0) or 0
+                            tokens["cache_creation"] += usage.get("input_cache_creation", 0) or 0
+
+                    elif mtype == "TurnBegin" and display is None:
+                        for part in (payload.get("user_input") or []):
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                preview = _strip_context_tags(str(part.get("text") or "")).strip()
+                                if preview:
+                                    display = preview[:120]
+                                    break
+
+                    elif mtype == "ToolCall":
+                        _count_tool(tool_counts,
+                                    payload.get("tool_name") or payload.get("name"))
+
+            # state.json's custom_title beats the first-prompt fallback.
+            try:
+                state = json.loads((wire.parent / "state.json").read_text(
+                    encoding="utf-8", errors="replace"))
+                if isinstance(state, dict) and state.get("custom_title"):
+                    display = str(state["custom_title"])[:120]
+            except Exception:
+                pass
+
+            ts = last_ts or _file_mtime_utc(wire)
+            tokens["total"] = (tokens["input"] + tokens["output"]
+                               + tokens["cached"] + tokens["cache_creation"])
+            cost = calculate_cost(
+                model, tokens["input"], tokens["output"], tokens["cached"],
+                cache_creation_tokens=tokens["cache_creation"], at=ts)
+            tokens["cost"] = cost
+
+            sess = {
+                "id": sid,
+                "agent": "kimi",
+                "project": aliases.get(
+                    projects.get(sid) or projects.get(wire.parent.parent.name, ""),
+                    projects.get(sid) or projects.get(wire.parent.parent.name, "unknown")),
+                "timestamp": ts,
+                "display": display or f"Kimi Code session {sid[:8]}",
+                "text": display,
+                "tokens": tokens,
+                "mcp_tools": [t for t in tool_counts
+                              if isinstance(t, str) and t.startswith("mcp")],
+                "has_plan": False,
+                "plans": [],
+                "model": model,
+                "artifacts": [{"name": "wire.jsonl", "path": str(wire),
+                               "type": "document"}],
+                "cost": cost,
+                "kimi": {
+                    "protocol_version": protocol_version,
+                    "num_status_updates": num_status,
+                },
+            }
+            _attach_tool_usage(sess, tool_counts)
+            out.append(sess)
+        except Exception:
+            continue
+
+    return out
+
+
+def _kimi_session_file(session_id: str) -> Optional[Path]:
+    """Locate one Kimi Code wire.jsonl by session id. The session dir IS the
+    id, so a direct glob resolves it without reversing the work-dir hash."""
+    if not KIMI_SESSIONS_DIR.is_dir() or not session_id or "/" in session_id:
+        return None
+    for match in KIMI_SESSIONS_DIR.glob(f"*/{session_id}/wire.jsonl"):
+        return match
+    return None
+
+
+def _kimi_trace_events(path: Path) -> List[Dict[str, Any]]:
+    """Normalize a Kimi Code wire.jsonl into the shared Claude-shaped trace
+    events the EventCard renderer expects (same contract as the pi branch).
+
+    Only conversation rows are surfaced: TurnBegin (user text), ContentPart
+    (assistant text/thinking), ToolCall and ToolResult. StatusUpdate/StepBegin/
+    TurnEnd carry no conversation and are dropped. Payload shapes beyond the
+    documented ones are read defensively — an unknown row is skipped, never an
+    error.
+    """
+    events: List[Dict[str, Any]] = []
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return events
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(row, dict):
+                continue
+            msg = row.get("message")
+            if not isinstance(msg, dict):
+                continue
+            mtype = msg.get("type")
+            payload = msg.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            norm: Optional[Dict[str, Any]] = None
+
+            if mtype == "TurnBegin":
+                text = "".join(
+                    str(p.get("text") or "") for p in (payload.get("user_input") or [])
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+                if text.strip():
+                    norm = {"type": "user", "message": {"role": "user",
+                            "content": [{"type": "text", "text": text}]}}
+
+            elif mtype == "ContentPart":
+                part = payload.get("part") if isinstance(payload.get("part"), dict) else payload
+                ptype = part.get("type")
+                txt = part.get("text") or part.get("thinking") or ""
+                if isinstance(txt, str) and txt.strip():
+                    if ptype in ("think", "thinking"):
+                        norm = {"type": "assistant", "message": {"role": "assistant",
+                                "content": [{"type": "thinking", "thinking": txt}]}}
+                    else:
+                        norm = {"type": "assistant", "message": {"role": "assistant",
+                                "content": [{"type": "text", "text": txt}]}}
+
+            elif mtype == "ToolCall":
+                norm = {"type": "assistant", "message": {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": payload.get("tool_call_id") or payload.get("id"),
+                    "name": payload.get("tool_name") or payload.get("name"),
+                    "input": payload.get("arguments") or payload.get("input") or {},
+                }]}}
+
+            elif mtype == "ToolResult":
+                content = payload.get("content") or payload.get("result") or ""
+                if isinstance(content, list):
+                    content = "".join(
+                        str(c.get("text") or "") for c in content
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                norm = {"type": "user", "message": {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": payload.get("tool_call_id") or payload.get("id"),
+                    "content": content if isinstance(content, str) else str(content),
+                }]}}
+
+            if norm is None:
+                continue
+            ts_raw = row.get("timestamp")
+            if isinstance(ts_raw, (int, float)):
+                try:
+                    norm["normalized_timestamp"] = datetime.fromtimestamp(
+                        ts_raw, tz=timezone.utc).timestamp() * 1000
+                except Exception:
+                    pass
+            norm.setdefault("normalized_timestamp", len(events) * 1000)
+            events.append(norm)
+    return events
 
 
 # ------------------------------------------------------------------ Qoder --
@@ -5126,6 +5677,199 @@ def _scan_qoder_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+def _scan_zcode_sessions() -> List[Dict[str, Any]]:
+    """Scan ZCode (Z.ai) sessions from its SQLite store (~/.zcode/cli/db/db.sqlite).
+
+    message/part carry the SAME JSON shapes as OpenCode: step-finish parts hold
+    {input, output, reasoning, cache{read, write}} with input INCLUSIVE of
+    cache.read and output INCLUSIVE of reasoning. Input is stored NET of
+    cache.read (and ``tokens["total"]`` is built from that net) so
+    ``calculate_cost`` does not double-bill cache reads — every other caller
+    nets first. OpenCode's scanner still passes the gross input today
+    (tracked as a follow-up; do not "fix" both silently or the two agents'
+    historical numbers diverge mid-release for different reasons).
+    message.data.cost stays 0 under coding-plan billing — cost comes from
+    calculate_cost. Children (session.parent_id) are already full sessions:
+    annotate the parent, never re-sum (count-once invariant).
+    """
+    aliases = _load_project_aliases()
+    sessions: List[Dict[str, Any]] = []
+    _zc_seen_ids: set = set()
+    zc_parent_of: Dict[str, str] = {}
+    for _zc_db in _zcode_dbs():
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                # Schema drift gate (ZCode versions tables in and out, like
+                # OpenCode): detect what exists so one missing peripheral
+                # table can't wipe out every session.
+                try:
+                    _tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'")}
+                except Exception:
+                    _tables = set()
+                try:
+                    _sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+                except Exception:
+                    _sess_cols = set()
+                _has_parent = "parent_id" in _sess_cols
+                _parent_sel = ", parent_id" if _has_parent else ""
+                # Some providers store the model only on the session row, not
+                # on assistant messages (OpenCode issue #39 shape).
+                _has_sess_model = "model" in _sess_cols
+                zc_by_id: Dict[str, Dict[str, Any]] = {}
+                rows = conn.execute(
+                    "SELECT id, directory, title, time_created, time_updated"
+                    f"{_parent_sel} FROM session").fetchall()
+                for srow in rows:
+                    sid = srow["id"]
+                    if sid in _zc_seen_ids:
+                        continue
+                    _zc_seen_ids.add(sid)
+                    ts = datetime.fromtimestamp(
+                        (srow["time_updated"] or srow["time_created"] or 0) / 1000,
+                        tz=timezone.utc)
+                    tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+                    model = None
+                    provider_id = None
+                    models_used: List[str] = []
+                    first_user = ""
+                    mcp_tools: List[str] = []
+                    zc_tool_counts: Dict[str, int] = {}
+                    has_plan = False
+                    plans: List[Dict[str, Any]] = []
+                    # Model, provider, plan-mode from assistant messages.
+                    for mrow in conn.execute(
+                            "SELECT data FROM message WHERE session_id=? ORDER BY time_created",
+                            (sid,)):
+                        try:
+                            mdata = json.loads(mrow["data"] or "{}")
+                        except Exception:
+                            continue
+                        if mdata.get("role") != "assistant":
+                            continue
+                        if not provider_id:
+                            provider_id = mdata.get("providerID")
+                        if not model:
+                            model = mdata.get("modelID") or mdata.get("providerID")
+                            if not model:
+                                model = _opencode_resolve_model(mdata.get("model"))
+                        _mm = mdata.get("modelID") or _opencode_resolve_model(mdata.get("model"))
+                        if _mm and _mm not in models_used:
+                            models_used.append(_mm)
+                        if mdata.get("mode") == "plan":
+                            has_plan = True
+                    if not model and _has_sess_model:
+                        try:
+                            mrow = conn.execute("SELECT model FROM session WHERE id=?", (sid,)).fetchone()
+                            if mrow is not None:
+                                model = _opencode_resolve_model(mrow["model"])
+                        except Exception:
+                            pass
+                    if not model:
+                        # No assistant message yet (fresh/degenerate session) —
+                        # fall back to any message's model, else None (cost 0).
+                        for mrow in conn.execute(
+                                "SELECT data FROM message WHERE session_id=? ORDER BY time_created",
+                                (sid,)):
+                            try:
+                                mdata = json.loads(mrow["data"] or "{}")
+                            except Exception:
+                                continue
+                            model = (_opencode_resolve_model(mdata.get("model"))
+                                     or mdata.get("modelID") or mdata.get("providerID"))
+                            if model:
+                                break
+                    if model and model not in models_used:
+                        models_used.insert(0, model)
+                    # Parts: first user text, tool names, token totals.
+                    for prow in conn.execute(
+                            "SELECT data FROM part WHERE session_id=? ORDER BY time_created",
+                            (sid,)):
+                        try:
+                            pdata = json.loads(prow["data"] or "{}")
+                        except Exception:
+                            continue
+                        ptype = pdata.get("type")
+                        if ptype == "text" and not first_user:
+                            txt = _strip_context_tags(pdata.get("text") or "")
+                            if txt:
+                                first_user = txt
+                        if ptype == "tool":
+                            tname = pdata.get("tool")
+                            if tname and tname not in mcp_tools:
+                                mcp_tools.append(tname)
+                            _count_tool(zc_tool_counts, tname)
+                        if ptype == "step-finish":
+                            tk = pdata.get("tokens") or {}
+                            cache = tk.get("cache") or {}
+                            # step-finish `input` is GROSS (includes cache.read);
+                            # calculate_cost expects NET input and adds cached
+                            # on top, so subtract before accumulating.
+                            gross_input = tk.get("input", 0) or 0
+                            cache_read = cache.get("read", 0) or 0
+                            tokens["input"] += max(0, gross_input - cache_read)
+                            tokens["output"] += tk.get("output", 0) or 0
+                            tokens["cached"] = max(tokens["cached"], cache_read)
+                            # cache writes ARE billed per event → cumulative.
+                            tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
+                    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                    tokens["cost"] = calculate_cost(
+                        model, tokens["input"], tokens["output"], tokens["cached"],
+                        cache_creation_tokens=tokens.get("cache_creation", 0),
+                        provider=provider_id, at=ts)
+                    title = srow["title"] or ""
+                    display = (first_user or title)[:100]
+                    todo_rows = (conn.execute(
+                        "SELECT content, status FROM todo WHERE session_id=? ORDER BY position",
+                        (sid,)).fetchall() if "todo" in _tables else [])
+                    if todo_rows:
+                        has_plan = True
+                        plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
+                        plans.append({"session_id": sid, "agent": "zcode",
+                                      "timestamp": ts, "content": plan_text})
+                    directory = srow["directory"] or "unknown"
+                    zc_sess = {
+                        "id": sid, "agent": "zcode",
+                        "project": aliases.get(directory, directory),
+                        "timestamp": ts, "display": display, "tokens": tokens,
+                        "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans,
+                        "model": model, "models_used": models_used, "artifacts": [],
+                        # providerID is ZCode's billing runtime ("builtin:zai-start-plan",
+                        # "builtin:zai-coding-plan") — exposed like OpenCode's "ollama".
+                        "provider": provider_id, "cost": tokens["cost"],
+                    }
+                    if _has_parent and srow["parent_id"]:
+                        zc_sess["parent_session_id"] = srow["parent_id"]
+                        zc_parent_of[sid] = srow["parent_id"]
+                    _attach_tool_usage(zc_sess, zc_tool_counts)
+                    zc_by_id[sid] = zc_sess
+                    sessions.append(zc_sess)
+                # Annotate parents with their children (display-only; the
+                # children's tokens are already counted as their own sessions).
+                for child_id, parent_id in zc_parent_of.items():
+                    parent = zc_by_id.get(parent_id)
+                    if parent is None:
+                        continue
+                    parent.setdefault("child_session_ids", []).append(child_id)
+                for zc_sess in zc_by_id.values():
+                    kids = zc_sess.get("child_session_ids") or []
+                    if kids:
+                        zc_sess["delegation"] = {"supported": True, "tokens_recorded": False,
+                                                 "linked_children": len(kids)}
+            finally:
+                conn.close()
+        except Exception as e:
+            # Don't let a schema/lock hiccup silently erase the whole agent —
+            # log it at debug so "no ZCode sessions" is diagnosable instead of
+            # invisible (same failure mode as OpenCode's discussion #170).
+            import logging
+            logging.getLogger("tokentelemetry.zcode").debug(
+                "ZCode scan skipped (%s): %r", _zc_db, e)
+    return sessions
+
+
 def _qoder_session_file(session_id: str) -> Optional[Path]:
     """Locate one Qoder transcript by session id."""
     if not QODER_PROJECTS_DIR.is_dir() or not session_id:
@@ -5337,8 +6081,11 @@ def _dsh_session_file(session_id: str) -> Optional[Path]:
     direct glob resolves it without reversing DSH's lossy cwd slug."""
     if not DSH_SESSIONS_DIR.exists() or not session_id or "/" in session_id:
         return None
-    for match in DSH_SESSIONS_DIR.glob(f"*/{session_id}/session.jsonl.zstd"):
-        return match
+    for sess_dir in DSH_SESSIONS_DIR.glob(f"*/{session_id}"):
+        if sess_dir.is_dir():
+            log = _dsh_log_in_dir(sess_dir)
+            if log is not None:
+                return log
     return None
 
 
@@ -5688,6 +6435,9 @@ _BUILTIN_CLI_COMMANDS = {
     "migrate-installer", "model", "output-style", "permissions", "plan", "plugin",
     "privacy-settings", "quit", "release-notes", "resume", "rewind", "status",
     "statusline", "terminal-setup", "theme", "todos", "upgrade", "usage", "vim",
+    # Newer built-ins seen as <command-name> tags in real transcripts.
+    "advisor", "autocompact", "effort", "feedback", "goal", "remote-control",
+    "rename", "skills", "teleport", "voice",
 }
 
 
@@ -5786,18 +6536,65 @@ def _mcp_usage_from_counts(tool_counts: Dict[str, int]) -> Dict[str, Dict[str, i
     return out
 
 
+def _errored_tool_use_ids(content: Any) -> List[str]:
+    """tool_use ids whose tool_result in this user-record content is_error."""
+    if not isinstance(content, list):
+        return []
+    return [b["tool_use_id"] for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+            and b.get("is_error") is True and b.get("tool_use_id")]
+
+
+def _plugin_of(name: Any) -> Optional[str]:
+    """Owning Claude Code plugin of a skill, subagent type or MCP server name.
+
+    Claude Code namespaces plugin-provided pieces two ways (verified in real
+    transcripts): skills and subagent types as "<plugin>:<name>"
+    ("grok:grok-rescue"), and MCP servers as "plugin_<plugin>_<server>" inside
+    the tool name ("mcp__plugin_grok_grok__grok_search" -> server
+    "plugin_grok_grok"). The server form is ambiguous when a name contains an
+    underscore; the common case is a plugin whose one server shares its name,
+    so a symmetric split wins, else the first underscore. None = not a plugin.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    if name.startswith("plugin_"):
+        rest = name[len("plugin_"):]
+        half = (len(rest) - 1) // 2
+        if len(rest) % 2 == 1 and rest[half] == "_" and rest[:half] == rest[half + 1:]:
+            return rest[:half] or None
+        return rest.split("_", 1)[0] or None
+    if ":" in name:
+        return name.split(":", 1)[0] or None
+    return None
+
+
 def _attach_tool_usage(sess: Dict[str, Any], tool_counts: Dict[str, int],
-                       skill_counts: Optional[Dict[str, int]] = None) -> None:
+                       skill_counts: Optional[Dict[str, int]] = None,
+                       tool_errors: Optional[Dict[str, int]] = None,
+                       skill_errors: Optional[Dict[str, int]] = None) -> None:
     """Attach tool_counts / mcp_usage / skills_used to a session dict (only when
-    non-empty, so agents without the signal simply lack the keys)."""
+    non-empty, so agents without the signal simply lack the keys).
+
+    ``tool_errors`` counts tool calls whose result came back is_error, keyed
+    like ``tool_counts``; it also yields ``mcp_errors`` (same shape as
+    ``mcp_usage``). ``skill_errors`` adds an ``errors`` count to the matching
+    ``skills_used`` entry. A call that failed is still a call, so the usage
+    counts include it."""
     if tool_counts:
         sess["tool_counts"] = tool_counts
         mcp = _mcp_usage_from_counts(tool_counts)
         if mcp:
             sess["mcp_usage"] = mcp
+    if tool_errors:
+        sess["tool_errors"] = tool_errors
+        mcp_err = _mcp_usage_from_counts(tool_errors)
+        if mcp_err:
+            sess["mcp_errors"] = mcp_err
     if skill_counts:
+        skill_errors = skill_errors or {}
         sess["skills_used"] = [
-            {"name": k, "count": v}
+            {"name": k, "count": v, **({"errors": skill_errors[k]} if skill_errors.get(k) else {})}
             for k, v in sorted(skill_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ]
 
@@ -5825,6 +6622,8 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     seen_message_ids: set = set()
+    tool_use_ids: set = set()
+    errored_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -5841,9 +6640,15 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                     if first_ts is None:
                         first_ts = ts
                     last_ts = ts
+                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                if data.get("type") == "user":
+                    errored_ids.update(_errored_tool_use_ids(msg.get("content")))
+                    continue
                 if data.get("type") != "assistant":
                     continue
-                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                for item in msg.get("content") or []:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("id"):
+                        tool_use_ids.add(item["id"])
                 m = msg.get("model")
                 if m and m != "<synthetic>" and not model:
                     model = m
@@ -5896,6 +6701,18 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
         "duration_ms": (round((ended - started).total_seconds() * 1000)
                         if started and ended else None),
     }
+    # A subagent's own failures never reach the parent transcript: a
+    # background spawn's Agent result is just "launched", so a plugin agent
+    # whose only call died (grok:grok-rescue on a broken sandbox) would read
+    # as a normal run. Count its errored tool results here; when every call
+    # it made failed, the run as a whole failed.
+    tool_errors = len(errored_ids & tool_use_ids)
+    if tool_use_ids:
+        entry["tool_calls"] = len(tool_use_ids)
+    if tool_errors:
+        entry["tool_errors"] = tool_errors
+        if tool_errors == len(tool_use_ids):
+            entry["status"] = "failed"
     if extra:
         entry.update(extra)
     return entry
@@ -6022,6 +6839,11 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         bt["count"] += 1
         bt["total"] += e["tokens"]["total"]
         bt["cost"] = round(bt["cost"] + (e["cost"] or 0), 6)
+        # Only-if-present, like the session-level usage keys.
+        if e.get("status") == "failed":
+            bt["failed"] = bt.get("failed", 0) + 1
+        if e.get("tool_errors"):
+            bt["tool_errors"] = bt.get("tool_errors", 0) + e["tool_errors"]
         # Subagents can run a different model than their parent (e.g. Explore on
         # Haiku under an Opus session) — keyed here so folding delegated cost
         # into the global by_model breakdown attributes it to the right model
@@ -6382,7 +7204,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
     "delegation", "delegated_cost", "delegated_by_model", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts", "goals", "untracked_background",
+    "tool_errors", "mcp_errors", "loop", "published_artifacts", "goals", "untracked_background",
 )
 
 
@@ -6609,6 +7431,8 @@ def _scan_sessions_sync():
                 else:
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
+                    tool_use_names: Dict[str, Tuple[str, Optional[str]]] = {}  # tool_use id -> (tool, skill)
+                    errored_tool_use_ids: set = set()        # tool_use ids whose result is_error
                     last_real_ts = None
                     loop_sched: List[Dict[str, Any]] = []   # scheduling tool calls (CronCreate/ScheduleWakeup)
                     loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
@@ -6706,10 +7530,13 @@ def _scan_sessions_sync():
                                             tool = item.get("name")
                                             if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                             _count_tool(tool_counts, tool)
+                                            skill = None
                                             if tool == "Skill":
                                                 skill = (item.get("input") or {}).get("skill")
                                                 if skill:
                                                     skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                                            if tool and item.get("id"):
+                                                tool_use_names[item["id"]] = (tool, skill)
                                             if tool == "ExitPlanMode":
                                                 plan_text = (item.get("input") or {}).get("plan") or ""
                                                 if plan_text:
@@ -6780,7 +7607,15 @@ def _scan_sessions_sync():
                                             _goal_block_now = True
                                     if "/plan" in str(u_content):
                                         sess["has_plan"] = True
-                                    for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
+                                    errored_tool_use_ids.update(_errored_tool_use_ids(u_content))
+                                    # Slash-command tags only from what the user sent: a
+                                    # tool_result that quotes a transcript (or this code)
+                                    # carries the same tag and is not an invocation.
+                                    _cmd_text = u_content if isinstance(u_content, str) else " ".join(
+                                        b.get("text", "") for b in u_content
+                                        if isinstance(b, dict) and b.get("type") == "text"
+                                    ) if isinstance(u_content, list) else ""
+                                    for cmd in _COMMAND_NAME_RE.findall(_cmd_text):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
                                     # Published Claude artifacts: pair each Artifact tool_use with
@@ -6939,7 +7774,16 @@ def _scan_sessions_sync():
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
-                    _attach_tool_usage(sess, tool_counts, skill_counts)
+                    tool_errors: Dict[str, int] = {}
+                    skill_errors: Dict[str, int] = {}
+                    for _tid in errored_tool_use_ids:
+                        _named = tool_use_names.get(_tid)
+                        if not _named:
+                            continue
+                        _count_tool(tool_errors, _named[0])
+                        if _named[1]:
+                            skill_errors[_named[1]] = skill_errors.get(_named[1], 0) + 1
+                    _attach_tool_usage(sess, tool_counts, skill_counts, tool_errors, skill_errors)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
                         "supported": True,
@@ -7022,6 +7866,7 @@ def _scan_sessions_sync():
             codex_site_calls: Dict[str, Dict[str, str]] = {}
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
+            _read_ok = False  # True once at least one rollout file is opened successfully
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -7055,6 +7900,7 @@ def _scan_sessions_sync():
             for rollout_file in rollout_files:
                 try:
                     with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
+                        _read_ok = True
                         for line in f:
                             try:
                                 data = json.loads(line)
@@ -7205,7 +8051,11 @@ def _scan_sessions_sync():
                                                 sess["has_plan"] = True
                                                 sess["plans"].append({"session_id": sid, "agent": "codex", "timestamp": sess["timestamp"], "content": content})
                                         except Exception: pass
-                except Exception: pass
+                except Exception as _exc:
+                    import logging
+                    logging.getLogger("tokentelemetry.codex").warning(
+                        "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
+                    )
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
@@ -7239,7 +8089,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None:
+            if source_mtime is not None and _read_ok:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():
@@ -8078,6 +8928,9 @@ def _scan_sessions_sync():
             logging.getLogger("tokentelemetry.opencode").debug(
                 "OpenCode scan skipped (%s): %r", _oc_db, e)
 
+    # 8a. ZCode (Z.ai) — OpenCode-family SQLite under ~/.zcode/cli/db/.
+    sessions.extend(_scan_zcode_sessions())
+
     # 8. Grok Build (xAI) — rich per-session directory with events, updates, chat history
     sessions.extend(_scan_grok_sessions())
 
@@ -8093,6 +8946,9 @@ def _scan_sessions_sync():
     # 8b4. Qoder — Claude-shaped JSONL under ~/.qoder/projects/. Bills in
     # credits and records no token counts at all; see _scan_qoder_sessions.
     sessions.extend(_scan_qoder_sessions())
+
+    # 8b5. Kimi Code — per-session wire.jsonl under ~/.kimi/sessions/
+    sessions.extend(_scan_kimi_sessions())
 
     # 8c. Meta Muse Code + Prime Agent. Their root session records contain the
     # cwd, so they naturally participate in project/worktree navigation.
@@ -8295,8 +9151,12 @@ def _scan_sessions_sync():
                     sessions.append(hermes_by_id[sid])
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.hermes").warning(
+                "Hermes SQLite scan failed (%s, profile=%s): %s",
+                db_path.name, h_profile, _exc, exc_info=True,
+            )
     # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
     # of their own, already in totals) — annotate parents, never re-sum.
     for h_sess in hermes_by_id.values():
@@ -8397,6 +9257,8 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
         if agent == "codex":
             hits = list(CODEX_DIR.glob(f"sessions/**/*{session_id}*.jsonl"))
             return hits[0] if hits else None
+        if agent == "kimi":
+            return _kimi_session_file(session_id)
     except OSError:
         return None
     return None
@@ -8572,7 +9434,7 @@ async def get_artifact(path: str):
     # them explicitly so the allow-list survives any future narrowing of that
     # root (and documents that those artifacts are intentionally served).
     allowed = [CLAUDE_DIR, CODEX_DIR, GEMINI_DIR, QWEN_DIR, VIBE_DIR, CURSOR_DIR,
-               VSCODE_BASE, CURSOR_BASE, *ANTIGRAVITY_BRAIN_DIRS, ANTIGRAVITY_CLI_DIR]
+               VSCODE_BASE, CURSOR_BASE, KIMI_DIR, *ANTIGRAVITY_BRAIN_DIRS, ANTIGRAVITY_CLI_DIR]
     try:
         resolved = p.resolve()
     except Exception:
@@ -9031,6 +9893,15 @@ async def get_session_detail(session_id: str, agent: str):
             return {"error": "Not found"}
         return _qoder_trace_events(sess_file)
 
+    elif agent == "kimi":
+        # Kimi Code — wire.jsonl normalized into the same Claude-shaped events
+        # the pi/dsh branches produce. StatusUpdate/StepBegin/TurnEnd rows carry
+        # no conversation and are dropped by the normalizer.
+        sess_file = _kimi_session_file(session_id)
+        if not sess_file:
+            return {"error": "Not found"}
+        return _kimi_trace_events(sess_file)
+
     elif agent in ["gemini", "antigravity"]:
         # Antigravity CLI (agy) sessions store the real per-step trajectory in
         # conversations/<id>.db — far richer than the brain markdown. Prefer it.
@@ -9332,6 +10203,60 @@ async def get_session_detail(session_id: str, agent: str):
                 try:
                     p = json.loads(prow["data"] or "{}")
                 except Exception: continue
+                role = role_by_msg.get(prow["message_id"], "assistant")
+                ts_ms = prow["time_created"]
+                base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+                ptype = p.get("type")
+                if ptype == "text":
+                    if role == "user":
+                        events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
+                    else:
+                        events.append({"type": "assistant", "payload": {"content": p.get("text", "")}, **base})
+                elif ptype == "reasoning":
+                    events.append({"type": "assistant_thinking", "payload": {"text": p.get("text", "")}, **base})
+                elif ptype == "tool":
+                    events.append({"type": "tool_call", "payload": {
+                        "tool": p.get("tool"),
+                        "callID": p.get("callID"),
+                        "state": p.get("state"),
+                    }, **base})
+                elif ptype == "step-finish":
+                    # Lifecycle marker, not its own trace event — but it carries
+                    # the step's token usage, so attach it to the step's last
+                    # emitted event for the per-step usage UI (#128).
+                    tk = p.get("tokens")
+                    if isinstance(tk, dict) and events:
+                        events[-1]["tokens"] = tk
+                # step-start is a lifecycle marker; skip in trace
+            return events
+        finally:
+            conn.close()
+    elif agent == "zcode":
+        # Same part shapes as OpenCode, same event contract — the frontend
+        # renders zcode traces through the opencode-compatible code paths.
+        _zc_db = _zcode_db_for_session(session_id)
+        if _zc_db is None:
+            return {"error": "Not found"}
+        conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            srow = conn.execute("SELECT id FROM session WHERE id=?", (session_id,)).fetchone()
+            if not srow:
+                return {"error": "Not found"}
+            # Build a message_id → role map so each part can be tagged correctly.
+            role_by_msg: Dict[str, str] = {}
+            for mrow in conn.execute("SELECT id, data FROM message WHERE session_id=? ORDER BY time_created", (session_id,)):
+                try:
+                    md = json.loads(mrow["data"] or "{}")
+                except Exception:
+                    md = {}
+                role_by_msg[mrow["id"]] = md.get("role") or "assistant"
+            events: List[Dict[str, Any]] = []
+            for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
+                try:
+                    p = json.loads(prow["data"] or "{}")
+                except Exception:
+                    continue
                 role = role_by_msg.get(prow["message_id"], "assistant")
                 ts_ms = prow["time_created"]
                 base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
@@ -9735,7 +10660,7 @@ async def session_delegation(session_id: str, agent: str):
         if parent_file is None:
             return {"error": "Not found"}
         subagents = []
-        for child_file in DSH_SESSIONS_DIR.glob("*/*/session.jsonl.zstd"):
+        for child_file in _dsh_session_logs():
             if child_file == parent_file:
                 continue
             child = _dsh_parse_session(child_file)
@@ -9756,6 +10681,30 @@ async def session_delegation(session_id: str, agent: str):
             return {"error": "Not found"}
         try:
             conn = sqlite3.connect(_sqlite_ro_uri(_oc_db), uri=True, timeout=1.0)
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+                if "parent_id" not in cols:
+                    return {"supported": False}
+                row = conn.execute("SELECT parent_id FROM session WHERE id=?", (session_id,)).fetchone()
+                if row is None:
+                    return {"error": "Not found"}
+                children = [r[0] for r in conn.execute(
+                    "SELECT id FROM session WHERE parent_id=?", (session_id,))]
+                return {"supported": True, "tokens_recorded": False,
+                        "parent_session_id": row[0],
+                        "child_session_ids": children,
+                        "linked_children": len(children)}
+            finally:
+                conn.close()
+        except Exception:
+            return {"error": "Not found"}
+
+    if agent == "zcode":
+        _zc_db = _zcode_db_for_session(session_id)
+        if _zc_db is None:
+            return {"error": "Not found"}
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(_zc_db), uri=True, timeout=1.0)
             try:
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
                 if "parent_id" not in cols:
@@ -11092,8 +12041,12 @@ async def get_analytics(
     window_includes_today = (to_b is None) or (to is None) or (to >= today_local)
     if window_includes_today:
         for s in await get_sessions_cached():
-            if _session_in_filters(s, from_b, to_b, agents, models, projects):
-                merged[(s.get("agent"), s.get("id"))] = s  # live wins over stored
+            if not _session_in_filters(s, from_b, to_b, agents, models, projects):
+                continue
+            key = (s.get("agent"), s.get("id"))
+            if s.get("stub") and key in merged:
+                continue  # a zero-value stub must never overwrite a persisted real row
+            merged[key] = s  # live wins over stored
     sessions = list(merged.values())
     by_agent = {}; by_day = {}; by_model = {}
     for s in sessions:
@@ -11229,7 +12182,8 @@ async def get_analytics(
     def _subagent_row(t: str) -> Dict[str, Any]:
         return by_subagent_type.setdefault(t, {
             "spawns": 0, "tokens": 0, "cost": 0.0, "session_count": 0,
-            "tokens_recorded": False, "agents": []})
+            "tokens_recorded": False, "agents": [], "failed": 0, "tool_errors": 0,
+            "plugin": _plugin_of(t)})
 
     def _deleg_agent_row(agent: str) -> Dict[str, Any]:
         return delegation_totals["by_agent"].setdefault(agent, {
@@ -11268,19 +12222,27 @@ async def get_analytics(
                 "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
-            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
+            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": [],
+                                                    "errors": 0, "plugin": _plugin_of(sk["name"])})
             row["invocations"] += sk["count"]
+            row["errors"] += sk.get("errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
+        mcp_errors = s.get("mcp_errors") or {}
         for server, tools in (s.get("mcp_usage") or {}).items():
-            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": []})
+            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": [],
+                                                    "errors": 0, "tool_errors": {},
+                                                    "plugin": _plugin_of(server)})
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
             for tool, n in tools.items():
                 row["calls"] += n
                 row["tools"][tool] = row["tools"].get(tool, 0) + n
+            for tool, n in (mcp_errors.get(server) or {}).items():
+                row["errors"] += n
+                row["tool_errors"][tool] = row["tool_errors"].get(tool, 0) + n
 
         deleg = s.get("delegation") or {}
         spawns_here = deleg.get("spawn_count") or deleg.get("linked_children") or 0
@@ -11292,6 +12254,8 @@ async def get_analytics(
         for t, d in (deleg.get("by_type") or {}).items():
             row = _subagent_row(t)
             row["spawns"] += d.get("count", 0)
+            row["failed"] += d.get("failed", 0) or 0
+            row["tool_errors"] += d.get("tool_errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
@@ -11522,6 +12486,120 @@ def _memory_preview(p: Path, scope: str, agent: str):
     try: txt = p.read_text(errors="ignore")
     except Exception: return None
     return {"scope": scope, "agent": agent, "path": str(p), "name": p.name, "preview": txt[:2000], "truncated": len(txt) > 2000, "size": len(txt)}
+
+
+# AGENTS.md is a shared convention rather than one agent's file. These are the
+# supported agents documented to read it; `agent` stays "codex" on the row so
+# older frontends keep rendering it.
+_AGENTS_MD_READERS = ["codex", "cursor", "opencode", "copilot"]
+
+# Per-agent instruction ("memory") files, by the name each agent looks for.
+# Nested copies (frontend/CLAUDE.md) are read too, when the agent works there.
+_MEMORY_FILENAMES = {"CLAUDE.md": "claude", "AGENTS.md": "codex", "GEMINI.md": "gemini", "QWEN.md": "qwen"}
+# Directories never worth walking for nested memory files. `.claude` holds
+# worktrees, which are full copies of the repo and would repeat every file.
+_MEMORY_SKIP_DIRS = {"node_modules", ".git", ".claude", "venv", ".venv", "__pycache__",
+                     ".next", "dist", "build", "target", ".tox", ".mypy_cache", ".pytest_cache"}
+_MEMORY_NESTED_DEPTH = 3
+_MEMORY_MAX_FILES = 60
+
+
+def _claude_project_key(project: Path) -> str:
+    """Claude Code's ~/.claude/projects/<key> name for a project path: every
+    non-alphanumeric character becomes '-' (so '/.claude/' -> '--claude-')."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project))
+
+
+def _collect_memory(project: Optional[Path]) -> List[dict]:
+    """Every agent's memory / instruction files for user scope + one project.
+
+    A project touched by several coding agents carries one file per agent
+    (CLAUDE.md, AGENTS.md, GEMINI.md, …), plus Claude Code's own auto memory
+    kept under ~/.claude/projects/<key>/memory. Each row names its agent;
+    AGENTS.md rows also list every agent that reads it in `agents`.
+    """
+    out: List[dict] = []
+    seen: Set[str] = set()
+
+    def add(p: Path, scope: str, agent: str, name: Optional[str] = None, **extra) -> None:
+        if len(out) >= _MEMORY_MAX_FILES:
+            return
+        try:
+            if not p.is_file():
+                return
+            key = str(p.resolve())
+        except OSError:
+            return
+        if key in seen:
+            return
+        m = _memory_preview(p, scope, agent)
+        if not m:
+            return
+        seen.add(key)
+        if name:
+            m["name"] = name
+        # Only a project AGENTS.md is shared; ~/.codex/AGENTS.md is Codex's own.
+        if scope == "project" and agent == "codex" and p.name == "AGENTS.md":
+            m["agents"] = list(_AGENTS_MD_READERS)
+        m.update(extra)
+        out.append(m)
+
+    # ---- user scope ----
+    add(CLAUDE_DIR / "CLAUDE.md", "user", "claude")
+    add(CODEX_DIR / "AGENTS.md", "user", "codex")
+    add(GEMINI_DIR / "GEMINI.md", "user", "gemini")
+    add(QWEN_DIR / "QWEN.md", "user", "qwen")
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")).expanduser()
+    add(xdg / "opencode" / "AGENTS.md", "user", "opencode", name="AGENTS.md (OpenCode global)")
+    # Hermes keeps its long-term memory as plain files in its home.
+    add(HERMES_DIR / "memories" / "MEMORY.md", "user", "hermes")
+    add(HERMES_DIR / "memories" / "USER.md", "user", "hermes")
+    add(HERMES_DIR / "SOUL.md", "user", "hermes")
+
+    if not project:
+        return out
+
+    # ---- project scope ----
+    # Claude Code auto memory for this project (MEMORY.md indexes the notes).
+    auto_dir = CLAUDE_DIR / "projects" / _claude_project_key(project) / "memory"
+    try:
+        notes = len([f for f in auto_dir.glob("*.md") if f.name != "MEMORY.md"])
+    except OSError:
+        notes = 0
+    add(auto_dir / "MEMORY.md", "project", "claude", name="MEMORY.md (auto memory)", note_count=notes)
+
+    add(project / ".claude" / "CLAUDE.md", "project", "claude", name=".claude/CLAUDE.md")
+    add(project / "CLAUDE.local.md", "project", "claude")
+    add(project / ".github" / "copilot-instructions.md", "project", "copilot",
+        name=".github/copilot-instructions.md")
+    try:
+        for f in sorted((project / ".github" / "instructions").glob("*.instructions.md")):
+            add(f, "project", "copilot", name=f".github/instructions/{f.name}")
+    except OSError:
+        pass
+    add(project / ".cursorrules", "project", "cursor")
+    try:
+        for f in sorted((project / ".cursor" / "rules").glob("*.mdc")):
+            add(f, "project", "cursor", name=f".cursor/rules/{f.name}")
+    except OSError:
+        pass
+
+    # Root and nested CLAUDE.md / AGENTS.md / GEMINI.md / QWEN.md. Root first
+    # so the cap never drops the files that matter most.
+    try:
+        for dirpath, dirnames, filenames in os.walk(project):
+            rel = Path(dirpath).relative_to(project)
+            depth = len(rel.parts)
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d not in _MEMORY_SKIP_DIRS and depth < _MEMORY_NESTED_DEPTH)
+            for fn in sorted(filenames):
+                agent = _MEMORY_FILENAMES.get(fn)
+                if agent:
+                    add(Path(dirpath) / fn, "project", agent,
+                        name=str(rel / fn) if depth else None)
+    except OSError:
+        pass
+    return out
 
 # ---- Plugin/extension collection (v1) ---------------------------------------
 # Each harness exposes a "plugin"/"extension" surface in its own way. We
@@ -11802,7 +12880,6 @@ async def get_config(project: Optional[str] = None):
     """Return skills, MCPs, and memory files for user scope + optional project scope."""
     skills: List[dict] = []
     mcps: List[dict] = []
-    memory: List[dict] = []
     commands: List[dict] = []
     subagents: List[dict] = []
 
@@ -11822,9 +12899,6 @@ async def get_config(project: Optional[str] = None):
                 skills.append(row)
     for p in [CLAUDE_DIR / "settings.json", Path(HOME) / ".claude.json"]:
         mcps += _mcps_from_claude_settings(p, "user")
-    claude_md = CLAUDE_DIR / "CLAUDE.md"
-    m = _memory_preview(claude_md, "user", "claude") if claude_md.exists() else None
-    if m: memory.append(m)
 
     commands += _collect_commands(CLAUDE_DIR, "user", "claude")
     subagents += _collect_subagents(CLAUDE_DIR, "user", "claude")
@@ -11854,9 +12928,6 @@ async def get_config(project: Optional[str] = None):
     # Codex
     mcps += _mcps_from_codex_toml(CODEX_DIR / "config.toml", "user")
     commands += _collect_commands(CODEX_DIR, "user", "codex")
-    codex_agents = CODEX_DIR / "AGENTS.md"
-    m = _memory_preview(codex_agents, "user", "codex") if codex_agents.exists() else None
-    if m: memory.append(m)
 
     # Cursor
     mcps += _mcps_from_json(CURSOR_DIR / "mcp.json", "user", "cursor")
@@ -11881,10 +12952,6 @@ async def get_config(project: Optional[str] = None):
             subagents += _collect_subagents(proj / ".claude", "project", "claude")
             for p in [proj / ".claude" / "settings.json", proj / ".claude" / "settings.local.json", proj / ".mcp.json"]:
                 mcps += _mcps_from_claude_settings(p, "project")
-            for fname in ["CLAUDE.md", "AGENTS.md"]:
-                fp = proj / fname
-                m = _memory_preview(fp, "project", "claude" if fname == "CLAUDE.md" else "codex") if fp.exists() else None
-                if m: memory.append(m)
 
             # Cursor
             mcps += _mcps_from_json(proj / ".cursor" / "mcp.json", "project", "cursor")
@@ -11916,8 +12983,9 @@ async def get_config(project: Optional[str] = None):
         if key in seen: continue
         seen.add(key); deduped.append(m)
 
-    # Plugins (project arg already validated above)
+    # Plugins and memory (project arg already validated above)
     plugins = _collect_all_plugins(Path(project) if project_valid else None)
+    memory = _collect_memory(Path(project) if project_valid else None)
 
     # Stamp pluginRef on items whose source falls inside a plugin's installPath.
     # Inline-set refs (Claude plugin-bundled blocks) are preserved by _tag_plugin_refs.
@@ -12071,14 +13139,28 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         else:
             gen_error = f"summarizer '{backend_name}' is not available"
 
+    # Generation failed, so fall back to the narrative we already have. Showing
+    # the previous one beats showing nothing.
+    served_older_narrative = False
     if narrative is None and cached and cached.get("narrative"):
         narrative = cached["narrative"]
+        served_older_narrative = cached.get("content_hash") != chash
 
-    result = _summaries.store(
-        session_id, meta.get("agent", agent), chash,
-        backend_name or "", cfg.get("model"),
-        brief, narrative or {}, 0.0,
-    )
+    if served_older_narrative:
+        # Do NOT re-store it under the new content hash. That hash mismatch is
+        # the ONLY thing that makes a later call regenerate, so stamping the old
+        # narrative with the new hash would mark a stale summary fresh forever:
+        # every subsequent request short-circuits at the cache check above and
+        # the summarizer is never called again, even once it recovers (#352).
+        # Leaving the row on its old hash means the next attempt still sees the
+        # content as changed and retries by itself.
+        result = cached
+    else:
+        result = _summaries.store(
+            session_id, meta.get("agent", agent), chash,
+            backend_name or "", cfg.get("model"),
+            brief, narrative or {}, 0.0,
+        )
     error_info = None
     if gen_error:
         from summarizers.errors import classify as _classify_err
@@ -12090,7 +13172,14 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         })
     except Exception:
         pass
-    return {"summary": {**result, "stale": False}, "error": gen_error, "error_info": error_info}
+    # `stale` was previously hard-coded False on every path, so the "Stale"
+    # badge the panel already renders (SummaryPanel.tsx) could never fire. It
+    # fires exactly here: the narrative describes an earlier, shorter trace.
+    return {
+        "summary": {**result, "stale": served_older_narrative},
+        "error": gen_error,
+        "error_info": error_info,
+    }
 
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):

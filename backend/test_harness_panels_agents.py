@@ -34,16 +34,21 @@ from harness_panels import paths as hp_paths
 
 
 def test_every_supported_agent_has_a_builder():
-    """Scope check: every agent in supported-agents.mdx, Hermes included."""
+    """Scope check: every agent in supported-agents.mdx, Hermes included.
+
+    An agent without an extractor yet must at least sit in PLANNED — that is
+    what keeps /agents/{agent}/panel reporting "planned" instead of a bare
+    "not installed" on machines where the agent's sessions already show up.
+    """
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "qoder", "hermes",
+        "prime", "dsh", "qoder", "hermes", "zcode", "kimi",
     }
-    assert supported == set(harness_panels.BUILDERS), (
-        "every supported agent needs an extractor; "
-        f"missing={supported - set(harness_panels.BUILDERS)} "
-        f"unexpected={set(harness_panels.BUILDERS) - supported}"
+    assert supported == set(harness_panels.BUILDERS) | set(harness_panels.PLANNED), (
+        "every supported agent needs an extractor or a PLANNED entry; "
+        f"missing={supported - set(harness_panels.BUILDERS) - set(harness_panels.PLANNED)} "
+        f"unexpected={(set(harness_panels.BUILDERS) | set(harness_panels.PLANNED)) - supported}"
     )
     assert harness_panels.EXCLUDED == ()
 
@@ -566,6 +571,42 @@ def test_smallcode_reads_project_traces(tmp_path, monkeypatch):
     assert sec["rows"][0][:4] == ["gemma load", "gemma-3", 3, "myrepo"]
 
 
+# --- Kimi Code --------------------------------------------------------------
+
+def test_kimi_panel_reads_registry_and_config(tmp_path, monkeypatch):
+    root = tmp_path / ".kimi"
+    root.mkdir(parents=True)
+    (root / "kimi.json").write_text(json.dumps({"work_dirs": [
+        {"path": "/home/dev/proj", "kaos": "local",
+         "last_session_id": "11111111-2222-3333-4444-555555555555"},
+    ]}), encoding="utf-8")
+    (root / "config.toml").write_text(
+        'default_model = "kimi-k2.6"\n\n[loop_control]\nmax_steps_per_turn = 100\n',
+        encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "KIMI_DIR", root)
+
+    doc = clis.build_kimi()
+    assert doc["installed"] is True
+    cfg = next(s for s in doc["sections"] if s["title"] == "Configuration")
+    values = {f["label"]: f["value"] for f in cfg["fields"]}
+    assert values["Default model"] == "kimi-k2.6"
+    assert values["Max steps per turn"] == 100
+    dirs = next(s for s in doc["sections"] if s["title"] == "Work directories")
+    assert dirs["rows"][0][0] == "/home/dev/proj"
+    assert dirs["rows"][0][1] == "11111111"
+
+
+def test_kimi_panel_survives_malformed_config(tmp_path, monkeypatch):
+    root = tmp_path / ".kimi"
+    root.mkdir(parents=True)
+    (root / "config.toml").write_text("not = [toml", encoding="utf-8")
+    (root / "kimi.json").write_text("{nope", encoding="utf-8")
+    monkeypatch.setattr(hp_paths, "KIMI_DIR", root)
+    doc = clis.build_kimi()
+    assert doc["installed"] is True
+    assert doc["sections"] == []
+
+
 # --- every agent ------------------------------------------------------------
 
 @pytest.mark.parametrize("agent", sorted(harness_panels.BUILDERS))
@@ -575,11 +616,16 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     for name in ("CLAUDE_DIR", "CODEX_DIR", "COPILOT_DIR", "GROK_DIR", "GEMINI_DIR",
                  "QWEN_DIR", "VIBE_DIR", "CURSOR_DIR", "PI_DIR", "DSH_DIR",
                  "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR",
-                 "QODER_DIR", "QODER_IDE_DIR"):
+                 "QODER_DIR", "QODER_IDE_DIR", "KIMI_DIR"):
         monkeypatch.setattr(hp_paths, name, absent, raising=False)
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)
     monkeypatch.setattr(hp_paths, "opencode_data_dir", lambda: absent, raising=False)
+    # ZCode resolves its root per call (it honours $ZCODE_DATA_DIR), so the
+    # function is what has to be pinned — a machine with a real ~/.zcode would
+    # otherwise build a live panel here and fail the isolation this test exists
+    # to prove.
+    monkeypatch.setattr(hp_paths, "zcode_dir", lambda: absent, raising=False)
     # The four original modules hold their own constants.
     for mod, attr in ((codex_panel, "CODEX_DIR"), (claude_panel, "CLAUDE_DIR"),
                       (copilot_panel, "COPILOT_DIR"), (grok_panel, "GROK_DIR")):
@@ -644,3 +690,37 @@ def test_hermes_billing_processes_and_dashboard_link(tmp_path, monkeypatch):
     sec = next(s for s in doc["sections"] if s["title"] == "Credential stores")
     assert "auth.json" in json.dumps(sec) and ".env" in json.dumps(sec)
     assert "sk-should-never-be-read" not in flat, "credential values are never read"
+
+
+def test_hermes_billing_tokens_survives_null_pair(tmp_path, monkeypatch):
+    """A NULL half of the input/output pair must not zero out the known half.
+
+    session_model_usage rows can have output_tokens unset while input_tokens
+    is recorded; SQLite's arithmetic SUM propagates that NULL through the
+    whole expression, discarding the known input tokens too (#342).
+    """
+    root = tmp_path / ".hermes"
+    root.mkdir(parents=True)
+    con = sqlite3.connect(root / "state.db")
+    con.execute(
+        "CREATE TABLE session_model_usage (session_id TEXT, model TEXT, "
+        "billing_provider TEXT, billing_mode TEXT, api_call_count INT, "
+        "input_tokens INT, output_tokens INT, cache_read_tokens INT, "
+        "cache_write_tokens INT, reasoning_tokens INT, "
+        "estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT)")
+    con.executemany(
+        "INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("s1", "gpt-5.4", "openai-codex", "subscription_included",
+             10, 100, None, 0, 0, 0, 0.0, 0.0, "included"),
+            ("s2", "gpt-5.4", "openai-codex", "subscription_included",
+             5, 50, 25, 0, 0, 0, 0.0, 0.0, "included"),
+        ])
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(hp_paths, "HERMES_DIR", root)
+    doc = hermes_panel.build_hermes(with_disk=False)
+
+    bill = next(s for s in doc["sections"] if s["title"] == "Billing by provider")
+    row = next(r for r in bill["rows"] if r[0] == "openai-codex")
+    assert row[3] == 175, "the 100 known input tokens from the NULL-output row must count"

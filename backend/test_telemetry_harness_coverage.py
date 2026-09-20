@@ -39,13 +39,15 @@ def test_known_agents_matches_the_panel_builders():
     The comment on _KNOWN_AGENTS has always *claimed* this; nothing enforced it.
     An agent missing here is not a crash — it is quietly bucketed as
     "other-agent", so the new harness looks like it has no users at all.
+    An agent still waiting for a panel builder counts: PLANNED is part of
+    the registry.
     """
-    from harness_panels import BUILDERS
-    assert telemetry._KNOWN_AGENTS == set(BUILDERS), (
-        "telemetry._KNOWN_AGENTS and harness_panels.BUILDERS disagree; "
-        "missing from telemetry: %s; missing from BUILDERS: %s"
-        % (sorted(set(BUILDERS) - telemetry._KNOWN_AGENTS),
-           sorted(telemetry._KNOWN_AGENTS - set(BUILDERS)))
+    import harness_panels
+    assert telemetry._KNOWN_AGENTS == set(harness_panels.BUILDERS) | set(harness_panels.PLANNED), (
+        "telemetry._KNOWN_AGENTS and harness_panels.BUILDERS|PLANNED disagree; "
+        "missing from telemetry: %s; missing from the registry: %s"
+        % (sorted((set(harness_panels.BUILDERS) | set(harness_panels.PLANNED)) - telemetry._KNOWN_AGENTS),
+           sorted(telemetry._KNOWN_AGENTS - set(harness_panels.BUILDERS) - set(harness_panels.PLANNED)))
     )
 
 

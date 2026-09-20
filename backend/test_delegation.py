@@ -72,7 +72,9 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
         + _jl(type="user", message={"role": "user", "content":
               "<command-name>/code-review</command-name><command-args>high</command-args>"})
         + _jl(type="user", message={"role": "user", "content":
-              "<command-name>/model</command-name>"}),
+              "<command-name>/model</command-name>"})
+        + _jl(type="user", message={"role": "user", "content":
+              "<command-name>/remote-control</command-name>"}),
         encoding="utf-8",
     )
     if not with_subagents:
@@ -280,7 +282,7 @@ def scan_env(tmp_path, monkeypatch):
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
                  "GROK_SESSIONS_DIR", "GROK_UNIFIED_LOG", "VSCODE_STORAGE", "CURSOR_STORAGE",
                  "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
-                 "HERMES_DIR", "PI_SESSIONS_DIR"):
+                 "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR"):
         monkeypatch.setattr(main, attr, missing / attr.lower())
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [])
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_DIRS", [])
@@ -288,6 +290,7 @@ def scan_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "CLAUDE_DIR", tmp_path / ".claude")
     monkeypatch.setattr(main, "CURSOR_DIR", tmp_path / ".cursor")
     monkeypatch.setattr(main, "OPENCODE_DB", tmp_path / "opencode.db")
+    monkeypatch.setattr(main, "ZCODE_DB", tmp_path / "zcode.db")
     monkeypatch.setattr(main, "HERMES_DB", tmp_path / "hermes-state.db")
     monkeypatch.setattr(main, "HERMES_PROFILES_DIR", missing / "hermes-profiles")
     monkeypatch.setattr(main, "PROJECT_ALIASES_FILE", tmp_path / "aliases.json")
@@ -542,6 +545,107 @@ def test_scan_claude_skills_and_mcp(scan_env):
     assert s["tool_counts"]["mcp__chrome__navigate"] == 3
     assert s["tool_counts"]["Skill"] == 2
     assert s["mcp_usage"] == {"chrome": {"navigate": 3}}
+    # Nothing failed → no error keys invented.
+    assert "tool_errors" not in s and "mcp_errors" not in s
+    assert all("errors" not in sk for sk in s["skills_used"])
+
+
+def _tool_result(tool_use_id, text, is_error=False):
+    blk = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
+    if is_error:
+        blk["is_error"] = True
+    return blk
+
+
+def make_failing_plugin_tree(claude_dir: Path, sid: str = SID) -> Path:
+    """Mirrors a real session: the grok plugin's MCP search and a grok skill
+    both fail on a broken sandbox, and a background grok:grok-rescue subagent
+    dies on its only call while the parent's Agent result reads "launched"."""
+    proj = claude_dir / "projects" / PROJ
+    proj.mkdir(parents=True, exist_ok=True)
+    session_file = proj / f"{sid}.jsonl"
+    use = lambda name, tid, **kw: {"type": "tool_use", "name": name, "id": tid, "input": kw}
+    session_file.write_text(
+        _jl(type="user", cwd="/tmp/proj", message={"role": "user", "content": "search x"})
+        + _assistant_line(inp=10, out=5, message_id="m1", content=[
+            use("mcp__plugin_grok_grok__grok_search", "t1", query="a"),
+            use("mcp__plugin_grok_grok__grok_search", "t2", query="b"),
+            use("Bash", "t3", command="ls"),
+            use("Skill", "t4", skill="grok:search"),
+            use("Skill", "t5", skill="graphify"),
+            use("Agent", "t6", subagent_type="grok:grok-rescue")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t1", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t2", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t3", "file.txt"),
+            _tool_result("t4", "skill failed to load", True),
+            _tool_result("t5", "ok"),
+            _tool_result("t6", "Async agent launched successfully."),
+        ]})
+        # A tool result quoting a transcript must not count as a slash command.
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t3", "grep hit: <command-name>/leaked</command-name>")]}),
+        encoding="utf-8",
+    )
+    sub = proj / sid / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-rescue.meta.json").write_text(json.dumps(
+        {"agentType": "grok:grok-rescue", "description": "rescue", "toolUseId": "t6"}))
+    (sub / "agent-rescue.jsonl").write_text(
+        _jl(type="user", message={"role": "user", "content": "investigate"})
+        + _assistant_line(inp=5, out=5, message_id="r1",
+                          content=[use("Bash", "r-t1", command="node grok-companion.mjs")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("r-t1", "Exit code 1\nGrok run failed", True)]}),
+        encoding="utf-8",
+    )
+    # Partial failure: one of two calls errored → counted, but the run isn't "failed".
+    (sub / "agent-explore.meta.json").write_text(json.dumps(
+        {"agentType": "Explore", "description": "look", "toolUseId": "t7"}))
+    (sub / "agent-explore.jsonl").write_text(
+        _assistant_line(inp=5, out=5, message_id="e1",
+                        content=[use("Read", "e-t1"), use("Grep", "e-t2")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("e-t1", "File does not exist.", True),
+            _tool_result("e-t2", "3 matches")]}),
+        encoding="utf-8",
+    )
+    return session_file
+
+
+def test_scan_claude_records_tool_failures(scan_env):
+    make_failing_plugin_tree(scan_env / ".claude")
+    s = [s for s in main._scan_sessions_sync() if s["agent"] == "claude"][0]
+    # Failed calls still count as calls.
+    assert s["mcp_usage"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["tool_errors"] == {"mcp__plugin_grok_grok__grok_search": 2, "Skill": 1}
+    assert s["mcp_errors"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["skills_used"] == [{"name": "graphify", "count": 1},
+                                {"name": "grok:search", "count": 1, "errors": 1}]
+    by_type = s["delegation"]["by_type"]
+    assert by_type["grok:grok-rescue"]["failed"] == 1
+    assert by_type["grok:grok-rescue"]["tool_errors"] == 1
+    assert "failed" not in by_type["Explore"]
+    assert by_type["Explore"]["tool_errors"] == 1
+
+    deleg = main._claude_subagent_usage(
+        scan_env / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    subs = {e["agent_type"]: e for e in deleg["subagents"]}
+    assert subs["grok:grok-rescue"]["status"] == "failed"
+    assert subs["grok:grok-rescue"]["tool_calls"] == 1
+    assert "status" not in subs["Explore"]
+    assert (subs["Explore"]["tool_calls"], subs["Explore"]["tool_errors"]) == (2, 1)
+
+
+def test_plugin_of():
+    assert main._plugin_of("plugin_grok_grok") == "grok"
+    assert main._plugin_of("plugin_gemini_gemini") == "gemini"
+    assert main._plugin_of("plugin_my_tool_my_tool") == "my_tool"   # symmetric wins
+    assert main._plugin_of("plugin_acme_search") == "acme"
+    assert main._plugin_of("grok:grok-rescue") == "grok"
+    assert main._plugin_of("codex:rescue") == "codex"
+    for plain in ("chrome", "graphify", "Explore", "", None, "plugin_"):
+        assert main._plugin_of(plain) is None
 
 
 def test_scan_agents_without_signal_lack_keys(scan_env):
@@ -555,8 +659,10 @@ def test_scan_agents_without_signal_lack_keys(scan_env):
 
 # --- /analytics ecosystem aggregates -----------------------------------------
 
-def test_analytics_ecosystem_aggregates(monkeypatch):
+def test_analytics_ecosystem_aggregates(tmp_path, monkeypatch):
     from datetime import datetime, timezone
+    # /analytics merges the persisted history store; keep the real one out.
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
     base = {"project": "/tmp/x", "timestamp": datetime.now(timezone.utc),
             "tokens": {"input": 10, "output": 5, "cached": 0, "total": 15},
             "cost": 0.01, "model": "claude-opus-4-8", "mcp_tools": []}
@@ -568,6 +674,15 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
                         "delegated_total": 500,
                         "by_type": {"Explore": {"count": 2, "total": 500, "cost": 0.2}}},
          "delegated_cost": 0.2},
+        # A plugin-backed session where everything the plugin did failed.
+        {**base, "id": "p", "agent": "claude",
+         "skills_used": [{"name": "grok:search", "count": 2, "errors": 1}],
+         "mcp_usage": {"plugin_grok_grok": {"grok_search": 2}},
+         "mcp_errors": {"plugin_grok_grok": {"grok_search": 2}},
+         "delegation": {"supported": True, "tokens_recorded": True, "spawn_count": 1,
+                        "delegated_total": 0,
+                        "by_type": {"grok:grok-rescue": {"count": 1, "total": 0, "cost": 0.0,
+                                                         "failed": 1, "tool_errors": 1}}}},
         {**base, "id": "b", "agent": "claude",
          "skills_used": [{"name": "graphify", "count": 1}],
          "mcp_usage": {"chrome": {"navigate": 1, "find": 2}},
@@ -593,15 +708,26 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
         return sessions
 
     monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
-    a = _run(main.get_analytics())
-    assert a["by_skill"] == {"graphify": {"invocations": 3, "session_count": 2,
-                                          "agents": ["claude"]}}
-    assert a["by_mcp_server"] == {"chrome": {"calls": 6, "session_count": 2,
-                                             "tools": {"navigate": 4, "find": 2},
-                                             "agents": ["claude"]}}
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert a["by_skill"]["graphify"] == {"invocations": 3, "session_count": 2,
+                                         "agents": ["claude"], "errors": 0, "plugin": None}
+    assert a["by_skill"]["grok:search"] == {"invocations": 2, "session_count": 1,
+                                            "agents": ["claude"], "errors": 1, "plugin": "grok"}
+    assert a["by_mcp_server"]["chrome"] == {"calls": 6, "session_count": 2,
+                                            "tools": {"navigate": 4, "find": 2},
+                                            "agents": ["claude"], "errors": 0,
+                                            "tool_errors": {}, "plugin": None}
+    assert a["by_mcp_server"]["plugin_grok_grok"] == {
+        "calls": 2, "session_count": 1, "tools": {"grok_search": 2}, "agents": ["claude"],
+        "errors": 2, "tool_errors": {"grok_search": 2}, "plugin": "grok"}
     assert a["by_subagent_type"]["Explore"] == {
         "spawns": 2, "tokens": 500, "cost": 0.2, "session_count": 1,
-        "tokens_recorded": True, "agents": ["claude"]}
+        "tokens_recorded": True, "agents": ["claude"], "failed": 0, "tool_errors": 0,
+        "plugin": None}
+    assert a["by_subagent_type"]["grok:grok-rescue"]["failed"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["tool_errors"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["plugin"] == "grok"
     # grok type rows attribute the child session's tokens.
     assert a["by_subagent_type"]["general-purpose"]["tokens"] == 100
     assert a["by_subagent_type"]["general-purpose"]["agents"] == ["grok"]
@@ -610,42 +736,119 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     assert a["by_subagent_type"]["explorer"]["tokens"] == 70
     d = a["delegation"]
     assert d["delegated_tokens"] == 500 and d["delegated_cost"] == 0.2
-    assert d["sessions_with_spawns"] == 3          # claude a + grok gp + codex cp
+    assert d["sessions_with_spawns"] == 4          # claude a + p + grok gp + codex cp
     assert d["linked_children"] == 2 and d["linked_child_tokens"] == 170
     assert d["by_agent"]["grok"] == {"parents": 1, "spawns": 1, "children": 1,
                                      "child_tokens": 100, "child_cost": 0.05,
                                      "delegated_tokens": 0, "delegated_cost": 0.0}
     # Existing aggregates unchanged in shape: delegated usage NOT folded in,
     # children counted once as their own sessions.
-    assert a["by_agent"]["claude"]["total"] == 30
-    assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
+    assert a["by_agent"]["claude"]["total"] == 45
+    assert a["total"]["total"] == 45 + 15 + 100 + 15 + 70
 
 
-def test_analytics_folds_delegated_into_by_day_and_by_model(scan_env):
-    """get_analytics() must fold delegated_* spend into by_day totals/cost and
-    attribute subagent-only models (e.g. Haiku under a Sonnet parent) in
-    by_model — verifying the core analytics fold-in added in this PR."""
-    make_claude_tree(scan_env / ".claude")
-    a = _run(main.get_analytics())
+def test_analytics_stub_does_not_clobber_stored_real_row(tmp_path, monkeypatch):
+    """A live scan that produced a zero-value stub (e.g. the on-disk transcript
+    was pruned) must not overwrite a durable row already holding real
+    accumulated tokens/cost, the same invariant history_store.upsert_sessions
+    already enforces on the write side (see test_upsert_stub_does_not_crush_real_row)."""
+    from datetime import timezone
+    hs = _hist_env(tmp_path, monkeypatch)
+    real = {"agent": "claude", "id": "s1", "project": "/p", "model": "claude-opus-4-8",
+            "timestamp": datetime.now(timezone.utc).isoformat(), "cost": 4.2,
+            "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                       "_cached_sum": 3000}}
+    assert hs.upsert_sessions([real]) == 1
+    stub_live = {"id": "s1", "agent": "claude", "project": "/p", "model": None,
+                 "timestamp": datetime.now(timezone.utc), "cost": 0.0,
+                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                 "stub": True}
+    # A live session outside the filtered agent list exercises the "does not
+    # even reach the stub check" branch, distinct from the stub-skip above.
+    out_of_filter = {"id": "s2", "agent": "codex", "project": "/p", "model": None,
+                     "timestamp": datetime.now(timezone.utc), "cost": 1.0,
+                     "tokens": {"input": 1, "output": 1, "cached": 0, "total": 2},
+                     "stub": False}
 
-    # by_day: there should be exactly one day bucket (all sessions share a
-    # timestamp). Its total must include both parent tokens (100+50+1000=1150)
-    # and delegated tokens (inp=38, out=15, cached=340 → 393). Cost non-zero.
+    async def fake_sessions(fresh: bool = False):
+        return [stub_live, out_of_filter]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=["claude"], models=[], projects=[]))
+    assert a["by_agent"]["claude"]["cost"] == 4.2
+    assert a["by_agent"]["claude"]["total"] == 1150
+    assert "codex" not in a["by_agent"]
+
+
+def test_analytics_fresh_live_session_still_overwrites_stored(tmp_path, monkeypatch):
+    """Control for the test above: an ordinary (non-stub) live session must
+    still win over a stale stored row; only a stub is barred from clobbering."""
+    from datetime import timezone
+    hs = _hist_env(tmp_path, monkeypatch)
+    real = {"agent": "claude", "id": "s1", "project": "/p", "model": "claude-opus-4-8",
+            "timestamp": datetime.now(timezone.utc).isoformat(), "cost": 4.2,
+            "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                       "_cached_sum": 3000}}
+    assert hs.upsert_sessions([real]) == 1
+    fresh_live = {"id": "s1", "agent": "claude", "project": "/p", "model": "claude-opus-4-8",
+                 "timestamp": datetime.now(timezone.utc), "cost": 9.9,
+                 "tokens": {"input": 500, "output": 500, "cached": 0, "total": 1000},
+                 "stub": False}
+
+    async def fake_sessions(fresh: bool = False):
+        return [fresh_live]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert a["by_agent"]["claude"]["cost"] == 9.9
+    assert a["by_agent"]["claude"]["total"] == 1000
+
+
+def test_analytics_folds_delegated_into_by_day_and_by_model(tmp_path, monkeypatch):
+    """get_analytics() must fold delegated_* spend into by_day and attribute a
+    subagent-only model (Haiku under an Opus parent) in by_model — the core
+    fold-in this change adds.
+
+    Stubs get_sessions_cached like its siblings above: the un-stubbed scan
+    reaches the real ~/.claude and history.db, so bucket-count assertions
+    against a tmp fixture tree are not hermetic.
+    """
+    from datetime import timezone
+    _hist_env(tmp_path, monkeypatch)
+    parent = {
+        "id": "s1", "agent": "claude", "project": "/p", "model": "claude-opus-4-8",
+        "timestamp": datetime.now(timezone.utc), "cost": 4.2, "stub": False,
+        "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                   "delegated_input": 38, "delegated_output": 15, "delegated_cached": 340},
+        "delegated_cost": 0.5,
+        # Haiku appears ONLY here — the parent session never ran it.
+        "delegated_by_model": {"claude-haiku-4-5-20251001": {
+            "input": 30, "output": 10, "cached": 400, "total": 440, "cost": 0.3}},
+    }
+
+    async def fake_sessions(fresh: bool = False):
+        return [parent]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+
     assert len(a["by_day"]) == 1
     day = a["by_day"][0]
-    parent_own_total = 100 + 50 + 1000          # input + output + cached (HWM)
-    delegated_total  = 38 + 15 + 340            # delegated_input + output + cached
-    assert day["total"] == parent_own_total + delegated_total
-    assert day["cost"] > 0
+    assert day["total"] == 1150 + (38 + 15 + 340)
+    assert day["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["total"] == 1150 + 393
 
-    # by_model: Haiku is ONLY used by subagents, not the parent session. It
-    # must appear in by_model via delegated_by_model attribution with non-zero
-    # totals and cost.
-    assert "claude-haiku-4-5-20251001" in a["by_model"], (
-        "Haiku subagent model missing from by_model — delegated_by_model fold-in not working")
     haiku = a["by_model"]["claude-haiku-4-5-20251001"]
-    assert haiku["total"] > 0
-    assert haiku["cost"] > 0
+    assert haiku["total"] == 440
+    assert haiku["cost"] == pytest.approx(0.3)
+    # A subagent transcript is not a session, so it must not inflate the count.
+    assert haiku["session_count"] == 0
+    # The parent's own model keeps only its own spend.
+    assert a["by_model"]["claude-opus-4-8"]["cost"] == pytest.approx(4.2)
 
 
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
@@ -1407,3 +1610,4 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+

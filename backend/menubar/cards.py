@@ -206,6 +206,7 @@ AGENT_HEX = {
     "smallcode": (0x0D, 0x94, 0x88), "pi": (0x71, 0x71, 0x7A),
     "muse": (0x25, 0x63, 0xEB), "prime": (0x84, 0xA3, 0x0C),
     "dsh": (0x4D, 0x6B, 0xFE), "qoder": (0x71, 0x71, 0x7A),
+    "kimi": (0x18, 0x18, 0x1B),
 }
 AGENT_FALLBACK = (0x64, 0x74, 0x8B)
 
@@ -223,7 +224,7 @@ AGENT_MARK = {
     "opencode": "OC", "grok": "GK", "gemini": "GM", "antigravity": "AG",
     "qwen": "QW", "vibe": "VB", "hermes": "HM", "cline": "CL",
     "smallcode": "SC", "pi": "PI", "muse": "MU", "prime": "PR",
-    "dsh": "DS", "qoder": "QO",
+    "dsh": "DS", "qoder": "QO", "kimi": "Ki",
 }
 
 

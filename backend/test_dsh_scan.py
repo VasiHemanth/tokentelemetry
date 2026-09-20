@@ -21,7 +21,7 @@ zstandard = pytest.importorskip("zstandard")
 
 
 def _write_dsh_session(sessions_dir, workspace_slug, session_id, header_extra,
-                        events, project="/Users/dev/project"):
+                        events, project="/Users/dev/project", filename="session.jsonl.zstd"):
     """Write one zstd-compressed session.jsonl under sessions_dir/<workspace_slug>/<id>/.
 
     `header_extra` merges into the required {type:"session", id, cwd,
@@ -38,7 +38,7 @@ def _write_dsh_session(sessions_dir, workspace_slug, session_id, header_extra,
 
     sess_dir = sessions_dir / workspace_slug / session_id
     sess_dir.mkdir(parents=True, exist_ok=True)
-    path = sess_dir / "session.jsonl.zstd"
+    path = sess_dir / filename
     path.write_bytes(zstandard.ZstdCompressor().compress(text.encode("utf-8")))
     return path
 
@@ -640,3 +640,142 @@ def test_metrics_absent_without_timing_data(scan_env):
     assert m["llm_ms"] is None
     assert m["ttft_ms_avg"] is None
     assert m["output_tok_per_sec"] is None
+
+
+# ---------------------------------------------------------------------------
+# Session format v3. DSH writes each format generation to its own file
+# (session.jsonl.zstd for v0, session.vN.jsonl.zstd after) and leaves older
+# generations in place, stops logging assistant/chunk as separate events
+# (the records move into assistant/message.data.stream), and logs failed model
+# attempts as assistant/attempt. Shapes below are copied from real v3 logs.
+# ---------------------------------------------------------------------------
+
+V3 = "session.v3.jsonl.zstd"
+
+
+def _v3_step(turn, step, t0, in_t, out_t, provider="opencode-go", model="glm-5.3-flash"):
+    """step/start at t0, first stream record at t0+500, usage/finish at t0+1500,
+    assistant/message at t0+1600 carrying the same usage sample."""
+    usage = {"inputTokens": in_t, "outputTokens": out_t, "totalTokens": in_t + out_t}
+    return [
+        {"type": "step/start", "seq": 1, "time": t0, "data": {"turn": turn, "step": step}},
+        {"type": "request/context", "seq": 2, "time": t0 + 1,
+         "data": {"provider": provider, "model": model, "contextWindow": 1000000}},
+        {"type": "assistant/message", "seq": 3, "time": t0 + 1600, "data": {
+            "turn": turn, "step": step, "usage": usage,
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}],
+                        "source": {"kind": "model", "provider": provider, "model": model}},
+            "stream": [
+                {"type": "chunk", "time": t0 + 500, "chunk": {"type": "block-start", "index": 0}},
+                {"type": "chunk", "time": t0 + 1500, "chunk": {"type": "usage", "usage": usage}},
+                {"type": "chunk", "time": t0 + 1500, "chunk": {"type": "finish", "reason": {"kind": "stop"}}},
+            ]}},
+        {"type": "step/end", "seq": 4, "time": t0 + 1700, "data": {"turn": turn, "step": step}},
+    ]
+
+
+def test_v3_session_file_is_scanned(scan_env):
+    """Sessions written after DSH's v3 format upgrade must not vanish."""
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-v3only",
+                       {"version": 3}, _v3_step(1, 1, 1000, 800, 40), filename=V3)
+
+    out = main._scan_dsh_sessions()
+    assert [s["id"] for s in out] == ["session-v3only"]
+    assert out[0]["tokens"]["input"] == 800
+    assert out[0]["tokens"]["output"] == 40   # message usage == stream usage: counted once
+    assert out[0]["model"] == "glm-5.3-flash"
+    assert out[0]["artifacts"][0]["name"] == V3
+
+
+def test_newest_generation_wins_when_both_logs_exist(scan_env):
+    """An upgraded DSH writes session.v3 beside the old session.jsonl. The
+    session is counted once, from the newer log."""
+    root = scan_env / "dsh_sessions"
+    _write_dsh_session(root, "--proj--", "session-both", {},
+                       _usage_events(1, 1, 100, 10), filename="session.jsonl.zstd")
+    _write_dsh_session(root, "--proj--", "session-both", {"version": 3},
+                       _v3_step(1, 1, 1000, 100, 10) + _v3_step(2, 1, 5000, 300, 30), filename=V3)
+
+    out = main._scan_dsh_sessions()
+    assert len(out) == 1
+    assert out[0]["tokens"]["input"] == 400
+    assert main._dsh_session_file("session-both").name == V3
+
+
+def test_v3_latency_reads_embedded_stream_times(scan_env):
+    """TTFT and throughput come from the stream records' own times:
+    TTFT = 500ms, LLM = 1500ms, generation = 1000ms -> 40 tok/s."""
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-v3lat",
+                       {"version": 3}, _v3_step(1, 1, 1000, 800, 40), filename=V3)
+
+    m = main._scan_dsh_sessions()[0]["dsh"]["metrics"]
+    assert m["ttft_ms_avg"] == 500
+    assert m["llm_ms"] == 1500
+    assert m["output_tok_per_sec"] == 40
+
+
+def test_v3_failed_attempt_spend_is_added_not_overwritten(scan_env):
+    """assistant/attempt is an attempt that committed no message. Tokens it
+    reported are extra spend; a zero-usage rate-limit attempt adds nothing and
+    does not skew TTFT."""
+    failed_zero = {"type": "assistant/attempt", "seq": 5, "time": 1002, "data": {
+        "turn": 1, "step": 1, "stream": [
+            {"type": "chunk", "time": 1002, "chunk": {"type": "usage", "usage": {
+                "inputTokens": 0, "outputTokens": 0, "totalTokens": 0}}},
+            {"type": "chunk", "time": 1002, "chunk": {"type": "finish", "reason": {
+                "kind": "error", "failure": {"code": "RATE_LIMIT"}}}}]}}
+    failed_billed = {"type": "assistant/attempt", "seq": 6, "time": 1003, "data": {
+        "turn": 1, "step": 1, "stream": [
+            {"type": "chunk", "time": 1003, "chunk": {"type": "usage", "usage": {
+                "inputTokens": 800, "outputTokens": 5}}}]}}
+    step = _v3_step(1, 1, 1000, 800, 40)
+    events = step[:2] + [failed_zero, failed_billed] + step[2:]
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-v3att",
+                       {"version": 3}, events, filename=V3)
+
+    s = main._scan_dsh_sessions()[0]
+    assert s["tokens"]["input"] == 1600
+    assert s["tokens"]["output"] == 45
+    assert s["dsh"]["metrics"]["ttft_ms_avg"] == 500
+
+
+def test_v3_subagent_folds_into_parent_and_delegation_endpoint(scan_env):
+    root = scan_env / "dsh_sessions"
+    _write_dsh_session(root, "--proj--", "session-parent", {"version": 3},
+                       _v3_step(1, 1, 1000, 100, 10), filename=V3)
+    _write_dsh_session(root, "--proj--", "child-uuid",
+                       {"version": 3, "origin": "subagent", "parentSession": "session-parent",
+                        "delegationDepth": 1},
+                       _v3_step(1, 1, 2000, 500, 50), filename=V3)
+
+    out = main._scan_dsh_sessions()
+    assert [s["id"] for s in out] == ["session-parent"]
+    assert out[0]["delegation"]["spawn_count"] == 1
+
+    import asyncio
+    deleg = asyncio.run(main.session_delegation("session-parent", agent="dsh"))
+    assert deleg["spawn_count"] == 1
+    assert deleg["subagents"][0]["tokens"]["input"] == 500
+
+
+def test_v3_trace_resolves_and_normalizes(scan_env):
+    events = [
+        {"type": "user/message", "seq": 1, "time": 900,
+         "data": {"content": [{"type": "text", "text": "hello"}], "source": {"kind": "user"}}},
+    ] + _v3_step(1, 1, 1000, 100, 10)
+    _write_dsh_session(scan_env / "dsh_sessions", "--proj--", "session-v3trace",
+                       {"version": 3}, events, filename=V3)
+
+    trace = main._dsh_trace_events(main._dsh_session_file("session-v3trace"))
+    kinds = [(e["type"], e["message"]["content"][0]["type"]) for e in trace]
+    assert kinds == [("user", "text"), ("assistant", "text")]
+
+
+def test_non_canonical_log_names_are_ignored(scan_env):
+    """DSH treats temp/uppercase/leading-zero/.v0 names as non-canonical."""
+    root = scan_env / "dsh_sessions"
+    for i, name in enumerate(["session.v0.jsonl.zstd", "session.v03.jsonl.zstd",
+                              "SESSION.v4.jsonl.zstd", "session.v5.jsonl.zstd.tmp"]):
+        _write_dsh_session(root, "--proj--", f"session-bad{i}", {}, _usage_events(1, 1, 1, 1), filename=name)
+    assert main._scan_dsh_sessions() == []
+

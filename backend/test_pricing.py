@@ -112,24 +112,22 @@ def test_subscription_model_returns_zero():
 
 def test_claude_5_series_curated_pricing():
     """Sonnet 5 / Opus 5 / Fable 5 must be priced from the curated table, not
-    _default. Sonnet 5 has two bands: introductory $2/$10 through 2026-08-31,
-    standard $3/$15 from 2026-09-01 (date-banded in _ANTHROPIC_BANDS)."""
+    _default. Sonnet 5 is a flat $2/$10: the increase to $3/$15 once scheduled
+    for 2026-09-01 was cancelled and $2/$10 is now the standard rate, so there
+    is deliberately no date band here."""
     assert calculate_cost("claude-opus-5", MTOK, 0, 0) == 5.00
     assert calculate_cost("claude-opus-5", 0, MTOK, 0) == 25.00
     assert calculate_cost("claude-opus-5", 0, 0, MTOK) == 0.50
-    # Sonnet 5 introductory rate (pre-cutover session)
+    assert calculate_cost("claude-sonnet-5", MTOK, 0, 0) == 2.00
+    assert calculate_cost("claude-sonnet-5", 0, MTOK, 0) == 10.00
+    assert calculate_cost("claude-sonnet-5", 0, 0, MTOK) == 0.20
+    # Same rate on either side of the cancelled cutover date.
     assert calculate_cost("claude-sonnet-5", MTOK, 0, 0, at="2026-08-15T12:00:00Z") == 2.00
-    assert calculate_cost("claude-sonnet-5", 0, MTOK, 0, at="2026-08-15T12:00:00Z") == 10.00
-    assert calculate_cost("claude-sonnet-5", 0, 0, MTOK, at="2026-08-15T12:00:00Z") == 0.20
-    # Sonnet 5 standard rate (post-cutover session)
-    assert calculate_cost("claude-sonnet-5", MTOK, 0, 0, at="2026-09-07T12:00:00Z") == 3.00
-    assert calculate_cost("claude-sonnet-5", 0, MTOK, 0, at="2026-09-07T12:00:00Z") == 15.00
-    assert calculate_cost("claude-sonnet-5", 0, 0, MTOK, at="2026-09-07T12:00:00Z") == 0.30
+    assert calculate_cost("claude-sonnet-5", MTOK, 0, 0, at="2026-09-07T12:00:00Z") == 2.00
     assert calculate_cost("claude-fable-5", MTOK, 0, 0) == 10.00
     # Date-suffixed model ids (as actually reported by the API) must still
     # resolve via the fuzzy prefix match, not fall through to _default.
-    assert calculate_cost("claude-sonnet-5-20260601", MTOK, 0, 0, at="2026-08-15T12:00:00Z") == 2.00
-    assert calculate_cost("claude-sonnet-5-20260601", MTOK, 0, 0, at="2026-09-07T12:00:00Z") == 3.00
+    assert calculate_cost("claude-sonnet-5-20260601", MTOK, 0, 0) == 2.00
 
 
 def test_unpriced_model_logs_warning_once(monkeypatch):

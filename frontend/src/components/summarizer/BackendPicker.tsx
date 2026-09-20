@@ -5,9 +5,10 @@ import { Check, Ban, Loader2, Plug, AlertCircle } from "lucide-react";
 import { getAgent } from "@/lib/agents";
 import { AgentLogo } from "@/components/icons/AgentLogo";
 import { cn } from "@/lib/cn";
+import { trackEvent } from "@/lib/telemetry";
 import {
   listCodexModels, listOllamaModels, testOpenAICompat,
-  DEFAULT_OPENAI_COMPAT,
+  DEFAULT_OPENAI_COMPAT, ENDPOINT_PRESETS,
   type CodexModel, type OllamaModel, type SummarizerBackend,
   type OpenAICompatConfig,
 } from "@/lib/summarizer";
@@ -254,6 +255,27 @@ interface OpenAICompatFormProps {
  * token up front, sampling params behind an "Advanced" toggle, and a
  * Test-connection button that pings the server before the user saves.
  */
+/**
+ * Is this endpoint somewhere other than the user's own machine? Hostname-based
+ * rather than a preset lookup, so a hand-typed gateway gets the same warning a
+ * preset does, and a local server on any port gets none.
+ */
+function isHostedEndpoint(endpoint: string): boolean {
+  let host: string;
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return false; // half-typed URL: say nothing rather than warn wrongly
+  }
+  if (host === "localhost" || host === "::1" || host.endsWith(".local")) return false;
+  if (host === "0.0.0.0" || host.startsWith("127.")) return false;
+  // RFC1918 / link-local: a box on the user's own network, not a vendor.
+  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) return false;
+  const m = /^172\.(\d{1,2})\./.exec(host);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return false;
+  return true;
+}
+
 function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAICompatFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -261,6 +283,8 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
 
   const set = <K extends keyof OpenAICompatConfig>(key: K, value: OpenAICompatConfig[K]) =>
     onChange?.({ ...config, [key]: value });
+
+  const activePreset = ENDPOINT_PRESETS.find((p) => p.endpoint === config.endpoint);
 
   const num = (key: keyof OpenAICompatConfig, label: string, step = "0.05") => (
     <div>
@@ -297,7 +321,38 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
   return (
     <div className="mt-2 ml-11 mr-1 space-y-3">
       <div>
-        <label className={LABEL_CLS}>Endpoint</label>
+        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+          <label className={cn(LABEL_CLS, "mb-0")}>Endpoint</label>
+          <div className="flex items-center gap-1.5">
+            {ENDPOINT_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                disabled={testing}
+                onClick={() => {
+                  onChange?.({ ...config, endpoint: p.endpoint });
+                  // Always reassign the model, including clearing it: a preset
+                  // with no model id means "the server picks" (llama.cpp / LM
+                  // Studio serves whatever is loaded). Leaving a stale hosted
+                  // model id pointed at localhost is worse than an empty field.
+                  onModelChange?.(p.model);
+                  // Clear any prior test result — it belongs to the previous
+                  // endpoint and would mislead the user into thinking this
+                  // preset has already been tested.
+                  setResult(null);
+                }}
+                className={cn(
+                  "h-6 px-2 rounded border text-[10.5px] font-medium transition-colors disabled:opacity-50",
+                  config.endpoint === p.endpoint
+                    ? "border-[var(--tt-border-focus)] text-[var(--tt-fg)]"
+                    : "border-[var(--tt-border-strong)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]",
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <input
           type="text"
           spellCheck={false}
@@ -307,9 +362,33 @@ function OpenAICompatForm({ model, onModelChange, config, onChange }: OpenAIComp
           className={FIELD_CLS}
         />
         <p className="text-[10.5px] text-[var(--tt-fg-dim)] mt-1.5">
-          Base URL of any OpenAI-compatible server (llama.cpp, vLLM, LM Studio, LocalAI…).
-          We POST to <code className="font-mono">/chat/completions</code> under it.
+          Base URL of any OpenAI-compatible server (llama.cpp, vLLM, LM Studio, LocalAI…)
+          or hosted gateway. We POST to <code className="font-mono">/chat/completions</code> under it.
         </p>
+        {/* Applies to every hosted value, not just the presets: whatever is in
+            the field above receives the session text. Scoping this to one
+            vendor would imply the others keep your data on the machine. */}
+        {isHostedEndpoint(config.endpoint) && (
+          <p className="text-[10.5px] text-[var(--tt-fg-dim)] mt-1">
+            This endpoint is not on your machine. When a session is summarized, its
+            prompts and responses are sent there.
+          </p>
+        )}
+        {activePreset?.refUrl && (
+          <p className="text-[10.5px] text-[var(--tt-fg-dim)] mt-1">
+            Reaches many models through one key. The sign-up link is a referral, so
+            TokenTelemetry earns a share of what referred workspaces spend.{" "}
+            <a
+              href={activePreset.refUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackEvent("feature.used", { name: "gateway-referral" })}
+              className="underline text-[var(--tt-fg)] hover:opacity-80"
+            >
+              Get a key
+            </a>
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-2">

@@ -41,6 +41,9 @@ VIBE_DIR = HOME / ".vibe"
 CURSOR_DIR = HOME / ".cursor"
 PI_DIR = HOME / ".pi" / "agent"
 DSH_DIR = _env_path("DSH_HOME") or (HOME / ".dsh")
+# Same contract as main.py's KIMI_DIR. ~/.kimi/credentials/ holds OAuth tokens
+# and is never read.
+KIMI_DIR = _env_path("KIMI_HOME") or (HOME / ".kimi")
 CLINE_DIR = _env_path("TT_CLINE_DIR") or (HOME / ".cline")
 # Same contract as main.py's QODER_DIR / QODER_IDE_DIR. Qoder keeps its CLI
 # transcripts under ~/.qoder and a separate Electron store in Application
@@ -90,6 +93,23 @@ def opencode_data_dir() -> Path:
         except OSError:
             continue
     return HOME / ".local" / "share" / "opencode"
+
+
+def zcode_dir() -> Path:
+    """ZCode's root, honouring $ZCODE_DATA_DIR like main.py's discovery does.
+
+    Resolved per call rather than at import: main.py binds ``ZCODE_DB`` once at
+    module load, and tests relocate the store by setting the env var, so a
+    constant here would pin the panel to the real store on a machine that has
+    one and break test isolation.
+    """
+    env = _env_path("ZCODE_DATA_DIR")
+    return env if env else HOME / ".zcode"
+
+
+def zcode_db() -> Path:
+    """The single canonical ZCode store. ZCode has no per-channel variants."""
+    return zcode_dir() / "cli" / "db" / "db.sqlite"
 
 
 def smallcode_roots() -> List[Path]:

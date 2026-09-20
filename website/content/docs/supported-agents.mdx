@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 17 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 19 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -26,6 +26,8 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Prime Agent** | Prime Intellect | `~/.prime/agent/sessions/` | tokens, traces, reported cost, model, active branch |
 | **DeepSeek Harness** | DeepSeek | `~/.dsh/sessions/` | tokens, traces, cost, model, provider, subagents, skills/tools, latency |
 | **Qoder** | Alibaba | `~/.qoder/projects/` | traces, credits, subagents, model, branch (no token counts — see below) |
+| **ZCode** | Z.ai | `~/.zcode/cli/db/db.sqlite` | tokens, traces, cost, model, provider, subagents |
+| **Kimi Code** | Moonshot AI | `~/.kimi/sessions/` | tokens, traces, cost, model |
 
 ## Autonomous agents
 
@@ -87,7 +89,7 @@ Prime Agent writes one JSONL session tree per file in `~/.prime/agent/sessions/`
 
 ### DeepSeek Harness
 
-DeepSeek Harness (the `dsh` CLI, npm `@deepseek-ai/dsh`) writes one zstd-compressed JSONL log per session to `~/.dsh/sessions/<slugged-cwd>/<session-id>/session.jsonl.zstd`. TokenTelemetry reads it read-only and honors `DSH_HOME` when the directory is relocated. Decompression needs the `zstandard` Python package, which `backend/requirements.txt` already pins; a virtualenv created before that pin was added will skip DSH sessions silently, so re-run the launcher if none show up.
+DeepSeek Harness (the `dsh` CLI, npm `@deepseek-ai/dsh`) writes one zstd-compressed JSONL log per session to `~/.dsh/sessions/<slugged-cwd>/<session-id>/`, named `session.jsonl.zstd` in the original format and `session.vN.jsonl.zstd` in later ones (current DSH writes `session.v3.jsonl.zstd`). An upgraded DSH leaves the older file next to the new one, so TokenTelemetry reads the newest version in each session directory. It reads read-only and honors `DSH_HOME` when the directory is relocated. Decompression needs the `zstandard` Python package, which `backend/requirements.txt` already pins; a virtualenv created before that pin was added will skip DSH sessions silently, so re-run the launcher if none show up.
 
 DSH records no cost of its own (its source zeroes the cost metadata deliberately), and it is bring-your-own-key across providers, so TokenTelemetry prices each `(turn, step)` with that step's own provider and model. A session that runs part of its work on a local Ollama model and part on a paid cloud model is priced correctly on both halves, with the local segments falling through to [local-model pricing](/docs/configuration/local-models). Tokens are de-duplicated per step, because DSH emits the same usage sample twice: once on the streaming chunk, once on the final message.
 
@@ -102,6 +104,17 @@ Qoder writes one JSONL transcript per session to `~/.qoder/projects/<slugged-cwd
 Two further things stay opaque by design: model ids are internal names such as `qmodel_38max`, and the catalogue that would resolve them (`.models/<uid>/catalog-v6`) is encrypted at rest; and each session's `state.json` is encrypted too, so resumable context and todos cannot be read. Both are listed on the agent page as unavailable, with the reason.
 
 Qoder also keeps an Electron store at `~/Library/Application Support/com.qoder.app.stable`. Its `main.sqlite` is a projection of the same sessions — the message rows are marked `sdk-projection` and reuse the transcript's ids — so TokenTelemetry reads it only for the human-readable session title, never as a second source of sessions. It counts towards the agent's disk footprint, which spans both directories.
+
+### ZCode
+
+ZCode (Z.ai) keeps its state in an OpenCode-family SQLite store at `~/.zcode/cli/db/db.sqlite` (override the location with `ZCODE_DATA_DIR`). TokenTelemetry reads it read-only — never taking a write lock on the live TUI's database: sessions and projects from the `session` table, models and plan mode from the `message` rows, per-step token totals, tool names and user prompts from the `part` rows, and plan artifacts from the `todo` table. Child sessions recorded in `session.parent_id` are folded into the parent as delegation rather than re-summed.
+
+Tokens are summed with the same semantics as OpenCode, whose store shares this schema. Sessions billed through the Z.ai coding plan report a $0.00 cost from ZCode itself, so TokenTelemetry estimates API-equivalent cost at Z.ai's list rates for the session's models. The dashboard has no plan-quota gauge for ZCode yet — its usage numbers live in the Z.ai account API, which needs your account credentials and is not read today.
+### Kimi Code
+
+Kimi Code (Moonshot AI's coding CLI, the `kimi` command) writes one JSONL wire log per session to `~/.kimi/sessions/<workdir-hash>/<session-uuid>/wire.jsonl`. TokenTelemetry detects the agent from the `~/.kimi/` directory, reads each `wire.jsonl` read-only for per-call usage, model, and the conversation trace, and rolls the sessions up under the project named by the `work_dirs` entries in `~/.kimi/kimi.json`. TokenTelemetry surfaces no delegation breakdown for Kimi Code: the scanner records no subagent links, so a Kimi session reports delegation as unsupported and its trace carries no subagent overlay. A run writes everything to one `wire.jsonl`, so a session's totals already cover whatever that run did.
+
+`~/.kimi/` belongs to Kimi Code alone. Two sibling directories that look similar are different products and are not read as Kimi Code sessions: `~/.kimi-work/` (kimi-slides, a presentation tool) and `~/.kimi-webbridge/` (the browser-automation bridge).
 
 ### Hermes Agent
 

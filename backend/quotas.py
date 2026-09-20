@@ -30,6 +30,10 @@ from tt_paths import data_dir
 SCHEMA = "tokentelemetry.quotas.v1"
 FRESHNESS = timedelta(minutes=5)
 CACHE_LOCK_TIMEOUT_SECONDS = 15
+# A fetchedAt read off disk this far ahead of the loader's own clock cannot
+# be trusted; treat it as no cached snapshot rather than an indefinitely
+# fresh one.
+MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 # ``flock``/``msvcrt.locking`` coordinate separate processes, but their
 # same-process behaviour differs by platform. Keep a per-cache thread lock as
@@ -249,10 +253,12 @@ class QuotaSnapshot:
         }
 
     @classmethod
-    def from_wire(cls, provider_id: str, value: Dict[str, Any]) -> Optional["QuotaSnapshot"]:
+    def from_wire(cls, provider_id: str, value: Dict[str, Any], now: datetime) -> Optional["QuotaSnapshot"]:
         fetched_at = _date(value.get("fetchedAt"))
         resources = value.get("resources")
         if not fetched_at or not isinstance(resources, dict):
+            return None
+        if fetched_at > now + MAX_FUTURE_SKEW:
             return None
         parsed = {
             str(key): QuotaResource.from_wire(resource)
@@ -919,9 +925,14 @@ class CursorQuotaProvider:
                     )
         spend = payload.get("spendLimitUsage")
         if isinstance(spend, dict):
-            limit = _number(spend.get("individualLimit")) or _number(spend.get("pooledLimit"))
-            remaining = _number(spend.get("individualRemaining")) or _number(spend.get("pooledRemaining"))
-            used = _number(spend.get("individualUsed")) or _number(spend.get("pooledUsed"))
+            # A present individual field of 0 is a real reading, not an absent one:
+            # `or` treats it as falsy and substitutes the team pool's figure instead.
+            individual_limit = _number(spend.get("individualLimit"))
+            individual_remaining = _number(spend.get("individualRemaining"))
+            individual_used = _number(spend.get("individualUsed"))
+            limit = individual_limit if individual_limit is not None else _number(spend.get("pooledLimit"))
+            remaining = individual_remaining if individual_remaining is not None else _number(spend.get("pooledRemaining"))
+            used = individual_used if individual_used is not None else _number(spend.get("pooledUsed"))
             if used is None and limit is not None and remaining is not None:
                 used = max(0, limit - remaining)
             if used is not None:
@@ -1025,7 +1036,7 @@ class GrokQuotaProvider:
             raise RuntimeError("invalid response")
         percent = _number(config.get("creditUsagePercent"))
         if percent is None:
-            percent = 0
+            raise RuntimeError("invalid response")
         try:
             settings_status, settings = self.fetch_json(self.settings_url, headers)
         except RuntimeError:
@@ -1305,13 +1316,43 @@ class QuotaService:
 
     def collect(self, force: bool = False) -> Dict[str, Any]:
         with self._lock:
-            with _CacheFileLock(self.cache_path) as acquired:
+            # The interprocess lock guards *refreshing and writing*, not
+            # reading: writes are atomic replaces, so a read sees either the
+            # prior complete cache or the next one. It exists so two processes
+            # (dashboard + menubar) don't fetch the same quotas twice or
+            # overwrite a newer snapshot with an older one.
+            #
+            # A caller that loses the race does neither of those things: it
+            # reads the cache and returns. So a background poll should not
+            # queue behind a refresh it is not going to perform. Waiting the
+            # full timeout blocked the response for that long and then served
+            # the very same file it could have read immediately, which blanked
+            # the Plan-limits UI for no reason. Poll with no wait; an explicit
+            # refresh still waits, because someone is watching that one.
+            #
+            # Nothing is reported for the ordinary case: each snapshot already
+            # carries fetchedAt / expiresAt / stale, so the caller can see for
+            # itself how old the numbers are.
+            with _CacheFileLock(
+                self.cache_path,
+                timeout=CACHE_LOCK_TIMEOUT_SECONDS if force else 0,
+            ) as acquired:
                 if not acquired:
                     # Another process is still collecting. Its atomic replace
                     # means this read is either the prior complete cache or the
                     # next complete cache; never write a competing snapshot.
                     self._load(reload=True)
-                    return self._wire(self.now(), [])
+                    errors: List[Dict[str, str]] = []
+                    if not self._snapshots:
+                        # No cached snapshot exists yet, so the response would
+                        # otherwise be indistinguishable from "no agents
+                        # configured" and every surface would render empty.
+                        errors.append({
+                            "providerId": "quotaCache",
+                            "message": "Another process is refreshing the quota "
+                                       "cache and no snapshot has been stored yet.",
+                        })
+                    return self._wire(self.now(), errors)
 
                 # Reload *inside* the process lock. A long-lived dashboard or
                 # menubar instance may have loaded a stale cache before another
@@ -1379,10 +1420,11 @@ class QuotaService:
             providers = value.get("providers") if isinstance(value, dict) else None
             if not isinstance(providers, dict):
                 return
+            loaded_at = self.now()
             snapshots = {
                 provider_id: snapshot
                 for provider_id, raw in providers.items()
-                if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw))
+                if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw, loaded_at))
             }
         except (OSError, json.JSONDecodeError):
             return
@@ -1437,5 +1479,7 @@ def default_quota_providers() -> List[QuotaProvider]:
         StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("dsh", "DeepSeek Harness", "The DeepSeek harness bills per API key; usage belongs to that key's own account page."),
         StaticQuotaProvider("qoder", "Qoder", "Qoder keeps its plan and usage state server-side; nothing local reports it."),
+        StaticQuotaProvider("zcode", "ZCode", "ZCode keeps its coding-plan usage in the Z.ai account API; nothing local reports it."),
+        StaticQuotaProvider("kimi", "Kimi Code", "Kimi Code keeps its membership usage allowance server-side; nothing local reports it."),
         StaticQuotaProvider("openai_compat", "OpenAI-compatible server", "This is a user-configured endpoint, so quota belongs to that provider's own account API."),
     ]

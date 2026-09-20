@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import sys
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import quotas as quotas_module
 from quotas import (
+    CACHE_LOCK_TIMEOUT_SECONDS,
+    _CacheFileLock,
     ClaudeQuotaProvider,
     CodexQuotaProvider,
     CopilotQuotaProvider,
@@ -163,6 +167,63 @@ def test_cursor_provider_reads_its_local_state_db_and_maps_monthly_quota(tmp_pat
     assert snapshot.resources["onDemand"].limit == 10
 
 
+def _cursor_home_with_token(tmp_path):
+    import sqlite3
+
+    home = tmp_path / "home"
+    db = home / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    db.parent.mkdir(parents=True)
+    connection = sqlite3.connect(db)
+    connection.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+    connection.executemany("INSERT INTO ItemTable VALUES (?, ?)", [
+        ("cursorAuth/accessToken", "cursor-token"),
+        ("cursorAuth/stripeMembershipType", "pro"),
+    ])
+    connection.commit()
+    connection.close()
+    return home
+
+
+def test_cursor_provider_does_not_attribute_pooled_spend_to_a_zeroed_individual(tmp_path):
+    home = _cursor_home_with_token(tmp_path)
+
+    def post(url, headers):
+        return 200, {
+            "enabled": True,
+            "billingCycleStart": 1_788_307_200_000,
+            "billingCycleEnd": 1_790_985_600_000,
+            "planUsage": {"totalPercentUsed": 27},
+            "spendLimitUsage": {
+                "individualLimit": 0, "individualUsed": 0, "individualRemaining": 0,
+                "pooledLimit": 50_000, "pooledUsed": 31_000, "pooledRemaining": 19_000,
+            },
+        }
+
+    snapshot = CursorQuotaProvider(home=home, post_json=post).refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    assert snapshot.resources["onDemand"].used == 0
+    assert snapshot.resources["onDemand"].limit == 0
+
+
+def test_cursor_provider_reports_a_zero_ondemand_row_instead_of_dropping_it(tmp_path):
+    home = _cursor_home_with_token(tmp_path)
+
+    def post(url, headers):
+        return 200, {
+            "enabled": True,
+            "billingCycleStart": 1_788_307_200_000,
+            "billingCycleEnd": 1_790_985_600_000,
+            "planUsage": {"totalPercentUsed": 27},
+            "spendLimitUsage": {"individualLimit": 0, "individualUsed": 0, "individualRemaining": 0},
+        }
+
+    snapshot = CursorQuotaProvider(home=home, post_json=post).refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    assert "onDemand" in snapshot.resources
+    assert snapshot.resources["onDemand"].used == 0
+    assert snapshot.resources["onDemand"].limit == 0
+
+
 def test_grok_provider_maps_its_weekly_credit_pool(tmp_path):
     home = tmp_path / "home"
     auth = home / ".grok" / "auth.json"
@@ -184,6 +245,29 @@ def test_grok_provider_maps_its_weekly_credit_pool(tmp_path):
     assert snapshot.plan == "SuperGrok"
     assert snapshot.resources["weekly"].used == 31
     assert snapshot.resources["weekly"].resets_at == datetime(2026, 9, 8, tzinfo=timezone.utc)
+
+
+def test_grok_provider_reports_invalid_response_when_credit_usage_percent_is_absent(tmp_path):
+    home = tmp_path / "home"
+    auth = home / ".grok" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(json.dumps({"https://auth.x.ai::account": {"key": "grok-token"}}))
+
+    def fetch(url, headers):
+        if url.endswith("/settings"):
+            return 200, {"subscription_tier_display": "SuperGrok"}
+        return 200, {"config": {"currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-09-01T00:00:00Z",
+            "end": "2026-09-08T00:00:00Z",
+        }}}
+
+    provider = GrokQuotaProvider(home=home, fetch_json=fetch)
+    try:
+        provider.refresh(datetime(2026, 9, 1, tzinfo=timezone.utc))
+        raise AssertionError("expected invalid response")
+    except RuntimeError as error:
+        assert str(error) == "invalid response"
 
 
 def test_gemini_provider_discovers_project_and_maps_per_model_buckets(tmp_path):
@@ -415,6 +499,151 @@ def test_second_service_reloads_a_fresh_disk_cache_before_refreshing(tmp_path):
 
     assert second_provider.calls == 0
     assert result["providers"]["opencode"]["plan"] == "first"
+
+
+def test_load_discards_a_disk_cache_written_with_a_clock_ahead_of_now(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # A skewed clock (dual-boot RTC offset, a resumed VM snapshot) wrote a
+    # cache whose fetchedAt is months in the future.
+    skewed_at = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: skewed_at).collect(force=True)
+
+    corrected_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    reader = Provider()
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: corrected_at)
+
+    result = service.collect()
+
+    assert reader.calls == 1
+    assert result["providers"]["opencode"]["fetchedAt"] == "2026-09-10T00:00:00Z"
+    assert result["providers"]["opencode"]["stale"] is False
+
+
+def test_load_still_trusts_a_fetched_at_a_few_seconds_ahead_of_the_loading_clock(tmp_path):
+    class Provider:
+        provider_id = "opencode"
+        display_name = "OpenCode"
+
+        def __init__(self):
+            self.calls = 0
+
+        def has_local_credentials(self):
+            return True
+
+        def refresh(self, now):
+            self.calls += 1
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    # Ordinary jitter between two processes' clocks, well inside
+    # MAX_FUTURE_SKEW, must not be treated as a corrupted cache.
+    written_at = datetime(2026, 9, 10, 12, 0, 5, tzinfo=timezone.utc)
+    QuotaService([Provider()], cache_path=cache_path, now=lambda: written_at).collect(force=True)
+
+    reader = Provider()
+    reader_now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
+    service = QuotaService([reader], cache_path=cache_path, now=lambda: reader_now)
+
+    service.collect()
+
+    assert reader.calls == 0
+
+
+# --- losing the cache lock -------------------------------------------------
+# The interprocess lock guards refreshing and writing, not reading. A caller
+# that loses it does neither, so it should serve the cache at once rather than
+# block for the timeout and then read that same file anyway.
+
+class _LockLoser:
+    """A provider that fails the test if it is ever asked to refresh."""
+
+    provider_id = "opencode"
+    display_name = "OpenCode"
+
+    def has_local_credentials(self):
+        return True
+
+    def refresh(self, now):
+        raise AssertionError("must not refresh while another process holds the lock")
+
+
+def _seed_cache(cache_path, at, plan="cached"):
+    class Writer(_LockLoser):
+        def refresh(self, now):
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {}, plan=plan)
+
+    QuotaService([Writer()], cache_path=cache_path, now=lambda: at).collect(force=True)
+
+
+def test_a_poll_that_loses_the_lock_serves_the_cache_without_waiting(tmp_path):
+    cache_path = tmp_path / "quotas.json"
+    written_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    _seed_cache(cache_path, written_at)
+
+    # Stale enough that a poll would normally refresh; the held lock must stop it.
+    later = written_at + FRESHNESS + timedelta(seconds=1)
+    service = QuotaService([_LockLoser()], cache_path=cache_path, now=lambda: later)
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        started = time.monotonic()
+        result = service.collect()
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0, "a poll must not queue behind another process's refresh"
+    assert result["providers"]["opencode"]["plan"] == "cached"
+    # Nothing is reported: the snapshot carries its own fetchedAt/stale, so the
+    # caller can already see how old these numbers are.
+    assert result["errors"] == []
+    assert result["providers"]["opencode"]["stale"] is True
+
+
+def test_losing_the_lock_with_no_cache_reports_an_error_rather_than_looking_empty(tmp_path):
+    """Without this, the response is identical to "no agents configured"."""
+    cache_path = tmp_path / "quotas.json"
+    service = QuotaService([_LockLoser()], cache_path=cache_path,
+                           now=lambda: datetime(2026, 9, 10, tzinfo=timezone.utc))
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        result = service.collect()
+
+    assert result["providers"] == {}
+    assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
+    assert "no snapshot has been stored yet" in result["errors"][0]["message"]
+
+
+def test_a_poll_waits_not_at_all_but_an_explicit_refresh_still_waits(tmp_path, monkeypatch):
+    """Nobody is watching a background poll; someone is watching Refresh."""
+    seen = []
+    original = quotas_module._CacheFileLock
+
+    class Spy(original):
+        def __init__(self, path, timeout=CACHE_LOCK_TIMEOUT_SECONDS):
+            seen.append(timeout)
+            super().__init__(path, timeout=timeout)
+
+    monkeypatch.setattr(quotas_module, "_CacheFileLock", Spy)
+    service = QuotaService([], cache_path=tmp_path / "quotas.json")
+
+    service.collect()
+    service.collect(force=True)
+
+    assert seen == [0, CACHE_LOCK_TIMEOUT_SECONDS]
 
 
 def test_second_service_never_saves_an_older_in_memory_snapshot_over_newer_disk_cache(tmp_path):
@@ -712,7 +941,7 @@ def test_default_quota_providers_roster_is_exact_and_stable():
     assert [p.provider_id for p in providers] == [
         "codex", "claude", "cursor", "opencode", "copilot", "grok", "gemini",
         "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
-        "muse", "prime", "dsh", "qoder", "openai_compat",
+        "muse", "prime", "dsh", "qoder", "zcode", "kimi", "openai_compat",
     ]
 
     native = [p for p in providers if not isinstance(p, StaticQuotaProvider)]
@@ -725,11 +954,12 @@ def test_default_quota_providers_roster_is_exact_and_stable():
     statics = {p.provider_id: p for p in providers if isinstance(p, StaticQuotaProvider)}
     assert set(statics) == {
         "antigravity", "qwen", "vibe", "hermes", "cline", "pi", "smallcode",
-        "muse", "prime", "dsh", "qoder", "openai_compat",
+        "muse", "prime", "dsh", "qoder", "zcode", "kimi", "openai_compat",
     }
     assert statics["qwen"].display_name == "Qwen CLI"
     assert statics["dsh"].display_name == "DeepSeek Harness"
     assert statics["muse"].display_name == "Muse Code"
+    assert statics["zcode"].display_name == "ZCode"
     assert statics["openai_compat"].display_name == "OpenAI-compatible server"
     assert [p.capability()["state"] for p in statics.values()] == ["notSupported"] * len(statics)
 

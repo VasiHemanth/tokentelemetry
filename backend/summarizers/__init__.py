@@ -11,6 +11,7 @@ from .base import BaseSummarizer, SummarizerError
 from .claude import ClaudeSummarizer
 from .codex import CodexSummarizer
 from .gemini import GeminiSummarizer
+from .kimi import KimiSummarizer
 from .antigravity import AntigravitySummarizer
 from .ollama import OllamaSummarizer
 from .openai_compat import OpenAICompatSummarizer
@@ -25,6 +26,7 @@ _ALL: List[BaseSummarizer] = [
     GeminiSummarizer(),
     AntigravitySummarizer(),
     QwenSummarizer(),
+    KimiSummarizer(),
     OllamaSummarizer(),
     OpenAICompatSummarizer(),
 ]
