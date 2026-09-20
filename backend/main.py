@@ -8056,6 +8056,8 @@ def _scan_sessions_sync():
                     logging.getLogger("tokentelemetry.codex").warning(
                         "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
                     )
+                    # A parse failure means the read is incomplete, not just opened.
+                    _read_ok = False
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
