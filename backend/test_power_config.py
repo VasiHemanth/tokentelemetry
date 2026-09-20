@@ -156,7 +156,8 @@ def test_subscription_match_is_substring_either_way():
 
 def test_local_model_uses_electricity_when_configured():
     with tempfile.TemporaryDirectory() as home:
-        _write_power_json(home, {"loadWatts": 80, "costPerKwh": 0.15})
+        _write_power_json(home, {"loadWatts": 80, "costPerKwh": 0.15,
+                                 "localEndpoints": ["http://localhost:11434"]})
         pc, pricing = _fresh_modules(home)
         out_tokens = 30_000  # at default 30 tok/s -> 1000s
         cost = pricing.calculate_cost("my-local-llama", 5000, out_tokens)
@@ -171,7 +172,8 @@ def test_local_model_uses_electricity_when_configured():
 
 def test_local_model_respects_custom_tok_per_sec():
     with tempfile.TemporaryDirectory() as home:
-        _write_power_json(home, {"loadWatts": 100, "costPerKwh": 0.20})
+        _write_power_json(home, {"loadWatts": 100, "costPerKwh": 0.20,
+                                 "localEndpoints": ["http://localhost:11434"]})
         _, pricing = _fresh_modules(home)
         out_tokens = 6000
         cost = pricing.calculate_cost(
@@ -197,6 +199,44 @@ def test_subscription_only_config_does_not_electricity_price_unknown_cloud():
         assert pricing.calculate_cost(
             "brand-new-cloud-model", 1_000_000, 1_000_000,
             endpoint="https://ollama.com/api/chat",
+        ) == 0.0
+
+
+def test_settings_save_with_detected_wattage_no_local_endpoints_does_not_reprice_cloud():
+    # Regression for issue #341: the settings form always round-trips the
+    # chip-detected loadWatts/costPerKwh even when the user only adds a
+    # subscriptionEndpoints entry. That persists valid power figures to
+    # power.json, which previously made local_power_enabled() return True with
+    # localEndpoints empty — re-pricing every unknown cloud model at near-zero
+    # electricity (~392x under-report). The fix: require at least one
+    # localEndpoints entry before activating electricity pricing.
+    with tempfile.TemporaryDirectory() as home:
+        # Simulate a save where the user added a subscription endpoint only;
+        # the form also submitted machine-detected power figures.
+        _write_power_json(home, {
+            "loadWatts": 22,
+            "costPerKwh": 0.15,
+            "localEndpoints": [],
+            "subscriptionEndpoints": ["https://api.example.com"],
+        })
+        pc, pricing = _fresh_modules(home)
+        # local_power_enabled must be False — no local endpoints configured.
+        assert pc.local_power_enabled() is False, (
+            "local_power_enabled() returned True with localEndpoints=[] "
+            "(issue #341: settings save with chip-detected wattage reprices cloud models)"
+        )
+        # Unknown cloud model must fall through to _default, not electricity.
+        unknown_cost = pricing.calculate_cost("brand-new-cloud-model", 1_000_000, 1_000_000)
+        d = pricing.PRICING["_default"]
+        expected = d["in"] + d["out"]
+        assert abs(unknown_cost - expected) < 1e-9, (
+            f"unknown cloud model repriced as electricity ({unknown_cost:.4f}) "
+            f"instead of _default ({expected:.4f})"
+        )
+        # The subscription short-circuit still zeroes that endpoint's models.
+        assert pricing.calculate_cost(
+            "brand-new-cloud-model", 1_000_000, 1_000_000,
+            endpoint="https://api.example.com/v1/chat",
         ) == 0.0
 
 
