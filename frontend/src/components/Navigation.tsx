@@ -12,6 +12,7 @@ import { AgentLogo } from "@/components/icons/AgentLogo";
 import { cn } from "@/lib/cn";
 import { clearPageState } from "@/lib/pageState";
 import { ThemeToggle } from "./ThemeToggle";
+import { LanguageSwitch } from "./LocaleOverlay";
 import NotificationBell from "./notifications/NotificationBell";
 import QuotaIndicator from "./QuotaIndicator";
 import HermesIcon from "./icons/HermesIcon";
@@ -110,6 +111,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
         />
 
         <ThemeToggle collapsed={isCollapsed} />
+        <LanguageSwitch collapsed={isCollapsed} />
 
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}

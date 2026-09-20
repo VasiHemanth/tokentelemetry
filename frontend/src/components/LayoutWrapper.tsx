@@ -8,6 +8,7 @@ import { QuotaProvider } from "./QuotaProvider";
 import NotificationToaster from "./notifications/NotificationToaster";
 import TokenGate from "./TokenGate";
 import TelemetryNotice from "./TelemetryNotice";
+import LocaleOverlay from "./LocaleOverlay";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
@@ -72,6 +73,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <FeedbackFloatingButton />
         <TokenGate />
         <TelemetryNotice />
+        {/* Runtime Chinese localization + the language switch. Kept as a single
+            mount so no other file depends on the i18n machinery. */}
+        <LocaleOverlay />
       </body>
       </QuotaProvider>
     </NotificationProvider>
