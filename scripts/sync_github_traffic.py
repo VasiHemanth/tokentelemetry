@@ -20,6 +20,12 @@ import gspread
 import requests
 from google.oauth2.service_account import Credentials
 
+_required = {"GCP_CREDENTIALS", "GH_PAT", "TT_SHEET_ID"}
+_missing = _required - set(k for k in _required if os.environ.get(k))
+if _missing:
+    print(f"Skipping sync: secrets not configured: {', '.join(sorted(_missing))}")
+    raise SystemExit(0)
+
 SPREADSHEET_ID = os.environ["TT_SHEET_ID"]
 
 REPOS_TO_TRACK = {
