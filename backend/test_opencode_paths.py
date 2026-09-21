@@ -212,6 +212,31 @@ def test_scan_merges_every_channel_db(scan_env):
     assert len(ids) == len(set(ids)), "a session present in two DBs was counted twice"
 
 
+def test_scan_prefers_newer_db_when_session_id_duplicated(scan_env):
+    """M6: when the same session id appears in two DBs (copied data dir),
+    the copy with the higher time_updated must win — not the first DB iterated."""
+    old_ts = 1_700_000_000_000
+    new_ts = 1_750_000_000_000
+    # canonical DB (iterated first) has the stale copy.
+    _make_scannable_db(scan_env / "opencode.db", "ses_dup")
+    # Patch the stale copy's time_updated to old_ts.
+    con = sqlite3.connect(str(scan_env / "opencode.db"))
+    con.execute("UPDATE session SET time_updated=? WHERE id='ses_dup'", (old_ts,))
+    con.commit(); con.close()
+    # Stable DB has the newer copy.
+    _make_scannable_db(scan_env / "opencode-stable.db", "ses_dup")
+    con = sqlite3.connect(str(scan_env / "opencode-stable.db"))
+    con.execute("UPDATE session SET time_updated=? WHERE id='ses_dup'", (new_ts,))
+    con.commit(); con.close()
+
+    dup_sessions = [s for s in main._scan_sessions_sync()
+                    if s["agent"] == "opencode" and s["id"] == "ses_dup"]
+    assert len(dup_sessions) == 1, "session must appear exactly once"
+    from datetime import datetime, timezone
+    expected_ts = datetime.fromtimestamp(new_ts / 1000, tz=timezone.utc)
+    assert dup_sessions[0]["timestamp"] == expected_ts, "newer DB's copy must win"
+
+
 def test_detail_lookup_finds_session_in_channel_db(scan_env):
     """Otherwise the list populates but clicking a session 404s."""
     _make_scannable_db(scan_env / "opencode.db", "ses_latest")

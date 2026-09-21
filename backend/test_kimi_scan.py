@@ -143,6 +143,23 @@ def test_scan_kimi_model_falls_back_to_kimi_for_coding(kimi_home):
     assert s["model"] == "kimi-for-coding"
 
 
+def test_scan_kimi_marks_stub_when_config_toml_unreadable(kimi_home):
+    """M3: when config.toml is missing/corrupt the fallback model is priced at
+    $0.00. Sessions must be marked stub=True so upsert_sessions does not
+    overwrite stored cost data with $0.00."""
+    _write_kimi_home(kimi_home)
+    (kimi_home / "config.toml").unlink(missing_ok=True)
+    s = main._scan_kimi_sessions()[0]
+    assert s.get("stub") is True, "sessions must be stubs when config is unreadable"
+
+
+def test_scan_kimi_not_stub_when_config_readable(kimi_home):
+    """When config.toml is present and valid, sessions must NOT be stubs."""
+    _write_kimi_home(kimi_home)
+    s = main._scan_kimi_sessions()[0]
+    assert not s.get("stub"), "sessions must not be stubs when config is readable"
+
+
 def test_scan_kimi_model_resolves_display_id_through_models_table(kimi_home):
     _write_kimi_home(kimi_home)
     (kimi_home / "config.toml").write_text(

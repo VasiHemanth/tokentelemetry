@@ -4950,31 +4950,37 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
 
 # ------------------------------------------------------------- Kimi Code --
 
-def _kimi_default_model() -> str:
+def _kimi_default_model() -> tuple:
     """Model name from ~/.kimi/config.toml. `default_model` is a display id
     (e.g. "kimi-code/kimi-for-coding") that resolves through
     [models."<id>"].model to the API model id; wire.jsonl never records the
-    model, so this config value is the only on-disk source. Falls back to
-    "kimi-for-coding" when absent or unreadable."""
+    model, so this config value is the only on-disk source.
+
+    Returns (model_id, trusted). trusted=False when config.toml was unreadable
+    (missing, corrupt, permission-denied); callers should treat sessions as
+    stubs so stored cost data is not overwritten with the $0.00 fallback."""
     try:
         import tomllib
         with open(KIMI_DIR / "config.toml", "rb") as f:
             data = tomllib.load(f)
-    except Exception:
-        return "kimi-for-coding"
+    except Exception as _e:
+        import logging as _log
+        _log.getLogger("tokentelemetry.kimi").debug(
+            "config.toml unreadable — Kimi sessions will not update cost: %r", _e)
+        return "kimi-for-coding", False
     if not isinstance(data, dict):
-        return "kimi-for-coding"
+        return "kimi-for-coding", False
     models = data.get("models")
     model = data.get("default_model")
     if not (isinstance(model, str) and model):
         if isinstance(models, dict):
             model = models.get("default_model")
     if not (isinstance(model, str) and model):
-        return "kimi-for-coding"
+        return "kimi-for-coding", True
     entry = models.get(model) if isinstance(models, dict) else None
     if isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"]:
-        return entry["model"]
-    return model
+        return entry["model"], True
+    return model, True
 
 
 def _kimi_project_by_session() -> Dict[str, str]:
@@ -5012,7 +5018,7 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
 
     aliases = _load_project_aliases()
     projects = _kimi_project_by_session()
-    model = _kimi_default_model()
+    model, model_trusted = _kimi_default_model()
 
     out: List[Dict[str, Any]] = []
     for wire in KIMI_SESSIONS_DIR.glob("*/*/wire.jsonl"):
@@ -5121,6 +5127,12 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
                     "protocol_version": protocol_version,
                     "num_status_updates": num_status,
                 },
+                # When config.toml is unreadable the model falls back to
+                # "kimi-for-coding" which is priced at $0.00.  Mark as stub so
+                # upsert_sessions does not overwrite a previously-stored cost
+                # with $0; the row stays visible but cost is not updated until
+                # config becomes readable again.
+                "stub": not model_trusted,
             }
             _attach_tool_usage(sess, tool_counts)
             out.append(sess)
@@ -8753,7 +8765,10 @@ def _scan_sessions_sync():
     # channel, so a channel-switcher can have several side by side (#170).
     # Session ids are unique per DB but the same id could in principle appear
     # in two of them (a copied data dir); keep the count-once invariant.
-    _oc_seen_ids: set = set()
+    # M6 fix: prefer the DB with the highest time_updated for a given session
+    # id rather than first-DB-wins, so a stale canonical copy does not shadow
+    # a newer channel copy when the user copies a data dir.
+    _oc_seen_ts: Dict[str, int] = {}   # sid -> best time_updated seen so far
     for _oc_db in _opencode_dbs():
         try:
             # mode=ro (via _sqlite_ro_uri) so we never take a write lock on the
@@ -8793,9 +8808,25 @@ def _scan_sessions_sync():
                 rows = conn.execute(f"SELECT id, directory, title, time_created, time_updated{_parent_sel} FROM session").fetchall()
                 for srow in rows:
                     sid = srow["id"]
-                    if sid in _oc_seen_ids:
-                        continue
-                    _oc_seen_ids.add(sid)
+                    srow_updated = srow["time_updated"] or srow["time_created"] or 0
+                    if sid in _oc_seen_ts:
+                        if srow_updated <= _oc_seen_ts[sid]:
+                            continue
+                        # Newer copy found — evict the stale entry (which may
+                        # be from a different DB iteration, so also scan the
+                        # global sessions list rather than only oc_by_id).
+                        old = oc_by_id.pop(sid, None)
+                        if old is not None:
+                            try:
+                                sessions.remove(old)
+                            except ValueError:
+                                pass
+                        else:
+                            for _i, _s in enumerate(sessions):
+                                if _s.get("agent") == "opencode" and _s.get("id") == sid:
+                                    del sessions[_i]
+                                    break
+                    _oc_seen_ts[sid] = srow_updated
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
