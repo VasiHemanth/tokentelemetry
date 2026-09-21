@@ -247,3 +247,33 @@ def test_session_detail_kimi_returns_claude_shaped_events(kimi_home):
 def test_session_detail_kimi_not_found(kimi_home):
     res = asyncio.run(main.get_session_detail("nonexistent-id", "kimi"))
     assert res == {"error": "Not found"}
+
+
+# ---------------------------------------------------------------------------
+# U3 — path traversal guard in _kimi_session_file
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_id", [
+    "..",
+    ".",
+    "../other",
+    "foo/bar",
+    "foo\\bar",          # Windows path separator
+    "..\\session",       # Windows traversal
+    "",
+])
+def test_kimi_session_file_rejects_unsafe_ids(kimi_home, bad_id):
+    """U3: _kimi_session_file must return None for any id that contains path
+    separators or traversal sequences, regardless of whether the sessions dir
+    contains matching entries."""
+    _write_kimi_home(kimi_home)
+    assert main._kimi_session_file(bad_id) is None, \
+        f"unsafe session_id {bad_id!r} must be rejected"
+
+
+def test_kimi_session_file_accepts_valid_uuid(kimi_home):
+    """A normal UUID-shaped session id must still resolve correctly."""
+    sess = _write_kimi_home(kimi_home)
+    result = main._kimi_session_file(SID)
+    assert result is not None
+    assert result.name == "wire.jsonl"

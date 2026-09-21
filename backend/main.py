@@ -5133,7 +5133,10 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
 def _kimi_session_file(session_id: str) -> Optional[Path]:
     """Locate one Kimi Code wire.jsonl by session id. The session dir IS the
     id, so a direct glob resolves it without reversing the work-dir hash."""
-    if not KIMI_SESSIONS_DIR.is_dir() or not session_id or "/" in session_id:
+    if (not KIMI_SESSIONS_DIR.is_dir() or not session_id
+            or "/" in session_id or "\\" in session_id
+            or session_id in (".", "..")
+            or Path(session_id).name != session_id):
         return None
     for match in KIMI_SESSIONS_DIR.glob(f"*/{session_id}/wire.jsonl"):
         return match
