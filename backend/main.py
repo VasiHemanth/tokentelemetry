@@ -5734,7 +5734,7 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                         ts = datetime.fromtimestamp(
                             (srow["time_updated"] or srow["time_created"] or 0) / 1000,
                             tz=timezone.utc)
-                        tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
+                        tokens = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "total": 0}
                         model = None
                         provider_id = None
                         models_used: List[str] = []
@@ -5815,12 +5815,14 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                                 cache_read = cache.get("read", 0) or 0
                                 tokens["input"] += max(0, gross_input - cache_read)
                                 tokens["output"] += tk.get("output", 0) or 0
+                                # HWM for display; cumulative sum for billing.
                                 tokens["cached"] = max(tokens["cached"], cache_read)
+                                tokens["_cached_sum"] += cache_read
                                 # cache writes ARE billed per event → cumulative.
                                 tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
                         tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                         tokens["cost"] = calculate_cost(
-                            model, tokens["input"], tokens["output"], tokens["cached"],
+                            model, tokens["input"], tokens["output"], tokens["_cached_sum"],
                             cache_creation_tokens=tokens.get("cache_creation", 0),
                             provider=provider_id, at=ts)
                         title = srow["title"] or ""
