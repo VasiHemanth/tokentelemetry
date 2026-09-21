@@ -261,6 +261,9 @@ def test_session_detail_kimi_not_found(kimi_home):
     "foo\\bar",          # Windows path separator
     "..\\session",       # Windows traversal
     "",
+    "*",                 # glob wildcard — must not match all sessions
+    "?",                 # glob wildcard
+    "[abc]",             # glob character class
 ])
 def test_kimi_session_file_rejects_unsafe_ids(kimi_home, bad_id):
     """U3: _kimi_session_file must return None for any id that contains path
