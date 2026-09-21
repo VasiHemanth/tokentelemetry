@@ -153,6 +153,16 @@ def test_scan_kimi_marks_stub_when_config_toml_unreadable(kimi_home):
     assert s.get("stub") is True, "sessions must be stubs when config is unreadable"
 
 
+def test_scan_kimi_marks_stub_when_config_has_no_default_model(kimi_home):
+    """M3 follow-up: readable config.toml with no usable default_model must also
+    produce stub=True — the fallback 'kimi-for-coding' is unpriced in many tables."""
+    _write_kimi_home(kimi_home)
+    (kimi_home / "config.toml").write_text("[loop_control]\nmax_steps_per_turn = 100\n",
+                                           encoding="utf-8")
+    s = main._scan_kimi_sessions()[0]
+    assert s.get("stub") is True, "sessions must be stubs when default_model is absent"
+
+
 def test_scan_kimi_not_stub_when_config_readable(kimi_home):
     """When config.toml is present and valid, sessions must NOT be stubs."""
     _write_kimi_home(kimi_home)

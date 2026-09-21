@@ -4976,7 +4976,7 @@ def _kimi_default_model() -> tuple:
         if isinstance(models, dict):
             model = models.get("default_model")
     if not (isinstance(model, str) and model):
-        return "kimi-for-coding", True
+        return "kimi-for-coding", False
     entry = models.get(model) if isinstance(models, dict) else None
     if isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"]:
         return entry["model"], True
@@ -8809,23 +8809,15 @@ def _scan_sessions_sync():
                 for srow in rows:
                     sid = srow["id"]
                     srow_updated = srow["time_updated"] or srow["time_created"] or 0
+                    _stale_oc = None   # same-DB stale reference (evict after build)
+                    _needs_evict = False
                     if sid in _oc_seen_ts:
                         if srow_updated <= _oc_seen_ts[sid]:
                             continue
-                        # Newer copy found — evict the stale entry (which may
-                        # be from a different DB iteration, so also scan the
-                        # global sessions list rather than only oc_by_id).
-                        old = oc_by_id.pop(sid, None)
-                        if old is not None:
-                            try:
-                                sessions.remove(old)
-                            except ValueError:
-                                pass
-                        else:
-                            for _i, _s in enumerate(sessions):
-                                if _s.get("agent") == "opencode" and _s.get("id") == sid:
-                                    del sessions[_i]
-                                    break
+                        # Newer copy found — save stale reference; evict after build
+                        # so a parse failure doesn't drop the session entirely.
+                        _stale_oc = oc_by_id.get(sid)
+                        _needs_evict = True
                     _oc_seen_ts[sid] = srow_updated
                     ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
@@ -8937,6 +8929,18 @@ def _scan_sessions_sync():
                     _attach_tool_usage(oc_sess, oc_tool_counts)
                     oc_by_id[sid] = oc_sess
                     sessions.append(oc_sess)
+                    # Evict stale entry only after new session successfully built.
+                    if _stale_oc is not None:
+                        try:
+                            sessions.remove(_stale_oc)
+                        except ValueError:
+                            pass
+                    elif _needs_evict:
+                        # Cross-DB stale: not in oc_by_id, must linear-scan sessions.
+                        for _i, _s in enumerate(sessions[:-1]):
+                            if _s.get("agent") == "opencode" and _s.get("id") == sid:
+                                del sessions[_i]
+                                break
                 # Annotate parents with their children (display-only; child tokens
                 # are already counted as their own sessions).
                 for child_id, parent_id in oc_parent_of.items():
