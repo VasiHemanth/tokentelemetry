@@ -836,7 +836,9 @@ def _scan_muse_sessions() -> List[Dict[str, Any]]:
             "tokens": tokens, "model": summary["model"], "mcp_tools": summary["tools"],
             "has_plan": False, "plans": [], "artifacts": [], "cost": tokens["cost"],
             "cost_source": "estimated",
-            "delegation": delegation, "muse": {"session_path": str(path)},
+            "delegation": delegation,
+            "delegated_cost": delegation["delegated_cost"],
+            "muse": {"session_path": str(path)},
         })
     return out
 
@@ -4942,6 +4944,7 @@ def _scan_dsh_sessions() -> List[Dict[str, Any]]:
         }
         if delegation:
             sess["delegation"] = delegation
+            sess["delegated_cost"] = delegation["delegated_cost"]
         _attach_tool_usage(sess, tool_counts)
         out.append(sess)
 
@@ -5723,53 +5726,24 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                     "SELECT id, directory, title, time_created, time_updated"
                     f"{_parent_sel} FROM session").fetchall()
                 for srow in rows:
-                    sid = srow["id"]
-                    if sid in _zc_seen_ids:
-                        continue
-                    _zc_seen_ids.add(sid)
-                    ts = datetime.fromtimestamp(
-                        (srow["time_updated"] or srow["time_created"] or 0) / 1000,
-                        tz=timezone.utc)
-                    tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-                    model = None
-                    provider_id = None
-                    models_used: List[str] = []
-                    first_user = ""
-                    mcp_tools: List[str] = []
-                    zc_tool_counts: Dict[str, int] = {}
-                    has_plan = False
-                    plans: List[Dict[str, Any]] = []
-                    # Model, provider, plan-mode from assistant messages.
-                    for mrow in conn.execute(
-                            "SELECT data FROM message WHERE session_id=? ORDER BY time_created",
-                            (sid,)):
-                        try:
-                            mdata = json.loads(mrow["data"] or "{}")
-                        except Exception:
+                    try:
+                        sid = srow["id"]
+                        if sid in _zc_seen_ids:
                             continue
-                        if mdata.get("role") != "assistant":
-                            continue
-                        if not provider_id:
-                            provider_id = mdata.get("providerID")
-                        if not model:
-                            model = mdata.get("modelID") or mdata.get("providerID")
-                            if not model:
-                                model = _opencode_resolve_model(mdata.get("model"))
-                        _mm = mdata.get("modelID") or _opencode_resolve_model(mdata.get("model"))
-                        if _mm and _mm not in models_used:
-                            models_used.append(_mm)
-                        if mdata.get("mode") == "plan":
-                            has_plan = True
-                    if not model and _has_sess_model:
-                        try:
-                            mrow = conn.execute("SELECT model FROM session WHERE id=?", (sid,)).fetchone()
-                            if mrow is not None:
-                                model = _opencode_resolve_model(mrow["model"])
-                        except Exception:
-                            pass
-                    if not model:
-                        # No assistant message yet (fresh/degenerate session) —
-                        # fall back to any message's model, else None (cost 0).
+                        _zc_seen_ids.add(sid)
+                        ts = datetime.fromtimestamp(
+                            (srow["time_updated"] or srow["time_created"] or 0) / 1000,
+                            tz=timezone.utc)
+                        tokens = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "total": 0}
+                        model = None
+                        provider_id = None
+                        models_used: List[str] = []
+                        first_user = ""
+                        mcp_tools: List[str] = []
+                        zc_tool_counts: Dict[str, int] = {}
+                        has_plan = False
+                        plans: List[Dict[str, Any]] = []
+                        # Model, provider, plan-mode from assistant messages.
                         for mrow in conn.execute(
                                 "SELECT data FROM message WHERE session_id=? ORDER BY time_created",
                                 (sid,)):
@@ -5777,75 +5751,111 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                                 mdata = json.loads(mrow["data"] or "{}")
                             except Exception:
                                 continue
-                            model = (_opencode_resolve_model(mdata.get("model"))
-                                     or mdata.get("modelID") or mdata.get("providerID"))
-                            if model:
-                                break
-                    if model and model not in models_used:
-                        models_used.insert(0, model)
-                    # Parts: first user text, tool names, token totals.
-                    for prow in conn.execute(
-                            "SELECT data FROM part WHERE session_id=? ORDER BY time_created",
-                            (sid,)):
-                        try:
-                            pdata = json.loads(prow["data"] or "{}")
-                        except Exception:
-                            continue
-                        ptype = pdata.get("type")
-                        if ptype == "text" and not first_user:
-                            txt = _strip_context_tags(pdata.get("text") or "")
-                            if txt:
-                                first_user = txt
-                        if ptype == "tool":
-                            tname = pdata.get("tool")
-                            if tname and tname not in mcp_tools:
-                                mcp_tools.append(tname)
-                            _count_tool(zc_tool_counts, tname)
-                        if ptype == "step-finish":
-                            tk = pdata.get("tokens") or {}
-                            cache = tk.get("cache") or {}
-                            # step-finish `input` is GROSS (includes cache.read);
-                            # calculate_cost expects NET input and adds cached
-                            # on top, so subtract before accumulating.
-                            gross_input = tk.get("input", 0) or 0
-                            cache_read = cache.get("read", 0) or 0
-                            tokens["input"] += max(0, gross_input - cache_read)
-                            tokens["output"] += tk.get("output", 0) or 0
-                            tokens["cached"] = max(tokens["cached"], cache_read)
-                            # cache writes ARE billed per event → cumulative.
-                            tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
-                    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                    tokens["cost"] = calculate_cost(
-                        model, tokens["input"], tokens["output"], tokens["cached"],
-                        cache_creation_tokens=tokens.get("cache_creation", 0),
-                        provider=provider_id, at=ts)
-                    title = srow["title"] or ""
-                    display = (first_user or title)[:100]
-                    todo_rows = (conn.execute(
-                        "SELECT content, status FROM todo WHERE session_id=? ORDER BY position",
-                        (sid,)).fetchall() if "todo" in _tables else [])
-                    if todo_rows:
-                        has_plan = True
-                        plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
-                        plans.append({"session_id": sid, "agent": "zcode",
-                                      "timestamp": ts, "content": plan_text})
-                    directory = srow["directory"] or "unknown"
-                    zc_sess = {
-                        "id": sid, "agent": "zcode",
-                        "project": aliases.get(directory, directory),
-                        "timestamp": ts, "display": display, "tokens": tokens,
-                        "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans,
-                        "model": model, "models_used": models_used, "artifacts": [],
-                        # providerID is ZCode's billing runtime ("builtin:zai-start-plan",
-                        # "builtin:zai-coding-plan") — exposed like OpenCode's "ollama".
-                        "provider": provider_id, "cost": tokens["cost"],
-                    }
-                    if _has_parent and srow["parent_id"]:
-                        zc_sess["parent_session_id"] = srow["parent_id"]
-                        zc_parent_of[sid] = srow["parent_id"]
-                    _attach_tool_usage(zc_sess, zc_tool_counts)
-                    zc_by_id[sid] = zc_sess
-                    sessions.append(zc_sess)
+                            if mdata.get("role") != "assistant":
+                                continue
+                            if not provider_id:
+                                provider_id = mdata.get("providerID")
+                            if not model:
+                                model = mdata.get("modelID") or mdata.get("providerID")
+                                if not model:
+                                    model = _opencode_resolve_model(mdata.get("model"))
+                            _mm = mdata.get("modelID") or _opencode_resolve_model(mdata.get("model"))
+                            if _mm and _mm not in models_used:
+                                models_used.append(_mm)
+                            if mdata.get("mode") == "plan":
+                                has_plan = True
+                        if not model and _has_sess_model:
+                            try:
+                                mrow = conn.execute("SELECT model FROM session WHERE id=?", (sid,)).fetchone()
+                                if mrow is not None:
+                                    model = _opencode_resolve_model(mrow["model"])
+                            except Exception:
+                                pass
+                        if not model:
+                            # No assistant message yet (fresh/degenerate session) —
+                            # fall back to any message's model, else None (cost 0).
+                            for mrow in conn.execute(
+                                    "SELECT data FROM message WHERE session_id=? ORDER BY time_created",
+                                    (sid,)):
+                                try:
+                                    mdata = json.loads(mrow["data"] or "{}")
+                                except Exception:
+                                    continue
+                                model = (_opencode_resolve_model(mdata.get("model"))
+                                         or mdata.get("modelID") or mdata.get("providerID"))
+                                if model:
+                                    break
+                        if model and model not in models_used:
+                            models_used.insert(0, model)
+                        # Parts: first user text, tool names, token totals.
+                        for prow in conn.execute(
+                                "SELECT data FROM part WHERE session_id=? ORDER BY time_created",
+                                (sid,)):
+                            try:
+                                pdata = json.loads(prow["data"] or "{}")
+                            except Exception:
+                                continue
+                            ptype = pdata.get("type")
+                            if ptype == "text" and not first_user:
+                                txt = _strip_context_tags(pdata.get("text") or "")
+                                if txt:
+                                    first_user = txt
+                            if ptype == "tool":
+                                tname = pdata.get("tool")
+                                if tname and tname not in mcp_tools:
+                                    mcp_tools.append(tname)
+                                _count_tool(zc_tool_counts, tname)
+                            if ptype == "step-finish":
+                                tk = pdata.get("tokens") or {}
+                                cache = tk.get("cache") or {}
+                                # step-finish `input` is GROSS (includes cache.read);
+                                # calculate_cost expects NET input and adds cached
+                                # on top, so subtract before accumulating.
+                                gross_input = tk.get("input", 0) or 0
+                                cache_read = cache.get("read", 0) or 0
+                                tokens["input"] += max(0, gross_input - cache_read)
+                                tokens["output"] += tk.get("output", 0) or 0
+                                # HWM for display; cumulative sum for billing.
+                                tokens["cached"] = max(tokens["cached"], cache_read)
+                                tokens["_cached_sum"] += cache_read
+                                # cache writes ARE billed per event → cumulative.
+                                tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
+                        tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                        tokens["cost"] = calculate_cost(
+                            model, tokens["input"], tokens["output"], tokens["_cached_sum"],
+                            cache_creation_tokens=tokens.get("cache_creation", 0),
+                            provider=provider_id, at=ts)
+                        title = srow["title"] or ""
+                        display = (first_user or title)[:100]
+                        todo_rows = (conn.execute(
+                            "SELECT content, status FROM todo WHERE session_id=? ORDER BY position",
+                            (sid,)).fetchall() if "todo" in _tables else [])
+                        if todo_rows:
+                            has_plan = True
+                            plan_text = "\n".join(f"- [{r['status']}] {r['content']}" for r in todo_rows)
+                            plans.append({"session_id": sid, "agent": "zcode",
+                                          "timestamp": ts, "content": plan_text})
+                        directory = srow["directory"] or "unknown"
+                        zc_sess = {
+                            "id": sid, "agent": "zcode",
+                            "project": aliases.get(directory, directory),
+                            "timestamp": ts, "display": display, "tokens": tokens,
+                            "mcp_tools": mcp_tools, "has_plan": has_plan, "plans": plans,
+                            "model": model, "models_used": models_used, "artifacts": [],
+                            # providerID is ZCode's billing runtime ("builtin:zai-start-plan",
+                            # "builtin:zai-coding-plan") — exposed like OpenCode's "ollama".
+                            "provider": provider_id, "cost": tokens["cost"],
+                        }
+                        if _has_parent and srow["parent_id"]:
+                            zc_sess["parent_session_id"] = srow["parent_id"]
+                            zc_parent_of[sid] = srow["parent_id"]
+                        _attach_tool_usage(zc_sess, zc_tool_counts)
+                        zc_by_id[sid] = zc_sess
+                        sessions.append(zc_sess)
+                    except Exception as _zc_row_exc:
+                        import logging as _log
+                        _log.getLogger("tokentelemetry.zcode").debug(
+                            "ZCode row skipped (%s): %r", srow["id"] if srow else "?", _zc_row_exc)
                 # Annotate parents with their children (display-only; the
                 # children's tokens are already counted as their own sessions).
                 for child_id, parent_id in zc_parent_of.items():
@@ -11762,7 +11772,7 @@ def _compute_budget_status(budget: Dict[str, Any], sessions: List[Dict[str, Any]
             continue
         if not _session_matches_filters(s, filters):
             continue
-        cost = float(s.get("cost", 0.0) or 0.0)
+        cost = float(s.get("cost", 0.0) or 0.0) + float(s.get("delegated_cost", 0.0) or 0.0)
         toks = int((s.get("tokens") or {}).get("total", 0) or 0)
         used += cost if limit_type == "usd" else toks
         sessions_in_window += 1

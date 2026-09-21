@@ -1058,3 +1058,44 @@ def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
 
     assert base.live_quota("codex") is None
+
+
+def test_non_acquiring_path_evicts_stale_snapshot_for_signed_out_provider(tmp_path):
+    """U2: when the lock is not acquired (another process is refreshing), the
+    non-acquiring read path must still evict snapshots for providers that no
+    longer have local credentials so signed-out providers are not served as
+    'available' from the stale cache."""
+    import threading
+
+    class SignedOutProvider:
+        provider_id = "claude"
+        display_name = "Claude"
+
+        def __init__(self):
+            self.signed_in = True
+
+        def has_local_credentials(self):
+            return self.signed_in
+
+        def refresh(self, now):
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {})
+
+    cache_path = tmp_path / "quotas.json"
+    provider = SignedOutProvider()
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    service = QuotaService([provider], cache_path=cache_path, now=lambda: now)
+
+    # Populate the cache while signed in.
+    service.collect(force=True)
+    assert service.collect(force=True)["capabilities"]["claude"]["state"] == "available"
+
+    # Sign out, then simulate the non-acquiring path by holding the lock while
+    # collect() tries to acquire it (timeout=0 means it gives up immediately).
+    provider.signed_in = False
+    with _CacheFileLock(cache_path, timeout=CACHE_LOCK_TIMEOUT_SECONDS):
+        result = service.collect()
+
+    # Stale snapshot must not appear in providers (would be rendered as available).
+    assert "claude" not in result["providers"]
+    # And not sneaked in via capabilities either.
+    assert result["capabilities"].get("claude", {}).get("state") != "available"
