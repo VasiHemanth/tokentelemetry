@@ -7867,6 +7867,7 @@ def _scan_sessions_sync():
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
             _read_ok = False  # True once at least one rollout file is opened successfully
+            _partial_parse = False  # True if any rollout file raised mid-parse
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -8056,6 +8057,7 @@ def _scan_sessions_sync():
                     logging.getLogger("tokentelemetry.codex").warning(
                         "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
                     )
+                    _partial_parse = True
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
@@ -8089,7 +8091,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None and _read_ok:
+            if source_mtime is not None and _read_ok and not _partial_parse:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():

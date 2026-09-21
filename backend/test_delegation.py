@@ -968,6 +968,53 @@ def test_scan_codex_discovery_and_linkage(scan_env, monkeypatch):
     assert by_id[CODEX_CHILD]["tokens"]["total"] == 70
 
 
+def test_codex_partial_parse_does_not_set_stub_false(scan_env, monkeypatch, tmp_path):
+    # Regression for #350: if ANY rollout file raises mid-parse (e.g. OSError,
+    # AttributeError from schema drift), the scanner must keep stub=True and
+    # must NOT write the partial result to the sidecar cache. A stub never
+    # blind-overwrites a real stored row (history_store uses a lightweight
+    # conflict clause for stubs).
+    codex_dir = scan_env / ".codex"
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
+
+    # Write a good rollout for the parent so session is discovered.
+    day = codex_dir / "sessions" / "2026" / "06" / "10"
+    day.mkdir(parents=True)
+    good_line = json.dumps({
+        "timestamp": "2026-06-10T07:01:50.000Z", "type": "event_msg",
+        "payload": {"type": "token_count",
+                    "info": {"total_token_usage": {
+                        "input_tokens": 1200000, "cached_input_tokens": 0,
+                        "output_tokens": 0, "total_tokens": 1200000}}}
+    }) + "\n"
+    rollout = day / f"rollout-2026-06-10T12-31-46-{CODEX_PARENT}.jsonl"
+    rollout.write_text(good_line)
+
+    # Write a second rollout for the SAME session id that will raise mid-parse:
+    # the file starts readable (_read_ok becomes True) but the second line has
+    # a `payload` that is a string instead of a dict, so
+    # data["payload"].get(...) raises AttributeError outside the per-line guard.
+    bad_line = json.dumps({
+        "timestamp": "2026-06-10T07:02:00.000Z", "type": "session_meta",
+        "payload": "not-a-dict",   # triggers AttributeError on .get() call
+    }) + "\n"
+    rollout2 = day / f"rollout-2026-06-10T12-32-00-{CODEX_PARENT}.jsonl"
+    rollout2.write_text(bad_line)
+
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    sess = by_id[CODEX_PARENT]
+
+    assert sess["stub"] is True, (
+        "partial Codex parse (rollout file raised) must keep stub=True (issue #350)"
+    )
+    # Sidecar must NOT have been written for the partial parse.
+    from scan_cache import cache_path as _cp
+    assert not _cp("codex", CODEX_PARENT).exists(), (
+        "sidecar cache must not be written for a partial parse (issue #350)"
+    )
+
+
 def test_endpoint_codex(scan_env, monkeypatch):
     codex_dir = scan_env / ".codex"
     monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
