@@ -6067,12 +6067,13 @@ async def dsh_lifecycle(session_id: Optional[str] = None, limit: int = 500):
                 since = created
             until = parsed["timestamp"].timestamp() * 1000
             correlation = "time-window"
-    events = _dsh_lifecycle_events(since_ms=since, until_ms=until, limit=limit)
+    all_events = _dsh_lifecycle_events(since_ms=since, until_ms=until, limit=None)
+    events = all_events[-limit:] if limit and len(all_events) > limit else all_events
     return {
         "installed": DSH_LIFECYCLE_FILE.exists(),
         "correlation": correlation,
         "events": events,
-        **_dsh_lifecycle_summary(events),
+        **_dsh_lifecycle_summary(all_events),
     }
 
 
