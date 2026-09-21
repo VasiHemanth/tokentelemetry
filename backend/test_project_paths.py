@@ -258,6 +258,31 @@ def test_budget_filters_match_across_separator_styles():
         {"project": PROJ_FORWARD})
 
 
+def test_budget_includes_delegated_cost():
+    """M7: delegated cost (subagent spend) must count toward the budget limit."""
+    from datetime import datetime, timezone
+    now = datetime.now().astimezone()
+    budget = {
+        "period": "monthly",
+        "limit_type": "usd",
+        "limit_value": 10.0,
+        "filters": {},
+        "thresholds": [],
+    }
+    sessions = [
+        {
+            "timestamp": now,
+            "agent": "claude",
+            "cost": 1.0,
+            "delegated_cost": 2.0,
+            "tokens": {"total": 1000},
+        }
+    ]
+    status = main._compute_budget_status(budget, sessions, now)
+    # Without delegated_cost the used would be 1.0; with it 3.0.
+    assert abs(status["used"] - 3.0) < 1e-9, f"expected 3.0, got {status['used']}"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
