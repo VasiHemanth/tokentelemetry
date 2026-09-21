@@ -424,40 +424,42 @@ def _make_transcript_dir(tmp: Path, *, lines=None):
     return logs, transcript
 
 
-def test_token_cache_is_reused_when_version_matches(tmp_path):
+def test_token_cache_is_reused_when_version_matches():
     """U1: a valid tokens_cache.json with the current _v must be returned without
     re-parsing the transcript."""
-    logs, tf = _make_transcript_dir(tmp_path)
-    cached = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
-              "_v": main._ANTIGRAVITY_TOKENS_CACHE_V}
-    cache_file = logs / "tokens_cache.json"
-    import json as _json
-    cache_file.write_text(_json.dumps(cached), encoding="utf-8")
-    # Make cache newer than transcript so the mtime guard passes.
-    import os as _os
-    _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        logs, tf = _make_transcript_dir(tmp)
+        cached = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
+                  "_v": main._ANTIGRAVITY_TOKENS_CACHE_V}
+        cache_file = logs / "tokens_cache.json"
+        cache_file.write_text(json.dumps(cached), encoding="utf-8")
+        # Make cache newer than transcript so the mtime guard passes.
+        import os as _os
+        _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
 
-    result = main._estimate_antigravity_tokens(tmp_path)
-    assert result["input"] == 999, "cached value must be returned as-is"
-    assert result["output"] == 888
+        result = main._estimate_antigravity_tokens(tmp)
+        assert result["input"] == 999, "cached value must be returned as-is"
+        assert result["output"] == 888
 
 
-def test_token_cache_busted_on_version_mismatch(tmp_path):
+def test_token_cache_busted_on_version_mismatch():
     """U1: a tokens_cache.json with a stale _v must be ignored so algo fixes
     propagate to finished sessions."""
-    logs, tf = _make_transcript_dir(tmp_path)
-    stale = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
-             "_v": main._ANTIGRAVITY_TOKENS_CACHE_V - 1}
-    cache_file = logs / "tokens_cache.json"
-    import json as _json
-    cache_file.write_text(_json.dumps(stale), encoding="utf-8")
-    import os as _os
-    _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        logs, tf = _make_transcript_dir(tmp)
+        stale = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
+                 "_v": main._ANTIGRAVITY_TOKENS_CACHE_V - 1}
+        cache_file = logs / "tokens_cache.json"
+        cache_file.write_text(json.dumps(stale), encoding="utf-8")
+        import os as _os
+        _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
 
-    result = main._estimate_antigravity_tokens(tmp_path)
-    assert result["input"] != 999, "stale cache must not be returned"
-    # Re-parse result must be based on actual transcript line lengths.
-    assert result["total"] == result["input"] + result["output"]
+        result = main._estimate_antigravity_tokens(tmp)
+        assert result["input"] != 999, "stale cache must not be returned"
+        # Re-parse result must be based on actual transcript line lengths.
+        assert result["total"] == result["input"] + result["output"]
 
 
 if __name__ == "__main__":
