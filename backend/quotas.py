@@ -1377,6 +1377,7 @@ class QuotaService:
                             "state": "notSignedIn",
                             "detail": "No local credentials found.",
                         }
+                        self._snapshots.pop(provider.provider_id, None)
                         continue
                     try:
                         self._snapshots[provider.provider_id] = provider.refresh(generated_at)
