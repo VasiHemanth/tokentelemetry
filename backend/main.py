@@ -1048,6 +1048,11 @@ def _antigravity_infer_project(text: str) -> str:
 
     return ANTIGRAVITY_UNASSIGNED
 
+# Bump when the token-estimation algorithm changes so finished sessions
+# (whose transcript never grows) get their cached values recomputed.
+_ANTIGRAVITY_TOKENS_CACHE_V = 1
+
+
 def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     import logging
     tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
@@ -1056,12 +1061,15 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
         tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
     if not tf.exists():
         return tkns
-        
+
     cache_file = sess_dir / ".system_generated" / "logs" / "tokens_cache.json"
     try:
         if cache_file.exists() and cache_file.stat().st_mtime >= tf.stat().st_mtime:
             with open(cache_file, "r", encoding="utf-8") as cf:
-                return json.load(cf)
+                cached = json.load(cf)
+            if isinstance(cached, dict) and cached.get("_v") == _ANTIGRAVITY_TOKENS_CACHE_V:
+                cached.pop("_v")
+                return cached
     except (OSError, json.JSONDecodeError) as e:
         logging.debug(f"Failed to read token cache for {sess_dir}: {e}")
 
@@ -1080,14 +1088,14 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
                 except json.JSONDecodeError as e:
                     logging.debug(f"Failed to parse line in {tf}: {e}")
         tkns["total"] = tkns["input"] + tkns["output"]
-        
+
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as cf:
-                json.dump(tkns, cf)
+                json.dump({**tkns, "_v": _ANTIGRAVITY_TOKENS_CACHE_V}, cf)
         except OSError as e:
             logging.debug(f"Failed to write token cache for {sess_dir}: {e}")
-            
+
     except OSError as e:
         logging.debug(f"Failed to access transcript for {sess_dir}: {e}")
 
