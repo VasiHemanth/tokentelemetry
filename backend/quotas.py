@@ -1369,6 +1369,14 @@ class QuotaService:
                         continue
                     is_fresh = current and generated_at < current.fetched_at + FRESHNESS
                     if not force and is_fresh:
+                        if not provider.has_local_credentials():
+                            capabilities[provider.provider_id] = {
+                                "displayName": provider.display_name,
+                                "state": "notSignedIn",
+                                "detail": "No local credentials found.",
+                            }
+                            self._snapshots.pop(provider.provider_id, None)
+                            continue
                         capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
                         continue
                     if not provider.has_local_credentials():
