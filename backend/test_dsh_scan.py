@@ -487,6 +487,32 @@ def test_lifecycle_endpoint_reports_not_installed(lifecycle_env):
     assert res["correlation"] == "none"
 
 
+def test_lifecycle_endpoint_summary_covers_events_beyond_limit(lifecycle_env):
+    # Regression for #353: the summary must reflect ALL events even when the
+    # returned `events` list is capped by `limit`. Failures and transitions in
+    # the discarded prefix must appear in the summary totals.
+    import asyncio
+    limit = 5
+    total = limit + 3  # 8 events; discarded prefix has 3 events including a failure
+    events = []
+    for i in range(total):
+        ts = (i + 1) * 1000
+        to_state = 3 if i == 0 else 2  # first event is a failure (state 3)
+        events.append({"ts": ts, "plugin": "tt-probe", "from": 1, "to": to_state,
+                        **({"error": "boom"} if to_state == 3 else {})})
+    _write_lifecycle(lifecycle_env, events)
+
+    res = asyncio.run(main.dsh_lifecycle(limit=limit))
+
+    assert len(res["events"]) == limit, "returned events must be capped at limit"
+    assert res["transitions"] == total, (
+        f"summary transitions must be {total} (all events), got {res['transitions']}"
+    )
+    assert res["failed"] == 1, (
+        "summary must count the failure in the discarded prefix (issue #353)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sandbox / approval posture
 # ---------------------------------------------------------------------------
