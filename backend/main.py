@@ -5814,7 +5814,7 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                             tokens["cached"] = max(tokens["cached"], cache_read)
                             # cache writes ARE billed per event → cumulative.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
-                    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"] + tokens.get("cache_creation", 0)
                     tokens["cost"] = calculate_cost(
                         model, tokens["input"], tokens["output"], tokens["cached"],
                         cache_creation_tokens=tokens.get("cache_creation", 0),
