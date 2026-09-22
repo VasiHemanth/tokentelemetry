@@ -8056,6 +8056,12 @@ def _scan_sessions_sync():
                     logging.getLogger("tokentelemetry.codex").warning(
                         "Codex rollout read failed (%s): %s", rollout_file.name, _exc, exc_info=True
                     )
+                    # A failed file means the composite source_mtime (which
+                    # includes this file) cannot represent a complete parse.
+                    # Clear _read_ok so the cache is NOT written; the session
+                    # will be re-parsed on the next scan once the file is
+                    # readable again, rather than locking in partial data.
+                    _read_ok = False
 
             if published_sites:
                 sess["published_artifacts"] = sorted(

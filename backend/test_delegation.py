@@ -1608,6 +1608,62 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     assert all("stub" not in s for s in data)
 
 
+def test_codex_partial_read_does_not_cache_when_rollout_file_unreadable(scan_env, monkeypatch, tmp_path):
+    """When a Codex rollout file fails to open, the session must NOT be written
+    to the scan cache.  Otherwise the composite source_mtime (which includes the
+    unreadable file) would produce a permanent cache hit on every subsequent scan,
+    locking in the partial data from any earlier successfully-read files forever.
+    """
+    import stat
+
+    SID = "aabbccdd-1111-2222-3333-000000000099"
+    codex_dir = scan_env / ".codex"
+    day = codex_dir / "sessions" / "2026" / "09" / "21"
+    day.mkdir(parents=True)
+
+    usage_line = json.dumps({
+        "timestamp": "2026-09-21T10:00:00.000Z",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 80, "cached_input_tokens": 0,
+            "output_tokens": 30, "total_tokens": 110,
+        }}},
+    }) + "\n"
+    meta_line = json.dumps({
+        "timestamp": "2026-09-21T10:00:00.000Z",
+        "type": "session_meta",
+        "payload": {"id": SID, "cwd": "/tmp/proj", "model_provider": "openai"},
+    }) + "\n"
+
+    file1 = day / f"rollout-2026-09-21T10-00-00-{SID}.jsonl"
+    file2 = day / f"rollout-2026-09-21T10-01-00-{SID}.jsonl"
+    file1.write_text(meta_line + usage_line)
+    file2.write_text(usage_line)  # readable content, but will be made unreadable
+
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+
+    # Make file2 unreadable so the outer try/except in the rollout loop fires.
+    file2.chmod(0o000)
+    try:
+        sessions = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+        assert SID in sessions, "session must still appear in in-memory scan result"
+        # stub=True means the cache was NOT written — the partial parse is not locked in.
+        assert sessions[SID]["stub"] is True, (
+            "session with an unreadable rollout file must stay stub=True "
+            "(cache not written) so the next scan can retry with full data"
+        )
+    finally:
+        # Restore permissions so tmp_path cleanup can remove the file.
+        file2.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    # Once all files are readable, the cache should be written and stub cleared.
+    sessions2 = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions2[SID]["stub"] is False, (
+        "after all rollout files become readable the session should be fully parsed and cached"
+    )
+    assert sessions2[SID]["tokens"]["total"] > 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
