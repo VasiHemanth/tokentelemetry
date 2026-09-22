@@ -1381,7 +1381,9 @@ class QuotaService:
                             # in; serve the existing (possibly stale) snapshot instead
                             # and let its own stale flag signal that a refresh failed.
                             capabilities[provider.provider_id] = {
-                                "displayName": provider.display_name, "state": "available"
+                                "displayName": provider.display_name,
+                                "state": "available",
+                                "detail": "Credential check failed; showing last known data.",
                             }
                         else:
                             capabilities[provider.provider_id] = {
