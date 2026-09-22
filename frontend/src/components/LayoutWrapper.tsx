@@ -73,8 +73,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <FeedbackFloatingButton />
         <TokenGate />
         <TelemetryNotice />
-        {/* Runtime Chinese localization + the language switch. Kept as a single
-            mount so no other file depends on the i18n machinery. */}
+        {/* Runtime locale overlay. The language itself is picked in
+            Settings → Language; this mount is the only wiring here. */}
         <LocaleOverlay />
       </body>
       </QuotaProvider>

@@ -11,6 +11,7 @@ import { RetentionSettings } from "@/components/settings/RetentionSettings";
 import UsagePrivacySettings from "@/components/settings/UsagePrivacySettings";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
 import { ThemeSetting } from "@/components/settings/ThemeSetting";
+import { LanguageSetting } from "@/components/settings/LanguageSetting";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { SETTINGS_CATEGORIES, categoryAnchor } from "@/components/settings/categories";
 import { ConnectDevice } from "@/components/ConnectDevice";
@@ -219,6 +220,13 @@ export default function SettingsPage() {
               <Card>
                 <div className="p-5">
                   <ThemeSetting />
+                </div>
+              </Card>
+            </Section>
+            <Section title="Language" description="Interface language, saved on this device.">
+              <Card>
+                <div className="p-5">
+                  <LanguageSetting />
                 </div>
               </Card>
             </Section>

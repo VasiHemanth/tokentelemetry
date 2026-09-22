@@ -30,6 +30,11 @@ export const SETTINGS_CATEGORIES: SettingCategory[] = [
         description: "Light, dark, or follow your system.",
       },
       {
+        id: "language",
+        label: "Language",
+        description: "Interface language, saved on this device.",
+      },
+      {
         id: "dash-prefs",
         label: "Dashboard preferences",
         description: "What appears on the main dashboard.",
