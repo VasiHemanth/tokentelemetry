@@ -5012,12 +5012,52 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
 
     aliases = _load_project_aliases()
     projects = _kimi_project_by_session()
-    model = _kimi_default_model()
+    # Lazy: only read config.toml on the first cache miss, not on every scan.
+    _model: Optional[str] = None
 
     out: List[Dict[str, Any]] = []
     for wire in KIMI_SESSIONS_DIR.glob("*/*/wire.jsonl"):
         try:
             sid = wire.parent.name
+            state_json = wire.parent / "state.json"
+            try:
+                source_mtime = max(
+                    wire.stat().st_mtime,
+                    state_json.stat().st_mtime if state_json.exists() else 0.0,
+                )
+            except OSError:
+                source_mtime = 0.0
+
+            cached = scan_cache.read_cache("kimi", sid, source_mtime)
+            if cached is not None:
+                ts_str = cached.get("_timestamp")
+                try:
+                    ts = datetime.fromisoformat(ts_str) if ts_str else datetime.now(tz=timezone.utc)
+                except (TypeError, ValueError):
+                    ts = datetime.now(tz=timezone.utc)
+                sess = {
+                    "id": sid,
+                    "agent": "kimi",
+                    "project": aliases.get(
+                        projects.get(sid) or projects.get(wire.parent.parent.name, ""),
+                        projects.get(sid) or projects.get(wire.parent.parent.name, "unknown")),
+                    "timestamp": ts,
+                    "display": cached.get("display") or f"Kimi Code session {sid[:8]}",
+                    "text": cached.get("text"),
+                    "tokens": cached.get("tokens", {}),
+                    "mcp_tools": cached.get("mcp_tools", []),
+                    "has_plan": False,
+                    "plans": [],
+                    "model": cached.get("model", "kimi-for-coding"),
+                    "artifacts": [{"name": "wire.jsonl", "path": str(wire),
+                                   "type": "document"}],
+                    "cost": cached.get("cost", 0.0),
+                    "kimi": cached.get("kimi", {}),
+                }
+                _attach_tool_usage(sess, cached.get("tool_counts", {}))
+                out.append(sess)
+                continue
+
             tokens = {"input": 0, "output": 0, "cached": 0,
                       "cache_creation": 0, "total": 0}
             seen_usage: set = set()
@@ -5094,6 +5134,9 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
             ts = last_ts or _file_mtime_utc(wire)
             tokens["total"] = (tokens["input"] + tokens["output"]
                                + tokens["cached"] + tokens["cache_creation"])
+            if _model is None:
+                _model = _kimi_default_model()
+            model = _model
             cost = calculate_cost(
                 model, tokens["input"], tokens["output"], tokens["cached"],
                 cache_creation_tokens=tokens["cache_creation"], at=ts)
@@ -5123,6 +5166,18 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
                 },
             }
             _attach_tool_usage(sess, tool_counts)
+            scan_cache.write_cache("kimi", sid, source_mtime, {
+                "tokens": tokens,
+                "model": model,
+                "cost": cost,
+                "display": display,
+                "text": display,
+                "has_plan": False,
+                "kimi": sess["kimi"],
+                "mcp_tools": sess.get("mcp_tools", []),
+                "tool_counts": tool_counts,
+                "_timestamp": ts.isoformat(),
+            })
             out.append(sess)
         except Exception:
             continue
