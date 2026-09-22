@@ -8,7 +8,7 @@ import json
 import yaml
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set, Iterable, Tuple
+from typing import Callable, List, Optional, Dict, Any, Set, Iterable, Tuple
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
@@ -26,6 +26,7 @@ from quotas import (
     QuotaService, default_quota_providers,
 )
 import scan_cache
+import antigravity_usage
 import harness_panels
 import codex_goals
 import hermes_telemetry as _ht
@@ -1517,6 +1518,213 @@ def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict
     for cid, ws in hist_project.items():
         meta.setdefault(cid, {}).setdefault("project", ws)
     return meta
+
+
+def _antigravity_store_meta() -> Dict[str, Dict[str, Any]]:
+    """`_antigravity_cli_meta` for every Antigravity store, not just the CLI's.
+
+    The IDE and the 2.0 app keep the same conversations/<id>.db trajectories, so
+    their sessions have the same exact model and project available. Reading only
+    the CLI store left IDE/app sessions to the brain-text heuristic, which is how
+    a screenshot path ended up as one session's project. The CLI's record wins
+    where a session somehow appears in more than one store.
+    """
+    merged: Dict[str, Dict[str, Any]] = {}
+    for brain_dir, _surface in ANTIGRAVITY_BRAIN_SOURCES:
+        for sid, entry in _antigravity_cli_meta(brain_dir.parent).items():
+            slot = merged.setdefault(sid, {})
+            for key, value in entry.items():
+                slot.setdefault(key, value)
+    return merged
+
+
+def _antigravity_price_known(model: str) -> bool:
+    """Whether the pricing table holds this exact model id.
+
+    Deliberately not calculate_cost's fuzzy match: a bare "gemini" key matches
+    every Gemini name, so an id that is really an internal alias would look priced
+    at a generic rate. See antigravity_usage.canonical_model.
+    """
+    import pricing as _pricing
+    norm = _pricing._normalize_model_id(model)
+    return bool(_pricing.rates_for(norm) or _pricing.PRICING.get(norm))
+
+
+def _antigravity_price(model: str, inp: int, out: int, cached: int, day: str) -> float:
+    # `day` prices each bucket at the rate in force when its calls ran.
+    return calculate_cost(model, inp, out, cached, at=day)
+
+
+def _antigravity_real_usage(db: Path) -> Optional[Dict[str, Any]]:
+    """Real token accounting for one conversation, via the scan cache.
+
+    Decoding every generation row of ~100 databases on each scan would be the
+    slowest part of it, and the rows only change while a session runs. The cache
+    is keyed on the newest write to the .db or its WAL, and stores raw token
+    buckets rather than a cost, so a pricing update applies without invalidating
+    it.
+
+    Returns the ``summarize`` result plus ``first_ts``/``last_ts`` (datetimes),
+    or None when the file holds no decodable model calls.
+    """
+    mtime = antigravity_usage.source_mtime(db)
+    cached = scan_cache.read_cache("antigravity", db.stem, mtime)
+    if cached is not None and cached.get("path") == str(db):
+        usage = cached.get("usage")
+    else:
+        usage = antigravity_usage.read_usage(db)
+        scan_cache.write_cache("antigravity", db.stem, mtime, {"path": str(db), "usage": usage})
+    if not usage or not usage.get("calls"):
+        return None
+    result = antigravity_usage.summarize(usage, _antigravity_price, _antigravity_price_known)
+    for key in ("first_ts", "last_ts"):
+        seconds = usage.get(key)
+        result[key] = datetime.fromtimestamp(seconds, tz=timezone.utc) if seconds else None
+    result["calls"] = usage.get("calls", 0)
+    return result
+
+
+def _antigravity_summary_index() -> Dict[str, Dict[str, Any]]:
+    """Antigravity's own session index, from each store's conversation_summaries.db.
+
+    It lists every conversation the app knows about with its title, last activity
+    and workspace, including sessions whose brain/ folder never received a
+    transcript. It is the one record that covers older .pb sessions, whose token
+    usage is not recorded anywhere we can read.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    gemini_home = str(GEMINI_DIR)
+    for brain_dir, surface in ANTIGRAVITY_BRAIN_SOURCES:
+        db = brain_dir.parent / "conversation_summaries.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(_sqlite_ro_uri(db), uri=True)
+            try:
+                rows = con.execute(
+                    "SELECT conversation_id, title, preview, step_count, workspace_uris, "
+                    "last_modified_time FROM conversation_summaries").fetchall()
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            continue
+        for cid, title, preview, steps, uris, modified in rows:
+            if not cid or cid in index:
+                continue
+            workspace = None
+            try:
+                parsed = json.loads(uris) if uris else []
+            except (TypeError, ValueError):
+                parsed = []
+            for uri in parsed if isinstance(parsed, list) else []:
+                path = unquote(str(uri).split("://", 1)[-1]) if "://" in str(uri) else str(uri)
+                # Scratch playgrounds under ~/.gemini are the agent's own space.
+                if path and not path.startswith(gemini_home):
+                    workspace = path.rstrip("/")
+                    break
+            try:
+                when = _aware(datetime.fromisoformat(str(modified).replace("Z", "+00:00"))) if modified else None
+            except ValueError:
+                when = None
+            index[cid] = {"title": (title or preview or "").strip(), "steps": steps or 0,
+                          "workspace": workspace, "timestamp": when, "surface": surface}
+    return index
+
+
+_AG_STORE_SURFACE = {"antigravity-cli": "cli", "antigravity-ide": "ide", "antigravity": "app"}
+
+
+def _antigravity_apply_real_usage(
+    sessions: List[Dict[str, Any]],
+    seen: set,
+    meta: Dict[str, Dict[str, Any]],
+    surfaces: Dict[str, str],
+    alias: Callable[[str], str],
+) -> None:
+    """Replace estimated Antigravity numbers with recorded ones, and add the
+    sessions the brain/ scan cannot see.
+
+    ``alias`` is the scan's own project-alias lookup (a closure over the aliases
+    it loaded), not the module-level ``apply_alias``, which takes them as a
+    second argument.
+
+    1. Every Antigravity session already collected whose conversations/<id>.db
+       records model calls takes its tokens, cost, model and last-activity time
+       from those records. Before this, the brain/ path estimated tokens as
+       characters / 4 and hard-coded the cost to $0.
+    2. A conversation with recorded calls but no usable brain/ folder is added
+       from its database.
+    3. A conversation Antigravity's own index lists with steps, and no database,
+       is added from the index: an older .pb session. Its tokens are unknown and
+       reported as zero rather than guessed.
+    """
+    db_files = antigravity_usage.conversation_files(GEMINI_DIR)
+    by_id = {s["id"]: s for s in sessions if s.get("agent") == "antigravity"}
+    index = _antigravity_summary_index()
+
+    def _project(sid: str, fallback: str = ANTIGRAVITY_UNASSIGNED) -> str:
+        found = (meta.get(sid) or {}).get("project") or (index.get(sid) or {}).get("workspace")
+        return alias(found or fallback)
+
+    for sid, db in db_files.items():
+        try:
+            real = _antigravity_real_usage(db)
+        except Exception as exc:  # one bad database must not cost the whole scan
+            _ag_log_warn("antigravity usage read failed for %s: %s", db.name, exc)
+            continue
+        if real is None:
+            continue
+        existing = by_id.get(sid)
+        if existing is not None:
+            existing["tokens"] = real["tokens"]
+            existing["cost"] = real["cost"]
+            existing["model"] = real["model"] or existing.get("model")
+            if real["last_ts"]:
+                existing["timestamp"] = real["last_ts"]
+            if existing.get("project") in (None, "", ANTIGRAVITY_UNASSIGNED):
+                existing["project"] = _project(sid)
+            continue
+        if sid in seen:
+            continue  # already reported under another agent (e.g. the Gemini CLI path)
+        seen.add(sid)
+        entry = index.get(sid) or {}
+        session = {
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": real["last_ts"] or entry.get("timestamp") or _file_mtime_utc(db),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": real["tokens"],
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": real["model"],
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or _AG_STORE_SURFACE.get(db.parent.parent.name),
+            "cost": real["cost"],
+        }
+        sessions.append(session)
+        by_id[sid] = session
+
+    for sid, entry in index.items():
+        if sid in by_id or sid in seen or sid in db_files or not entry.get("steps"):
+            continue
+        seen.add(sid)
+        sessions.append({
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": entry.get("timestamp") or _now(),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0},
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": None,
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or entry.get("surface"),
+            "cost": 0.0,
+        })
 
 class TokenUsage(BaseModel):
     input: int = 0
@@ -8133,6 +8341,15 @@ def _scan_sessions_sync():
         sessions.extend(codex_sessions.values())
 
     # 3 & 7. Gemini & Antigravity
+    # Both are read by the Antigravity passes below, so they are set here rather
+    # than inside the Gemini branch. They used to be assigned only once
+    # ~/.gemini/projects.json was found, and that file belongs to the Gemini CLI,
+    # not Antigravity. On a machine with Antigravity but no Gemini CLI history,
+    # the brain/ loop's first `sid in _seen_antigravity` raised NameError, its
+    # per-session `except Exception: continue` swallowed it, and every Antigravity
+    # session was dropped without a trace.
+    _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
+    _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
     gemini_projects_file = GEMINI_DIR / "projects.json"
     if gemini_projects_file.exists():
         try:
@@ -8169,8 +8386,6 @@ def _scan_sessions_sync():
                             if _d and _d.get("sessionId"):
                                 _all_chat_sids.add(_d["sessionId"])
                         except Exception: pass
-            _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
-            _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
 
             for tmp_dir in (GEMINI_DIR / "tmp").glob("*"):
                 if not tmp_dir.is_dir(): continue
@@ -8309,8 +8524,9 @@ def _scan_sessions_sync():
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
     _seen_brain_sids: set = set()
-    # CLI (`agy`) ground truth: real model + exact project, keyed by session id.
-    _ag_cli_meta = _antigravity_cli_meta()
+    # Ground truth from each store's SQLite trajectories: real model + exact
+    # project, keyed by session id, for the IDE and app as well as the CLI.
+    _ag_cli_meta = _antigravity_store_meta()
     for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
         if not _brain_dir.exists(): continue
         for sess_dir in _brain_dir.iterdir():
@@ -8441,6 +8657,13 @@ def _scan_sessions_sync():
                     **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
+
+    # 3c. Recorded usage from each conversation's own SQLite store, and the
+    # sessions brain/ has no folder for. See _antigravity_apply_real_usage.
+    try:
+        _antigravity_apply_real_usage(sessions, _seen_antigravity, _ag_cli_meta, _ag_surface, apply_alias)
+    except Exception as exc:
+        _ag_log_warn("antigravity real-usage pass failed: %s", exc)
 
     # 4. Qwen
     if QWEN_DIR.exists():
