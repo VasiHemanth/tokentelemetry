@@ -117,30 +117,27 @@ def test_storage_and_coverage():
 
 
 def test_upsert_recency_guard_rejects_older_scan_data():
-    """U14: a non-stub upsert whose last_seen_at is older than the stored row's
-    must not overwrite token counts or cost.
+    """U14: a non-stub upsert with an earlier scan_started_at must not overwrite
+    a row that was already written by a newer scan.
 
-    Scenario: scan B (newer) writes total=150 and a future last_seen_at directly
-    into the store; then scan A (older, lower last_seen_at from datetime.now())
-    tries to upsert total=100. The WHERE guard in the conflict clause must reject
-    A's update, leaving total=150 in the DB."""
-    import sqlite3 as _sqlite3
-    from tt_paths import data_dir as _data_dir
-
+    Scan B (started at T+10) writes total=150. Scan A (started at T+1, but whose
+    persist thread fires later) tries to upsert total=100. The WHERE guard in the
+    conflict clause must reject A's update because its scan_started_at (T+1) is
+    older than the stored last_seen_at (T+10)."""
     h = _fresh_store()
-    # First write: scan B's data with total=150.
-    h.upsert_sessions([_session(total=150, tokens={"input": 100, "output": 45, "cached": 5, "total": 150})])
+    t_b = "2026-01-01T00:00:10+00:00"
+    t_a = "2026-01-01T00:00:01+00:00"
 
-    # Advance the stored last_seen_at to a time far in the future so that the
-    # next upsert (scan A, using datetime.now()) is guaranteed to be "older".
-    db_path = _data_dir() / "history.db"
-    con = _sqlite3.connect(str(db_path))
-    con.execute("UPDATE sessions SET last_seen_at='2099-01-01T00:00:00+00:00' WHERE id='s1'")
-    con.commit()
-    con.close()
-
-    # Scan A tries to overwrite with stale lower counts.
-    h.upsert_sessions([_session(total=100, tokens={"input": 50, "output": 45, "cached": 5, "total": 100})])
+    # Scan B (newer) persists first.
+    h.upsert_sessions(
+        [_session(total=150, tokens={"input": 100, "output": 45, "cached": 5, "total": 150})],
+        scan_started_at=t_b,
+    )
+    # Scan A (older) persist thread fires after B's — must be rejected.
+    h.upsert_sessions(
+        [_session(total=100, tokens={"input": 50, "output": 45, "cached": 5, "total": 100})],
+        scan_started_at=t_a,
+    )
 
     rows = h.query()
     assert len(rows) == 1
@@ -152,9 +149,13 @@ def test_upsert_recency_guard_rejects_older_scan_data():
 def test_upsert_recency_guard_allows_newer_scan_data():
     """The guard must still allow a newer scan to update an existing row."""
     h = _fresh_store()
-    h.upsert_sessions([_session(total=17)])
-    # Second upsert has a later datetime.now() — should win.
-    h.upsert_sessions([_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})])
+    t_a = "2026-01-01T00:00:01+00:00"
+    t_b = "2026-01-01T00:00:10+00:00"
+    h.upsert_sessions([_session(total=17)], scan_started_at=t_a)
+    h.upsert_sessions(
+        [_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})],
+        scan_started_at=t_b,
+    )
     rows = h.query()
     assert rows[0]["tokens"]["total"] == 31, "newer scan must update the row"
 
@@ -173,7 +174,11 @@ def test_upsert_recency_guard_allows_null_last_seen_at():
     con.commit()
     con.close()
 
-    h.upsert_sessions([_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})])
+    # Even with an early scan_started_at, NULL last_seen_at must not block.
+    h.upsert_sessions(
+        [_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})],
+        scan_started_at="2020-01-01T00:00:00+00:00",
+    )
     rows = h.query()
     assert rows[0]["tokens"]["total"] == 31, "NULL last_seen_at must not block the update"
 

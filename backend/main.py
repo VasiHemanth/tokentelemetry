@@ -9264,14 +9264,20 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
     return None
 
 
-def _persist_history_async(data: List[Dict[str, Any]]) -> None:
+def _persist_history_async(data: List[Dict[str, Any]],
+                           scan_started_at: Optional[str] = None) -> None:
     """Schedule the durable-history write off the request path. Fire-and-forget:
-    failures are logged inside the store and never surface to the caller."""
+    failures are logged inside the store and never surface to the caller.
+
+    ``scan_started_at`` is an ISO timestamp from just before the scan ran.
+    Forwarded to ``upsert_sessions`` so ``last_seen_at`` is anchored to the
+    scan's start rather than the executor's wall-clock, making the recency
+    guard in the conflict clause accurate under concurrent persist threads."""
     import history_store
 
     def _work() -> None:
         try:
-            history_store.upsert_sessions(data)
+            history_store.upsert_sessions(data, scan_started_at=scan_started_at)
             history_store.mark_absent({(s.get("agent"), s.get("id")) for s in data
                                        if s.get("agent") and s.get("id")})
             _archive_opted_in_transcripts(data)
@@ -9355,6 +9361,11 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         _sessions_cache["building"] = True
         try:
             t0 = _time.monotonic()
+            # Capture scan start before the scan runs so upsert_sessions can use
+            # it as last_seen_at — anchoring the upsert to scan time rather than
+            # executor time, which makes the recency guard in the conflict clause
+            # accurate under concurrent persist threads (U14 / U13).
+            scan_started_at = datetime.now(timezone.utc).isoformat()
             data = await _asyncio.to_thread(_scan_sessions_sync)
             _sessions_cache["data"] = data
             _sessions_cache["at"] = _time.monotonic()
@@ -9364,7 +9375,7 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             # outlives the agents' own transcript pruning. Fire-and-forget on a
             # worker thread — a store failure must never break a request, and the
             # write must not add latency to this scan.
-            _persist_history_async(data)
+            _persist_history_async(data, scan_started_at=scan_started_at)
         except Exception as e:
             _log.exception("sessions scan failed: %s", e)
             # If we have a previous value, keep serving it rather than 500-ing.

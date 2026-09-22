@@ -210,7 +210,8 @@ def _ecosystem_blob(row: Dict[str, Any]) -> Optional[str]:
 
 # ── write path ───────────────────────────────────────────────────────────────
 
-def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
+def upsert_sessions(rows: Sequence[Dict[str, Any]],
+                    scan_started_at: Optional[str] = None) -> int:
     """Idempotently persist the core rollup for each live session dict.
 
     Keyed by (agent, id): a session that grows between scans overwrites its row
@@ -218,11 +219,19 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
     upserts; ``last_*`` and the token/cost columns track the freshest scan, and
     ``source_present`` is (re)set to 1 because we just saw the file on disk.
     Returns the number of rows written. Never raises — a store failure must not
-    break the scan that called it."""
+    break the scan that called it.
+
+    ``scan_started_at`` is an ISO timestamp captured before the scan ran.
+    When provided it is used as ``last_seen_at`` instead of ``datetime.now()``
+    at executor time, anchoring the upsert to when the scan actually ran.
+    This makes the recency guard in the conflict clause (``WHERE … last_seen_at``)
+    accurate: a delayed older scan's thread still carries the earlier scan-start
+    timestamp, so the guard correctly rejects its stale data even though the
+    thread fires late."""
     valid = [r for r in rows if r.get("id") and r.get("agent")]
     if not valid:
         return 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = scan_started_at or datetime.now(timezone.utc).isoformat()
     written = 0
     try:
         con = _connect()
