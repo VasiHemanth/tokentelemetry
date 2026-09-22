@@ -262,6 +262,13 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             source_present=1
                     """
                 else:
+                    # The WHERE guard rejects an upsert whose scan timestamp is
+                    # older than what's already stored.  Without it a delayed
+                    # persist thread from an earlier scan can overwrite a newer
+                    # scan's token counts, cost, and model — silently rolling
+                    # back an actively-growing session.  NULL last_seen_at means
+                    # the row was written before this guard existed; always allow
+                    # the first real write to populate it.
                     conflict_clause = """
                         ON CONFLICT(agent, id) DO UPDATE SET
                             project=excluded.project,
@@ -287,6 +294,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             delegated_cached=excluded.delegated_cached,
                             delegated_cache_reads=excluded.delegated_cache_reads,
                             delegated_by_model_json=excluded.delegated_by_model_json
+                        WHERE (sessions.last_seen_at IS NULL
+                               OR excluded.last_seen_at >= sessions.last_seen_at)
                     """
                 con.execute(
                     f"""
