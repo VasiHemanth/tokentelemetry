@@ -12097,20 +12097,27 @@ async def get_analytics(
         by_agent[agent]["savings_usd"] += savings
         by_agent[agent]["co2_g"] += co2
         by_agent[agent]["session_count"] += 1
-        # Stubs carry no model info and zero cost — skip by_model to avoid
-        # minting a phantom "{agent} (unknown)" row with session_count=1.
+        # Skip by_model for zero-spend sessions with no model. This covers:
+        # (a) live stubs (stub=True, model=None, cost/tokens=0), and
+        # (b) stored stubs rehydrated without the stub flag (model=None,
+        #     cost=0, tokens all-zero) — the DB schema has no stub column so
+        #     _rehydrate cannot restore it. A real session with unknown model
+        #     but actual spend still lands in the "(unknown)" bucket.
         if not s.get("stub"):
-            model_name = s.get("model") or f"{agent} (unknown)"
-            if model_name not in by_model:
-                by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
-                                        "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
-                                        "session_count": 0, "agent": agent}
-            for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
-            by_model[model_name]["cost"] += scost
-            by_model[model_name]["energy_wh"] += energy
-            by_model[model_name]["savings_usd"] += savings
-            by_model[model_name]["co2_g"] += co2
-            by_model[model_name]["session_count"] += 1
+            model_name = s.get("model") or (
+                f"{agent} (unknown)" if (scost or st.get("total", 0)) else None
+            )
+            if model_name:
+                if model_name not in by_model:
+                    by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                            "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                            "session_count": 0, "agent": agent}
+                for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
+                by_model[model_name]["cost"] += scost
+                by_model[model_name]["energy_wh"] += energy
+                by_model[model_name]["savings_usd"] += savings
+                by_model[model_name]["co2_g"] += co2
+                by_model[model_name]["session_count"] += 1
         # Delegated spend attributed to the SUBAGENT's own model (can differ
         # from the parent's, e.g. Explore on Haiku under an Opus session) —
         # not lumped onto model_name above. No session_count bump: a subagent

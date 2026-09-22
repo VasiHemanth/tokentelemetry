@@ -1608,15 +1608,17 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     assert all("stub" not in s for s in data)
 
 
-def test_analytics_stub_without_stored_row_does_not_mint_phantom_model(monkeypatch):
-    """U9: a stub live session with no stored counterpart must not create a
-    phantom '{agent} (unknown)' entry in by_model (session_count=1, all zeros).
+def test_analytics_stub_without_stored_row_does_not_mint_phantom_model(
+        tmp_path, monkeypatch):
+    """U9 (live path): a stub live session with no stored counterpart must not
+    create a phantom '{agent} (unknown)' entry in by_model.
 
-    The key path: stub has model=None and no key in merged from the store, so
-    stub-skip guard (line 12102) does NOT fire — the stub is included in
-    `sessions`. Without the by_model guard it creates a phantom row.
+    The stub-skip guard only fires when a stored key already exists. With no
+    stored counterpart the stub enters `sessions`; without the by_model guard
+    model=None falls back to '{agent} (unknown)' and mints a phantom row.
     """
     from datetime import timezone
+    _hist_env(tmp_path, monkeypatch)  # isolate from real ~/.tokentelemetry/history.db
 
     stub_live = {"id": "s_new", "agent": "claude", "project": "/p", "model": None,
                  "timestamp": datetime.now(timezone.utc), "cost": 0.0,
@@ -1627,15 +1629,39 @@ def test_analytics_stub_without_stored_row_does_not_mint_phantom_model(monkeypat
         return [stub_live]
 
     monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
-    # No history_store mock needed — query returns [] by default because the
-    # db path points nowhere, so merged starts empty and the stub is the only
-    # candidate; no stored counterpart → stub-skip guard does not fire.
     a = _run(main.get_analytics(from_=None, to=None, granularity="day",
                                 agents=[], models=[], projects=[]))
     assert "claude (unknown)" not in a["by_model"], (
         "stub session with no model must not mint phantom by_model entry")
     # Stub still counted in by_agent session_count (it is a real session).
     assert a["by_agent"]["claude"]["session_count"] == 1
+
+
+def test_analytics_stored_stub_does_not_mint_phantom_model(tmp_path, monkeypatch):
+    """U9 (stored path): a stub that was persisted and rehydrated lacks the
+    stub flag (no 'stub' column in the DB schema) and arrives in merged as an
+    ordinary zero-spend, model=None row. Must not mint a phantom by_model entry.
+    """
+    from datetime import timezone
+    hs = _hist_env(tmp_path, monkeypatch)
+
+    # Insert a stub row (model=None, all tokens/cost zero).
+    stub_rec = {"agent": "claude", "id": "s_stored_stub", "project": "/p",
+                "model": None, "timestamp": datetime.now(timezone.utc).isoformat(),
+                "cost": 0.0,
+                "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                "stub": True}
+    hs.upsert_sessions([stub_rec])
+
+    # Live scan returns nothing for this session — stored row drives the merge.
+    async def fake_sessions(fresh: bool = False):
+        return []
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert "claude (unknown)" not in a["by_model"], (
+        "rehydrated stub with model=None and zero spend must not mint phantom by_model entry")
 
 
 if __name__ == "__main__":
