@@ -10972,7 +10972,7 @@ async def get_projects(include_hidden: bool = False):
         # `cost` is None for an unpriced session (the key EXISTS, so a dict
         # default never fires). An unpriced session contributes 0 to a SUM
         # while still rendering individually as "not captured".
-        projects[proj]["tokens"]["cost"] += s.get("cost") or 0.0
+        projects[proj]["tokens"]["cost"] += (s.get("cost") or 0.0) + (s.get("delegated_cost") or 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
         projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
     for p in projects.values():
