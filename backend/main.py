@@ -5812,11 +5812,14 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                             tokens["input"] += max(0, gross_input - cache_read)
                             tokens["output"] += tk.get("output", 0) or 0
                             tokens["cached"] = max(tokens["cached"], cache_read)
+                            # cumulative billed cache reads (vs HWM above for display)
+                            tokens["_cached_sum"] = tokens.get("_cached_sum", 0) + cache_read
                             # cache writes ARE billed per event → cumulative.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + (cache.get("write", 0) or 0)
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
                     tokens["cost"] = calculate_cost(
-                        model, tokens["input"], tokens["output"], tokens["cached"],
+                        model, tokens["input"], tokens["output"],
+                        tokens.get("_cached_sum", tokens["cached"]),
                         cache_creation_tokens=tokens.get("cache_creation", 0),
                         provider=provider_id, at=ts)
                     title = srow["title"] or ""
@@ -8873,14 +8876,20 @@ def _scan_sessions_sync():
                         if ptype == "step-finish":
                             tk = pdata.get("tokens") or {}
                             cache = tk.get("cache") or {}
+                            cr = cache.get("read", 0) or 0
                             cache_write = (cache.get("write", 0) or 0)
                             tokens["input"]  += tk.get("input", 0) or 0
                             tokens["output"] += tk.get("output", 0) or 0
-                            tokens["cached"] = max(tokens["cached"], cache.get("read", 0) or 0)
+                            tokens["cached"] = max(tokens["cached"], cr)
+                            # cumulative billed cache reads (vs HWM above for display)
+                            tokens["_cached_sum"] = tokens.get("_cached_sum", 0) + cr
                             # cache writes ARE billed per event → cumulative; priced at 1.25x input.
                             tokens["cache_creation"] = tokens.get("cache_creation", 0) + cache_write
                     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"], cache_creation_tokens=tokens.get("cache_creation", 0), provider=provider_id, at=ts)
+                    tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"],
+                                                    tokens.get("_cached_sum", tokens["cached"]),
+                                                    cache_creation_tokens=tokens.get("cache_creation", 0),
+                                                    provider=provider_id, at=ts)
                     project_path = srow["directory"] or "unknown"
                     title = srow["title"] or ""
                     display = (first_user or title)[:100]
