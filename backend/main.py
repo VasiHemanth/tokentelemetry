@@ -9381,10 +9381,12 @@ async def get_sessions(fresh: bool = False):
     """Return the session list. Pass ?fresh=1 to force a re-scan."""
     data = await get_sessions_cached(fresh=fresh)
     # `stub` is scan→persist plumbing (history_store.upsert_sessions keys its
-    # conflict clause on it), not API surface. Strip it on shallow copies —
-    # never mutate the cached dicts, which the async history persist may
-    # still be reading.
-    return [{k: v for k, v in s.items() if k != "stub"} for s in data]
+    # conflict clause on it), not API surface. Filter stubs out entirely —
+    # they represent sessions whose file was never successfully parsed (e.g.
+    # history.jsonl entries whose .jsonl file has been deleted) and would
+    # show as blank rows in the UI. Strip the key on shallow copies so we
+    # never mutate the cached dicts the async history persist may still read.
+    return [{k: v for k, v in s.items() if k != "stub"} for s in data if not s.get("stub")]
 
 
 @app.get("/pricing")

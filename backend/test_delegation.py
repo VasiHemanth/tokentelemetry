@@ -1608,6 +1608,39 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     assert all("stub" not in s for s in data)
 
 
+def test_sessions_endpoint_excludes_stub_sessions(scan_env, monkeypatch):
+    """U12: stub sessions (history.jsonl entries with no matching .jsonl file)
+    must be filtered out of /sessions entirely, not just have their `stub` key
+    stripped. They represent deleted/moved session files and would otherwise
+    surface as blank rows (zero tokens, null model) in the frontend."""
+    import asyncio
+
+    claude_dir = scan_env / ".claude"
+    make_claude_tree(claude_dir)  # one real, fully-parseable session
+
+    # Seed history.jsonl with a second session id that has NO matching .jsonl
+    # file. The scanner creates a stub for it and never clears stub=False.
+    orphan_sid = "orphan-sid-aaaa-bbbb-cccc-000000000001"
+    history_file = claude_dir / "history.jsonl"
+    import json as _json
+    history_file.write_text(
+        _json.dumps({"sessionId": orphan_sid, "project": "/tmp/gone",
+                     "display": "deleted session", "timestamp": 1000000000000})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "_persist_history_async", lambda data: None)
+    data = asyncio.run(main.get_sessions(fresh=True))
+
+    returned_ids = {s["id"] for s in data}
+    assert SID in returned_ids, "real session must appear"
+    assert orphan_sid not in returned_ids, (
+        "orphan stub (history.jsonl entry with no .jsonl file) must not appear in /sessions"
+    )
+    assert all("stub" not in s for s in data)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
