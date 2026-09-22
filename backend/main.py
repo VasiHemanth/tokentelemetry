@@ -5727,9 +5727,9 @@ def _scan_zcode_sessions() -> List[Dict[str, Any]]:
                     if sid in _zc_seen_ids:
                         continue
                     _zc_seen_ids.add(sid)
-                    ts = datetime.fromtimestamp(
-                        (srow["time_updated"] or srow["time_created"] or 0) / 1000,
-                        tz=timezone.utc)
+                    _zc_ts_ms = srow["time_updated"] or srow["time_created"]
+                    ts = (datetime.fromtimestamp(_zc_ts_ms / 1000, tz=timezone.utc)
+                          if _zc_ts_ms else datetime.now(tz=timezone.utc))
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
                     provider_id = None
@@ -8796,7 +8796,9 @@ def _scan_sessions_sync():
                     if sid in _oc_seen_ids:
                         continue
                     _oc_seen_ids.add(sid)
-                    ts = datetime.fromtimestamp((srow["time_updated"] or srow["time_created"] or 0) / 1000, tz=timezone.utc)
+                    _oc_ts_ms = srow["time_updated"] or srow["time_created"]
+                    ts = (datetime.fromtimestamp(_oc_ts_ms / 1000, tz=timezone.utc)
+                          if _oc_ts_ms else datetime.now(tz=timezone.utc))
                     tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                     model = None
                     provider_id = None   # OpenCode records the runtime (e.g. "ollama") → local detection
