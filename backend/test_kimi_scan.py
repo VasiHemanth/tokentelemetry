@@ -247,3 +247,66 @@ def test_session_detail_kimi_returns_claude_shaped_events(kimi_home):
 def test_session_detail_kimi_not_found(kimi_home):
     res = asyncio.run(main.get_session_detail("nonexistent-id", "kimi"))
     assert res == {"error": "Not found"}
+
+
+# ---------------------------------------------------------------------------
+# U8: scan cache preserves model at scan time; repricing history on config
+# change is the bug this test guards against.
+# ---------------------------------------------------------------------------
+
+def test_scan_kimi_cache_preserves_model_across_config_change(kimi_home, tmp_path,
+                                                               monkeypatch):
+    """U8: a session scanned with model A must still report model A after the
+    config changes to model B — the scan cache locks in the model at scan time
+    so historical sessions are not retroactively repriced."""
+    import scan_cache as sc
+
+    # Point scan_cache at a temp dir so it doesn't touch the real data dir.
+    monkeypatch.setattr(sc, "data_dir", lambda: tmp_path / "tt_data")
+
+    _write_kimi_home(kimi_home, model="kimi-k2.6")
+
+    # First scan: wire.jsonl present, model is kimi-k2.6 from config.toml.
+    first = main._scan_kimi_sessions()
+    assert len(first) == 1
+    assert first[0]["model"] == "kimi-k2.6"
+
+    # Now change the config to a different model (simulates user switching).
+    (kimi_home / "config.toml").write_text(
+        'default_model = "kimi-newer"\n', encoding="utf-8")
+
+    # Second scan: source files unchanged, so cache hit is expected.
+    # The session must still report the original model, not the new one.
+    second = main._scan_kimi_sessions()
+    assert len(second) == 1
+    assert second[0]["model"] == "kimi-k2.6", (
+        "model must be preserved from cache; config change must not retroactively "
+        "reprice existing sessions")
+
+
+def test_scan_kimi_cache_refreshes_when_wire_changes(kimi_home, tmp_path, monkeypatch):
+    """Cache must be invalidated when wire.jsonl is newer than the stored mtime."""
+    import time
+    import scan_cache as sc
+
+    monkeypatch.setattr(sc, "data_dir", lambda: tmp_path / "tt_data")
+
+    sess_dir = _write_kimi_home(kimi_home, model="kimi-k2.6")
+
+    # First scan writes the cache.
+    first = main._scan_kimi_sessions()
+    assert first[0]["tokens"]["input"] == 2965 + 500
+
+    # Append a new StatusUpdate so the session has more tokens.
+    wire = sess_dir / "wire.jsonl"
+    time.sleep(0.05)  # ensure mtime advances
+    with open(wire, "a", encoding="utf-8") as f:
+        f.write(json.dumps(_status("chatcmpl-ccc", 1786800020.0,
+                                   input_other=1000, output=10)) + "\n")
+    # Touch wire to guarantee mtime is newer (some filesystems are coarse).
+    wire.touch()
+
+    # Second scan must re-parse (cache miss due to newer mtime).
+    second = main._scan_kimi_sessions()
+    assert second[0]["tokens"]["input"] == 2965 + 500 + 1000, (
+        "cache should be invalidated when wire.jsonl is modified")
