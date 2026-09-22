@@ -139,6 +139,33 @@ def test_stub_insert_uses_null_first_ts():
     )
 
 
+def test_stub_excluded_from_date_range_query():
+    """A stub-only row (never fully parsed) must NOT appear in date-range
+    query() results. query() filters by last_ts; NULL last_ts (set on stub
+    INSERT) is excluded by SQLite's `last_ts >= ?` comparison — this is the
+    end-to-end path that feeds /analytics day-bucketing.
+    """
+    h = _fresh_store()
+    stub = _session("s1", total=0)
+    stub["stub"] = True
+    stub["timestamp"] = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    h.upsert_sessions([stub])
+
+    # Query the day the stub claims to belong to — must come back empty.
+    results = h.query(from_="2026-06-01T00:00:00+00:00", to="2026-06-01T23:59:59+00:00")
+    assert not any(r["id"] == "s1" for r in results), (
+        "stub-only row must not appear in date-range query (last_ts should be NULL)"
+    )
+
+    # After a full parse the session must appear in the correct date bucket.
+    real = _session("s1", total=50, ts=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    h.upsert_sessions([real])
+    results2 = h.query(from_="2026-06-01T00:00:00+00:00", to="2026-06-01T23:59:59+00:00")
+    assert any(r["id"] == "s1" for r in results2), (
+        "session must appear in date-range query after non-stub upsert"
+    )
+
+
 def test_non_stub_after_stub_sets_correct_first_ts():
     """When a stub row (first_ts=NULL) is later upserted as a fully-parsed row,
     first_ts must be set to the actual session start timestamp via COALESCE.
