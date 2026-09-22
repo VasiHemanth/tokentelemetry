@@ -7867,6 +7867,7 @@ def _scan_sessions_sync():
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
             _read_ok = False  # True once at least one rollout file is opened successfully
+            _any_read_error = False  # True if any file failed; blocks cache write even if later files succeed
 
             def record_codex_model(value: Any) -> None:
                 """Keep full Codex model IDs in trace order, latest as primary."""
@@ -8058,10 +8059,10 @@ def _scan_sessions_sync():
                     )
                     # A failed file means the composite source_mtime (which
                     # includes this file) cannot represent a complete parse.
-                    # Clear _read_ok so the cache is NOT written; the session
-                    # will be re-parsed on the next scan once the file is
-                    # readable again, rather than locking in partial data.
-                    _read_ok = False
+                    # Latch _any_read_error so the cache is NOT written even if
+                    # later files in the loop open successfully; the session
+                    # re-parses on the next scan once all files are readable.
+                    _any_read_error = True
 
             if published_sites:
                 sess["published_artifacts"] = sorted(
@@ -8095,7 +8096,7 @@ def _scan_sessions_sync():
                     }
                 sess["tokens_by_day"] = tbd
 
-            if source_mtime is not None and _read_ok:
+            if source_mtime is not None and _read_ok and not _any_read_error:
                 scan_cache.write_cache("codex", sid, source_mtime, _codex_cache_payload(sess))
                 sess["stub"] = False
         for s in codex_sessions.values():

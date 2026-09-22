@@ -1608,13 +1608,19 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     assert all("stub" not in s for s in data)
 
 
-def test_codex_partial_read_does_not_cache_when_rollout_file_unreadable(scan_env, monkeypatch, tmp_path):
-    """When a Codex rollout file fails to open, the session must NOT be written
-    to the scan cache.  Otherwise the composite source_mtime (which includes the
-    unreadable file) would produce a permanent cache hit on every subsequent scan,
-    locking in the partial data from any earlier successfully-read files forever.
+def test_codex_partial_read_does_not_cache_when_rollout_file_unreadable(scan_env, monkeypatch):
+    """When any Codex rollout file fails to open, the session must NOT be
+    written to the scan cache, regardless of which file in the sorted order
+    fails.  Covers two orderings:
+
+    - file1 succeeds, file2 (last) fails  — the original bug scenario
+    - file1 (first) fails, file2 succeeds — checks that a later success does
+      NOT reset the error latch and allow a partial cache write
+
+    Uses monkeypatching of builtins.open to simulate PermissionError so the
+    test is reliable even when tests run as root (where chmod 0o000 is ignored).
     """
-    import stat
+    from unittest.mock import patch, mock_open, MagicMock
 
     SID = "aabbccdd-1111-2222-3333-000000000099"
     codex_dir = scan_env / ".codex"
@@ -1635,33 +1641,48 @@ def test_codex_partial_read_does_not_cache_when_rollout_file_unreadable(scan_env
         "payload": {"id": SID, "cwd": "/tmp/proj", "model_provider": "openai"},
     }) + "\n"
 
+    # Sort order is by filename; file1 < file2 < file3.
     file1 = day / f"rollout-2026-09-21T10-00-00-{SID}.jsonl"
     file2 = day / f"rollout-2026-09-21T10-01-00-{SID}.jsonl"
+    file3 = day / f"rollout-2026-09-21T10-02-00-{SID}.jsonl"
     file1.write_text(meta_line + usage_line)
-    file2.write_text(usage_line)  # readable content, but will be made unreadable
+    file2.write_text(usage_line)
+    file3.write_text(usage_line)
 
     monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
 
-    # Make file2 unreadable so the outer try/except in the rollout loop fires.
-    file2.chmod(0o000)
-    try:
-        sessions = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
-        assert SID in sessions, "session must still appear in in-memory scan result"
-        # stub=True means the cache was NOT written — the partial parse is not locked in.
-        assert sessions[SID]["stub"] is True, (
-            "session with an unreadable rollout file must stay stub=True "
-            "(cache not written) so the next scan can retry with full data"
-        )
-    finally:
-        # Restore permissions so tmp_path cleanup can remove the file.
-        file2.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    real_open = open
 
-    # Once all files are readable, the cache should be written and stub cleared.
-    sessions2 = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
-    assert sessions2[SID]["stub"] is False, (
-        "after all rollout files become readable the session should be fully parsed and cached"
+    def _open_raising_on(bad_path):
+        """Return an open() replacement that raises PermissionError for bad_path."""
+        def _patched(path, *args, **kwargs):
+            if str(path) == str(bad_path):
+                raise PermissionError(f"simulated: {path}")
+            return real_open(path, *args, **kwargs)
+        return _patched
+
+    # Case A: last file (file3) fails — original bug scenario.
+    with patch("builtins.open", side_effect=_open_raising_on(file3)):
+        sessions_a = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_a[SID]["stub"] is True, (
+        "last-file failure must keep stub=True (cache not written)"
     )
-    assert sessions2[SID]["tokens"]["total"] > 0
+
+    # Case B: first file (file1) fails, file2 and file3 succeed.
+    # Without the _any_read_error latch, _read_ok would be reset to True by
+    # file2/file3 succeeding, and the cache would be written with partial data.
+    with patch("builtins.open", side_effect=_open_raising_on(file1)):
+        sessions_b = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_b[SID]["stub"] is True, (
+        "first-file failure must also keep stub=True even when later files succeed"
+    )
+
+    # Case C: all files readable — cache should be written and stub cleared.
+    sessions_c = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_c[SID]["stub"] is False, (
+        "with all files readable the session must be fully parsed and cached"
+    )
+    assert sessions_c[SID]["tokens"]["total"] > 0
 
 
 if __name__ == "__main__":
