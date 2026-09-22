@@ -321,18 +321,31 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
     return written
 
 
-def mark_absent(seen_keys: Set[Tuple[str, str]]) -> None:
+def mark_absent(seen_keys: Set[Tuple[str, str]],
+                scan_started_at: Optional[str] = None) -> None:
     """Flag rows whose (agent, id) was NOT in the latest scan as no longer on
     disk (``source_present=0``). Never deletes — the rollup is what survives
-    agent pruning, so those rows are exactly the ones we must keep."""
+    agent pruning, so those rows are exactly the ones we must keep.
+
+    ``scan_started_at`` is an ISO timestamp captured before the scan began.
+    When provided, rows whose ``last_seen_at >= scan_started_at`` are skipped:
+    those were upserted by a concurrent newer scan and must not be clobbered by
+    an older scan's mark_absent firing late on a thread executor."""
     try:
         con = _connect()
         try:
             present = con.execute(
-                "SELECT agent, id FROM sessions WHERE source_present=1"
+                "SELECT agent, id, last_seen_at FROM sessions WHERE source_present=1"
             ).fetchall()
-            gone = [(a, i) for (a, i) in ((r["agent"], r["id"]) for r in present)
-                    if (a, i) not in seen_keys]
+            gone = []
+            for r in present:
+                a, i = r["agent"], r["id"]
+                if (a, i) in seen_keys:
+                    continue
+                if scan_started_at and (r["last_seen_at"] or "") >= scan_started_at:
+                    # A newer concurrent scan already refreshed this row.
+                    continue
+                gone.append((a, i))
             if gone:
                 con.executemany(
                     "UPDATE sessions SET source_present=0 WHERE agent=? AND id=?", gone
