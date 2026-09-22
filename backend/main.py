@@ -9276,7 +9276,7 @@ def _persist_history_async(data: List[Dict[str, Any]],
 
     def _work() -> None:
         try:
-            history_store.upsert_sessions(data)
+            history_store.upsert_sessions(data, scan_started_at=scan_started_at)
             history_store.mark_absent(
                 {(s.get("agent"), s.get("id")) for s in data
                  if s.get("agent") and s.get("id")},
