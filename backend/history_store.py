@@ -255,7 +255,17 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 # its DO UPDATE SET touches only liveness columns. INSERT is
                 # identical to the real path, so a genuinely-new stub still lands
                 # as a zero-value row rather than being dropped.
-                if r.get("stub", False):
+                is_stub = r.get("stub", False)
+                # Stubs have no reliable first-event timestamp (their
+                # `timestamp` is the file mtime, and _to_utc_iso() falls back
+                # to now() when timestamp is None). Inserting that as first_ts
+                # would permanently anchor a session at the scan time rather
+                # than its actual start, breaking date-range analytics for
+                # sessions that are never fully parsed. Use NULL on a stub's
+                # first INSERT; the non-stub conflict clause's COALESCE(MIN...)
+                # fills it in correctly once a full parse runs.
+                first_ts_val = None if is_stub else ts
+                if is_stub:
                     conflict_clause = """
                         ON CONFLICT(agent, id) DO UPDATE SET
                             last_seen_at=excluded.last_seen_at,
@@ -269,7 +279,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             provider=excluded.provider,
                             endpoint=excluded.endpoint,
                             billing_mode=excluded.billing_mode,
-                            first_ts=MIN(sessions.first_ts, excluded.first_ts),
+                            first_ts=COALESCE(MIN(sessions.first_ts, excluded.first_ts),
+                                              sessions.first_ts, excluded.first_ts),
                             last_ts=MAX(sessions.last_ts, excluded.last_ts),
                             input=excluded.input,
                             output=excluded.output,
@@ -302,7 +313,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                     (
                         r.get("agent"), r.get("id"), r.get("project"), r.get("model"),
                         r.get("provider"), r.get("endpoint"), r.get("billing_mode"),
-                        ts, ts,
+                        first_ts_val, ts,
                         int(tok.get("input", 0) or 0), int(tok.get("output", 0) or 0),
                         int(tok.get("cached", 0) or 0), int(cache_reads or 0),
                         int(tok.get("total", 0) or 0),

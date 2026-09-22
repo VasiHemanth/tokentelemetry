@@ -116,6 +116,58 @@ def test_storage_and_coverage():
     assert stats["transcript_bytes"] > 0
 
 
+def test_stub_insert_uses_null_first_ts():
+    """A stub row (not yet fully parsed) must not anchor first_ts to the
+    scan time. Inserting scan-time as first_ts would permanently misplace
+    the session in date-range analytics for sessions that are never parsed.
+    """
+    h = _fresh_store()
+    # Insert a stub with timestamp = now (simulates the _to_utc_iso fallback)
+    stub = _session("s1", total=0)
+    stub["stub"] = True
+    stub["timestamp"] = datetime.now(timezone.utc)  # scan time
+    h.upsert_sessions([stub])
+
+    import sqlite3, os
+    db = os.environ[_VAR] + "/history.db"
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT first_ts FROM sessions WHERE id='s1'").fetchone()
+    con.close()
+    assert row[0] is None, (
+        "stub INSERT must store NULL for first_ts, not scan time — "
+        f"got {row[0]!r}"
+    )
+
+
+def test_non_stub_after_stub_sets_correct_first_ts():
+    """When a stub row (first_ts=NULL) is later upserted as a fully-parsed row,
+    first_ts must be set to the actual session start timestamp via COALESCE.
+    """
+    import sqlite3 as _sqlite3
+    actual_start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    h = _fresh_store()
+
+    # 1. Stub lands first — first_ts should be NULL.
+    stub = _session("s1", total=0, ts=datetime.now(timezone.utc))
+    stub["stub"] = True
+    h.upsert_sessions([stub])
+
+    # 2. Full parse arrives with the real start timestamp.
+    real = _session("s1", total=100, ts=actual_start)
+    h.upsert_sessions([real])
+
+    db = os.environ[_VAR] + "/history.db"
+    con = _sqlite3.connect(db)
+    row = con.execute("SELECT first_ts FROM sessions WHERE id='s1'").fetchone()
+    con.close()
+    assert row[0] is not None, "first_ts must not remain NULL after a non-stub upsert"
+    stored_ts = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+    assert stored_ts.date() == actual_start.date(), (
+        f"first_ts should reflect actual session start {actual_start.date()}, "
+        f"got {stored_ts!r}"
+    )
+
+
 def test_bucket_key_day_week_month():
     # _bucket_key lives in the analytics endpoint module; import lazily so a
     # missing FastAPI dep degrades to a skip rather than a hard failure.
