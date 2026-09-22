@@ -286,6 +286,7 @@ def test_scan_kimi_cache_preserves_model_across_config_change(kimi_home, tmp_pat
 
 def test_scan_kimi_cache_refreshes_when_wire_changes(kimi_home, tmp_path, monkeypatch):
     """Cache must be invalidated when wire.jsonl is newer than the stored mtime."""
+    import os
     import time
     import scan_cache as sc
 
@@ -299,12 +300,13 @@ def test_scan_kimi_cache_refreshes_when_wire_changes(kimi_home, tmp_path, monkey
 
     # Append a new StatusUpdate so the session has more tokens.
     wire = sess_dir / "wire.jsonl"
-    time.sleep(0.05)  # ensure mtime advances
     with open(wire, "a", encoding="utf-8") as f:
         f.write(json.dumps(_status("chatcmpl-ccc", 1786800020.0,
                                    input_other=1000, output=10)) + "\n")
-    # Touch wire to guarantee mtime is newer (some filesystems are coarse).
-    wire.touch()
+    # Set mtime to 2 seconds in the future — reliable even on 1s-resolution
+    # filesystems (HFS+, FAT32) without any sleep.
+    future = time.time() + 2.0
+    os.utime(wire, (future, future))
 
     # Second scan must re-parse (cache miss due to newer mtime).
     second = main._scan_kimi_sessions()

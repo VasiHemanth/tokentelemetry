@@ -5012,7 +5012,8 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
 
     aliases = _load_project_aliases()
     projects = _kimi_project_by_session()
-    model = _kimi_default_model()
+    # Lazy: only read config.toml on the first cache miss, not on every scan.
+    _model: Optional[str] = None
 
     out: List[Dict[str, Any]] = []
     for wire in KIMI_SESSIONS_DIR.glob("*/*/wire.jsonl"):
@@ -5133,6 +5134,9 @@ def _scan_kimi_sessions() -> List[Dict[str, Any]]:
             ts = last_ts or _file_mtime_utc(wire)
             tokens["total"] = (tokens["input"] + tokens["output"]
                                + tokens["cached"] + tokens["cache_creation"])
+            if _model is None:
+                _model = _kimi_default_model()
+            model = _model
             cost = calculate_cost(
                 model, tokens["input"], tokens["output"], tokens["cached"],
                 cache_creation_tokens=tokens["cache_creation"], at=ts)
