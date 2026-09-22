@@ -1372,11 +1372,23 @@ class QuotaService:
                         capabilities[provider.provider_id] = {"displayName": provider.display_name, "state": "available"}
                         continue
                     if not provider.has_local_credentials():
-                        capabilities[provider.provider_id] = {
-                            "displayName": provider.display_name,
-                            "state": "notSignedIn",
-                            "detail": "No local credentials found.",
-                        }
+                        if current:
+                            # Credential check failed but a prior snapshot exists.
+                            # On macOS, _read_keychain() times out when the Keychain
+                            # consent dialog is not answered, returning None — the
+                            # same as "no credentials". Serving "notSignedIn" here
+                            # would blank the quota UI even though the user is signed
+                            # in; serve the existing (possibly stale) snapshot instead
+                            # and let its own stale flag signal that a refresh failed.
+                            capabilities[provider.provider_id] = {
+                                "displayName": provider.display_name, "state": "available"
+                            }
+                        else:
+                            capabilities[provider.provider_id] = {
+                                "displayName": provider.display_name,
+                                "state": "notSignedIn",
+                                "detail": "No local credentials found.",
+                            }
                         continue
                     try:
                         self._snapshots[provider.provider_id] = provider.refresh(generated_at)
