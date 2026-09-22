@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-09-20",
+      "title": "Subagent spend counts toward your totals",
+      "highlights": [
+        {
+          "title": "Delegated cost is in the totals, not beside them",
+          "description": "Cost run up by Claude subagents and workflows was shown in its own box but left out of the headline total, the cost-by-day chart and the per-model table, so a day of heavy delegation read low. It is now folded in, for past days as well as today, and attributed to the model the subagent actually ran rather than the parent's. Analytics also gains a cost-by-day table. Thanks to slmingol for reporting and fixing this (PR #338).",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
       "tag": "2026-09-19",
       "title": "See what a session used, and what failed",
       "highlights": [

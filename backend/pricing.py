@@ -17,6 +17,7 @@
 # Sources cited in PRICING_SOURCES.md alongside this file.
 
 import json
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -25,6 +26,13 @@ from typing import Any, Dict, Optional
 # price lists. This is deliberately NOT overwritten by the bundled overlay:
 # the two move independently, and reporting the overlay's date for the inline
 # table hid a three-month-stale DeepSeek rate behind a fresh-looking timestamp.
+logger = logging.getLogger("tokentelemetry.pricing")
+# Models already warned about falling through to `_default`, so a chatty
+# session does not log the same warning on every request. Cleared past a
+# sane bound: a warn-once cache must not become an unbounded set.
+_warned_unpriced_models: set = set()
+_WARNED_UNPRICED_CAP = 500
+
 PRICING_UPDATED = "2026-08-29"
 # Date of the bundled models.dev snapshot. Set by _load_bundled_pricing().
 PRICING_OVERLAY_UPDATED = None
@@ -684,6 +692,21 @@ def calculate_cost(
                     )
             except Exception:
                 pass
+            # No curated entry, no overlay entry, no fuzzy-prefix match and not
+            # opted into local-power pricing: this model is billed at the generic
+            # _default rate, which is almost certainly wrong for a real API model.
+            # Warn once per model so the next new-model release degrades visibly
+            # in the server log instead of silently undercounting for weeks.
+            if m_norm not in _warned_unpriced_models:
+                if len(_warned_unpriced_models) >= _WARNED_UNPRICED_CAP:
+                    _warned_unpriced_models.clear()
+                _warned_unpriced_models.add(m_norm)
+                logger.warning(
+                    "No pricing entry for model %r (provider=%r) — billing at "
+                    "_default rate ($%.2f/$%.2f per MTok in/out). Add a curated "
+                    "entry in pricing.py or refresh pricing_data.json.",
+                    model_name, provider, PRICING["_default"]["in"], PRICING["_default"]["out"],
+                )
             config = PRICING["_default"]
 
     in_rate = config["in"] or 0

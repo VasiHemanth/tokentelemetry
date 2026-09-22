@@ -234,6 +234,30 @@ def test_helper_rollup(tmp_path):
     assert deleg["cost"] >= 0
 
 
+def test_helper_rollup_dedups_repeated_message_id(tmp_path):
+    """Claude Code writes one JSONL line per content block of a single turn
+    (thinking/text/tool_use), repeating the full message.usage on every line
+    with the SAME message.id. Without dedup, a 3-block turn triples its usage."""
+    sub = tmp_path / ".claude" / "projects" / PROJ / SID / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-one.jsonl").write_text(
+        # Turn 1: 3 content blocks, same message.id, same usage repeated 3x.
+        _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        # Turn 2: a genuinely distinct request — must still be counted.
+        + _assistant_line(inp=4, out=2, cache_read=50, cache_creation=0, message_id="msg_B"),
+        encoding="utf-8",
+    )
+    deleg = main._claude_subagent_usage(tmp_path / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    one = deleg["subagents"][0]
+    assert one["tokens"]["input"] == 10 + 4
+    assert one["tokens"]["output"] == 5 + 2
+    assert one["tokens"]["cached"] == max(100, 50)  # high-water-mark, not tripled
+    assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
+    assert one["tokens"]["cache_creation"] == 20
+
+
 def test_helper_costs_with_each_files_own_model(tmp_path, monkeypatch):
     sf = make_claude_tree(tmp_path / ".claude")
     seen = []
@@ -283,7 +307,8 @@ def test_scan_claude_delegation_summary(scan_env):
     assert d["supported"] is True and d["tokens_recorded"] is True
     assert d["spawn_count"] == 3
     assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (300 + 40)
-    # Per-type rollup for analytics: Explore file = 30+10+300 tokens.
+    # Per-type rollup for analytics: Explore file = 30+10+300 tokens (cached
+    # is the high-water-mark across its two turns, 100 vs 300 — not summed).
     assert d["by_type"]["Explore"] == {"count": 1, "total": 340,
                                        "cost": d["by_type"]["Explore"]["cost"]}
     assert set(d["by_type"]) == {"Explore", "general-purpose", "unknown"}
@@ -779,6 +804,51 @@ def test_analytics_fresh_live_session_still_overwrites_stored(tmp_path, monkeypa
                                 agents=[], models=[], projects=[]))
     assert a["by_agent"]["claude"]["cost"] == 9.9
     assert a["by_agent"]["claude"]["total"] == 1000
+
+
+def test_analytics_folds_delegated_into_by_day_and_by_model(tmp_path, monkeypatch):
+    """get_analytics() must fold delegated_* spend into by_day and attribute a
+    subagent-only model (Haiku under an Opus parent) in by_model — the core
+    fold-in this change adds.
+
+    Stubs get_sessions_cached like its siblings above: the un-stubbed scan
+    reaches the real ~/.claude and history.db, so bucket-count assertions
+    against a tmp fixture tree are not hermetic.
+    """
+    from datetime import timezone
+    _hist_env(tmp_path, monkeypatch)
+    parent = {
+        "id": "s1", "agent": "claude", "project": "/p", "model": "claude-opus-4-8",
+        "timestamp": datetime.now(timezone.utc), "cost": 4.2, "stub": False,
+        "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                   "delegated_input": 38, "delegated_output": 15, "delegated_cached": 340},
+        "delegated_cost": 0.5,
+        # Haiku appears ONLY here — the parent session never ran it.
+        "delegated_by_model": {"claude-haiku-4-5-20251001": {
+            "input": 30, "output": 10, "cached": 400, "total": 440, "cost": 0.3}},
+    }
+
+    async def fake_sessions(fresh: bool = False):
+        return [parent]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+
+    assert len(a["by_day"]) == 1
+    day = a["by_day"][0]
+    assert day["total"] == 1150 + (38 + 15 + 340)
+    assert day["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["total"] == 1150 + 393
+
+    haiku = a["by_model"]["claude-haiku-4-5-20251001"]
+    assert haiku["total"] == 440
+    assert haiku["cost"] == pytest.approx(0.3)
+    # A subagent transcript is not a session, so it must not inflate the count.
+    assert haiku["session_count"] == 0
+    # The parent's own model keeps only its own spend.
+    assert a["by_model"]["claude-opus-4-8"]["cost"] == pytest.approx(4.2)
 
 
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
@@ -1540,3 +1610,4 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
