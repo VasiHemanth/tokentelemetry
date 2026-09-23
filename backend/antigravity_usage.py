@@ -112,9 +112,15 @@ def _text(buf: Optional[bytes], number: int) -> Optional[str]:
     return text or None
 
 
+# Seconds, so anything past 2100 is not a date this field ever held: a build
+# that switched to milliseconds, or a varint misread as a timestamp. Letting it
+# through would make datetime raise and cost the whole conversation.
+_MAX_TIMESTAMP = 4_102_444_800  # 2100-01-01T00:00:00Z
+
+
 def _timestamp(message: Optional[bytes]) -> Optional[int]:
     seconds = _field(message, 1)
-    return seconds if isinstance(seconds, int) and seconds > 0 else None
+    return seconds if isinstance(seconds, int) and 0 < seconds < _MAX_TIMESTAMP else None
 
 
 def decode_generation(blob: bytes, step_metadata: Optional[bytes] = None) -> Optional[Dict[str, Any]]:
@@ -202,25 +208,16 @@ def _from_id(model_id: str) -> Optional[str]:
     return _EFFORT_SUFFIX_RE.sub("", m) or None
 
 
-def canonical_model(model_id: Optional[str], label: Optional[str],
-                    is_known: Callable[[str], bool] = lambda _name: False) -> Optional[str]:
-    """The model id to report and price one call under, or None if nothing names it.
+def candidate_names(model_id: Optional[str], label: Optional[str]) -> List[str]:
+    """Every name one call could be reported under, most trustworthy first.
 
-    Each call names its model twice, and they disagree in useful ways. A
-    placeholder id ("gemini-pro-default") says nothing, so the label, which records
-    the model that really served the turn, goes first. Some concrete-looking ids
-    are internal aliases: "gemini-3-flash-a" arrives with the label "Gemini 3.5
-    Flash" every time. Fuzzy matching would price that alias as gemini-3-flash, at
-    a sixth of the real rate. So a name is taken only once ``is_known`` says the
-    pricing table holds it exactly; failing that, the first name that could be
-    derived at all.
-
-    A bare "gemini" is never produced: the pricing table fuzzy-matches it to a
-    generic rate, which would look priced and be wrong.
+    A placeholder id ("gemini-pro-default") says nothing, so the label, which
+    records the model that really served the turn, goes first; otherwise the
+    concrete id does. A bare "gemini" is never produced.
     """
     placeholder = bool(model_id) and model_id.strip().lower().replace("-tiered", "").endswith("-default")
     order = ("label", "id") if placeholder or not model_id else ("id", "label")
-    candidates = []
+    names: List[str] = []
     for source in order:
         if source == "id" and model_id:
             name = _from_id(model_id)
@@ -228,12 +225,29 @@ def canonical_model(model_id: Optional[str], label: Optional[str],
             name = _from_label(label)
         else:
             name = None
-        if name and name not in candidates:
-            candidates.append(name)
-    for name in candidates:
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def canonical_model(model_id: Optional[str], label: Optional[str],
+                    is_known: Callable[[str], bool] = lambda _name: False) -> Optional[str]:
+    """The model to price one call under, or None when no name is known exactly.
+
+    Some concrete-looking ids are internal aliases: "gemini-3-flash-a" arrives with
+    the label "Gemini 3.5 Flash" every time. The pricing table fuzzy-matches, so the
+    alias on its own would be billed as gemini-3-flash, at a sixth of the real
+    rate, and a bare "gemini" would match a generic rate. Being priced therefore
+    proves nothing; only a name ``is_known`` finds in the table exactly is used.
+
+    With no such name the call is left unpriced rather than given the nearest
+    rate. Pricing is resolved at read time, so it is priced correctly as soon as
+    the table learns the model.
+    """
+    for name in candidate_names(model_id, label):
         if is_known(name):
             return name
-    return candidates[0] if candidates else None
+    return None
 
 
 # --- one conversation database -------------------------------------------------
@@ -316,16 +330,19 @@ def summarize(usage: Dict[str, Any], price: Callable[..., float],
 
     ``price(model, input, output, cached, day)`` returns USD for one bucket, and
     ``is_known(model)`` says whether the pricing table holds that exact id (see
-    ``canonical_model``). Calls no name could be found for are counted in the
-    tokens but not priced: there is no rate to charge them at, and a default rate
-    would be a number we made up.
+    ``canonical_model``). Calls with no exactly-known name are counted in the
+    tokens but not priced: there is no rate to charge them at, and the nearest
+    rate would be a number we made up. They still carry their best name for
+    display, in ``unpriced_models``.
 
     ``model`` is the model with the most tokens, which is what the session list and
-    the by-model breakdown show.
+    the by-model breakdown show: a priced one if there is any, else the best
+    unpriced name.
     """
     tokens = {"input": 0, "output": 0, "cached": 0}
     cost = 0.0
     per_model: Dict[str, int] = {}
+    unpriced_models: Dict[str, int] = {}
     unpriced = 0
     for b in usage.get("buckets") or []:
         for key in tokens:
@@ -337,11 +354,15 @@ def summarize(usage: Dict[str, Any], price: Callable[..., float],
             per_model[model] = per_model.get(model, 0) + volume
         else:
             unpriced += volume
+            names = candidate_names(b.get("model_id"), b.get("label"))
+            if names:
+                unpriced_models[names[0]] = unpriced_models.get(names[0], 0) + volume
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
     tokens["cost"] = cost
-    model = max(per_model, key=per_model.get) if per_model else None
-    return {"tokens": tokens, "cost": cost, "model": model,
-            "models": per_model, "unpriced_tokens": unpriced}
+    ranked = per_model or unpriced_models
+    model = max(ranked, key=ranked.get) if ranked else None
+    return {"tokens": tokens, "cost": cost, "model": model, "models": per_model,
+            "unpriced_models": unpriced_models, "unpriced_tokens": unpriced}
 
 
 def conversation_files(gemini_dir: Path) -> Dict[str, Path]:

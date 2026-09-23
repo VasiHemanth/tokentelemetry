@@ -134,6 +134,28 @@ def test_canonical_model(model_id, label, expected):
     assert au.canonical_model(model_id, label, known) == expected
 
 
+def test_an_alias_without_its_label_is_left_unpriced_not_fuzzy_priced():
+    """Alone, "gemini-3-flash-a" would fuzzy-match gemini-3-flash at a sixth of the
+    real (gemini-3.5-flash) rate. Unpriced is honest; the wrong rate is not."""
+    assert au.canonical_model("gemini-3-flash-a", None, known) is None
+    s = au.summarize({"buckets": [{"model_id": "gemini-3-flash-a", "label": None, "day": DAY0,
+                                   "input": 1_000, "output": 0, "cached": 0, "calls": 1}]},
+                     lambda *a: pytest.fail("an unknown alias must not be priced"), known)
+    assert s["cost"] == 0.0 and s["unpriced_tokens"] == 1_000
+    assert s["model"] == "gemini-3-flash-a", "still named for display"
+
+
+def test_an_impossible_timestamp_skips_the_row_not_the_conversation(tmp_path):
+    """A millisecond epoch (or a misread varint) used to make datetime raise out
+    of read_usage, losing every call in the file on every scan."""
+    assert au.decode_generation(gen_blob("gemini-3.8-flash", inp=1, ts=10**12)) is None
+    db = tmp_path / "conversations" / "sid.db"
+    make_db(db, [(gen_blob("gemini-3.8-flash", inp=5, ts=T0), None),
+                 (gen_blob("gemini-3.8-flash", inp=9, ts=10**12), None)])
+    usage = au.read_usage(db)
+    assert usage["calls"] == 1 and usage["buckets"][0]["input"] == 5
+
+
 def test_canonical_model_never_emits_a_bare_vendor_name():
     # "gemini" alone fuzzy-matches a generic rate in the pricing table.
     assert au.canonical_model("gemini-default", None, known) is None
