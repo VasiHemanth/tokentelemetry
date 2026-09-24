@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-09-23",
+      "title": "Antigravity sessions get real numbers",
+      "highlights": [
+        {
+          "title": "Antigravity usage is read, not estimated",
+          "description": "Antigravity sessions used to show a rough token guess and $0 cost, so they barely registered in totals or charts. TokenTelemetry now reads the tokens and model recorded for every call in each conversation's own database, and prices them like any other agent. Expect your Antigravity cost to rise sharply: on a real machine, 95 sessions went from $0 to $116 at API list prices.",
+          "href": "/agents/antigravity"
+        },
+        {
+          "title": "Antigravity sessions no longer go missing",
+          "description": "If the Gemini CLI had never run on your machine, every Antigravity session was silently skipped. Sessions without a transcript folder, and older ones Antigravity still lists in its own index, now show up too, and IDE sessions are filed under the project they actually ran in."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-20",
       "title": "Subagent spend counts toward your totals",
       "highlights": [
