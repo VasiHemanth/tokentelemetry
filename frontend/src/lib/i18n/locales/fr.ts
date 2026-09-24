@@ -732,7 +732,7 @@ const phrases: Record<string, string> = {
   "Off": "Désactivé",
   "Sun": "Dim",
   "Mon": "Lun",
-  "Tue": "Mar",
+  "Tue": "Mar.",
   "Wed": "Mer",
   "Thu": "Jeu",
   "Fri": "Ven",

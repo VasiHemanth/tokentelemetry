@@ -61,6 +61,13 @@ function report(tag, phrases) {
   const extra = Object.keys(phrases).filter((k) => !known.has(k));
   const identity = Object.entries(phrases).filter(([k, v]) => k === v).map(([k]) => k);
   const effective = Object.keys(phrases).length - identity.length;
+  // The overlay skips any node whose text is already a translated value, so a
+  // key that is also some other key's translation can never apply. French
+  // "Tue" → "Mar" once hid "Mar" → "Mars", leaving March in English.
+  const produced = new Set(
+    Object.entries(phrases).filter(([k, v]) => k !== v).map(([, v]) => v),
+  );
+  const shadowed = Object.keys(phrases).filter((k) => phrases[k] !== k && produced.has(k));
   return {
     tag,
     total: canonical.length,
@@ -69,6 +76,7 @@ function report(tag, phrases) {
     missing,
     extra,
     identity,
+    shadowed,
   };
 }
 
@@ -136,6 +144,15 @@ function build(tag, { check }) {
   if (stats.missing.length) {
     console.log(`  ⚠ untranslated keys (render in English), first 10:`);
     stats.missing.slice(0, 10).forEach((k) => console.log(`     - ${JSON.stringify(k)}`));
+  }
+  if (stats.shadowed.length) {
+    // Unlike a missing key this is always a bug, so fail the check.
+    console.log(`  ✗ keys that another key's translation shadows (they never apply):`);
+    stats.shadowed.forEach((k) => {
+      const by = Object.keys(phrases).filter((o) => o !== k && phrases[o] === k);
+      console.log(`     - ${JSON.stringify(k)} is also the translation of ${JSON.stringify(by)}`);
+    });
+    process.exitCode = 1;
   }
 }
 

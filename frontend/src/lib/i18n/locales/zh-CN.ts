@@ -759,7 +759,7 @@ const phrases: Record<string, string> = {
   "Run": "运行",
   "Job": "任务",
   "yes": "是",
-  "for": "打开",
+  "for": "为",
   "Off": "关闭",
   "Sun": "周日",
   "Mon": "周一",
