@@ -63,7 +63,7 @@ The one-line installer also starts the app for you on first install — you only
 
 ## Ports in use
 
-**Symptom:** TokenTelemetry fails to start with "required port(s) already in use: 3000" (or 8000).
+**Symptom:** TokenTelemetry fails to start with "required port(s) already in use: 13000" (or 18000).
 
 **Fix:**
 
@@ -71,11 +71,11 @@ Find and stop the process using the port:
 
 ```bash
 # macOS / Linux:
-lsof -iTCP:3000 -sTCP:LISTEN
+lsof -iTCP:13000 -sTCP:LISTEN
 kill <PID>
 
 # Windows:
-netstat -ano | findstr :3000
+netstat -ano | findstr :13000
 taskkill /PID <PID> /F
 ```
 
@@ -154,13 +154,13 @@ The frontend loaded but can't reach the backend. Most commonly caused by a missi
 
 ```bash
 # On the remote machine:
-NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+NEXT_PUBLIC_API_BASE=http://localhost:18000 ./start.sh
 
 # On your laptop:
-ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+ssh -N -L 13000:127.0.0.1:13000 -L 18000:127.0.0.1:18000 user@remote-host
 ```
 
-A single `-L 3000:...` forward without `-L 8000:...` produces a blank dashboard.
+A single `-L 13000:...` forward without `-L 18000:...` produces a blank dashboard.
 
 ### CORS error in browser console
 

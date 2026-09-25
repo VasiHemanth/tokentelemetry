@@ -31,8 +31,8 @@ The first argument is a command only when it matches a known verb; anything else
 
 | Flag | Short | Default | Description |
 | --- | --- | --- | --- |
-| `--port <N>` | `-p` | `3000` | Frontend (Next.js) port |
-| `--api-port <N>` | `-a` | `8000` | Backend (FastAPI) port |
+| `--port <N>` | `-p` | `13000` | Frontend (Next.js) port |
+| `--api-port <N>` | `-a` | `18000` | Backend (FastAPI) port |
 | `--data-dir <path>` | `-d` | `~/.tokentelemetry` | Where TokenTelemetry stores config and state. Sets `TOKENTELEMETRY_DATA_DIR`. |
 | `--host <addr>` | | `127.0.0.1` | Backend bind address. Use `0.0.0.0` (or a specific IP) to expose remotely. |
 | `--allowed-origins <list>` | | _(empty)_ | Comma-separated hosts allowed to load the dashboard from another machine (CORS + Next.js dev origins). |
@@ -43,13 +43,13 @@ The first argument is a command only when it matches a known verb; anything else
 ### Flag examples
 
 ```bash
-# Default: frontend on 3000, backend on 8000, localhost only
+# Default: frontend on 13000, backend on 18000, localhost only
 ./start.sh
 
 # Custom ports
 ./start.sh --port 4000 --api-port 9000
 
-# Frontend on 4000, backend stays 8000
+# Frontend on 4000, backend stays 18000
 ./start.sh -p 4000
 
 # Expose on a tailnet/LAN with auto-generated token
@@ -74,7 +74,7 @@ The first argument is a command only when it matches a known verb; anything else
 | `AGENT_HARNESS_NO_OPEN` | Set to any non-empty value to skip auto-opening the browser on startup. |
 | `TT_NO_UV` | Set to `1` to bootstrap the backend venv with `python -m venv` and pip even when [uv](https://docs.astral.sh/uv/) is on PATH. |
 | `NEXT_PUBLIC_API_PORT` | Passed to the Next.js dev server to tell the frontend which port the backend is on. Set automatically by the launcher from `--api-port`. |
-| `NEXT_PUBLIC_API_BASE` | Full backend URL override (e.g. `http://localhost:8000`). Overrides the runtime auto-detection from `window.location`. Useful in SSH-tunnel setups. |
+| `NEXT_PUBLIC_API_BASE` | Full backend URL override (e.g. `http://localhost:18000`). Overrides the runtime auto-detection from `window.location`. Useful in SSH-tunnel setups. |
 
 ### Backend (Python / FastAPI)
 

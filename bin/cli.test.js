@@ -67,8 +67,8 @@ test('unknown flags still error during dashboard flag parsing', () => {
 test('parseArgs keeps every default option', () => {
   const { help, options } = cli.parseArgs([]);
   assert.strictEqual(help, false);
-  assert.strictEqual(options.frontPort, 3000);
-  assert.strictEqual(options.apiPort, 8000);
+  assert.strictEqual(options.frontPort, 13000);
+  assert.strictEqual(options.apiPort, 18000);
   assert.strictEqual(options.host, '127.0.0.1');
   assert.strictEqual(options.allowedOrigins, '');
   assert.strictEqual(options.authToken, '');

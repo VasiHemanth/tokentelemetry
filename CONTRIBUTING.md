@@ -35,8 +35,8 @@ node bin/cli.js
 ```
 
 This starts:
-- **Frontend** (Next.js) at http://localhost:3000
-- **Backend** (FastAPI) at http://127.0.0.1:8000
+- **Frontend** (Next.js) at http://localhost:13000
+- **Backend** (FastAPI) at http://127.0.0.1:18000
 
 ### Project Structure
 ```

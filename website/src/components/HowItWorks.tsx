@@ -15,7 +15,7 @@ const STEPS = [
     n: "3",
     title: "Open the dashboard",
     body: "Tokens, cost, traces, and reasoning — for every agent, in one local dashboard.",
-    code: <><span className="text-[var(--tt-fg-faint)]">→ </span>http://localhost:3000</>,
+    code: <><span className="text-[var(--tt-fg-faint)]">→ </span>http://localhost:13000</>,
   },
 ];
 

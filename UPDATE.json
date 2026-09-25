@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-09-25",
+      "title": "New default ports: 13000 and 18000",
+      "highlights": [
+        {
+          "title": "Dashboard moved to localhost:13000",
+          "description": "The dashboard now opens on port 13000 and its API on 18000, so it no longer fights your own projects for 3000 and 8000. Update any bookmark to http://localhost:13000, and the base URL in the Hermes Dashboard plugin if you set it. To keep the old ports, start with --port 3000 --api-port 8000. Suggested by nxtrohith (#406)."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-24",
       "title": "The dashboard in your language",
       "highlights": [

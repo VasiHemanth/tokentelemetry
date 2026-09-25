@@ -5,21 +5,21 @@ description: Change the frontend and backend ports, understand NEXT_PUBLIC_API_P
 
 TokenTelemetry runs two services:
 
-- **Frontend** (Next.js) — default port **3000**
-- **Backend** (FastAPI) — default port **8000**
+- **Frontend** (Next.js) — default port **13000**
+- **Backend** (FastAPI) — default port **18000**
 
-Both ports are configurable.
+Both ports are configurable. The defaults sit away from 3000 and 8000, which most dev servers use, so TokenTelemetry can run next to your own projects. They match the Docker setup. Versions before September 2026 used 3000 and 8000; `./start.sh --port 3000 --api-port 8000` brings those back.
 
 ## Changing ports
 
 Use the `--port` / `-p` flag for the frontend and `--api-port` / `-a` flag for the backend:
 
 ```bash
-# Custom frontend port only (backend stays 8000):
+# Custom frontend port only (backend stays 18000):
 ./start.sh --port 4000
 ./start.sh -p 4000
 
-# Custom backend port only (frontend stays 3000):
+# Custom backend port only (frontend stays 13000):
 ./start.sh --api-port 9000
 ./start.sh -a 9000
 
@@ -51,7 +51,7 @@ NEXT_PUBLIC_API_PORT=9000 npm run dev
 `NEXT_PUBLIC_API_BASE` lets you pin the full backend URL, overriding the auto-derived value. This is useful for SSH-tunnel setups where the frontend and backend are on different hosts from the browser's perspective:
 
 ```bash
-NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+NEXT_PUBLIC_API_BASE=http://localhost:18000 ./start.sh
 ```
 
 See [Remote Access](/docs/configuration/remote-access) for the SSH-tunnel pattern where this is needed.
@@ -61,14 +61,14 @@ See [Remote Access](/docs/configuration/remote-access) for the SSH-tunnel patter
 The launcher checks both ports before starting. If either port is already occupied, it prints an error and exits:
 
 ```
-ERROR: required port(s) already in use: 3000
+ERROR: required port(s) already in use: 13000
 Stop whatever is listening on those ports and try again.
-Tip: `lsof -iTCP:3000 -sTCP:LISTEN` shows the culprit.
+Tip: `lsof -iTCP:13000 -sTCP:LISTEN` shows the culprit.
 ```
 
 On Windows:
 ```
-Tip: `netstat -ano | findstr :3000` shows the culprit PID.
+Tip: `netstat -ano | findstr :13000` shows the culprit PID.
 ```
 
 This fail-fast behavior prevents the common problem where Next.js silently bumps to port 3001 and the auto-opened browser lands on the wrong URL.
@@ -77,7 +77,7 @@ To free a port:
 
 ```bash
 # macOS / Linux — find the process:
-lsof -iTCP:3000 -sTCP:LISTEN
+lsof -iTCP:13000 -sTCP:LISTEN
 
 # Kill it:
 kill <PID>

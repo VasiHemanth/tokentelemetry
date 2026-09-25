@@ -86,7 +86,7 @@ Hermes Agent isn't a coding agent — it runs across CLI, messaging platforms (T
 
 Run TokenTelemetry on the same host as Hermes — we read `$HERMES_HOME` (or `~/.hermes/` if unset) locally, no remote-DB mode yet.
 
-### Hermes Dashboard plugin (`:9119` → `:3000`)
+### Hermes Dashboard plugin (`:9119` → `:13000`)
 
 If you run Hermes's own web dashboard (`hermes dashboard`, port `9119`), install the plugin so TokenTelemetry shows up as a tab inside it — one port to remember, deep-link cards to every TT page.
 
@@ -152,7 +152,7 @@ cd tokentelemetry
 # node bin/cli.js # cross-platform
 ```
 
-Then open: **http://localhost:3000**
+Then open: **http://localhost:13000**
 
 ---
 
@@ -293,7 +293,7 @@ Use the built-in flags when you can reach the machine directly (tailnet, LAN, or
 ```bash
 ./start.sh --host 0.0.0.0 \
   --allowed-origins your-laptop.tailnet.ts.net,192.168.1.42 \
-  --port 3000 --api-port 8000
+  --port 13000 --api-port 18000
 ```
 
 - `--host 0.0.0.0` (or a concrete IP) makes the backend listen on all interfaces.
@@ -313,7 +313,7 @@ This pattern is common when your agents (and their logs) run on a remote VPS or 
 **On the remote machine** (where the agent logs live — this is required because TokenTelemetry reads files locally):
 
 ```bash
-NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+NEXT_PUBLIC_API_BASE=http://localhost:18000 ./start.sh
 ```
 
 The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at that address (instead of deriving it from the browser's window.location). It is baked into the frontend build, so setting, changing, or clearing it triggers a rebuild on the next `./start.sh`.
@@ -321,12 +321,12 @@ The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the bac
 **On your laptop:**
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+ssh -N -L 13000:127.0.0.1:13000 -L 18000:127.0.0.1:18000 user@remote-host
 ```
 
-Then open **http://localhost:3000** on your laptop.
+Then open **http://localhost:13000** on your laptop.
 
-Both the UI and all data fetches are forwarded over the single SSH connection. The old single-port example (`-L 3000:...` only) produced a page skeleton with no data because the frontend would try to reach the backend on the laptop's localhost instead of the remote.
+Both the UI and all data fetches are forwarded over the single SSH connection. The old single-port example (`-L 13000:...` only) produced a page skeleton with no data because the frontend would try to reach the backend on the laptop's localhost instead of the remote.
 
 This method requires no firewall changes on the remote machine and reuses your existing SSH authentication.
 
@@ -377,7 +377,7 @@ A: Not really. Hermes ships its own `/usage` + `/insights` and a bundled Langfus
 A: Yes — run TokenTelemetry on the same host (it reads local files). See the **[Remote Access](#remote-access)** section above for the two supported methods:
 
 - Direct exposure with `--host 0.0.0.0` + token (recommended when the network allows it).
-- SSH tunnel with the correct dual-port forward (`-L 3000:... -L 8000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote (the previously documented single-port command produced a blank dashboard).
+- SSH tunnel with the correct dual-port forward (`-L 13000:... -L 18000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote (the previously documented single-port command produced a blank dashboard).
 
 **Q: Is "Hermes Agent" the same as the Hermes-3 LLMs?**  
 A: No. Hermes Agent is the [open-source agent framework](https://github.com/NousResearch/hermes-agent); Hermes-3 is a family of fine-tuned models. TokenTelemetry observes the agent — it can be running any model.
@@ -426,7 +426,7 @@ Know of another? [Open an issue](https://github.com/VasiHemanth/tokentelemetry/i
 
 ## Troubleshooting
 
-**Port conflicts:** Check/kill processes on ports 3000 and 8000.
+**Port conflicts:** Check/kill processes on ports 13000 and 18000.
 **Python not found:** Install Python 3.9+ and ensure it's in your PATH.  
 **No sessions showing:** Run an agent (Claude Code, Gemini CLI, etc.) first — TokenTelemetry needs existing log files.  
 **Windows issues:** Run PowerShell as Administrator for the installer.

@@ -46,7 +46,7 @@ TokenTelemetry binds to `127.0.0.1`, so the dashboard is reachable only from the
 </Callout>
 
 <Callout title="Port already in use?" type="warn">
-If you see `required port(s) already in use: 3000, 8000`, another process is on those ports. Free them (`lsof -iTCP:3000 -sTCP:LISTEN` shows the culprit) or start on different ports: `./start.sh --port 3100 --api-port 8100`.
+If you see `required port(s) already in use: 13000, 18000`, another process is on those ports. Free them (`lsof -iTCP:13000 -sTCP:LISTEN` shows the culprit) or start on different ports: `./start.sh --port 3100 --api-port 8100`.
 </Callout>
 
 ## Option 2: Clone & run
