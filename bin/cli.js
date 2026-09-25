@@ -66,7 +66,7 @@ function parseInvocation(argv) {
 // { help, options }: help is true when -h/--help was seen (the caller prints
 // help and exits 0).
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false, dev: false };
+  const out = { frontPort: 13000, apiPort: 18000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false, dev: false };
   const fail = (msg) => { throw new UsageError(msg); };
   const take = (i) => {
     if (i + 1 >= argv.length) fail(`expected a value after ${argv[i]}`);
@@ -154,8 +154,8 @@ function printHelp() {
     '  stop                       Stop the dashboard (not available yet).',
     '',
     'Options:',
-    '  -p, --port <N>            Frontend (Next.js) port. Default 3000.',
-    '  -a, --api-port <N>        Backend (FastAPI) port. Default 8000.',
+    '  -p, --port <N>            Frontend (Next.js) port. Default 13000.',
+    '  -a, --api-port <N>        Backend (FastAPI) port. Default 18000.',
     '  -d, --data-dir <P>        Where TokenTelemetry stores its config + state.',
     '                            Default ~/.tokentelemetry (sets TOKENTELEMETRY_DATA_DIR).',
     '      --host <ADDR>         Backend bind address. Default 127.0.0.1 (loopback).',
@@ -175,9 +175,9 @@ function printHelp() {
     '  -h, --help               Show this help.',
     '',
     'Examples:',
-    '  start.sh                                 # 3000 / 8000, localhost only',
+    '  start.sh                                 # 13000 / 18000, localhost only',
     '  start.sh --port 4000 --api-port 9000     # custom both',
-    '  start.sh -p 4000                         # frontend on 4000, backend stays 8000',
+    '  start.sh -p 4000                         # frontend on 4000, backend stays 18000',
     '  start.sh --host 0.0.0.0 \\               # expose on a tailnet/LAN (token auto-gen)',
     '    --allowed-origins box.tailnet.ts.net,100.64.0.1',
     '  start.sh --data-dir /mnt/d/tt-data       # store config + state on D:',
