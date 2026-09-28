@@ -50,6 +50,8 @@ jobs:
           - { os: ubuntu-latest, tool: bun, node: "24" }
           - { os: windows-latest, tool: bun, node: "24" }
           - { os: ubuntu-latest, tool: npm, node: "22.14.0" }
+          # The #396 reporter's setup: Windows, npm, Node 22.14.
+          - { os: windows-latest, tool: npm, node: "22.14.0" }
     defaults:
       run:
         working-directory: frontend
