@@ -1,0 +1,73 @@
+name: Launcher
+
+# bin/cli.js is what every install path (install.sh, install.ps1, start.sh,
+# start.bat) ends in, and it had no CI at all. This runs its unit tests on all
+# three platforms, and installs + builds the dashboard the ways the launcher
+# does: with Bun where it's on PATH (verified locally only on macOS, #407), and
+# with npm on Node 22.14, below the 22.22 some dependencies declare (#396).
+
+on:
+  pull_request:
+    paths:
+      - "bin/**"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - ".github/workflows/launcher.yml"
+  push:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - run: node --test bin/cli.test.js
+
+  install-and-build:
+    name: install (${{ matrix.tool }}, ${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, tool: bun, node: "24" }
+          - { os: windows-latest, tool: bun, node: "24" }
+          - { os: ubuntu-latest, tool: npm, node: "22.14.0" }
+    defaults:
+      run:
+        working-directory: frontend
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - if: matrix.tool == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      # Same commands as ensureFrontend() in bin/cli.js.
+      - if: matrix.tool == 'bun'
+        run: bun install --frozen-lockfile --network-concurrency=16
+      - if: matrix.tool == 'npm'
+        run: npm ci --no-audit --no-fund
+
+      - run: npx next build
+        env:
+          NEXT_PUBLIC_API_PORT: "18000"
