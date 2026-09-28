@@ -125,6 +125,108 @@ WHERE blob1 = 'page.viewed' AND blob7 = 'agent-panel'
 GROUP BY agent ORDER BY views DESC
 ```
 
+#### Recurring users (`app.active`)
+
+`app.active` is sent at most once per local day per install, and only after a
+real UI interaction, so headless launches and bots that only hit
+`app.launched` never produce one. It carries no install id. Instead the app
+keeps a local file of dates (never sent) and reports coarse bands, which the
+Worker stores as doubles holding each band's **lower bound in days**:
+
+| Column | Prop | Values |
+|---|---|---|
+| `double3` | first_in_week | 1 on the install's first active day of the local ISO week |
+| `double4` | first_in_month | 1 on the first active day of the local calendar month |
+| `double5` | install_age | `0` (0d), `1` (1-6d), `7` (7-29d), `30` (30-89d), `90` (90d+) |
+| `double6` | gap since last active day | `1` (1d), `2` (2-7d), `8` (8-30d), `30` (30d+), `-1` new install, `-2` first event after upgrading an existing install |
+| `double7` | freq_28d, active days in last 28 | `1`, `2` (2-4), `5` (5-12), `13` (13+) |
+
+Every other event also writes these slots (`0` for the flags, `-99` for the
+bands), and so does an `app.active` with a missing or unknown label. **Always
+filter `blob1 = 'app.active'`**, and exclude `-99` when aggregating a band.
+
+Analytics Engine may sample, so weight by `_sample_interval` instead of
+`count()`. The flags are 0/1, so `SUM(double3 * _sample_interval)` counts
+installs.
+
+```sql
+-- DAU: one app.active per install per local day
+SELECT toStartOfDay(timestamp) AS day,
+       SUM(_sample_interval) AS dau
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY day ORDER BY day
+
+-- WAU: installs whose first active day of the week fell in this week
+SELECT toStartOfWeek(timestamp) AS week,
+       SUM(double3 * _sample_interval) AS wau
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND timestamp > now() - INTERVAL '90' DAY
+GROUP BY week ORDER BY week
+
+-- MAU: same idea per calendar month
+SELECT toStartOfMonth(timestamp) AS month,
+       SUM(double4 * _sample_interval) AS mau
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND timestamp > now() - INTERVAL '90' DAY
+GROUP BY month ORDER BY month
+
+-- New vs returning per day. "upgraded" (-2) is an existing install seen for
+-- the first time since the upgrade: neither new nor a measurable return.
+SELECT toStartOfDay(timestamp) AS day,
+       SUM(if(double6 = -1, _sample_interval, 0)) AS new_installs,
+       SUM(if(double6 > 0, _sample_interval, 0))  AS returning,
+       SUM(if(double6 = -2, _sample_interval, 0)) AS upgraded
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY day ORDER BY day
+
+-- Returning users by gap: double6 >= 8 is someone coming back after a lapse
+SELECT double6 AS gap_days_min, SUM(_sample_interval) AS active_days
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND double6 > 0
+  AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY gap_days_min ORDER BY gap_days_min
+
+-- Retention mix: how old are the installs that are active today?
+SELECT double5 AS install_age_days_min, SUM(_sample_interval) AS active_days
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND double5 != -99
+  AND timestamp > now() - INTERVAL '30' DAY
+GROUP BY install_age_days_min ORDER BY install_age_days_min
+
+-- Stickiness: active-day frequency, counted once per install per month.
+-- double7 >= 13 means used on roughly every other day or more.
+SELECT double7 AS active_days_28d_min,
+       SUM(double4 * _sample_interval) AS installs
+FROM tt_telemetry
+WHERE blob1 = 'app.active' AND double7 != -99
+  AND timestamp > now() - INTERVAL '90' DAY
+GROUP BY active_days_28d_min ORDER BY active_days_28d_min
+```
+
+In the stickiness query `double7` comes from each install's first active day of
+the month, so it describes the 28 days before that day. For a current view, use
+`SUM(_sample_interval)` over the last 7 days instead, which weights heavy users
+by the number of days they were active.
+
+Known skews:
+
+- **Local days vs UTC buckets.** The app decides "new day", "first in week" and
+  "first in month" on the user's local calendar, but `timestamp` is UTC. An
+  event near local midnight can land in the neighbouring UTC day, week or
+  month, so the DAU/WAU/MAU edges are off by a few hours of traffic per zone.
+  `toStartOfWeek` also buckets from Sunday, while the app's weeks start on
+  Monday (ISO), so a user active on both Sunday and Monday is counted twice in
+  one bucket and zero times in another. Totals over several weeks are unaffected.
+- **Bot filter.** Because `app.active` needs a UI interaction, it undercounts
+  anyone who only uses the API or MCP server without opening the dashboard. That
+  is the intended trade for dropping the headless launches that inflate
+  `app.launched`.
+- **Opt-outs and upgrades.** Installs with telemetry off send nothing, and the
+  first `app.active` after upgrading an older install is `upgraded` (`-2`), not
+  `new`, so new-install counts start clean from the release that adds the event.
+
 ### 2. Grafana (the "holistic picture")
 Install the official **Cloudflare Analytics Engine** Grafana data-source plugin,
 point it at the SQL API with the same token, and build panels (DAU, top routes,
@@ -145,11 +247,19 @@ agent mix, summary outcomes). This is the recommended long-term dashboard.
 | `blob8` | feature name (`feature.used`) | `blob16` | sdkVersion |
 | `blob17` | agent — a *single* harness | `blob18` | volume (bucketed count) |
 | `double1` | agent_count | `double2` | isDebug (0/1) |
+| `double3` | first_in_week (`app.active`) | `double4` | first_in_month (`app.active`) |
+| `double5` | install_age, days (`app.active`) | `double6` | gap, days; -1 new, -2 upgraded (`app.active`) |
+| `double7` | freq_28d, days (`app.active`) | | |
 
 Note `blob13` and `blob17` are different things: `blob13` is the whole detected
 set as a CSV (context, on every event), `blob17` is one harness — the subject of
 a `harness.scanned`, or the panel being viewed on a `page.viewed`. Positions are
 append-only; renumbering silently re-labels every historical row.
+
+`double3`..`double7` are written on every event, holding `0` (flags) and `-99`
+(bands) outside `app.active`; filter on `blob1` before reading them. Analytics
+Engine allows at most 20 blobs and 20 doubles per data point, and blobs are at
+18, so new props should go into doubles where they can be expressed as numbers.
 
 Plus the automatic `timestamp` and `_sample_interval` columns.
 

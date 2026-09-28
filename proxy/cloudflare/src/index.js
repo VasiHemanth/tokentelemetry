@@ -39,8 +39,20 @@
  *   blob14  = summarizer_backend     (context)
  *   blob15  = country                (CF edge 2-letter, no IP stored)
  *   blob16  = sdkVersion
+ *   blob17  = agent                  (one harness)
+ *   blob18  = volume                 (bucketed session count)
  *   double1 = agent_count
  *   double2 = isDebug                (0/1)
+ *   double3 = first_in_week          (app.active, 0/1)
+ *   double4 = first_in_month         (app.active, 0/1)
+ *   double5 = install_age lower bound in days (app.active; 0/1/7/30/90)
+ *   double6 = gap lower bound in days (app.active; 1/2/8/30,
+ *                                      -1 = new, -2 = upgraded)
+ *   double7 = freq_28d lower bound    (app.active; 1/2/5/13)
+ *
+ * double3..double7 are written on EVERY event: 0 for the flags and -99
+ * (BAND_MISSING) for the bands when the prop is absent. Always filter
+ * blob1 = 'app.active' before reading them.
  */
 
 const MAX_BODY = 8 * 1024; // events are tiny; reject anything bigger as abuse.
@@ -54,6 +66,7 @@ const ALLOWED_EVENTS = new Set([
   "app.launched", "page.viewed", "trace.summarized",
   "analytics.filtered", "feature.used", "retention.opted_in",
   "harness.scanned", "planlimits.toggled", "agent.opened",
+  "app.active",
 ]);
 
 // Cheap, stateless validation. This is NOT anti-spoof (an open-source client
@@ -81,6 +94,20 @@ function blob(v, max = 64) {
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+// app.active activity bands, stored as the band's LOWER BOUND in days rather
+// than an ordinal, so reordering or adding a band can never change what an old
+// row means and SQL can use plain comparisons (e.g. gap >= 8). The backend
+// sends the string labels; unknown or missing labels become BAND_MISSING.
+const BAND_MISSING = -99;
+const INSTALL_AGE_DAYS = { "0d": 0, "1-6d": 1, "7-29d": 7, "30-89d": 30, "90d+": 90 };
+const GAP_DAYS = { "new": -1, "upgraded": -2, "1d": 1, "2-7d": 2, "8-30d": 8, "30d+": 30 };
+const FREQ_28D_DAYS = { "1": 1, "2-4": 2, "5-12": 5, "13+": 13 };
+
+function band(table, v) {
+  const k = typeof v === "string" ? v : String(v ?? "");
+  return Object.prototype.hasOwnProperty.call(table, k) ? table[k] : BAND_MISSING;
 }
 
 export default {
@@ -141,6 +168,13 @@ export default {
         doubles: [
           num(p.agent_count),         // double1
           s.isDebug ? 1 : 0,          // double2
+          // Appended, never renumbered. app.active only; other events get 0
+          // for the flags and BAND_MISSING (-99) for the bands.
+          num(p.first_in_week),       // double3 -- 0/1
+          num(p.first_in_month),      // double4 -- 0/1
+          band(INSTALL_AGE_DAYS, p.install_age), // double5 -- days
+          band(GAP_DAYS, p.gap),                 // double6 -- days, -1 new, -2 upgraded
+          band(FREQ_28D_DAYS, p.freq_28d),       // double7 -- active days in 28
         ],
       });
     } catch (_) {

@@ -120,6 +120,13 @@ export default function UsagePrivacySettings() {
             ))}
           </div>
 
+          {/* Kept locally, never sent */}
+          {state.local_state?.map((f) => (
+            <p key={f.path} className="text-[11px] text-[var(--tt-fg-dim)]">
+              Kept on this machine: <code className="font-mono">{f.path}</code>. {f.note}
+            </p>
+          ))}
+
           {/* Exactly-what-we-send disclosure */}
           <div className="rounded-[var(--tt-radius)] border border-[var(--tt-border)] overflow-hidden">
             <button
