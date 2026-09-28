@@ -393,6 +393,22 @@ function findUv() {
   return runSoft('uv', ['--version'], { stdio: 'ignore' }) === 0 ? 'uv' : null;
 }
 
+// How to install frontend deps. Bun is used the way uv is on the backend:
+// only when already on PATH, never installed for the user, and TT_NO_BUN=1
+// forces npm. It also needs the committed package-lock.json, because Bun
+// migrates that lock (versions and sha512 integrity) into its own; without
+// one it would resolve versions itself, so that case stays on `npm install`.
+function frontendInstallPlan({ hasBun, hasLock, env = process.env }) {
+  if (!hasLock) return 'npm-install';
+  if (env.TT_NO_BUN === '1' || !hasBun) return 'npm-ci';
+  return 'bun';
+}
+
+function findBun() {
+  if (process.env.TT_NO_BUN === '1' || !which('bun')) return false;
+  return runSoft('bun', ['--version'], { stdio: 'ignore' }) === 0;
+}
+
 function venvPipWorks() {
   if (!fs.existsSync(venvPython)) return false;
   return runSoft(venvPython, ['-m', 'pip', '--version'], { stdio: 'ignore' }) === 0;
@@ -519,10 +535,28 @@ function ensureFrontend() {
   // committed lockfile) and is faster since it skips dependency resolution. Older
   // checkouts predating the committed lockfile (or a repo where it was deleted)
   // fall back to `npm install` so those users aren't broken.
-  if (fs.existsSync(lockPath)) {
-    run('npm', ['ci'], { cwd: frontendDir });
-  } else {
-    run('npm', ['install'], { cwd: frontendDir });
+  const plan = frontendInstallPlan({ hasBun: findBun(), hasLock: fs.existsSync(lockPath) });
+  let installed = false;
+  if (plan === 'bun') {
+    // Bun writes a bun.lock migrated from package-lock.json. Remove it before
+    // and after: a leftover one would win over a later package-lock.json bump
+    // (a transitive security fix) and quietly reinstall the old versions.
+    const bunLock = path.join(frontendDir, 'bun.lock');
+    const dropBunLock = () => { try { fs.rmSync(bunLock, { force: true }); } catch {} };
+    console.log('→ using bun (set TT_NO_BUN=1 to use npm instead)');
+    dropBunLock();
+    try {
+      // At bun's default of 48 parallel downloads, cold installs occasionally
+      // stalled for minutes; 16 measured a steady ~14s (npm ci: ~15s cold).
+      installed = runSoft('bun', ['install', '--frozen-lockfile', '--network-concurrency=16'], { cwd: frontendDir }) === 0;
+    } finally {
+      dropBunLock();
+    }
+    if (!installed) console.log('→ bun install failed, falling back to npm ci…');
+  }
+  if (!installed) {
+    // `npm ci` clears node_modules first, so a half-finished bun install is harmless.
+    run('npm', [plan === 'npm-install' ? 'install' : 'ci'], { cwd: frontendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
@@ -944,6 +978,7 @@ module.exports = {
   checkDesktopNode,
   nodeAtLeast,
   nodeEngineNote,
+  frontendInstallPlan,
   start,
   main,
   cmdMenubar,

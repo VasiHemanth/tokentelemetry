@@ -73,6 +73,8 @@ The launcher creates a Python virtual environment and installs dependencies on f
 
 If [uv](https://docs.astral.sh/uv/) is already on your PATH the launcher uses it for both steps, which is a good deal faster; otherwise it uses `python -m venv` and pip. You don't need to install uv, and either way you get the same interpreter and the same hash-checked packages. Set `TT_NO_UV=1` to force the pip path.
 
+The dashboard's JavaScript dependencies work the same way. If [Bun](https://bun.sh) is on your PATH the launcher installs them with `bun install`, which reinstalls in about a second instead of npm's six when dependencies change after an update; otherwise it uses `npm ci`. Bun installs exactly the versions and checksums pinned in `package-lock.json`, and if it fails for any reason the launcher falls back to npm. You don't need Bun, and Node.js is still required either way. Set `TT_NO_BUN=1` to always use npm.
+
 ## What gets installed
 
 TokenTelemetry does **not** add any global npm package or modify your agent's config. It installs:

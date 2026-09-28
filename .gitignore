@@ -10,6 +10,8 @@ TRACE_VIEW_ENHANCEMENT_PLAN.md
 node_modules/
 .next/
 .next-desktop/
+# bin/cli.js deletes it after a bun install; this covers an interrupted one.
+frontend/bun.lock
 out/
 *.tsbuildinfo
 

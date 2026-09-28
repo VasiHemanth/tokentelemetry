@@ -252,3 +252,10 @@ test('nodeEngineNote explains the EBADENGINE warning only below 22.22', () => {
   assert.strictEqual(cli.nodeEngineNote('22.22.0'), null);
   assert.strictEqual(cli.nodeEngineNote('25.9.0'), null);
 });
+
+test('frontendInstallPlan uses bun only when it is on PATH and the lock exists', () => {
+  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: true, env: {} }), 'bun');
+  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: true, env: { TT_NO_BUN: '1' } }), 'npm-ci');
+  assert.strictEqual(cli.frontendInstallPlan({ hasBun: false, hasLock: true, env: {} }), 'npm-ci');
+  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: false, env: {} }), 'npm-install');
+});
