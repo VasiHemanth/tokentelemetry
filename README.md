@@ -209,6 +209,7 @@ Captured plan-mode outputs from Claude Code's `/plan` command and equivalent in 
 - **Node.js 20.9+** (22.22+ recommended; older versions install fine but npm prints `EBADENGINE` warnings)
 - **Python 3.9+**
 - **git**
+- Optional, for faster installs and updates: [uv](https://docs.astral.sh/uv/) (all platforms) and [Bun](https://bun.sh) (macOS and Linux). The launcher uses them when they're on your PATH and falls back to pip and npm otherwise.
 - Any supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)
 
 ---

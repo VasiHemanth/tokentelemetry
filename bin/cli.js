@@ -406,6 +406,20 @@ function frontendInstallPlan({ hasBun, hasLock, env = process.env, platform = pr
   return 'bun';
 }
 
+// A one-line nudge, printed only while an install is actually running, when
+// the faster tool is missing. Never for someone who opted out with TT_NO_*,
+// and no Bun tip on Windows, where the launcher doesn't use it.
+function speedupTip(tool, { present, env = process.env, platform = process.platform }) {
+  if (present) return null;
+  if (tool === 'uv' && env.TT_NO_UV !== '1') {
+    return '  Tip: install uv (https://docs.astral.sh/uv/) and TokenTelemetry sets up and updates its Python side several times faster.';
+  }
+  if (tool === 'bun' && env.TT_NO_BUN !== '1' && platform !== 'win32') {
+    return '  Tip: install Bun (https://bun.sh) and TokenTelemetry installs and updates the dashboard several times faster.';
+  }
+  return null;
+}
+
 function findBun() {
   if (isWindows || process.env.TT_NO_BUN === '1' || !which('bun')) return false;
   return runSoft('bun', ['--version'], { stdio: 'ignore' }) === 0;
@@ -494,6 +508,8 @@ function ensureBackend() {
     // pip — no need to pay a Python startup on every launch.
     ensureVenvPip();
     console.log('→ installing backend dependencies…');
+    const tip = speedupTip('uv', { present: false });
+    if (tip) console.log(tip);
     run(venvPython, ['-m', 'pip', 'install', '--quiet', ...hashFlags, '-r', reqFile], { cwd: backendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
@@ -537,7 +553,10 @@ function ensureFrontend() {
   // committed lockfile) and is faster since it skips dependency resolution. Older
   // checkouts predating the committed lockfile (or a repo where it was deleted)
   // fall back to `npm install` so those users aren't broken.
-  const plan = frontendInstallPlan({ hasBun: findBun(), hasLock: fs.existsSync(lockPath) });
+  const hasBun = findBun();
+  const plan = frontendInstallPlan({ hasBun, hasLock: fs.existsSync(lockPath) });
+  const bunTip = speedupTip('bun', { present: hasBun });
+  if (bunTip) console.log(bunTip);
   let installed = false;
   if (plan === 'bun') {
     // Bun writes a bun.lock migrated from package-lock.json. Remove it before
@@ -981,6 +1000,7 @@ module.exports = {
   nodeAtLeast,
   nodeEngineNote,
   frontendInstallPlan,
+  speedupTip,
   start,
   main,
   cmdMenubar,

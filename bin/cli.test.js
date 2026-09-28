@@ -263,3 +263,15 @@ test('frontendInstallPlan uses bun only when it is on PATH and the lock exists',
   // Slower than npm on Windows, so never chosen there.
   assert.strictEqual(plan({ hasBun: true, hasLock: true, platform: 'win32' }), 'npm-ci');
 });
+
+test('speedupTip suggests uv everywhere and Bun only off Windows', () => {
+  const tip = (tool, o) => cli.speedupTip(tool, { env: {}, platform: 'linux', ...o });
+  assert.match(tip('uv', { present: false, platform: 'win32' }), /docs\.astral\.sh\/uv/);
+  assert.match(tip('bun', { present: false }), /bun\.sh/);
+  assert.match(tip('bun', { present: false, platform: 'darwin' }), /bun\.sh/);
+  assert.strictEqual(tip('bun', { present: false, platform: 'win32' }), null);
+  assert.strictEqual(tip('uv', { present: true }), null);
+  assert.strictEqual(tip('bun', { present: true }), null);
+  assert.strictEqual(tip('uv', { present: false, env: { TT_NO_UV: '1' } }), null);
+  assert.strictEqual(tip('bun', { present: false, env: { TT_NO_BUN: '1' } }), null);
+});
