@@ -398,14 +398,16 @@ function findUv() {
 // forces npm. It also needs the committed package-lock.json, because Bun
 // migrates that lock (versions and sha512 integrity) into its own; without
 // one it would resolve versions itself, so that case stays on `npm install`.
-function frontendInstallPlan({ hasBun, hasLock, env = process.env }) {
+// Not on Windows: in CI a cold bun install there took ~95s against npm ci's
+// ~51s (on Linux bun was ~5s against ~23s).
+function frontendInstallPlan({ hasBun, hasLock, env = process.env, platform = process.platform }) {
   if (!hasLock) return 'npm-install';
-  if (env.TT_NO_BUN === '1' || !hasBun) return 'npm-ci';
+  if (env.TT_NO_BUN === '1' || !hasBun || platform === 'win32') return 'npm-ci';
   return 'bun';
 }
 
 function findBun() {
-  if (process.env.TT_NO_BUN === '1' || !which('bun')) return false;
+  if (isWindows || process.env.TT_NO_BUN === '1' || !which('bun')) return false;
   return runSoft('bun', ['--version'], { stdio: 'ignore' }) === 0;
 }
 

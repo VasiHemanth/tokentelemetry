@@ -3,7 +3,7 @@ name: Launcher
 # bin/cli.js is what every install path (install.sh, install.ps1, start.sh,
 # start.bat) ends in, and it had no CI at all. This runs its unit tests on all
 # three platforms, and installs + builds the dashboard the ways the launcher
-# does: with Bun where it's on PATH (verified locally only on macOS, #407), and
+# does: with Bun where it's on PATH (Linux here; macOS verified locally), and
 # with npm on Node 22.14, below the 22.22 some dependencies declare (#396).
 
 on:
@@ -47,8 +47,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # No Windows bun leg: the launcher never picks bun there (it measured
+          # ~95s cold against npm's ~51s on this runner).
           - { os: ubuntu-latest, tool: bun, node: "24" }
-          - { os: windows-latest, tool: bun, node: "24" }
           - { os: ubuntu-latest, tool: npm, node: "22.14.0" }
           # The #396 reporter's setup: Windows, npm, Node 22.14.
           - { os: windows-latest, tool: npm, node: "22.14.0" }

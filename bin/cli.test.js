@@ -254,8 +254,12 @@ test('nodeEngineNote explains the EBADENGINE warning only below 22.22', () => {
 });
 
 test('frontendInstallPlan uses bun only when it is on PATH and the lock exists', () => {
-  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: true, env: {} }), 'bun');
-  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: true, env: { TT_NO_BUN: '1' } }), 'npm-ci');
-  assert.strictEqual(cli.frontendInstallPlan({ hasBun: false, hasLock: true, env: {} }), 'npm-ci');
-  assert.strictEqual(cli.frontendInstallPlan({ hasBun: true, hasLock: false, env: {} }), 'npm-install');
+  const plan = (o) => cli.frontendInstallPlan({ env: {}, platform: 'linux', ...o });
+  assert.strictEqual(plan({ hasBun: true, hasLock: true }), 'bun');
+  assert.strictEqual(plan({ hasBun: true, hasLock: true, platform: 'darwin' }), 'bun');
+  assert.strictEqual(plan({ hasBun: true, hasLock: true, env: { TT_NO_BUN: '1' } }), 'npm-ci');
+  assert.strictEqual(plan({ hasBun: false, hasLock: true }), 'npm-ci');
+  assert.strictEqual(plan({ hasBun: true, hasLock: false }), 'npm-install');
+  // Slower than npm on Windows, so never chosen there.
+  assert.strictEqual(plan({ hasBun: true, hasLock: true, platform: 'win32' }), 'npm-ci');
 });
