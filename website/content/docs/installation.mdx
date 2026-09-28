@@ -9,7 +9,7 @@ import { Callout } from 'fumadocs-ui/components/callout';
 
 Before installing, make sure you have:
 
-- **Node.js 18+** — [nodejs.org](https://nodejs.org)
+- **Node.js 20.9+** — [nodejs.org](https://nodejs.org). The launcher refuses anything older. Node.js 22.22+ is recommended: below it npm prints `EBADENGINE` warnings during the first install (on Windows too), which are harmless.
 - **Python 3.9+** — [python.org](https://www.python.org/downloads/). On Debian/Ubuntu, also `sudo apt install python3-venv`: Python there ships without the venv/pip bootstrap, so the first launch can't install the backend dependencies.
 - **npm** (comes with Node.js)
 - At least one supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)

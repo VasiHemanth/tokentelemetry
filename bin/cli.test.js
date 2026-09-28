@@ -236,3 +236,19 @@ test('the Electron spawn quotes its paths when it goes through cmd.exe', () => {
   assert.equal(posix.command, '/repo/node_modules/.bin/electron');
   assert.deepEqual(posix.args, ['/repo/desktop/main.cjs']);
 });
+
+test('nodeAtLeast compares Node versions part by part', () => {
+  assert.strictEqual(cli.nodeAtLeast('22.14.0', '22.22.0'), false);
+  assert.strictEqual(cli.nodeAtLeast('22.22.0', '22.22.0'), true);
+  assert.strictEqual(cli.nodeAtLeast('24.0.0', '22.22.0'), true);
+  assert.strictEqual(cli.nodeAtLeast('20.9.0', '20.9.0'), true);
+  assert.strictEqual(cli.nodeAtLeast('20.8.1', '20.9.0'), false);
+  assert.strictEqual(cli.nodeAtLeast('v22.3.0', '22.22.0'), false);
+  assert.strictEqual(cli.nodeAtLeast('23.0.0-nightly20250101', '22.22.0'), true);
+});
+
+test('nodeEngineNote explains the EBADENGINE warning only below 22.22', () => {
+  assert.match(cli.nodeEngineNote('22.14.0'), /EBADENGINE[\s\S]*22\.22\.0/);
+  assert.strictEqual(cli.nodeEngineNote('22.22.0'), null);
+  assert.strictEqual(cli.nodeEngineNote('25.9.0'), null);
+});

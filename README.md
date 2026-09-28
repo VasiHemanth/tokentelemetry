@@ -206,7 +206,7 @@ Captured plan-mode outputs from Claude Code's `/plan` command and equivalent in 
 
 ## Requirements
 
-- **Node.js 20.9+**
+- **Node.js 20.9+** (22.22+ recommended; older versions install fine but npm prints `EBADENGINE` warnings)
 - **Python 3.9+**
 - **git**
 - Any supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)

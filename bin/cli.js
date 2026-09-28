@@ -292,18 +292,49 @@ function which(cmd) {
   return probe.status === 0 ? probe.stdout.trim().split(/\r?\n/)[0] : null;
 }
 
+// True when `version` ("22.14.0", "v22.14.0", "23.0.0-nightly…") is at or
+// above `floor` ("22.22.0"). Missing parts count as 0.
+function nodeAtLeast(version, floor) {
+  const parts = (v) => String(v).replace(/^v/, '').split('-')[0].split('.').map((n) => Number(n) || 0);
+  const a = parts(version);
+  const b = parts(floor);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return true;
+}
+
+const NODE_MIN = '20.9.0';
+// The newest Node any frontend dependency declares: @lobehub/ui (a peer of
+// @lobehub/icons) asks for >=22.22.0. The dashboard installs, builds and runs
+// on 22.14 regardless (checked for issue #396), so below this we explain npm's
+// EBADENGINE warning instead of refusing to start.
+const NODE_RECOMMENDED = '22.22.0';
+
 function checkNode() {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major < 20 || (major === 20 && minor < 9)) {
-    die(`Node.js 20.9+ required (detected ${process.versions.node}).`);
+  if (!nodeAtLeast(process.versions.node, NODE_MIN)) {
+    die(
+      `TokenTelemetry requires Node.js >= ${NODE_MIN}.\n` +
+      `Detected: Node.js ${process.versions.node}.\n\n` +
+      'Please upgrade Node.js (https://nodejs.org/) and run this again.',
+    );
   }
 }
 
+function nodeEngineNote(version) {
+  if (nodeAtLeast(version, NODE_RECOMMENDED)) return null;
+  return [
+    `  Note: Node.js ${version} is older than ${NODE_RECOMMENDED}, which some dashboard`,
+    '  dependencies declare. npm will print "EBADENGINE Unsupported engine" warnings',
+    '  during this install; they are safe to ignore and TokenTelemetry still works.',
+    `  Upgrading to Node.js ${NODE_RECOMMENDED}+ (https://nodejs.org/) silences them.`,
+  ].join('\n');
+}
+
 function checkDesktopNode() {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  // Electron's current installer requires this newer Node line. Keep the
-  // ordinary dashboard's existing Node 20.9 floor unchanged.
-  if (major < 22 || (major === 22 && minor < 12)) {
+  // Electron's current installer requires this newer Node line. The ordinary
+  // dashboard keeps its lower NODE_MIN floor.
+  if (!nodeAtLeast(process.versions.node, '22.12.0')) {
     die(`TokenTelemetry Desktop requires Node.js 22.12+ (detected ${process.versions.node}).`);
   }
 }
@@ -481,6 +512,8 @@ function ensureFrontend() {
   console.log(fs.existsSync(nmDir)
     ? '→ frontend dependencies changed; updating…'
     : '→ installing frontend dependencies (first run can take a minute)…');
+  const engineNote = nodeEngineNote(process.versions.node);
+  if (engineNote) console.log(engineNote);
   // Prefer `npm ci` — it installs exactly what package-lock.json pins (supply-chain
   // hardening: a compromised registry can't slip a newer, malicious version past a
   // committed lockfile) and is faster since it skips dependency resolution. Older
@@ -909,6 +942,8 @@ module.exports = {
   shouldOpenBrowser,
   openBrowser,
   checkDesktopNode,
+  nodeAtLeast,
+  nodeEngineNote,
   start,
   main,
   cmdMenubar,

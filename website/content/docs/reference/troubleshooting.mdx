@@ -212,6 +212,18 @@ python3 --version   # should show 3.9+
 
 ---
 
+## Node.js version warnings during install
+
+**Symptom:** The launcher exits with "TokenTelemetry requires Node.js >= 20.9.0", or the first install prints `npm warn EBADENGINE Unsupported engine` for `@lobehub/ui` (required `>=22.22.0`). You may also see a React peer-dependency warning for `@emoji-mart/react`.
+
+**Fix:** Below 20.9 the launcher stops; upgrade Node.js from [nodejs.org](https://nodejs.org) and run it again. Between 20.9 and 22.22 the `EBADENGINE` warning is harmless: the dashboard installs, builds and runs. Upgrade to Node.js 22.22+ to silence it. The `@emoji-mart/react` warning comes from a dependency of `@lobehub/icons` and doesn't affect TokenTelemetry.
+
+```bash
+node --version   # 20.9+ required, 22.22+ recommended
+```
+
+---
+
 ## `No module named pip` during install
 
 **Symptom:** On Linux, the first launch stops at:
