@@ -513,7 +513,11 @@ def _infer_first_seen(today: date) -> Tuple[date, bool]:
                 continue
             try:
                 if entry.is_file():
-                    mtime = entry.stat().st_mtime
+                    st = entry.stat()
+                    # Files like preferences are rewritten routinely, so their
+                    # mtime understates install age; creation time (macOS /
+                    # Windows) doesn't move.
+                    mtime = min(st.st_mtime, getattr(st, "st_birthtime", st.st_mtime))
                     if oldest is None or mtime < oldest:
                         oldest = mtime
             except Exception:
