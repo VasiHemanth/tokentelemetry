@@ -6,7 +6,7 @@
 
 TokenTelemetry is a free, open-source observability dashboard that automatically tracks token usage, LLM costs, tool calls, session traces, reasoning steps, subagent delegations, scheduled-job (cron) health, and gateway health across AI coding agents AND autonomous agents — Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, Qwen, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, ZCode, Kimi Code, and Nous Research's Hermes Agent.
 
-It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:3000.
+It reads session logs and SQLite state directly from the filesystem (no SDK, no instrumentation) and presents them in a unified local web dashboard at http://localhost:13000.
 
 ## Key Facts
 
@@ -120,7 +120,7 @@ cd tokentelemetry
 ## Common Questions
 
 **Q: How do I track Claude Code token usage?**
-A: Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from `~/.claude/` logs — no instrumentation, no SDK, no config.
+A: Install TokenTelemetry, run Claude Code normally, and open http://localhost:13000. TokenTelemetry auto-detects Claude Code sessions from `~/.claude/` logs — no instrumentation, no SDK, no config.
 
 **Q: How do I monitor Gemini CLI and Codex costs?**
 A: TokenTelemetry auto-reads logs from Gemini CLI, OpenAI Codex CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, and Antigravity. Token counts and dollar costs appear in the local dashboard automatically.

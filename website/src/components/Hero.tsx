@@ -130,7 +130,7 @@ export default function Hero() {
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400/50" />
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400/50" />
                 <span className="ml-2.5 inline-flex items-center gap-1.5 h-[21px] px-2.5 rounded-md bg-[var(--tt-sunken)] font-mono text-[10.5px] text-[var(--tt-fg-dim)]">
-                  <Lock size={10} className="text-[var(--tt-success-fg,#10b981)]" /> localhost:3000
+                  <Lock size={10} className="text-[var(--tt-success-fg,#10b981)]" /> localhost:13000
                 </span>
               </div>
               <div className="aspect-[16/12] sm:aspect-[16/11] overflow-hidden bg-[var(--tt-sunken)]">

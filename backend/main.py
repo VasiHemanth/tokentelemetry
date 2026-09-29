@@ -13452,7 +13452,7 @@ if __name__ == "__main__":
 
     logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
-    # Port resolution order: --port CLI arg → TT_API_PORT env var → 8000.
+    # Port resolution order: --port CLI arg → TT_API_PORT env var → 18000.
     # bin/cli.js passes --port; running the file directly (uvicorn / python)
     # honors the env var so devs can override without editing args.
     def _resolve_port() -> int:
@@ -13468,7 +13468,7 @@ if __name__ == "__main__":
         if env_port:
             try: return int(env_port)
             except ValueError: pass
-        return 8000
+        return 18000
 
     # Host resolution order: --host CLI arg → TT_HOST env var → 127.0.0.1.
     # Default stays loopback; set 0.0.0.0 (or a specific interface IP) to expose
