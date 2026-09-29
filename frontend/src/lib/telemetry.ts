@@ -37,10 +37,18 @@ export interface TelemetryAlwaysSent {
   note: string;
 }
 
+/** A local-only file kept on this machine (never sent) that a bucketed prop is
+ *  derived from -- e.g. the dates-only activity file behind `app.active`. */
+export interface TelemetryLocalState {
+  path: string;
+  note: string;
+}
+
 /** Exactly-what-we-send transparency payload (`GET /config/telemetry/preview`). */
 export interface TelemetryPreview extends TelemetryState {
   session_id: string;
   never_collected: string[];
+  local_state: TelemetryLocalState[];
   events: string[];
   event_catalog: TelemetryEventSpec[];
   always_sent: TelemetryAlwaysSent[];

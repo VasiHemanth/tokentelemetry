@@ -29,15 +29,18 @@ from __future__ import annotations
 import json
 import os
 import platform
+import tempfile
 import threading
 import urllib.error
 import urllib.request
 import uuid
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Deque, Dict, List, Optional
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from harness_config import load_preferences
+from tt_paths import data_dir
 
 # --------------------------------------------------------------------------
 # Where events go. The app ONLY ever talks to this Worker URL — never a data
@@ -133,7 +136,20 @@ _EVENT_PROPS: Dict[str, set] = {
     # reader is invisible until someone files a bug -- which is how DeepSeek
     # Harness shipped reporting zero sessions.
     "harness.scanned":    {"agent", "volume"},
+    # Recurring-user signal WITHOUT any install id -- see mark_active(). Fires
+    # at most once per local calendar day, only from a real UI event reaching
+    # POST /telemetry/event (never from app.launched/startup), so a headless/
+    # bot launch never counts as "active". Deliberately carries none of the
+    # per-launch context props (see _NO_CONTEXT_PROPS_EVENTS below).
+    "app.active": {"install_age", "gap", "freq_28d", "first_in_week", "first_in_month"},
 }
+
+# Events that must NOT carry the per-launch context props (`agents`,
+# `agent_count`, `summarizer_backend`). app.active can fire many times a day
+# across a long-running backend and exists purely to bucket recency/frequency
+# by date -- attaching the installed-agent fingerprint to it would needlessly
+# widen its privacy surface for no analytical benefit.
+_NO_CONTEXT_PROPS_EVENTS = {"app.active"}
 
 # Enum-controlled values. A value outside its set becomes "other" — never the
 # raw value — so an unexpected/identifying string can't ride through.
@@ -168,6 +184,10 @@ _ENUMS: Dict[str, set] = {
     "volume": {"0", "1-9", "10-99", "100-999", "1000-plus", "other"},
     # Plan-limit gauge: opened (pinned/panel shown) vs. closed (a second click).
     "state": {"opened", "closed", "other"},
+    # app.active buckets -- see mark_active(). Never a raw day count/date.
+    "install_age": {"0d", "1-6d", "7-29d", "30-89d", "90d+"},
+    "gap": {"new", "upgraded", "1d", "2-7d", "8-30d", "30d+"},
+    "freq_28d": {"1", "2-4", "5-12", "13+"},
 }
 
 # Detected-agent names we recognise — must match _list_available_agents() in
@@ -303,7 +323,9 @@ def build_event(event: str, props: Optional[Dict[str, Any]] = None) -> Dict[str,
     Pure + side-effect-free, so the preview endpoint can show users precisely
     what leaves the machine — including when telemetry is OFF.
     """
-    merged = {**_sanitize_props(event, props), **_context_props()}
+    merged = _sanitize_props(event, props)
+    if event not in _NO_CONTEXT_PROPS_EVENTS:
+        merged = {**merged, **_context_props()}
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "sessionId": _SESSION_ID,
@@ -406,6 +428,231 @@ def emit(event: str, props: Optional[Dict[str, Any]] = None) -> None:
         pass
 
 
+# --------------------------------------------------------------------------
+# app.active — recurring-user counting WITHOUT any install id.
+#
+# A tiny local state file (dates only, never sent) tracks the last ~28 active
+# days so we can bucket recency/frequency without ever storing or sending a
+# stable identifier. Nothing here is transmitted directly -- mark_active()
+# derives enum-bucketed props from it and sends only those (see "app.active"
+# emits "app.active" -- above the props allowlist).
+# --------------------------------------------------------------------------
+_ACTIVITY_FILENAME = ".telemetry-activity.json"
+_ACTIVITY_LOCK = threading.Lock()
+_DATE_FMT = "%Y-%m-%d"
+_RECENT_WINDOW_DAYS = 28  # keep the trailing 28-day window, today inclusive
+
+
+def _activity_file() -> Path:
+    return data_dir() / _ACTIVITY_FILENAME
+
+
+def _parse_day(s: Any) -> Optional[date]:
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.strptime(s, _DATE_FMT).date()
+    except Exception:
+        return None
+
+
+def _load_activity_state() -> Tuple[Dict[str, Any], bool]:
+    """Return (state, existed). Any unreadable/corrupt/non-dict file is
+    treated as though it doesn't exist -- never raises, never partially
+    trusts garbage."""
+    path = _activity_file()
+    if not path.exists():
+        return {}, False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {}, False
+    if not isinstance(raw, dict):
+        return {}, False
+    return raw, True
+
+
+def _write_activity_state(state: Dict[str, Any]) -> None:
+    """Atomic write (tmp + os.replace), mirroring harness_config._atomic_write_json."""
+    d = data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(d), prefix=_ACTIVITY_FILENAME + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, str(_activity_file()))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def _infer_first_seen(today: date) -> Tuple[date, bool]:
+    """Backfill first_seen for an install that predates this feature: the
+    oldest mtime among existing files in the data dir (preferences, caches,
+    etc.), excluding the activity file itself. Falls back to `today` (not
+    inferred) when the dir is empty/missing/unreadable.
+
+    A brand-new install also gets files written into the data dir during its
+    very first session -- history_store's rollup DB, harness_config's
+    VERSION/preferences, scan_cache entries -- typically from the dashboard's
+    first data fetches, which land BEFORE the first UI event reaches
+    mark_active(). Only a file strictly OLDER than today's local date is real
+    evidence of an install that predates this call; anything dated today is
+    this session's own first-run writes, not proof of a prior install."""
+    d = data_dir()
+    try:
+        if not d.exists():
+            return today, False
+        oldest: Optional[float] = None
+        for entry in d.iterdir():
+            if entry.name == _ACTIVITY_FILENAME:
+                continue
+            try:
+                if entry.is_file():
+                    st = entry.stat()
+                    # Files like preferences are rewritten routinely, so their
+                    # mtime understates install age; creation time (macOS /
+                    # Windows) doesn't move.
+                    mtime = min(st.st_mtime, getattr(st, "st_birthtime", st.st_mtime))
+                    if oldest is None or mtime < oldest:
+                        oldest = mtime
+            except Exception:
+                continue
+        if oldest is None:
+            return today, False
+        inferred = datetime.fromtimestamp(oldest).date()
+        if inferred >= today:  # today's own writes (or clock skew) prove nothing
+            return today, False
+        return inferred, True
+    except Exception:
+        return today, False
+
+
+def _age_bucket(days: int) -> str:
+    if days <= 0:
+        return "0d"
+    if days <= 6:
+        return "1-6d"
+    if days <= 29:
+        return "7-29d"
+    if days <= 89:
+        return "30-89d"
+    return "90d+"
+
+
+def _gap_bucket(days: Optional[int]) -> str:
+    # days is None (no prior last_active) is handled by the caller (new/
+    # upgraded); this only buckets a real elapsed gap. <=1 (including
+    # corrupt/negative values from clock skew) collapses to the smallest
+    # bucket rather than a made-up label.
+    if days is None or days <= 1:
+        return "1d"
+    if days <= 7:
+        return "2-7d"
+    if days <= 30:
+        return "8-30d"
+    return "30d+"
+
+
+def _freq_bucket(n: int) -> str:
+    if n <= 1:
+        return "1"
+    if n <= 4:
+        return "2-4"
+    if n <= 12:
+        return "5-12"
+    return "13+"
+
+
+def _trim_recent(day_strs: List[str], today: date) -> List[str]:
+    """Keep only entries within the trailing 28-day window ending today
+    (inclusive), de-duplicated and sorted. Unparseable/future-dated entries
+    are dropped rather than trusted."""
+    out = set()
+    for s in day_strs:
+        d = _parse_day(s)
+        if d is None:
+            continue
+        delta = (today - d).days
+        if 0 <= delta < _RECENT_WINDOW_DAYS:
+            out.add(s)
+    return sorted(out)
+
+
+def mark_active(today: Optional[date] = None) -> Optional[Dict[str, Any]]:
+    """Mark the local install active today and emit `app.active`, at most once
+    per local calendar day. No-op (and never writes/reads anything) unless
+    `enabled()` -- so nothing is written when telemetry is off, env-forced off,
+    or under CI. Never raises. Returns the props emitted, or None on a no-op.
+
+    `today` overrides the local date -- for tests only; production callers
+    always use the default (today's local date)."""
+    if not enabled():
+        return None
+    try:
+        with _ACTIVITY_LOCK:
+            day = today if today is not None else date.today()
+            day_str = day.strftime(_DATE_FMT)
+            state, existed = _load_activity_state()
+
+            last_active = _parse_day(state.get("last_active")) if existed else None
+            if last_active is not None and last_active == day:
+                return None  # already marked active today
+
+            recent_raw = state.get("recent_days") if isinstance(state.get("recent_days"), list) else []
+            recent = [s for s in recent_raw if isinstance(s, str)]
+
+            # Compare against last_active, not recent_days: recent_days only
+            # spans 28 days, so a month with activity on the 1st and the 30th
+            # would otherwise count the install twice in MAU.
+            first_in_week = (last_active is None or
+                             last_active.isocalendar()[:2] != day.isocalendar()[:2])
+            first_in_month = (last_active is None or
+                              (last_active.year, last_active.month) != (day.year, day.month))
+
+            if not existed:
+                first_seen, inferred = _infer_first_seen(day)
+                gap = "upgraded" if inferred else "new"
+                first_seen_str = first_seen.strftime(_DATE_FMT)
+            else:
+                inferred = bool(state.get("first_seen_inferred", False))
+                first_seen_dt = _parse_day(state.get("first_seen"))
+                first_seen_str = first_seen_dt.strftime(_DATE_FMT) if first_seen_dt else day_str
+                if last_active is None:
+                    gap = "new" if not inferred else "upgraded"
+                else:
+                    gap = _gap_bucket((day - last_active).days)
+
+            new_recent = _trim_recent(recent + [day_str], day)
+            first_seen_dt = _parse_day(first_seen_str) or day
+            age_days = (day - first_seen_dt).days
+
+            props = {
+                "install_age": _age_bucket(age_days),
+                "gap": gap,
+                "freq_28d": _freq_bucket(len(new_recent)),
+                "first_in_week": 1 if first_in_week else 0,
+                "first_in_month": 1 if first_in_month else 0,
+            }
+
+            new_state = {
+                "first_seen": first_seen_str,
+                "last_active": day_str,
+                "recent_days": new_recent,
+                "first_seen_inferred": inferred,
+            }
+            _write_activity_state(new_state)
+    except Exception:
+        return None
+
+    emit("app.active", props)
+    return props
+
+
 def sample_payloads() -> List[Dict[str, Any]]:
     """One synthetic payload per event type — the full shape, for the preview UI.
     Works regardless of enabled state so users can always inspect what we'd send."""
@@ -419,6 +666,8 @@ def sample_payloads() -> List[Dict[str, Any]]:
         "harness.scanned": {"agent": "qoder", "volume": "1-9"},
         "planlimits.toggled": {"state": "opened"},
         "agent.opened": {"agent": "claude"},
+        "app.active": {"install_age": "7-29d", "gap": "1d", "freq_28d": "2-4",
+                        "first_in_week": 1, "first_in_month": 0},
     }
     # Iterate the allowlist, not the sample dict: an event added to
     # _EVENT_PROPS without a sample here still shows up in the panel (with
@@ -491,6 +740,14 @@ def preview() -> Dict[str, Any]:
             "prompts", "code", "file or directory paths", "project / repo names",
             "tokens", "costs", "model output", "log content", "IP address",
             "any stable device or user identifier",
+        ],
+        "local_state": [
+            {
+                "path": _ACTIVITY_FILENAME,
+                "note": "Dates only (first seen, last active, active days in "
+                        "the last 28), used to compute the coarse app.active "
+                        "bands. The dates themselves are never sent.",
+            },
         ],
         "events": sorted(_EVENT_PROPS.keys()),
         "event_catalog": event_catalog(),
