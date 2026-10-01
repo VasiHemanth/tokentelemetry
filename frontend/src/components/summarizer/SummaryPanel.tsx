@@ -15,6 +15,8 @@ import {
   type Summary, type SummarizerConfig, type SummaryErrorInfo,
 } from "@/lib/summarizer";
 
+import CustomPromptBox from "./CustomPromptBox";
+
 interface SummaryPanelProps {
   sessionId: string;
   agent: string;
@@ -276,6 +278,8 @@ export default function SummaryPanel({ sessionId, agent }: SummaryPanelProps) {
               )}
             </div>
           )}
+
+          {aiEnabled && <CustomPromptBox sessionId={sessionId} agent={agent} />}
         </div>
       )}
     </div>
@@ -345,7 +349,7 @@ function renderHint(hint: string): React.ReactNode {
   });
 }
 
-function SummaryErrorCard({ info }: { info: SummaryErrorInfo }) {
+export function SummaryErrorCard({ info }: { info: SummaryErrorInfo }) {
   const Icon = ERROR_ICONS[info.category] ?? AlertCircle;
   return (
     <div className="rounded-[var(--tt-radius)] border border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)] p-3.5 space-y-2.5">

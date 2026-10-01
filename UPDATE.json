@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-10-01",
+      "title": "Ask your own question about a session",
+      "highlights": [
+        {
+          "title": "Custom prompt on session summaries",
+          "description": "Under a session's summary, write your own question (decisions made, bugs hit, what is still open) and your summarizer backend answers it from that session. Answers are saved, so reopening the page does not call the model again."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-28",
       "title": "New default ports, faster setup",
       "highlights": [

@@ -13410,6 +13410,61 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         "error_info": error_info,
     }
 
+@app.get("/sessions/{session_id}/summary/custom")
+async def list_custom_summaries(session_id: str):
+    return {"items": _summaries.list_custom(session_id)}
+
+@app.post("/sessions/{session_id}/summary/custom")
+async def make_custom_summary(session_id: str, agent: str, body: dict = Body(...)):
+    """Run a user-written prompt over the session brief with the configured
+    summarizer backend. Answers are cached per (session, prompt) and replaced
+    when the trace has grown."""
+    prompt = _summaries.clean_custom_prompt(body.get("prompt"))
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt is required")
+    cfg = _summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    detail = await get_session_detail(session_id, agent)
+    if isinstance(detail, dict) and detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail.get("error", "session not found"))
+    events = _summaries.normalize_detail(detail)
+    if not events:
+        raise HTTPException(status_code=422, detail="no trace content to summarize")
+
+    chash = _summaries.content_hash(session_id, events)
+    phash = _summaries.prompt_hash(prompt)
+    if not body.get("force"):
+        for item in _summaries.list_custom(session_id, limit=200):
+            if item["prompt_hash"] == phash and item["content_hash"] == chash:
+                return {"item": item, "cached": True, "error": None, "error_info": None}
+
+    meta = await _session_meta(session_id, agent) or {"agent": agent}
+    brief = _summaries.condense_for_focus(events, meta)
+    gen_error = None
+    answer = None
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    if sm and sm.is_available():
+        try:
+            answer = sm.summarize(_summaries.build_custom_prompt(brief, prompt)).strip()
+        except SummarizerError as e:
+            gen_error = str(e)
+    else:
+        gen_error = f"summarizer '{backend_name}' is not available"
+
+    if not answer and not gen_error:
+        gen_error = f"{backend_name} produced no output"
+    item = None
+    error_info = None
+    if answer:
+        item = _summaries.store_custom(session_id, prompt, chash, backend_name, cfg.get("model"), answer)
+    elif gen_error:
+        from summarizers.errors import classify as _classify_err
+        error_info = _classify_err(gen_error, backend_name=backend_name or "")
+    return {"item": item, "cached": False, "error": gen_error, "error_info": error_info}
+
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):
     sessions = await get_sessions_cached()

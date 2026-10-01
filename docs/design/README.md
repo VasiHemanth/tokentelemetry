@@ -14,3 +14,4 @@ it in the feature's PR.
 | Delegation & ecosystem telemetry | [`../../DESIGN.md`](../../DESIGN.md) | — (pre-ADR) |
 | Documentation site + community resources | [documentation-site.md](documentation-site.md) | [ADR-0003](../adr/0003-docs-site-fumadocs.md) |
 | `/goal` telemetry (plan) | [goal-telemetry.md](goal-telemetry.md) | — |
+| Chat with sessions and projects | [session-chat.md](session-chat.md) | — |

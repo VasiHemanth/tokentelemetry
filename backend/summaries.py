@@ -260,6 +260,132 @@ def parse_narrative(raw: str) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Custom focus prompt
+#
+# The default summary has a fixed shape. A custom prompt lets the user ask for
+# different information (decisions, bugs, follow-ups) from the same session.
+# Adapters take one prompt string, so the "system prompt" is a preamble inside
+# that string rather than a separate API field.
+# --------------------------------------------------------------------------- #
+MAX_CUSTOM_PROMPT_CHARS = 2000
+_MSG_SNIPPET = 300
+_MSG_CAP = 40
+
+_CUSTOM_PREAMBLE = """You are answering a question about one coding-agent session for an
+observability dashboard. You are given a condensed brief plus excerpts of the
+user and assistant messages (not the full transcript, long messages are cut).
+Answer ONLY from this material. If it does not contain the answer, say so
+plainly instead of guessing. Reply in concise Markdown, no preamble.
+
+INSTRUCTION FROM THE USER:
+"""
+
+
+def condense_for_focus(events: List[Dict[str, Any]], meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The standard brief plus capped message excerpts, so a custom prompt has
+    some conversation to work with. Kept out of ``condense_trace`` so the stored
+    default brief does not grow."""
+    brief = condense_trace(events, meta)
+    user_msgs: list[str] = []
+    assistant_msgs: list[str] = []
+    for ev in events:
+        role, content = _content_of(ev)
+        txt = _text_blocks(content).strip()
+        if not txt:
+            continue
+        if role == "user":
+            if txt.startswith("<") or "tool_result" in txt[:40]:
+                continue
+            user_msgs.append(txt[:_MSG_SNIPPET])
+        elif role == "assistant":
+            assistant_msgs.append(txt[:_MSG_SNIPPET])
+    brief["user_messages"] = user_msgs[:_MSG_CAP]
+    brief["assistant_messages"] = assistant_msgs[-_MSG_CAP:]
+    return brief
+
+
+def clean_custom_prompt(prompt: Any) -> str:
+    """Trim and length-cap a user prompt. Empty string means invalid."""
+    if not isinstance(prompt, str):
+        return ""
+    return prompt.strip()[:MAX_CUSTOM_PROMPT_CHARS]
+
+
+def build_custom_prompt(brief: Dict[str, Any], prompt: str) -> str:
+    return _CUSTOM_PREAMBLE + prompt + "\n\nBRIEF:\n" + json.dumps(brief, indent=2, default=str)
+
+
+def prompt_hash(prompt: str) -> str:
+    return hashlib.sha1(prompt.strip().encode()).hexdigest()[:16]
+
+
+def _custom_conn() -> sqlite3.Connection:
+    conn = _conn()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS custom_summaries (
+                session_id   TEXT NOT NULL,
+                prompt_hash  TEXT NOT NULL,
+                prompt       TEXT,
+                content_hash TEXT,
+                backend      TEXT,
+                model        TEXT,
+                answer       TEXT,
+                generated_at TEXT,
+                PRIMARY KEY (session_id, prompt_hash)
+            )"""
+        )
+        return conn
+    except Exception:
+        conn.close()
+        raise
+
+
+def store_custom(
+    session_id: str, prompt: str, chash: str, backend: str, model: Optional[str], answer: str,
+) -> Dict[str, Any]:
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    phash = prompt_hash(prompt)
+    conn = _custom_conn()
+    try:
+        conn.execute(
+            """INSERT INTO custom_summaries
+               (session_id, prompt_hash, prompt, content_hash, backend, model, answer, generated_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(session_id, prompt_hash) DO UPDATE SET
+                 prompt=excluded.prompt, content_hash=excluded.content_hash,
+                 backend=excluded.backend, model=excluded.model,
+                 answer=excluded.answer, generated_at=excluded.generated_at""",
+            (session_id, phash, prompt, chash, backend, model, answer, generated_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "prompt_hash": phash, "prompt": prompt, "content_hash": chash, "backend": backend,
+        "model": model, "answer": answer, "generated_at": generated_at,
+    }
+
+
+def list_custom(session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """Newest first. A DB error reads as no results, like ``get_cached``."""
+    try:
+        conn = _custom_conn()
+        try:
+            rows = conn.execute(
+                """SELECT prompt_hash, prompt, content_hash, backend, model, answer, generated_at
+                   FROM custom_summaries WHERE session_id=?
+                   ORDER BY generated_at DESC, rowid DESC LIMIT ?""",
+                (session_id, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
 # Content hash — detects when a trace has grown so we re-summarize.
 # --------------------------------------------------------------------------- #
 def content_hash(session_id: str, events: List[Dict[str, Any]]) -> str:

@@ -184,7 +184,42 @@ export const generateSummary = (sessionId: string, agent: string, force = false)
     { method: "POST" },
   );
 
-export const summarizeRecent = (limit: number) =>
+export interface CustomSummary {
+  prompt_hash: string;
+  prompt: string;
+  content_hash: string;
+  backend: string;
+  model: string | null;
+  answer: string;
+  generated_at: string;
+}
+
+export const MAX_CUSTOM_PROMPT_CHARS = 2000;
+
+/** Starting points for the custom prompt box; the user can edit them freely. */
+export const CUSTOM_PROMPT_PRESETS: { label: string; prompt: string }[] = [
+  { label: "Decisions", prompt: "List the decisions made in this session and the reason given for each." },
+  { label: "Bugs & fixes", prompt: "List the bugs or errors hit in this session and how each was fixed or worked around." },
+  { label: "Open items", prompt: "What was left unfinished, deferred, or flagged as a follow-up?" },
+  { label: "Files & why", prompt: "For each file touched, say in one line why it was changed." },
+];
+
+export const getCustomSummaries = (sessionId: string) =>
+  api<{ items: CustomSummary[] }>(`/sessions/${sessionId}/summary/custom`).then((r) => r.items);
+
+export const generateCustomSummary = (sessionId: string, agent: string, prompt: string, force = false) =>
+  api<{
+    item: CustomSummary | null;
+    cached: boolean;
+    error: string | null;
+    error_info?: SummaryErrorInfo | null;
+  }>(`/sessions/${sessionId}/summary/custom?agent=${encodeURIComponent(agent)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, force }),
+  });
+
+export const summarizeRecent =(limit: number) =>
   api<RecentTally>(`/summaries/recent?limit=${limit}`, { method: "POST" });
 
 /**
