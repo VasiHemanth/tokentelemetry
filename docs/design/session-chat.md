@@ -1,7 +1,7 @@
 # Chat with sessions and projects
 
-Status: step 1 shipped (custom prompt on a session summary). Steps 2 and 3 are
-proposed.
+Status: steps 1 and 2 shipped (custom prompt, then multi-turn chat about one
+session). Step 3 is proposed.
 
 ## Why
 
@@ -26,7 +26,7 @@ approach?" without the user remembering which agent or day it was.
 | Step | What | Needs |
 | --- | --- | --- |
 | 1. Custom prompt | Next to "Generate summary", a free-text prompt (with presets) runs over one session. Answers are cached per session and prompt. | Nothing new. Shipped. |
-| 2. Session chat | Multi-turn chat about one session. History is kept client-side and replayed each turn. | A transcript retrieval step, see below. |
+| 2. Session chat | Multi-turn chat about one session. History is kept client-side and replayed each turn. | A transcript retrieval step. Shipped, see below. |
 | 3. Project chat | Ask across all sessions in a project, across agents. Answers cite session, agent and date. | A local search index over session text. |
 
 ## Step 1 as built
@@ -36,14 +36,50 @@ approach?" without the user remembering which agent or day it was.
 - The prompt is capped at 2000 characters. The model receives the standard brief
   plus up to 40 user and 40 assistant message excerpts (300 characters each).
 - Cached in `custom_summaries` keyed by (session, prompt hash). An entry is
-  reused only while the trace is unchanged, same rule as the standard summary.
+  reused only while the trace is unchanged and the backend and model are the
+  same. `GET` with `?agent=` marks each item `stale` when the trace has grown.
+  The newest 50 answers per session are kept.
+- Transcript text is untrusted. The prompt fences it in `<untrusted_session_data>`
+  tags, tells the model it is data, strips lookalike tags from it, and repeats
+  the instruction after it. The claude CLI runs with tools disabled and codex in
+  its read-only sandbox for these calls. The brief is capped at 12000 characters.
+- The model call runs in a worker thread so it does not block other requests.
+  If saving the answer fails, it is still returned with `persisted: false`.
 - Errors go through `summarizers/errors.py::classify`, same as the standard
   summary. Disabled backend returns 409, empty prompt 422.
-- The answer is rendered as Markdown with react-markdown (raw HTML is not
-  interpreted).
+- The answer is rendered as Markdown with react-markdown. Raw HTML is not
+  interpreted, images are replaced by a text placeholder (a remote image URL
+  would send data out on load) and links open in a new tab without a referrer.
 
 Known limit: the model sees excerpts, not the full transcript, so questions about
-detail that was cut will get "not in the material" answers. Step 2 addresses that.
+detail that was cut will get "not in the material" answers. Step 2 addresses that
+by retrieving excerpts per question.
+
+## Step 2 as built
+
+- `POST /sessions/{id}/chat?agent=` with `{messages: [{role, content}]}`. Returns
+  `{reply, error, error_info}`. Roles must be `user` or `assistant`, the last
+  message must be from the user (422 otherwise), and summaries must be enabled
+  (409 otherwise). Only the last 10 messages are used, each cut to 2000
+  characters. Nothing is stored on the server; the client holds the conversation.
+- Retrieval is plain keyword matching in `summaries.py`, with no index and no
+  embeddings. The transcript is split into chunks (text pieces of about 600
+  characters, tool calls and short tool results as one line each). Chunks are
+  scored against the latest question by the summed inverse document frequency of
+  the shared lowercase keywords (stopwords dropped). The best chunks that fit a
+  12000 character budget are sent in chronological order. If nothing matches, the
+  most recent user and assistant text is sent instead.
+- Each excerpt starts with `[tN]`, where N is the number of the user message it
+  follows. The model is asked to cite turns that way.
+- The prompt is a preamble (excerpts are untrusted data, answer only from them,
+  cite turns), then the standard brief and excerpts inside the fence, then the
+  conversation so far, then the new question. The same tool-less or read-only
+  backend settings as the custom prompt apply.
+- Errors use `summarizers/errors.py::classify`, as the custom prompt does. The
+  UI is a Chat tab next to "Ask once" in the summary panel. It says each turn
+  uses the user's own backend quota.
+- Known limit: keyword overlap misses paraphrases. A question worded unlike the
+  transcript can retrieve the wrong excerpts.
 
 ## Open decisions for steps 2 and 3
 

@@ -16,6 +16,7 @@ import {
 } from "@/lib/summarizer";
 
 import CustomPromptBox from "./CustomPromptBox";
+import SessionChat from "./SessionChat";
 
 interface SummaryPanelProps {
   sessionId: string;
@@ -279,7 +280,7 @@ export default function SummaryPanel({ sessionId, agent }: SummaryPanelProps) {
             </div>
           )}
 
-          {aiEnabled && <CustomPromptBox sessionId={sessionId} agent={agent} />}
+          {aiEnabled && <AskTabs sessionId={sessionId} agent={agent} />}
         </div>
       )}
     </div>
@@ -347,6 +348,53 @@ function renderHint(hint: string): React.ReactNode {
     }
     return <span key={i}>{part}</span>;
   });
+}
+
+/** Structured error card when the backend classified it, else a plain danger box. */
+export function SummaryErrorView({ info, message }: { info?: SummaryErrorInfo | null; message?: string | null }) {
+  if (info) return <SummaryErrorCard info={info} />;
+  if (!message) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-[var(--tt-radius)] border border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)] px-3 py-2.5">
+      <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--tt-danger-fg)]" />
+      <p className="text-[12px] text-[var(--tt-danger-fg)]">{message}</p>
+    </div>
+  );
+}
+
+/** "Ask once" (cached single prompts) and "Chat" (multi-turn) share one slot. */
+function AskTabs({ sessionId, agent }: { sessionId: string; agent: string }) {
+  const [tab, setTab] = useState<"once" | "chat">("once");
+  const tabs = [
+    { id: "once" as const, label: "Ask once" },
+    { id: "chat" as const, label: "Chat" },
+  ];
+  return (
+    <div className="space-y-3 border-t border-[var(--tt-border)] pt-5">
+      <div role="tablist" aria-label="Ask about this session" className="inline-flex gap-1 rounded-md border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-0.5">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={cn(
+              "h-6 px-3 rounded text-[11px] font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-brand)]",
+              tab === t.id
+                ? "bg-[var(--tt-panel)] text-[var(--tt-fg)]"
+                : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {/* Both stay mounted so switching tabs keeps drafts and the conversation. */}
+      <div hidden={tab !== "once"}><CustomPromptBox sessionId={sessionId} agent={agent} /></div>
+      <div hidden={tab !== "chat"}><SessionChat sessionId={sessionId} agent={agent} /></div>
+    </div>
+  );
 }
 
 export function SummaryErrorCard({ info }: { info: SummaryErrorInfo }) {

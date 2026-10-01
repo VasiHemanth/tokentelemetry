@@ -7,6 +7,10 @@
         {
           "title": "Custom prompt on session summaries",
           "description": "Under a session's summary, write your own question (decisions made, bugs hit, what is still open) and your summarizer backend answers it from that session. Answers are saved, so reopening the page does not call the model again."
+        },
+        {
+          "title": "Chat with a session",
+          "description": "A new Chat tab under a session's summary lets you ask follow-up questions about that session. Each question pulls the matching parts of the transcript and cites the turns it used, so you can check the answer. It uses your own summarizer backend, and the conversation is not saved."
         }
       ]
     },
