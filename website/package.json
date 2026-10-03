@@ -11,7 +11,7 @@
   "dependencies": {
     "@lobehub/icons": "^5.18.0",
     "@types/mdx": "^2.0.14",
-    "framer-motion": "^12.42.2",
+    "framer-motion": "^13.4.0",
     "fumadocs-core": "^16.15.9",
     "fumadocs-mdx": "^15.4.0",
     "fumadocs-ui": "^16.15.9",
