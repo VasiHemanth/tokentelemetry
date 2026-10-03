@@ -76,8 +76,8 @@ def _model_requests(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, An
     """
     if not table_exists(conn, "model_usage"):
         return None
+    total = _int(conn.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0])
     rows: List[List[Any]] = []
-    total = 0
     for r in conn.execute(
         """SELECT model_id, variant, COUNT(*) AS n,
                   AVG(duration_ms) AS avg_ms,
@@ -89,7 +89,6 @@ def _model_requests(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, An
             ORDER BY n DESC
             LIMIT 30"""
     ):
-        total += _int(r["n"])
         rows.append([
             str(r["model_id"] or "—"),
             _VARIANTS.get(r["variant"], str(r["variant"])),
@@ -168,8 +167,8 @@ def _tools(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, Any]]:
     """
     if not table_exists(conn, "tool_usage"):
         return None
+    total = _int(conn.execute("SELECT COUNT(*) FROM tool_usage").fetchone()[0])
     rows: List[List[Any]] = []
-    total = 0
     for r in conn.execute(
         """SELECT tool_name,
                   COUNT(*) AS n,
@@ -184,7 +183,6 @@ def _tools(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, Any]]:
             ORDER BY n DESC
             LIMIT 40"""
     ):
-        total += _int(r["n"])
         rows.append([
             str(r["tool_name"] or "—"),
             _int(r["n"]),
@@ -215,6 +213,8 @@ def _approvals(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, Any]]:
     """How tool calls were authorised, in ZCode's own vocabulary."""
     if not table_exists(conn, "tool_usage"):
         return None
+    approval_total = _int(
+        conn.execute("SELECT COUNT(*) FROM tool_usage").fetchone()[0])
     rows = [
         [str(r["approval_status"] or "—"), _int(r["n"])]
         for r in conn.execute(
@@ -228,7 +228,7 @@ def _approvals(conn: sqlite3.Connection, db: Path) -> Optional[Dict[str, Any]]:
     return section(
         "table", "Tool approvals", tilde(db) + " → tool_usage",
         columns=["Approval", "Calls"], rows=rows,
-        count=sum(r[1] for r in rows))
+        count=approval_total)
 
 
 # Values the permission ruleset may carry that are user-authored paths or
