@@ -410,6 +410,58 @@ def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
         assert sum(s["tokens"]["total"] for s in rows) == 300
 
 
+def _make_transcript_dir(tmp: Path, *, lines=None):
+    """Minimal .system_generated/logs/ tree with a transcript and optional cache."""
+    logs = tmp / ".system_generated" / "logs"
+    logs.mkdir(parents=True)
+    transcript = logs / "transcript_full.jsonl"
+    if lines is None:
+        lines = [
+            json.dumps({"source": "USER", "content": "hello"}),
+            json.dumps({"source": "MODEL", "content": "hi"}),
+        ]
+    transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return logs, transcript
+
+
+def test_token_cache_is_reused_when_version_matches():
+    """U1: a valid tokens_cache.json with the current _v must be returned without
+    re-parsing the transcript."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        logs, tf = _make_transcript_dir(tmp)
+        cached = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
+                  "_v": main._ANTIGRAVITY_TOKENS_CACHE_V}
+        cache_file = logs / "tokens_cache.json"
+        cache_file.write_text(json.dumps(cached), encoding="utf-8")
+        # Make cache newer than transcript so the mtime guard passes.
+        import os as _os
+        _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
+
+        result = main._estimate_antigravity_tokens(tmp)
+        assert result["input"] == 999, "cached value must be returned as-is"
+        assert result["output"] == 888
+
+
+def test_token_cache_busted_on_version_mismatch():
+    """U1: a tokens_cache.json with a stale _v must be ignored so algo fixes
+    propagate to finished sessions."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        logs, tf = _make_transcript_dir(tmp)
+        stale = {"input": 999, "output": 888, "cached": 0, "total": 1887, "cost": 0.0,
+                 "_v": main._ANTIGRAVITY_TOKENS_CACHE_V - 1}
+        cache_file = logs / "tokens_cache.json"
+        cache_file.write_text(json.dumps(stale), encoding="utf-8")
+        import os as _os
+        _os.utime(cache_file, (tf.stat().st_mtime + 1, tf.stat().st_mtime + 1))
+
+        result = main._estimate_antigravity_tokens(tmp)
+        assert result["input"] != 999, "stale cache must not be returned"
+        # Re-parse result must be based on actual transcript line lengths.
+        assert result["total"] == result["input"] + result["output"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
