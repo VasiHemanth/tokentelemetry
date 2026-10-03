@@ -255,7 +255,20 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 # its DO UPDATE SET touches only liveness columns. INSERT is
                 # identical to the real path, so a genuinely-new stub still lands
                 # as a zero-value row rather than being dropped.
-                if r.get("stub", False):
+                is_stub = r.get("stub", False)
+                # Stubs have no reliable timestamps (their `timestamp` is the
+                # file mtime, and _to_utc_iso() falls back to now() when it is
+                # None). Inserting scan-time values as first_ts/last_ts would
+                # misattribute the session to the wrong date in analytics.
+                # Use NULL for both on a stub's first INSERT:
+                # - first_ts NULL: unknown session start, never used as anchor.
+                # - last_ts NULL: excluded from `last_ts >= ?` date-range
+                #   filters in query(), so unparsed stubs don't pollute buckets.
+                # The non-stub conflict clause's COALESCE(MAX/MIN...) fills
+                # both in correctly once a full parse runs.
+                first_ts_val = None if is_stub else ts
+                last_ts_val = None if is_stub else ts
+                if is_stub:
                     conflict_clause = """
                         ON CONFLICT(agent, id) DO UPDATE SET
                             last_seen_at=excluded.last_seen_at,
@@ -269,8 +282,10 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             provider=excluded.provider,
                             endpoint=excluded.endpoint,
                             billing_mode=excluded.billing_mode,
-                            first_ts=MIN(sessions.first_ts, excluded.first_ts),
-                            last_ts=MAX(sessions.last_ts, excluded.last_ts),
+                            first_ts=COALESCE(MIN(sessions.first_ts, excluded.first_ts),
+                                              sessions.first_ts, excluded.first_ts),
+                            last_ts=COALESCE(MAX(sessions.last_ts, excluded.last_ts),
+                                             sessions.last_ts, excluded.last_ts),
                             input=excluded.input,
                             output=excluded.output,
                             cached=excluded.cached,
@@ -302,7 +317,7 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                     (
                         r.get("agent"), r.get("id"), r.get("project"), r.get("model"),
                         r.get("provider"), r.get("endpoint"), r.get("billing_mode"),
-                        ts, ts,
+                        first_ts_val, last_ts_val,
                         int(tok.get("input", 0) or 0), int(tok.get("output", 0) or 0),
                         int(tok.get("cached", 0) or 0), int(cache_reads or 0),
                         int(tok.get("total", 0) or 0),
