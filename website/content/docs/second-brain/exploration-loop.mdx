@@ -1,0 +1,57 @@
+---
+title: Exploration Loop
+description: A recurring prompt that makes agents stress-test the second brain against your project and record honest numbers.
+---
+
+The exploration loop lets agents do the heavy lifting: each iteration runs
+one scenario against your project, measures it with cold-context subagents,
+records the numbers in a ledger, and proposes at most one improvement for
+your review. Negative results are recorded, not hidden.
+
+## Start it
+
+In Claude Code, from your project root:
+
+```
+/loop 30m Run one iteration of the second-brain exploration loop defined in
+docs/EXPLORE-LOOP.md of the tokentelemetry-plugin repo. Follow its
+iteration protocol exactly.
+```
+
+Stop it any time. The ledger keeps state, so the next run resumes where it
+left off.
+
+## What each iteration does
+
+1. Picks the first `todo` scenario from the ledger.
+2. Runs it via fresh subagents, so token counts are cold-context and honest.
+3. Records date, arms, numbers, verdict, and a one-line insight.
+4. Proposes at most one improvement, filed for human review, never
+   auto-applied.
+5. When all scenarios are done, derives two new ones from the open questions
+   in the insights column.
+
+## Seed scenarios
+
+| id | Scenario | Measures |
+|---|---|---|
+| S1 | Cold-start project question, wiki vs no-wiki | turns, tokens, correctness |
+| S2 | Edit a cited source, query its page | STALE detection and code fallback |
+| S3 | Onboarding: architecture in 10 bullets, both arms | tokens, subsystem coverage |
+| S4 | Merge a diff, `/brain ingest`, verify provenance | pages touched, FRESH after |
+| S5 | Hand-edit a page in a /tmp copy, run `status.py` | TAMPERED detection |
+| S6 | Non-Claude harness reads AGENTS.md pointer | cross-harness adherence |
+| S7 | Ambiguous question, page exists but is not named | did the agent read the wiki first |
+| S8 | Regenerate the wiki graph image after ingest | node/edge counts move sensibly |
+| S9 | Five `/brain query` calls | answers cite pages and confirm against sources 5/5 |
+| S10 | `/skillsmith` dry run | proposal grounded in waste evidence |
+
+## Ground rules
+
+- Measurements come from fresh subagents; the orchestrating turn is warm and
+  would bias counts.
+- Wiki pages are never edited by hand; ingest scenarios go through
+  `/brain ingest`.
+- Synthetic manifest edits happen in /tmp copies, never in the real wiki.
+- A scenario that shows the wiki losing is a valid result. The ledger exists
+  to find weaknesses, not to prove the feature works.
