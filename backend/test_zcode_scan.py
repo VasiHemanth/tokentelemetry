@@ -144,7 +144,7 @@ def test_scan_zcode_sessions_full_shape(scan_env, monkeypatch, tmp_path):
     assert s["tokens"]["output"] == 5079 + 10
     assert s["tokens"]["cached"] == 26496
     assert s["tokens"]["cache_creation"] == 25
-    assert s["tokens"]["total"] == s["tokens"]["input"] + s["tokens"]["output"] + s["tokens"]["cached"]
+    assert s["tokens"]["total"] == s["tokens"]["input"] + s["tokens"]["output"] + s["tokens"]["cached"] + s["tokens"]["cache_creation"]
     assert s["tokens"]["cost"] == 0.123
     assert s["mcp_tools"] == ["Bash"]
     assert s["has_plan"] is True
@@ -221,9 +221,11 @@ def test_scan_nets_cache_read_before_cost(scan_env, monkeypatch, tmp_path):
     assert calls[0]["cached"] == 26496
     assert calls[0]["output"] == 5079 + 10
     assert calls[0]["cache_creation"] == 25
-    # total must not re-add cache.read on top of the still-gross input
-    assert out[0]["tokens"]["total"] == net_input + (5079 + 10) + 26496
-    assert out[0]["tokens"]["input"] == net_input
+    # total must not re-add cache.read on top of the still-gross input,
+    # but must include cache_creation (25 from the second step-finish)
+    tk = out[0]["tokens"]
+    assert tk["total"] == net_input + (5079 + 10) + 26496 + 25
+    assert tk["input"] == net_input
 
 
 def test_scan_zcode_dedupes_shared_session_ids(scan_env, monkeypatch, tmp_path):
@@ -283,3 +285,29 @@ def test_scan_zcode_resolves_model_from_degenerate_session(scan_env, monkeypatch
     assert out[0]["model"] == "GLM-5.3-Flash"
     assert out[0]["tokens"]["total"] == 0
     assert out[0]["has_plan"] is False
+
+
+def test_scan_zcode_total_includes_cache_creation(scan_env, monkeypatch, tmp_path):
+    """U4: tokens["total"] must include cache_creation so it matches Kimi's
+    definition and cost accounting stays consistent."""
+    db = tmp_path / "db.sqlite"
+    _mk_zcode_db(db, sessions=[{
+        "id": "sess_u4", "directory": r"D:\p", "title": "U4",
+        "messages": [({"role": "assistant", "modelID": "GLM-5.3-Flash"}, 1000)],
+        "parts": [
+            ({"type": "step-finish",
+              "tokens": {"input": 500, "output": 100,
+                         "cache": {"read": 50, "write": 75}}}, 1100),
+        ],
+    }])
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    s = main._scan_zcode_sessions()[0]
+    tk = s["tokens"]
+    # input is netted (gross 500 - cache_read 50 = 450)
+    assert tk["input"] == 450
+    assert tk["output"] == 100
+    assert tk["cached"] == 50        # HWM of cache.read
+    assert tk["cache_creation"] == 75
+    assert tk["total"] == tk["input"] + tk["output"] + tk["cached"] + tk["cache_creation"], \
+        "total must include cache_creation"
