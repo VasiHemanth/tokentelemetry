@@ -131,6 +131,62 @@ def test_bucket_key_day_week_month():
     assert main._bucket_key(d, "month").endswith("-01")
 
 
+def test_stub_advances_when_better_partial_parse_available():
+    """M5: a stub row's token counts must update when a later stub has more
+    total tokens than the currently stored stub.  The old clause froze
+    first-sighting partial values forever."""
+    h = _fresh_store()
+    # First stub: partial parse gives 100 total tokens.
+    h.upsert_sessions([_session(total=100, stub=True,
+                                tokens={"input": 80, "output": 20, "cached": 0, "total": 100})])
+    rows = h.query()
+    assert rows[0]["tokens"]["total"] == 100
+
+    # Second scan: still a stub but a better partial parse gives 250 tokens.
+    h.upsert_sessions([_session(total=250, stub=True,
+                                tokens={"input": 200, "output": 50, "cached": 0, "total": 250},
+                                cost=0.05)])
+    rows = h.query()
+    assert rows[0]["tokens"]["total"] == 250, "better stub must advance stored value"
+    assert rows[0]["cost"] == 0.05
+
+
+def test_stub_does_not_overwrite_real_row_with_zeros():
+    """Regression: a zero-value stub must never overwrite a real (non-stub) row."""
+    h = _fresh_store()
+    h.upsert_sessions([_session(total=500,
+                                tokens={"input": 400, "output": 100, "cached": 0, "total": 500},
+                                cost=0.10)])
+    # Stub with zero tokens (e.g. a newly-discovered session).
+    h.upsert_sessions([_session(total=0, stub=True,
+                                tokens={"input": 0, "output": 0, "cached": 0, "total": 0},
+                                cost=0.0)])
+    rows = h.query()
+    assert rows[0]["tokens"]["total"] == 500, "zero stub must not overwrite real row"
+    assert rows[0]["cost"] == 0.10
+
+
+def test_upsert_preserves_delegated_cost_when_subagent_files_deleted():
+    """M8: when delegation data is absent from the session dict (e.g. subagent
+    files deleted), upsert must keep the previously-stored delegated_cost
+    rather than zeroing it out."""
+    h = _fresh_store()
+    # First upsert: session with delegation data.
+    s1 = _session()
+    s1["delegated_cost"] = 2.50
+    s1["tokens"]["delegated_input"] = 1000
+    h.upsert_sessions([s1])
+    rows = h.query()
+    assert rows[0]["delegated_cost"] == 2.50
+
+    # Second upsert: same session but delegation keys absent (files deleted).
+    s2 = _session()
+    # No "delegated_cost" key in s2.
+    h.upsert_sessions([s2])
+    rows = h.query()
+    assert rows[0]["delegated_cost"] == 2.50, "stored delegated_cost must survive absent delegation data"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
