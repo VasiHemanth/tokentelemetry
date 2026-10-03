@@ -221,3 +221,11 @@ def test_model_resolved_before_pricing(tmp_path, monkeypatch):
     assert sess["tokens"]["cost"] != pytest.approx(
         calculate_xai_turn_cost("grok-build", 100, 10, 20)
     )
+
+
+def test_grok_47_has_curated_price():
+    from pricing import PRICING, calculate_cost
+
+    assert PRICING["grok-4.7"]["in"] == 2.60
+    assert calculate_cost("grok-4.7", 1_000_000, 0, 0) == pytest.approx(2.60)
+    assert calculate_cost("grok-4.7", 0, 1_000_000, 0) == pytest.approx(7.80)
