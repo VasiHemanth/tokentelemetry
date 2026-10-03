@@ -1600,7 +1600,7 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     import asyncio
     make_claude_tree(scan_env / ".claude")
     # Keep the fire-and-forget history persist away from the real store.
-    monkeypatch.setattr(main, "_persist_history_async", lambda data: None)
+    monkeypatch.setattr(main, "_persist_history_async", lambda data, **kw: None)
 
     data = asyncio.run(main.get_sessions(fresh=True))
 
