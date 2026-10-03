@@ -34,7 +34,7 @@ logger = logging.getLogger("tokentelemetry.scan_cache")
 # update that affects cached costs. `_mtime` only detects source-transcript
 # changes; this detects code changes. A mismatch is a miss, so stale entries
 # are transparently reparsed and rewritten — never migrated in place.
-CACHE_VERSION = 14  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250); v11: assistant usage-dedupe fix restores continuation tool blocks; v12: Codex Sites are published artifacts; v13: Claude tool_errors/mcp_errors, skill + subagent failure counts; v14: delegated_by_model added to Claude cache payload for by_model analytics attribution (#338)
+CACHE_VERSION = 15  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250); v11: assistant usage-dedupe fix restores continuation tool blocks; v12: Codex Sites are published artifacts; v13: Claude tool_errors/mcp_errors, skill + subagent failure counts; v14: delegated_by_model added to Claude cache payload for by_model analytics attribution (#338); v15: freshness uses == not >= — invalidates future-mtime entries from pre-fix code, and stale Codex sidecars written before the partial-parse guard (#350 #351)
 
 
 def _require_safe_component(candidate: str) -> str:
@@ -64,7 +64,7 @@ def cache_path(agent: str, session_id: str) -> Path:
 
 
 def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dict[str, Any]]:
-    """Return the cached payload if fresh (stored _mtime >= source_mtime AND
+    """Return the cached payload if fresh (stored _mtime == source_mtime AND
     written by this CACHE_VERSION), else None.
 
     Never raises — any OSError/JSONDecodeError/missing-key/unsafe-id is
@@ -78,7 +78,7 @@ def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dic
         if data.get("_version") != CACHE_VERSION:
             return None
         cached_mtime = data["_mtime"]
-        if cached_mtime >= source_mtime:
+        if cached_mtime == source_mtime:
             return data
         return None
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
