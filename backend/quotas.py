@@ -1342,6 +1342,11 @@ class QuotaService:
                     # means this read is either the prior complete cache or the
                     # next complete cache; never write a competing snapshot.
                     self._load(reload=True)
+                    # Evict snapshots for providers that are no longer signed in
+                    # so we don't serve stale "available" state from the cache.
+                    for _p in self.providers:
+                        if not _p.has_local_credentials():
+                            self._snapshots.pop(_p.provider_id, None)
                     errors: List[Dict[str, str]] = []
                     if not self._snapshots:
                         # No cached snapshot exists yet, so the response would
