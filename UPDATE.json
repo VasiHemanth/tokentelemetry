@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-10-06",
+      "title": "Quotas and pricing get pages",
+      "highlights": [
+        {
+          "title": "Quotas and pricing in the sidebar",
+          "description": "Plan limits and model rates now have full dashboard pages instead of only JSON endpoints, so you can inspect provider windows, reset times, and per-model input/output/cache-read costs from navigation.",
+          "href": "/quotas"
+        }
+      ]
+    },
+    {
       "tag": "2026-10-01",
       "title": "Ask your own question about a session",
       "highlights": [
