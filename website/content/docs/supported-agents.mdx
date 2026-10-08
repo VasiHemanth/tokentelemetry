@@ -53,7 +53,11 @@ Reads session files from `~/.gemini/`. Captures token counts (input/output), cos
 
 ### Antigravity
 
-Antigravity is Google's browser automation agent. TokenTelemetry reads its sessions from `~/.gemini/antigravity/` and additionally captures browser screenshots and Antigravity recording strips (thumbnail sequences from `browser_recordings`). See [Artifacts](/docs/features/artifacts).
+Antigravity is Google's coding agent, shipped as the Antigravity app, the Antigravity IDE and the `agy` CLI. Each keeps its own store under `~/.gemini/` (`antigravity/`, `antigravity-ide/` and `antigravity-cli/`), and TokenTelemetry reads all three.
+
+Token counts and the model come from each conversation's own database, `conversations/<id>.db`, which records every model call with its input, output and cache-read tokens. Cost is the API list-price equivalent of those tokens, like every other subscription agent. Sessions from before June 2026 were stored as `.pb` files that carry no readable usage; they are listed with their title and project but no token count.
+
+TokenTelemetry also captures browser screenshots and Antigravity recording strips (thumbnail sequences from `browser_recordings`). See [Artifacts](/docs/features/artifacts).
 
 ### Cursor
 

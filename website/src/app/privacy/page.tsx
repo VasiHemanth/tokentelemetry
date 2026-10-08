@@ -61,6 +61,13 @@ export default function PrivacyPage() {
           </li>
           <li>When you turn full transcript retention on or off — the setting only, never which agent</li>
           <li>
+            At most once a day, after you use the dashboard, a note that the app was used that day.
+            It reports only coarse bands: how long ago it was installed (e.g. &ldquo;7-29d&rdquo;),
+            how long since it was last used, how many of the last 28 days it was used, and whether
+            this is the first use this week or month. No identifier is sent. The dates behind those
+            bands stay in a local file on your machine
+          </li>
+          <li>
             A random session id that is regenerated every launch and is never linked to you across
             sessions
           </li>

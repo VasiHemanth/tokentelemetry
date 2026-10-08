@@ -48,7 +48,7 @@ Not really. Hermes ships its own `/usage` + `/insights` pages and a bundled Lang
 Yes — run TokenTelemetry on the same host (it reads local files). See [Remote Access](/docs/configuration/remote-access) for the two supported methods:
 
 - **Direct exposure** with `--host 0.0.0.0` + auto-generated token (recommended when the network allows it).
-- **SSH tunnel** with dual-port forward (`-L 3000:... -L 8000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote side. The single-port command (`-L 3000:...` only) produces a blank dashboard.
+- **SSH tunnel** with dual-port forward (`-L 13000:... -L 18000:...`) plus `NEXT_PUBLIC_API_BASE` on the remote side. The single-port command (`-L 13000:...` only) produces a blank dashboard.
 
 **Is "Hermes Agent" the same as the Hermes-3 LLMs?**
 
@@ -72,7 +72,7 @@ The session transcript exceeded the model's context window or the provider's per
 
 **What ports does TokenTelemetry use?**
 
-Frontend (Next.js): 3000. Backend (FastAPI): 8000. Both are configurable — see [Ports & Networking](/docs/configuration/ports-networking).
+Frontend (Next.js): 13000. Backend (FastAPI): 18000. Both are configurable — see [Ports & Networking](/docs/configuration/ports-networking).
 
 **Can I run TokenTelemetry on a server and access it remotely?**
 
@@ -88,4 +88,4 @@ Re-run the installer (`curl -fsSL https://tokentelemetry.com/install.sh | bash` 
 
 **Is there a CLI or API I can use to query the data?**
 
-Not yet. The backend exposes a REST API at `http://localhost:8000` that the frontend uses — it's undocumented and may change. A stable public API is tracked on the [issue tracker](https://github.com/VasiHemanth/tokentelemetry/issues).
+Not yet. The backend exposes a REST API at `http://localhost:18000` that the frontend uses — it's undocumented and may change. A stable public API is tracked on the [issue tracker](https://github.com/VasiHemanth/tokentelemetry/issues).

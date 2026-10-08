@@ -10,7 +10,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "How do I track Claude Code token usage?",
-    a: "Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from ~/.claude/ logs — no instrumentation, no SDK, no config.",
+    a: "Install TokenTelemetry, run Claude Code normally, and open http://localhost:13000. TokenTelemetry auto-detects Claude Code sessions from ~/.claude/ logs — no instrumentation, no SDK, no config.",
   },
   {
     q: "How do I monitor Google Antigravity, Codex, and Gemini CLI costs?",

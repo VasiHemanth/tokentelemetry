@@ -8,7 +8,7 @@ import json
 import yaml
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set, Iterable, Tuple
+from typing import Callable, List, Optional, Dict, Any, Set, Iterable, Tuple
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
@@ -26,6 +26,7 @@ from quotas import (
     QuotaService, default_quota_providers,
 )
 import scan_cache
+import antigravity_usage
 import harness_panels
 import codex_goals
 import hermes_telemetry as _ht
@@ -1517,6 +1518,213 @@ def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict
     for cid, ws in hist_project.items():
         meta.setdefault(cid, {}).setdefault("project", ws)
     return meta
+
+
+def _antigravity_store_meta() -> Dict[str, Dict[str, Any]]:
+    """`_antigravity_cli_meta` for every Antigravity store, not just the CLI's.
+
+    The IDE and the 2.0 app keep the same conversations/<id>.db trajectories, so
+    their sessions have the same exact model and project available. Reading only
+    the CLI store left IDE/app sessions to the brain-text heuristic, which is how
+    a screenshot path ended up as one session's project. The CLI's record wins
+    where a session somehow appears in more than one store.
+    """
+    merged: Dict[str, Dict[str, Any]] = {}
+    for brain_dir, _surface in ANTIGRAVITY_BRAIN_SOURCES:
+        for sid, entry in _antigravity_cli_meta(brain_dir.parent).items():
+            slot = merged.setdefault(sid, {})
+            for key, value in entry.items():
+                slot.setdefault(key, value)
+    return merged
+
+
+def _antigravity_price_known(model: str) -> bool:
+    """Whether the pricing table holds this exact model id.
+
+    Deliberately not calculate_cost's fuzzy match: a bare "gemini" key matches
+    every Gemini name, so an id that is really an internal alias would look priced
+    at a generic rate. See antigravity_usage.canonical_model.
+    """
+    import pricing as _pricing
+    norm = _pricing._normalize_model_id(model)
+    return bool(_pricing.rates_for(norm) or _pricing.PRICING.get(norm))
+
+
+def _antigravity_price(model: str, inp: int, out: int, cached: int, day: str) -> float:
+    # `day` prices each bucket at the rate in force when its calls ran.
+    return calculate_cost(model, inp, out, cached, at=day)
+
+
+def _antigravity_real_usage(db: Path) -> Optional[Dict[str, Any]]:
+    """Real token accounting for one conversation, via the scan cache.
+
+    Decoding every generation row of ~100 databases on each scan would be the
+    slowest part of it, and the rows only change while a session runs. The cache
+    is keyed on the newest write to the .db or its WAL, and stores raw token
+    buckets rather than a cost, so a pricing update applies without invalidating
+    it.
+
+    Returns the ``summarize`` result plus ``first_ts``/``last_ts`` (datetimes),
+    or None when the file holds no decodable model calls.
+    """
+    mtime = antigravity_usage.source_mtime(db)
+    cached = scan_cache.read_cache("antigravity", db.stem, mtime)
+    if cached is not None and cached.get("path") == str(db):
+        usage = cached.get("usage")
+    else:
+        usage = antigravity_usage.read_usage(db)
+        scan_cache.write_cache("antigravity", db.stem, mtime, {"path": str(db), "usage": usage})
+    if not usage or not usage.get("calls"):
+        return None
+    result = antigravity_usage.summarize(usage, _antigravity_price, _antigravity_price_known)
+    for key in ("first_ts", "last_ts"):
+        seconds = usage.get(key)
+        result[key] = datetime.fromtimestamp(seconds, tz=timezone.utc) if seconds else None
+    result["calls"] = usage.get("calls", 0)
+    return result
+
+
+def _antigravity_summary_index() -> Dict[str, Dict[str, Any]]:
+    """Antigravity's own session index, from each store's conversation_summaries.db.
+
+    It lists every conversation the app knows about with its title, last activity
+    and workspace, including sessions whose brain/ folder never received a
+    transcript. It is the one record that covers older .pb sessions, whose token
+    usage is not recorded anywhere we can read.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    gemini_home = str(GEMINI_DIR)
+    for brain_dir, surface in ANTIGRAVITY_BRAIN_SOURCES:
+        db = brain_dir.parent / "conversation_summaries.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(_sqlite_ro_uri(db), uri=True)
+            try:
+                rows = con.execute(
+                    "SELECT conversation_id, title, preview, step_count, workspace_uris, "
+                    "last_modified_time FROM conversation_summaries").fetchall()
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            continue
+        for cid, title, preview, steps, uris, modified in rows:
+            if not cid or cid in index:
+                continue
+            workspace = None
+            try:
+                parsed = json.loads(uris) if uris else []
+            except (TypeError, ValueError):
+                parsed = []
+            for uri in parsed if isinstance(parsed, list) else []:
+                path = unquote(str(uri).split("://", 1)[-1]) if "://" in str(uri) else str(uri)
+                # Scratch playgrounds under ~/.gemini are the agent's own space.
+                if path and not path.startswith(gemini_home):
+                    workspace = path.rstrip("/")
+                    break
+            try:
+                when = _aware(datetime.fromisoformat(str(modified).replace("Z", "+00:00"))) if modified else None
+            except ValueError:
+                when = None
+            index[cid] = {"title": (title or preview or "").strip(), "steps": steps or 0,
+                          "workspace": workspace, "timestamp": when, "surface": surface}
+    return index
+
+
+_AG_STORE_SURFACE = {"antigravity-cli": "cli", "antigravity-ide": "ide", "antigravity": "app"}
+
+
+def _antigravity_apply_real_usage(
+    sessions: List[Dict[str, Any]],
+    seen: set,
+    meta: Dict[str, Dict[str, Any]],
+    surfaces: Dict[str, str],
+    alias: Callable[[str], str],
+) -> None:
+    """Replace estimated Antigravity numbers with recorded ones, and add the
+    sessions the brain/ scan cannot see.
+
+    ``alias`` is the scan's own project-alias lookup (a closure over the aliases
+    it loaded), not the module-level ``apply_alias``, which takes them as a
+    second argument.
+
+    1. Every Antigravity session already collected whose conversations/<id>.db
+       records model calls takes its tokens, cost, model and last-activity time
+       from those records. Before this, the brain/ path estimated tokens as
+       characters / 4 and hard-coded the cost to $0.
+    2. A conversation with recorded calls but no usable brain/ folder is added
+       from its database.
+    3. A conversation Antigravity's own index lists with steps, and no database,
+       is added from the index: an older .pb session. Its tokens are unknown and
+       reported as zero rather than guessed.
+    """
+    db_files = antigravity_usage.conversation_files(GEMINI_DIR)
+    by_id = {s["id"]: s for s in sessions if s.get("agent") == "antigravity"}
+    index = _antigravity_summary_index()
+
+    def _project(sid: str, fallback: str = ANTIGRAVITY_UNASSIGNED) -> str:
+        found = (meta.get(sid) or {}).get("project") or (index.get(sid) or {}).get("workspace")
+        return alias(found or fallback)
+
+    for sid, db in db_files.items():
+        try:
+            real = _antigravity_real_usage(db)
+        except Exception as exc:  # one bad database must not cost the whole scan
+            _ag_log_warn("antigravity usage read failed for %s: %s", db.name, exc)
+            continue
+        if real is None:
+            continue
+        existing = by_id.get(sid)
+        if existing is not None:
+            existing["tokens"] = real["tokens"]
+            existing["cost"] = real["cost"]
+            existing["model"] = real["model"] or existing.get("model")
+            if real["last_ts"]:
+                existing["timestamp"] = real["last_ts"]
+            if existing.get("project") in (None, "", ANTIGRAVITY_UNASSIGNED):
+                existing["project"] = _project(sid)
+            continue
+        if sid in seen:
+            continue  # already reported under another agent (e.g. the Gemini CLI path)
+        seen.add(sid)
+        entry = index.get(sid) or {}
+        session = {
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": real["last_ts"] or entry.get("timestamp") or _file_mtime_utc(db),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": real["tokens"],
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": real["model"],
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or _AG_STORE_SURFACE.get(db.parent.parent.name),
+            "cost": real["cost"],
+        }
+        sessions.append(session)
+        by_id[sid] = session
+
+    for sid, entry in index.items():
+        if sid in by_id or sid in seen or sid in db_files or not entry.get("steps"):
+            continue
+        seen.add(sid)
+        sessions.append({
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": entry.get("timestamp") or _now(),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0},
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": None,
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or entry.get("surface"),
+            "cost": 0.0,
+        })
 
 class TokenUsage(BaseModel):
     input: int = 0
@@ -6435,6 +6643,9 @@ _BUILTIN_CLI_COMMANDS = {
     "migrate-installer", "model", "output-style", "permissions", "plan", "plugin",
     "privacy-settings", "quit", "release-notes", "resume", "rewind", "status",
     "statusline", "terminal-setup", "theme", "todos", "upgrade", "usage", "vim",
+    # Newer built-ins seen as <command-name> tags in real transcripts.
+    "advisor", "autocompact", "effort", "feedback", "goal", "remote-control",
+    "rename", "skills", "teleport", "voice",
 }
 
 
@@ -6533,18 +6744,65 @@ def _mcp_usage_from_counts(tool_counts: Dict[str, int]) -> Dict[str, Dict[str, i
     return out
 
 
+def _errored_tool_use_ids(content: Any) -> List[str]:
+    """tool_use ids whose tool_result in this user-record content is_error."""
+    if not isinstance(content, list):
+        return []
+    return [b["tool_use_id"] for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+            and b.get("is_error") is True and b.get("tool_use_id")]
+
+
+def _plugin_of(name: Any) -> Optional[str]:
+    """Owning Claude Code plugin of a skill, subagent type or MCP server name.
+
+    Claude Code namespaces plugin-provided pieces two ways (verified in real
+    transcripts): skills and subagent types as "<plugin>:<name>"
+    ("grok:grok-rescue"), and MCP servers as "plugin_<plugin>_<server>" inside
+    the tool name ("mcp__plugin_grok_grok__grok_search" -> server
+    "plugin_grok_grok"). The server form is ambiguous when a name contains an
+    underscore; the common case is a plugin whose one server shares its name,
+    so a symmetric split wins, else the first underscore. None = not a plugin.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    if name.startswith("plugin_"):
+        rest = name[len("plugin_"):]
+        half = (len(rest) - 1) // 2
+        if len(rest) % 2 == 1 and rest[half] == "_" and rest[:half] == rest[half + 1:]:
+            return rest[:half] or None
+        return rest.split("_", 1)[0] or None
+    if ":" in name:
+        return name.split(":", 1)[0] or None
+    return None
+
+
 def _attach_tool_usage(sess: Dict[str, Any], tool_counts: Dict[str, int],
-                       skill_counts: Optional[Dict[str, int]] = None) -> None:
+                       skill_counts: Optional[Dict[str, int]] = None,
+                       tool_errors: Optional[Dict[str, int]] = None,
+                       skill_errors: Optional[Dict[str, int]] = None) -> None:
     """Attach tool_counts / mcp_usage / skills_used to a session dict (only when
-    non-empty, so agents without the signal simply lack the keys)."""
+    non-empty, so agents without the signal simply lack the keys).
+
+    ``tool_errors`` counts tool calls whose result came back is_error, keyed
+    like ``tool_counts``; it also yields ``mcp_errors`` (same shape as
+    ``mcp_usage``). ``skill_errors`` adds an ``errors`` count to the matching
+    ``skills_used`` entry. A call that failed is still a call, so the usage
+    counts include it."""
     if tool_counts:
         sess["tool_counts"] = tool_counts
         mcp = _mcp_usage_from_counts(tool_counts)
         if mcp:
             sess["mcp_usage"] = mcp
+    if tool_errors:
+        sess["tool_errors"] = tool_errors
+        mcp_err = _mcp_usage_from_counts(tool_errors)
+        if mcp_err:
+            sess["mcp_errors"] = mcp_err
     if skill_counts:
+        skill_errors = skill_errors or {}
         sess["skills_used"] = [
-            {"name": k, "count": v}
+            {"name": k, "count": v, **({"errors": skill_errors[k]} if skill_errors.get(k) else {})}
             for k, v in sorted(skill_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ]
 
@@ -6573,6 +6831,8 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     seen_message_ids: set = set()
+    tool_use_ids: set = set()
+    errored_ids: set = set()
     try:
         with open(f, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -6589,9 +6849,15 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                     if first_ts is None:
                         first_ts = ts
                     last_ts = ts
+                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                if data.get("type") == "user":
+                    errored_ids.update(_errored_tool_use_ids(msg.get("content")))
+                    continue
                 if data.get("type") != "assistant":
                     continue
-                msg = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+                for item in msg.get("content") or []:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("id"):
+                        tool_use_ids.add(item["id"])
                 m = msg.get("model")
                 if m and m != "<synthetic>" and not model:
                     model = m
@@ -6645,6 +6911,18 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
         "duration_ms": (round((ended - started).total_seconds() * 1000)
                         if started and ended else None),
     }
+    # A subagent's own failures never reach the parent transcript: a
+    # background spawn's Agent result is just "launched", so a plugin agent
+    # whose only call died (grok:grok-rescue on a broken sandbox) would read
+    # as a normal run. Count its errored tool results here; when every call
+    # it made failed, the run as a whole failed.
+    tool_errors = len(errored_ids & tool_use_ids)
+    if tool_use_ids:
+        entry["tool_calls"] = len(tool_use_ids)
+    if tool_errors:
+        entry["tool_errors"] = tool_errors
+        if tool_errors == len(tool_use_ids):
+            entry["status"] = "failed"
     if extra:
         entry.update(extra)
     return entry
@@ -6763,6 +7041,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     totals = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     by_type: Dict[str, Dict[str, Any]] = {}
+    by_model: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         for k in totals:
             totals[k] += e["tokens"][k]
@@ -6770,12 +7049,27 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
         bt["count"] += 1
         bt["total"] += e["tokens"]["total"]
         bt["cost"] = round(bt["cost"] + (e["cost"] or 0), 6)
+        # Only-if-present, like the session-level usage keys.
+        if e.get("status") == "failed":
+            bt["failed"] = bt.get("failed", 0) + 1
+        if e.get("tool_errors"):
+            bt["tool_errors"] = bt.get("tool_errors", 0) + e["tool_errors"]
+        # Subagents can run a different model than their parent (e.g. Explore on
+        # Haiku under an Opus session) — keyed here so folding delegated cost
+        # into the global by_model breakdown attributes it to the right model
+        # instead of lumping every subagent's spend onto the parent's model.
+        bm = by_model.setdefault(e.get("model") or "unknown", {
+            "input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0})
+        for k in ("input", "output", "cached", "total"):
+            bm[k] += e["tokens"][k]
+        bm["cost"] = round(bm["cost"] + (e["cost"] or 0), 6)
     return {
         "spawn_count": len(entries),
         "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
         "subagents": entries,
         "totals": totals,
         "by_type": by_type,
+        "by_model": by_model,
         "cost": round(sum(e["cost"] or 0 for e in entries), 6),
     }
 
@@ -7119,8 +7413,8 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
-    "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
-    "loop", "published_artifacts", "goals", "untracked_background",
+    "delegation", "delegated_cost", "delegated_by_model", "tool_counts", "mcp_usage", "skills_used",
+    "tool_errors", "mcp_errors", "loop", "published_artifacts", "goals", "untracked_background",
 )
 
 
@@ -7363,6 +7657,8 @@ def _scan_sessions_sync():
                 else:
                     tool_counts: Dict[str, int] = {}
                     skill_counts: Dict[str, int] = {}
+                    tool_use_names: Dict[str, Tuple[str, Optional[str]]] = {}  # tool_use id -> (tool, skill)
+                    errored_tool_use_ids: set = set()        # tool_use ids whose result is_error
                     last_real_ts = None
                     loop_sched: List[Dict[str, Any]] = []   # scheduling tool calls (CronCreate/ScheduleWakeup)
                     loop_cancels: List[Dict[str, Any]] = []  # CronDelete / ScheduleWakeup stop
@@ -7466,10 +7762,13 @@ def _scan_sessions_sync():
                                             tool = item.get("name")
                                             if tool not in sess["mcp_tools"]: sess["mcp_tools"].append(tool)
                                             _count_tool(tool_counts, tool)
+                                            skill = None
                                             if tool == "Skill":
                                                 skill = (item.get("input") or {}).get("skill")
                                                 if skill:
                                                     skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                                            if tool and item.get("id"):
+                                                tool_use_names[item["id"]] = (tool, skill)
                                             if tool == "ExitPlanMode":
                                                 plan_text = (item.get("input") or {}).get("plan") or ""
                                                 if plan_text:
@@ -7540,7 +7839,15 @@ def _scan_sessions_sync():
                                             _goal_block_now = True
                                     if "/plan" in str(u_content):
                                         sess["has_plan"] = True
-                                    for cmd in _COMMAND_NAME_RE.findall(str(u_content)):
+                                    errored_tool_use_ids.update(_errored_tool_use_ids(u_content))
+                                    # Slash-command tags only from what the user sent: a
+                                    # tool_result that quotes a transcript (or this code)
+                                    # carries the same tag and is not an invocation.
+                                    _cmd_text = u_content if isinstance(u_content, str) else " ".join(
+                                        b.get("text", "") for b in u_content
+                                        if isinstance(b, dict) and b.get("type") == "text"
+                                    ) if isinstance(u_content, list) else ""
+                                    for cmd in _COMMAND_NAME_RE.findall(_cmd_text):
                                         if cmd not in _BUILTIN_CLI_COMMANDS:
                                             skill_counts[cmd] = skill_counts.get(cmd, 0) + 1
                                     # Published Claude artifacts: pair each Artifact tool_use with
@@ -7698,7 +8005,16 @@ def _scan_sessions_sync():
                             "footprint_tokens": footprint_tokens,
                             "footprint_cost": footprint_cost,
                         }
-                    _attach_tool_usage(sess, tool_counts, skill_counts)
+                    tool_errors: Dict[str, int] = {}
+                    skill_errors: Dict[str, int] = {}
+                    for _tid in errored_tool_use_ids:
+                        _named = tool_use_names.get(_tid)
+                        if not _named:
+                            continue
+                        _count_tool(tool_errors, _named[0])
+                        if _named[1]:
+                            skill_errors[_named[1]] = skill_errors.get(_named[1], 0) + 1
+                    _attach_tool_usage(sess, tool_counts, skill_counts, tool_errors, skill_errors)
                     deleg = _claude_subagent_usage(session_file, sid)
                     sess["delegation"] = {
                         "supported": True,
@@ -7711,8 +8027,10 @@ def _scan_sessions_sync():
                         sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
                         sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
                         sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
+                        sess["tokens"]["delegated_cache_reads"] = deleg["totals"]["_cached_sum"]
                         sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
                         sess["delegated_cost"] = deleg["cost"]
+                        sess["delegated_by_model"] = deleg["by_model"]
 
                     if source_mtime is not None:
                         scan_cache.write_cache("claude", sid, source_mtime, _claude_cache_payload(sess))
@@ -8064,6 +8382,15 @@ def _scan_sessions_sync():
         sessions.extend(codex_sessions.values())
 
     # 3 & 7. Gemini & Antigravity
+    # Both are read by the Antigravity passes below, so they are set here rather
+    # than inside the Gemini branch. They used to be assigned only once
+    # ~/.gemini/projects.json was found, and that file belongs to the Gemini CLI,
+    # not Antigravity. On a machine with Antigravity but no Gemini CLI history,
+    # the brain/ loop's first `sid in _seen_antigravity` raised NameError, its
+    # per-session `except Exception: continue` swallowed it, and every Antigravity
+    # session was dropped without a trace.
+    _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
+    _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
     gemini_projects_file = GEMINI_DIR / "projects.json"
     if gemini_projects_file.exists():
         try:
@@ -8100,8 +8427,6 @@ def _scan_sessions_sync():
                             if _d and _d.get("sessionId"):
                                 _all_chat_sids.add(_d["sessionId"])
                         except Exception: pass
-            _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
-            _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
 
             for tmp_dir in (GEMINI_DIR / "tmp").glob("*"):
                 if not tmp_dir.is_dir(): continue
@@ -8240,8 +8565,9 @@ def _scan_sessions_sync():
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
     _seen_brain_sids: set = set()
-    # CLI (`agy`) ground truth: real model + exact project, keyed by session id.
-    _ag_cli_meta = _antigravity_cli_meta()
+    # Ground truth from each store's SQLite trajectories: real model + exact
+    # project, keyed by session id, for the IDE and app as well as the CLI.
+    _ag_cli_meta = _antigravity_store_meta()
     for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
         if not _brain_dir.exists(): continue
         for sess_dir in _brain_dir.iterdir():
@@ -8372,6 +8698,13 @@ def _scan_sessions_sync():
                     **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
+
+    # 3c. Recorded usage from each conversation's own SQLite store, and the
+    # sessions brain/ has no folder for. See _antigravity_apply_real_usage.
+    try:
+        _antigravity_apply_real_usage(sessions, _seen_antigravity, _ag_cli_meta, _ag_surface, apply_alias)
+    except Exception as exc:
+        _ag_log_warn("antigravity real-usage pass failed: %s", exc)
 
     # 4. Qwen
     if QWEN_DIR.exists():
@@ -11995,6 +12328,18 @@ async def get_analytics(
         # None for an unpriced session; feeds three aggregates plus
         # savings_vs_cloud() below, all of which need a number.
         scost = s.get("cost") or 0.0
+        # Delegated (Claude subagent/workflow) spend exists NOWHERE else — those
+        # transcripts aren't sessions themselves, so folding it in here is
+        # additive, never a double count (unlike linked_child_* below, which
+        # covers hermes/opencode children that already ARE sessions in `sessions`
+        # and must stay attribution-only). `delegation_totals` below still
+        # surfaces the same figure as a per-parent breakdown view.
+        dcost = s.get("delegated_cost") or 0.0
+        d_input = st.get("delegated_input", 0) or 0
+        d_output = st.get("delegated_output", 0) or 0
+        d_cached = st.get("delegated_cached", 0) or 0
+        d_cache_reads = st.get("delegated_cache_reads", 0) or 0
+        d_total = d_input + d_output + d_cached
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
         if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
@@ -12011,8 +12356,12 @@ async def get_analytics(
         # Cursor, ZCode) still keep `cached` as a per-session high-water mark and
         # the per-turn read sum in `_cached_sum`; prefer the sum. Claude's
         # `cached` is already the sum.
-        by_agent[agent]["cache_reads"] += st.get("_cached_sum") or st.get("cached", 0) or 0
-        by_agent[agent]["cost"] += scost
+        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cache_reads
+        by_agent[agent]["input"] += d_input
+        by_agent[agent]["output"] += d_output
+        by_agent[agent]["cached"] += d_cached
+        by_agent[agent]["total"] += d_total
+        by_agent[agent]["cost"] += scost + dcost
         by_agent[agent]["energy_wh"] += energy
         by_agent[agent]["savings_usd"] += savings
         by_agent[agent]["co2_g"] += co2
@@ -12028,13 +12377,29 @@ async def get_analytics(
         by_model[model_name]["savings_usd"] += savings
         by_model[model_name]["co2_g"] += co2
         by_model[model_name]["session_count"] += 1
+        # Delegated spend attributed to the SUBAGENT's own model (can differ
+        # from the parent's, e.g. Explore on Haiku under an Opus session) —
+        # not lumped onto model_name above. No session_count bump: a subagent
+        # transcript isn't a session.
+        for dmodel, dm in (s.get("delegated_by_model") or {}).items():
+            if dmodel not in by_model:
+                by_model[dmodel] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                    "session_count": 0, "agent": agent}
+            for k in ("input", "output", "cached", "total"):
+                by_model[dmodel][k] += dm.get(k, 0)
+            by_model[dmodel]["cost"] += dm.get("cost", 0) or 0
         # Bucket by LOCAL day, not UTC.
         day = _bucket_key(s["timestamp"], granularity)
         if day not in by_day:
             by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0,
                            "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
-        by_day[day]["cost"] += scost
+        by_day[day]["input"] += d_input
+        by_day[day]["output"] += d_output
+        by_day[day]["cached"] += d_cached
+        by_day[day]["total"] += d_total
+        by_day[day]["cost"] += scost + dcost
         by_day[day]["energy_wh"] += energy
         by_day[day]["savings_usd"] += savings
         by_day[day]["co2_g"] += co2
@@ -12051,19 +12416,19 @@ async def get_analytics(
     total_cached = sum(a["cached"] for a in by_agent.values())
     total_cache_reads = sum(a["cache_reads"] for a in by_agent.values())
 
-    # Ecosystem usage: skills, MCP servers, subagent types. New keys only — the
-    # existing by_agent/by_day/by_model/total stay byte-identical (no silent
-    # historical changes). Delegated usage is exposed as its OWN bucket, never
-    # folded into the per-agent sums: claude subagent transcripts aren't
-    # sessions (counted nowhere else), while opencode/hermes children already
-    # appear as sessions above — adding parent-side sums would double-count.
+    # Ecosystem usage: skills, MCP servers, subagent types.
     by_skill: Dict[str, Dict[str, Any]] = {}
     by_mcp_server: Dict[str, Dict[str, Any]] = {}
     by_subagent_type: Dict[str, Dict[str, Any]] = {}
-    # delegated_*: usage that exists NOWHERE else (claude subagent transcripts).
-    # linked_child_*: child sessions spawned by a parent — their tokens are
-    # already in by_agent/by_day/total above; surfaced here as an attribution
-    # view, never added on top.
+    # delegated_*: claude subagent/workflow transcript usage — exists NOWHERE
+    # else, so it IS folded into by_agent/by_day/by_model/total above (see the
+    # `dcost`/`d_input` etc. additions in the loop above); delegation_totals here
+    # is an ADDITIONAL per-parent attribution view of that same already-counted
+    # spend, not a separate pool.
+    # linked_child_*: child sessions spawned by a parent (opencode/hermes) —
+    # those children already appear as ordinary sessions in `sessions` and are
+    # already in by_agent/by_day/total; surfaced here as an attribution view,
+    # never added on top (that WOULD double-count, unlike delegated_*).
     delegation_totals: Dict[str, Any] = {
         "delegated_tokens": 0, "delegated_cost": 0.0,
         "sessions_with_spawns": 0,
@@ -12086,7 +12451,8 @@ async def get_analytics(
     def _subagent_row(t: str) -> Dict[str, Any]:
         return by_subagent_type.setdefault(t, {
             "spawns": 0, "tokens": 0, "cost": 0.0, "session_count": 0,
-            "tokens_recorded": False, "agents": []})
+            "tokens_recorded": False, "agents": [], "failed": 0, "tool_errors": 0,
+            "plugin": _plugin_of(t)})
 
     def _deleg_agent_row(agent: str) -> Dict[str, Any]:
         return delegation_totals["by_agent"].setdefault(agent, {
@@ -12125,19 +12491,27 @@ async def get_analytics(
                 "next_fire_at": lp.get("next_fire_at"),
             }
         for sk in s.get("skills_used") or []:
-            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": []})
+            row = by_skill.setdefault(sk["name"], {"invocations": 0, "session_count": 0, "agents": [],
+                                                    "errors": 0, "plugin": _plugin_of(sk["name"])})
             row["invocations"] += sk["count"]
+            row["errors"] += sk.get("errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
+        mcp_errors = s.get("mcp_errors") or {}
         for server, tools in (s.get("mcp_usage") or {}).items():
-            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": []})
+            row = by_mcp_server.setdefault(server, {"calls": 0, "tools": {}, "session_count": 0, "agents": [],
+                                                    "errors": 0, "tool_errors": {},
+                                                    "plugin": _plugin_of(server)})
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
             for tool, n in tools.items():
                 row["calls"] += n
                 row["tools"][tool] = row["tools"].get(tool, 0) + n
+            for tool, n in (mcp_errors.get(server) or {}).items():
+                row["errors"] += n
+                row["tool_errors"][tool] = row["tool_errors"].get(tool, 0) + n
 
         deleg = s.get("delegation") or {}
         spawns_here = deleg.get("spawn_count") or deleg.get("linked_children") or 0
@@ -12149,6 +12523,8 @@ async def get_analytics(
         for t, d in (deleg.get("by_type") or {}).items():
             row = _subagent_row(t)
             row["spawns"] += d.get("count", 0)
+            row["failed"] += d.get("failed", 0) or 0
+            row["tool_errors"] += d.get("tool_errors", 0) or 0
             row["session_count"] += 1
             if agent not in row["agents"]:
                 row["agents"].append(agent)
@@ -12379,6 +12755,120 @@ def _memory_preview(p: Path, scope: str, agent: str):
     try: txt = p.read_text(errors="ignore")
     except Exception: return None
     return {"scope": scope, "agent": agent, "path": str(p), "name": p.name, "preview": txt[:2000], "truncated": len(txt) > 2000, "size": len(txt)}
+
+
+# AGENTS.md is a shared convention rather than one agent's file. These are the
+# supported agents documented to read it; `agent` stays "codex" on the row so
+# older frontends keep rendering it.
+_AGENTS_MD_READERS = ["codex", "cursor", "opencode", "copilot"]
+
+# Per-agent instruction ("memory") files, by the name each agent looks for.
+# Nested copies (frontend/CLAUDE.md) are read too, when the agent works there.
+_MEMORY_FILENAMES = {"CLAUDE.md": "claude", "AGENTS.md": "codex", "GEMINI.md": "gemini", "QWEN.md": "qwen"}
+# Directories never worth walking for nested memory files. `.claude` holds
+# worktrees, which are full copies of the repo and would repeat every file.
+_MEMORY_SKIP_DIRS = {"node_modules", ".git", ".claude", "venv", ".venv", "__pycache__",
+                     ".next", "dist", "build", "target", ".tox", ".mypy_cache", ".pytest_cache"}
+_MEMORY_NESTED_DEPTH = 3
+_MEMORY_MAX_FILES = 60
+
+
+def _claude_project_key(project: Path) -> str:
+    """Claude Code's ~/.claude/projects/<key> name for a project path: every
+    non-alphanumeric character becomes '-' (so '/.claude/' -> '--claude-')."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project))
+
+
+def _collect_memory(project: Optional[Path]) -> List[dict]:
+    """Every agent's memory / instruction files for user scope + one project.
+
+    A project touched by several coding agents carries one file per agent
+    (CLAUDE.md, AGENTS.md, GEMINI.md, …), plus Claude Code's own auto memory
+    kept under ~/.claude/projects/<key>/memory. Each row names its agent;
+    AGENTS.md rows also list every agent that reads it in `agents`.
+    """
+    out: List[dict] = []
+    seen: Set[str] = set()
+
+    def add(p: Path, scope: str, agent: str, name: Optional[str] = None, **extra) -> None:
+        if len(out) >= _MEMORY_MAX_FILES:
+            return
+        try:
+            if not p.is_file():
+                return
+            key = str(p.resolve())
+        except OSError:
+            return
+        if key in seen:
+            return
+        m = _memory_preview(p, scope, agent)
+        if not m:
+            return
+        seen.add(key)
+        if name:
+            m["name"] = name
+        # Only a project AGENTS.md is shared; ~/.codex/AGENTS.md is Codex's own.
+        if scope == "project" and agent == "codex" and p.name == "AGENTS.md":
+            m["agents"] = list(_AGENTS_MD_READERS)
+        m.update(extra)
+        out.append(m)
+
+    # ---- user scope ----
+    add(CLAUDE_DIR / "CLAUDE.md", "user", "claude")
+    add(CODEX_DIR / "AGENTS.md", "user", "codex")
+    add(GEMINI_DIR / "GEMINI.md", "user", "gemini")
+    add(QWEN_DIR / "QWEN.md", "user", "qwen")
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")).expanduser()
+    add(xdg / "opencode" / "AGENTS.md", "user", "opencode", name="AGENTS.md (OpenCode global)")
+    # Hermes keeps its long-term memory as plain files in its home.
+    add(HERMES_DIR / "memories" / "MEMORY.md", "user", "hermes")
+    add(HERMES_DIR / "memories" / "USER.md", "user", "hermes")
+    add(HERMES_DIR / "SOUL.md", "user", "hermes")
+
+    if not project:
+        return out
+
+    # ---- project scope ----
+    # Claude Code auto memory for this project (MEMORY.md indexes the notes).
+    auto_dir = CLAUDE_DIR / "projects" / _claude_project_key(project) / "memory"
+    try:
+        notes = len([f for f in auto_dir.glob("*.md") if f.name != "MEMORY.md"])
+    except OSError:
+        notes = 0
+    add(auto_dir / "MEMORY.md", "project", "claude", name="MEMORY.md (auto memory)", note_count=notes)
+
+    add(project / ".claude" / "CLAUDE.md", "project", "claude", name=".claude/CLAUDE.md")
+    add(project / "CLAUDE.local.md", "project", "claude")
+    add(project / ".github" / "copilot-instructions.md", "project", "copilot",
+        name=".github/copilot-instructions.md")
+    try:
+        for f in sorted((project / ".github" / "instructions").glob("*.instructions.md")):
+            add(f, "project", "copilot", name=f".github/instructions/{f.name}")
+    except OSError:
+        pass
+    add(project / ".cursorrules", "project", "cursor")
+    try:
+        for f in sorted((project / ".cursor" / "rules").glob("*.mdc")):
+            add(f, "project", "cursor", name=f".cursor/rules/{f.name}")
+    except OSError:
+        pass
+
+    # Root and nested CLAUDE.md / AGENTS.md / GEMINI.md / QWEN.md. Root first
+    # so the cap never drops the files that matter most.
+    try:
+        for dirpath, dirnames, filenames in os.walk(project):
+            rel = Path(dirpath).relative_to(project)
+            depth = len(rel.parts)
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d not in _MEMORY_SKIP_DIRS and depth < _MEMORY_NESTED_DEPTH)
+            for fn in sorted(filenames):
+                agent = _MEMORY_FILENAMES.get(fn)
+                if agent:
+                    add(Path(dirpath) / fn, "project", agent,
+                        name=str(rel / fn) if depth else None)
+    except OSError:
+        pass
+    return out
 
 # ---- Plugin/extension collection (v1) ---------------------------------------
 # Each harness exposes a "plugin"/"extension" surface in its own way. We
@@ -12659,7 +13149,6 @@ async def get_config(project: Optional[str] = None):
     """Return skills, MCPs, and memory files for user scope + optional project scope."""
     skills: List[dict] = []
     mcps: List[dict] = []
-    memory: List[dict] = []
     commands: List[dict] = []
     subagents: List[dict] = []
 
@@ -12679,9 +13168,6 @@ async def get_config(project: Optional[str] = None):
                 skills.append(row)
     for p in [CLAUDE_DIR / "settings.json", Path(HOME) / ".claude.json"]:
         mcps += _mcps_from_claude_settings(p, "user")
-    claude_md = CLAUDE_DIR / "CLAUDE.md"
-    m = _memory_preview(claude_md, "user", "claude") if claude_md.exists() else None
-    if m: memory.append(m)
 
     commands += _collect_commands(CLAUDE_DIR, "user", "claude")
     subagents += _collect_subagents(CLAUDE_DIR, "user", "claude")
@@ -12711,9 +13197,6 @@ async def get_config(project: Optional[str] = None):
     # Codex
     mcps += _mcps_from_codex_toml(CODEX_DIR / "config.toml", "user")
     commands += _collect_commands(CODEX_DIR, "user", "codex")
-    codex_agents = CODEX_DIR / "AGENTS.md"
-    m = _memory_preview(codex_agents, "user", "codex") if codex_agents.exists() else None
-    if m: memory.append(m)
 
     # Cursor
     mcps += _mcps_from_json(CURSOR_DIR / "mcp.json", "user", "cursor")
@@ -12738,10 +13221,6 @@ async def get_config(project: Optional[str] = None):
             subagents += _collect_subagents(proj / ".claude", "project", "claude")
             for p in [proj / ".claude" / "settings.json", proj / ".claude" / "settings.local.json", proj / ".mcp.json"]:
                 mcps += _mcps_from_claude_settings(p, "project")
-            for fname in ["CLAUDE.md", "AGENTS.md"]:
-                fp = proj / fname
-                m = _memory_preview(fp, "project", "claude" if fname == "CLAUDE.md" else "codex") if fp.exists() else None
-                if m: memory.append(m)
 
             # Cursor
             mcps += _mcps_from_json(proj / ".cursor" / "mcp.json", "project", "cursor")
@@ -12773,8 +13252,9 @@ async def get_config(project: Optional[str] = None):
         if key in seen: continue
         seen.add(key); deduped.append(m)
 
-    # Plugins (project arg already validated above)
+    # Plugins and memory (project arg already validated above)
     plugins = _collect_all_plugins(Path(project) if project_valid else None)
+    memory = _collect_memory(Path(project) if project_valid else None)
 
     # Stamp pluginRef on items whose source falls inside a plugin's installPath.
     # Inline-set refs (Claude plugin-bundled blocks) are preserved by _tag_plugin_refs.
@@ -12921,7 +13401,7 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
         if sm and sm.is_available():
             try:
-                raw = sm.summarize(_summaries.build_prompt(brief))
+                raw = await _asyncio.to_thread(sm.summarize, _summaries.build_prompt(brief))
                 narrative = _summaries.parse_narrative(raw)
             except SummarizerError as e:
                 gen_error = str(e)
@@ -12969,6 +13449,143 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         "error": gen_error,
         "error_info": error_info,
     }
+
+@app.get("/sessions/{session_id}/summary/custom")
+async def list_custom_summaries(session_id: str, agent: str = ""):
+    """Stored custom answers. With ``agent`` given, each item also carries
+    ``stale``: whether the trace has changed since the answer was made."""
+    items = _summaries.list_custom(session_id)
+    if agent:
+        try:
+            detail = await get_session_detail(session_id, agent)
+            events = [] if (isinstance(detail, dict) and detail.get("error")) else _summaries.normalize_detail(detail)
+        except Exception:
+            events = []
+        if events:
+            chash = _summaries.content_hash(session_id, events)
+            items = [{**it, "stale": it["content_hash"] != chash} for it in items]
+    return {"items": items}
+
+@app.post("/sessions/{session_id}/summary/custom")
+async def make_custom_summary(session_id: str, agent: str, body: dict = Body(...)):
+    """Run a user-written prompt over the session brief with the configured
+    summarizer backend. Answers are cached per (session, prompt) and replaced
+    when the trace has grown or the backend or model changed."""
+    prompt = _summaries.clean_custom_prompt(body.get("prompt"))
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt is required")
+    cfg = _summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    detail = await get_session_detail(session_id, agent)
+    if isinstance(detail, dict) and detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail.get("error", "session not found"))
+    events = _summaries.normalize_detail(detail)
+    if not events:
+        raise HTTPException(status_code=422, detail="no trace content to summarize")
+
+    chash = _summaries.content_hash(session_id, events)
+    phash = _summaries.prompt_hash(prompt)
+    if not body.get("force"):
+        hit = _summaries.get_custom(session_id, phash)
+        if (
+            hit and hit["content_hash"] == chash
+            and hit["backend"] == backend_name and hit["model"] == cfg.get("model")
+        ):
+            return {"item": hit, "cached": True, "error": None, "error_info": None}
+
+    meta = await _session_meta(session_id, agent) or {"agent": agent}
+    brief = _summaries.condense_for_focus(events, meta)
+    gen_error = None
+    answer = None
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    if sm and sm.is_available():
+        try:
+            # Blocking subprocess or HTTP call: keep it off the event loop.
+            answer = await _asyncio.to_thread(
+                _summaries.ask_untrusted, sm, _summaries.build_custom_prompt(brief, prompt)
+            )
+        except SummarizerError as e:
+            gen_error = str(e)
+    else:
+        gen_error = f"summarizer '{backend_name}' is not available"
+
+    if not answer and not gen_error:
+        gen_error = f"{backend_name} produced no output"
+    item = None
+    error_info = None
+    persisted = True
+    if answer:
+        try:
+            item = _summaries.store_custom(session_id, prompt, chash, backend_name, cfg.get("model"), answer)
+        except sqlite3.Error:
+            # The model call already ran (and may have spent quota), so hand
+            # the answer back even though it could not be saved.
+            persisted = False
+            item = {
+                "prompt_hash": phash, "prompt": prompt, "content_hash": chash,
+                "backend": backend_name, "model": cfg.get("model"), "answer": answer,
+                "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            }
+    elif gen_error:
+        from summarizers.errors import classify as _classify_err
+        error_info = _classify_err(gen_error, backend_name=backend_name or "")
+    return {"item": item, "cached": False, "error": gen_error, "error_info": error_info, "persisted": persisted}
+
+@app.post("/sessions/{session_id}/chat")
+async def chat_about_session(session_id: str, agent: str, body: dict = Body(...)):
+    """One turn of a chat about a single session. The client sends the whole
+    conversation each time and nothing is stored here. The transcript is
+    searched for the excerpts that match the latest question and those are sent
+    with the standard brief and the conversation."""
+    try:
+        messages = _summaries.clean_chat_messages(body.get("messages"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    cfg = _summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    detail = await get_session_detail(session_id, agent)
+    if isinstance(detail, dict) and detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail.get("error", "session not found"))
+    events = _summaries.normalize_detail(detail)
+    if not events:
+        raise HTTPException(status_code=422, detail="no trace content to chat about")
+
+    meta = await _session_meta(session_id, agent) or {"agent": agent}
+    brief = _summaries.condense_trace(events, meta)
+    snippets = _summaries.retrieve_snippets(_summaries.build_chunks(events), messages[-1]["content"])
+    prompt = _summaries.build_chat_prompt(brief, snippets, messages)
+
+    gen_error = None
+    answer = None
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    if sm and sm.is_available():
+        try:
+            answer = await _asyncio.to_thread(_summaries.ask_untrusted, sm, prompt)
+        except SummarizerError as e:
+            gen_error = str(e)
+    else:
+        gen_error = f"summarizer '{backend_name}' is not available"
+    if not answer and not gen_error:
+        gen_error = f"{backend_name} produced no output"
+
+    reply = None
+    error_info = None
+    if answer:
+        reply = {
+            "role": "assistant", "content": answer, "backend": backend_name,
+            "model": cfg.get("model"), "excerpts": len(snippets),
+            "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+    else:
+        from summarizers.errors import classify as _classify_err
+        error_info = _classify_err(gen_error, backend_name=backend_name or "")
+    return {"reply": reply, "error": gen_error, "error_info": error_info}
 
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):
@@ -13018,7 +13635,7 @@ if __name__ == "__main__":
 
     logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
-    # Port resolution order: --port CLI arg → TT_API_PORT env var → 8000.
+    # Port resolution order: --port CLI arg → TT_API_PORT env var → 18000.
     # bin/cli.js passes --port; running the file directly (uvicorn / python)
     # honors the env var so devs can override without editing args.
     def _resolve_port() -> int:
@@ -13034,7 +13651,7 @@ if __name__ == "__main__":
         if env_port:
             try: return int(env_port)
             except ValueError: pass
-        return 8000
+        return 18000
 
     # Host resolution order: --host CLI arg → TT_HOST env var → 127.0.0.1.
     # Default stays loopback; set 0.0.0.0 (or a specific interface IP) to expose

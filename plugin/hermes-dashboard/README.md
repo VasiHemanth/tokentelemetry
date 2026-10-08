@@ -35,7 +35,7 @@ Open `http://127.0.0.1:9119`, click **TokenTelemetry** in the sidebar. If TT isn
 ## What it does
 
 - Registers a nav tab in Hermes Dashboard (position: `after:analytics`)
-- Probes your local TokenTelemetry instance (default `http://localhost:3000`) and shows a reachability pill
+- Probes your local TokenTelemetry instance (default `http://localhost:13000`) and shows a reachability pill
 - Six launcher cards that open TT in a new tab at the right page
 - Inline base-URL editor (persists to `localStorage`) for non-default deployments
 - Pure frontend — no backend routes, no `plugin_api.py`, no network access beyond your local TT

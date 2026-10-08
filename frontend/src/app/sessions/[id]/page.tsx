@@ -10,6 +10,7 @@ import Link from "next/link";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import AgentSigil from "@/components/icons/AgentSigil";
 import SourceBadge from "@/components/SourceBadge";
+import { pluginUsage, sessionUsage, type SessionUsage, type SessionUsageFields, type UsageRow } from "@/lib/sessionUsage";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
@@ -47,7 +48,7 @@ interface PublishedArtifact {
   timestamp?: string | null;
 }
 
-interface Session {
+interface Session extends SessionUsageFields {
   id: string;
   agent: string;
   project: string;
@@ -814,6 +815,9 @@ export default function SessionDetailPage() {
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
+      // What THIS run used, from the scanner. projectConfig above is only what
+      // is installed on disk for the project.
+      usage: sessionUsage(sessionInfo),
       // DSH's runtime-resolved capability set for THIS session (see backend).
       dsh: agent === "dsh" ? sessionInfo?.dsh : undefined,
       // Same for Qoder: its session log records the skills and MCP servers the
@@ -1412,7 +1416,16 @@ export default function SessionDetailPage() {
                <GoalCard key={g.goal_id || i} goal={g} sessionTokens={sessionInfo?.tokens?.total} />
              ))}
              {/* Delegated work — subagent spawns and what they actually cost */}
-             {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
+             {(delegation || context.usage) && agent && (
+               <DelegationCard
+                 delegation={delegation ?? {}}
+                 usage={context.usage}
+                 agent={agent}
+                 sessionId={id}
+                 onOpenSubagent={setSubagentView}
+                 onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
+               />
+             )}
              {/* Split View Header & Boundary Gap Mode Controller */}
              {splitView && (
                <div className="relative grid grid-cols-2 gap-8 items-center mb-6 pb-2 border-b border-[var(--tt-border)]">
@@ -2054,6 +2067,125 @@ function DetailRow({ k, v, accent }: { k: string; v: React.ReactNode; accent?: s
   );
 }
 
+function UsageErrorPill({ n, label = "failed" }: { n: number; label?: string }) {
+  if (!n) return null;
+  return (
+    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+      {n} {label}
+    </span>
+  );
+}
+
+function UsageName({ row }: { row: UsageRow }) {
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      {row.plugin && (
+        <span
+          title={`From the ${row.plugin} plugin`}
+          className="text-[8px] font-black uppercase px-1 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 shrink-0"
+        >
+          {row.plugin}
+        </span>
+      )}
+      <span className="truncate text-[var(--tt-fg)]" title={row.name}>{row.name}</span>
+    </span>
+  );
+}
+
+function SessionUsageSection({ usage }: { usage: SessionUsage }) {
+  const heading = (label: string, count: number) => (
+    <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+      {label} ({count})
+    </div>
+  );
+  const rowCls = (errors: number) =>
+    `flex items-center justify-between gap-2 text-[10px] font-mono rounded px-2 py-1 border ${
+      errors ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]/40" : "border-[var(--tt-border)] bg-[var(--tt-panel)]/70"
+    }`;
+  return (
+    <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
+      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+        <Activity size={12} /> Used This Session
+        {usage.totalErrors > 0 && (
+          <span className="ml-auto flex items-center gap-1 normal-case tracking-normal text-[var(--tt-danger-fg)]">
+            <AlertTriangle size={11} /> {usage.totalErrors} failed call{usage.totalErrors === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+
+      {usage.skills.length > 0 && (
+        <div className="space-y-1">
+          {heading("Skills", usage.skills.length)}
+          {usage.skills.map((r) => (
+            <div key={r.name} className={rowCls(r.errors)}>
+              <UsageName row={r} />
+              <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                <UsageErrorPill n={r.errors} />×{r.calls}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.mcp.length > 0 && (
+        <div className="space-y-1">
+          {heading("MCP Servers", usage.mcp.length)}
+          {usage.mcp.map((r) => (
+            <div key={r.name} className={`${rowCls(r.errors)} flex-col items-stretch`}>
+              <div className="flex items-center justify-between gap-2">
+                <UsageName row={r} />
+                <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                  <UsageErrorPill n={r.errors} />×{r.calls}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-2 gap-y-0.5 pl-1 text-[9px] text-[var(--tt-fg-dim)]">
+                {r.tools.map((t) => (
+                  <span key={t.name} className={t.errors ? "text-[var(--tt-danger-fg)]" : undefined}>
+                    {t.name} ×{t.calls}{t.errors ? ` (${t.errors === t.calls ? "all" : t.errors} failed)` : ""}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.subagents.length > 0 && (
+        <div className="space-y-1">
+          {heading("Subagents", usage.subagents.length)}
+          {usage.subagents.map((r) => (
+            <div
+              key={r.name}
+              className={rowCls(r.failed)}
+              title={r.errors ? `${r.errors} tool call${r.errors === 1 ? "" : "s"} failed inside these runs` : undefined}
+            >
+              <UsageName row={r} />
+              <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                <UsageErrorPill n={r.failed} />
+                {!r.failed && r.errors > 0 && <UsageErrorPill n={r.errors} label="tool errors" />}
+                ×{r.calls}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.otherToolErrors.length > 0 && (
+        <div className="space-y-1">
+          {heading("Other failed tool calls", usage.otherToolErrors.length)}
+          <div className="flex flex-wrap gap-1.5">
+            {usage.otherToolErrors.map((t) => (
+              <span key={t.name} className="text-[10px] font-mono px-2 py-0.5 rounded border bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+                {t.name} ×{t.errors}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ContextPanel({ ctx }: { ctx: TraceValue }) {
   const [copiedId, setCopiedId] = useState(false);
   const hasAny = ctx.model || ctx.cwd || ctx.systemPrompt || ctx.instructions || ctx.sandbox;
@@ -2110,10 +2242,15 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       <ContextRow k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
       <ContextRow k="CWD" v={ctx.cwd} />
 
+      {ctx.usage && <SessionUsageSection usage={ctx.usage} />}
+
       {ctx.projectConfig && (ctx.projectConfig.counts?.skills > 0 || ctx.projectConfig.counts?.mcps > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
-            <Settings2 size={12} /> Project Configuration
+            <Settings2 size={12} /> Installed in Project
+          </div>
+          <div className="text-[9px] text-[var(--tt-fg-faint)] -mt-2">
+            Everything on disk for this project, not what this session used.
           </div>
           {ctx.projectConfig.counts.skills > 0 && (
             <details open>
@@ -3595,13 +3732,17 @@ function GoalCard({ goal, sessionTokens }: { goal: TraceValue; sessionTokens?: n
 }
 
 
-function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: TraceValue; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void }) {
+function DelegationCard({ delegation, usage, agent, sessionId, onOpenSubagent, onShowDetails }: { delegation: TraceValue; usage?: SessionUsage | null; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void; onShowDetails?: () => void }) {
   const subagents: TraceValue[] = delegation?.subagents || [];
   const spawnCount: number = delegation?.spawn_count ?? 0;
   const children: string[] = delegation?.child_session_ids || [];
   const parentId: string | null = delegation?.parent_session_id || null;
-  // Nothing delegated and not itself a child → no card, no fake zeros.
-  if (spawnCount === 0 && children.length === 0 && !parentId) return null;
+  // Plugins are work handed to another tool (a Grok search, a Codex rescue),
+  // so their pass/fail belongs here, visible when the session opens, even for
+  // a session that spawned no subagents.
+  const plugins = pluginUsage(usage ?? null);
+  // Nothing delegated, no plugin used and not itself a child → no card, no fake zeros.
+  if (spawnCount === 0 && children.length === 0 && !parentId && plugins.length === 0) return null;
   const totals = delegation?.totals;
   // Children listed in subagent entries don't need a duplicate "Child session" row.
   const inlineChildIds = new Set(subagents.map((s: TraceValue) => s.child_session_id).filter(Boolean));
@@ -3626,6 +3767,7 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
           <Stat label="Delegated cost" value={formatCost(delegation.cost)} />
         </div>
       )}
+      {plugins.length > 0 && <PluginPassFail plugins={plugins} onShowDetails={onShowDetails} />}
       {subagents.length > 0 && (
         <div className="space-y-1">
           {subagents.map((s: TraceValue, i: number) => (
@@ -3649,6 +3791,14 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
                 )}
                 <Badge>{s.agent_type || s.agent_role || "subagent"}</Badge>
                 <span className="truncate text-[var(--tt-fg)]">{s.description || s.phase || s.nickname || s.agent_id}</span>
+                {s.status === "failed" ? (
+                  <span
+                    title={`All ${s.tool_calls ?? ""} tool calls in this run failed`}
+                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]"
+                  >failed</span>
+                ) : s.tool_errors > 0 ? (
+                  <span title={`${s.tool_errors} of ${s.tool_calls} tool calls failed`}><UsageErrorPill n={s.tool_errors} label="tool errors" /></span>
+                ) : null}
               </span>
               <span className="flex items-center gap-3 shrink-0">
                 {s.model && <span className="text-[var(--tt-fg-dim)]">{s.model.replace(/-\d{8}$/, "")}</span>}
@@ -3714,6 +3864,52 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PluginPassFail({ plugins, onShowDetails }: { plugins: ReturnType<typeof pluginUsage>; onShowDetails?: () => void }) {
+  const kindLabel = { mcp: "MCP", skill: "skill", subagent: "subagent" } as const;
+  return (
+    <div className="mb-3 space-y-1.5">
+      <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+        <span>Plugins ({plugins.length})</span>
+        {onShowDetails && (
+          <button onClick={onShowDetails} className="normal-case tracking-normal text-[var(--tt-brand)] hover:underline">
+            all tools used ▸
+          </button>
+        )}
+      </div>
+      {plugins.map((g) => {
+        const passed = g.calls - g.failed;
+        return (
+          <div
+            key={g.plugin}
+            className={`rounded border px-2.5 py-1.5 text-[11px] font-mono ${
+              g.failed ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]/40" : "border-[var(--tt-border)] bg-[var(--tt-sunken)]/40"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 min-w-0">
+                {g.failed ? <AlertTriangle size={12} className="text-[var(--tt-danger-fg)] shrink-0" /> : <Check size={12} className="text-[var(--tt-success-fg)] shrink-0" />}
+                <span className="text-[var(--tt-fg)] font-semibold">{g.plugin}</span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0 tabular">
+                {passed > 0 && <span className="text-[var(--tt-success-fg)]">{passed} passed</span>}
+                {g.failed > 0 && <span className="text-[var(--tt-danger-fg)]">{g.failed} failed</span>}
+              </span>
+            </div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 pl-5 text-[10px] text-[var(--tt-fg-dim)]">
+              {g.items.map((i) => (
+                <span key={`${i.kind}:${i.name}`} className={i.failed ? "text-[var(--tt-danger-fg)]" : undefined}>
+                  {kindLabel[i.kind]} {i.name} ×{i.calls}
+                  {i.failed ? ` · ${i.failed === i.calls ? "all" : i.failed} failed` : ""}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

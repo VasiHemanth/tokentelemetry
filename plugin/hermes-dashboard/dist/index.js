@@ -7,7 +7,7 @@
   const { Card, CardHeader, CardTitle, CardContent, Badge, Button, Input, Label } = SDK.components;
 
   const STORAGE_KEY = "tt.baseUrl";
-  const DEFAULT_BASE = "http://localhost:3000";
+  const DEFAULT_BASE = "http://localhost:13000";
 
   function loadBase() {
     try { return localStorage.getItem(STORAGE_KEY) || DEFAULT_BASE; }
