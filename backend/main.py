@@ -11226,6 +11226,12 @@ async def post_telemetry_event(payload: dict = Body(...)):
         return {"ok": False}
     props = payload.get("props")
     _telemetry.emit(event, props if isinstance(props, dict) else None)
+    # Recurring-user signal, WITHOUT any install id: a real UI event reached
+    # this bridge, so mark today active. Deliberately not on app.launched/
+    # startup -- that would also count headless/bot launches. mark_active()
+    # emits "app.active" itself, at most once per local calendar day; it is
+    # a no-op unless telemetry is enabled and never raises.
+    _telemetry.mark_active()
     return {"ok": True}
 
 
