@@ -1,0 +1,43 @@
+name: Backup Cloudflare Telemetry to Google Drive
+
+on:
+  schedule:
+    # Runs every Monday at 02:00 UTC (weekly backup)
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: Backup AE to Google Drive
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-api-python-client google-auth
+
+      - name: Run Cloudflare to Google Drive Backup
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: python scripts/backup_cloudflare_to_gdrive.py
+
+      - name: Archive backup artifacts in GitHub
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tokentelemetry-cloudflare-backup
+          path: archive_output/
+          retention-days: 90
