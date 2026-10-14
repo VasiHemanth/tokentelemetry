@@ -35,7 +35,7 @@ jobs:
         run: python scripts/backup_cloudflare_to_gdrive.py
 
       - name: Archive backup artifacts in GitHub
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: tokentelemetry-cloudflare-backup
