@@ -15,3 +15,4 @@ it in the feature's PR.
 | Documentation site + community resources | [documentation-site.md](documentation-site.md) | [ADR-0003](../adr/0003-docs-site-fumadocs.md) |
 | `/goal` telemetry (plan) | [goal-telemetry.md](goal-telemetry.md) | — |
 | Chat with sessions and projects | [session-chat.md](session-chat.md) | — |
+| Oh My Pi (OMP) session telemetry | [omp-integration.md](omp-integration.md) | [ADR-0005](../adr/0005-omp-reported-cost-as-native-unit.md) |

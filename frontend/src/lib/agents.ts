@@ -8,12 +8,13 @@ import PiIcon from "@/components/icons/PiIcon";
 import MuseIcon from "@/components/icons/MuseIcon";
 import PrimeIcon from "@/components/icons/PrimeIcon";
 import DshIcon from "@/components/icons/DshIcon";
+import OmpIcon from "@/components/icons/OmpIcon";
 
 export type AgentKey =
   | "claude" | "codex" | "gemini" | "antigravity"
   | "qwen" | "vibe" | "cursor" | "copilot" | "opencode" | "hermes" | "grok"
   | "openai_compat" | "cline" | "smallcode" | "pi" | "muse" | "prime" | "dsh"
-  | "qoder" | "zcode" | "kimi";
+  | "qoder" | "zcode" | "kimi" | "omp";
 
 export interface AgentMeta {
   key: AgentKey;
@@ -52,6 +53,9 @@ export const AGENTS: Record<AgentKey, AgentMeta> = {
   // gets the same theme-aware tint treatment with a dark hex rather than a
   // blue that would collide with muse/dsh/qwen.
   kimi:        { key: "kimi",        label: "Kimi Code",   hex: "#18181b", icon: Moon },
+  // Oh My Pi's mark is monochrome, so it takes the same theme-aware neutral
+  // treatment as qoder/zcode: a near-white hex plus a `--agent-omp` override.
+  omp:         { key: "omp",         label: "Oh My Pi",    hex: "#e4e4e7", icon: OmpIcon },
 };
 
 const FALLBACK: AgentMeta = {

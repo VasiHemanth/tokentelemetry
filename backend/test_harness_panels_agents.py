@@ -43,7 +43,7 @@ def test_every_supported_agent_has_a_builder():
     supported = {
         "claude", "codex", "gemini", "antigravity", "qwen", "vibe", "cursor",
         "copilot", "opencode", "grok", "cline", "smallcode", "pi", "muse",
-        "prime", "dsh", "qoder", "hermes", "zcode", "kimi",
+        "prime", "dsh", "qoder", "hermes", "zcode", "kimi", "omp",
     }
     assert supported == set(harness_panels.BUILDERS) | set(harness_panels.PLANNED), (
         "every supported agent needs an extractor or a PLANNED entry; "
@@ -245,6 +245,68 @@ def test_pi_mcp_and_trust(tmp_path, monkeypatch):
     assert {f["label"]: f["value"] for f in perms["fields"]}["Trusted directories"] == 2
     assert "ghp_should_never_appear_here" not in json.dumps(doc), \
         "MCP env values can hold tokens and must not be emitted"
+
+
+# --- Oh My Pi (OMP) ---------------------------------------------------------
+
+def test_omp_mcp_config_and_model_perf(tmp_path, monkeypatch):
+    root = tmp_path / "agent"
+    root.mkdir(parents=True)
+    (root / "mcp.json").write_text(json.dumps({
+        "mcpServers": {"github": {"command": "npx", "args": ["-y", "server-github"],
+                                  "env": {"TOKEN": "ghp_should_never_appear_here"}}}
+    }), encoding="utf-8")
+    (root / "config.yml").write_text(
+        "defaultModelRole: balanced\ntheme: dark\n", encoding="utf-8")
+    (root / "models.yml").write_text(
+        "providers:\n"
+        "  anthropic:\n"
+        "    apiKey: sk-DO-NOT-LEAK-omp-secret\n"
+        "    model: claude-sonnet-4\n"
+        "  openai:\n"
+        "    apiKey: sk-also-secret\n",
+        encoding="utf-8")
+    con = sqlite3.connect(root / "agent.db")
+    con.executescript("""
+        CREATE TABLE model_perf (model_key TEXT, samples INT, gen_ms REAL,
+                                 ttft_ms REAL, output_tokens INT);
+        CREATE TABLE model_usage (model_key TEXT, last_used_at INT);
+        INSERT INTO model_perf VALUES ('claude-sonnet-4', 12, 850.0, 210.0, 4096);
+        INSERT INTO model_usage VALUES ('claude-sonnet-4', 1787000000);
+    """)
+    con.commit(); con.close()
+    monkeypatch.setattr(hp_paths, "OMP_DIR", root)
+    monkeypatch.setattr(hp_paths, "OMP_SESSIONS_DIR", root / "sessions")
+
+    doc = clis.build_omp()
+    assert doc["installed"] is True
+
+    mcp = next(s for s in doc["sections"] if s["title"] == "MCP servers")
+    assert mcp["rows"][0][0] == "github"
+
+    cfg = next(s for s in doc["sections"] if s["title"] == "Configuration")
+    values = {f["label"]: f["value"] for f in cfg["fields"]}
+    assert values["Default model role"] == "balanced"
+    assert values["Theme"] == "dark"
+
+    prov = next(s for s in doc["sections"] if s["title"] == "Providers")
+    assert {f["label"]: f["value"] for f in prov["fields"]}["Configured providers"] == 2
+
+    perf = next(s for s in doc["sections"] if s["title"] == "Model usage")
+    row = perf["rows"][0]
+    assert row[0] == "claude-sonnet-4" and row[1] == 12
+    assert row[2] == "210 ms" and row[3] == "850 ms" and row[4] == 4096
+
+    kinds = {n["kind"] for n in doc["not_available"]}
+    assert {"quota", "mcp usage"} <= kinds, \
+        "OMP stores bare tool names, so per-call MCP attribution is unavailable"
+
+    flat = json.dumps(doc)
+    assert "ghp_should_never_appear_here" not in flat, \
+        "MCP env values can hold tokens and must not be emitted"
+    assert "sk-DO-NOT-LEAK-omp-secret" not in flat, \
+        "models.yml apiKey values must never be emitted"
+
 
 
 # --- DSH --------------------------------------------------------------------
@@ -616,7 +678,7 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     for name in ("CLAUDE_DIR", "CODEX_DIR", "COPILOT_DIR", "GROK_DIR", "GEMINI_DIR",
                  "QWEN_DIR", "VIBE_DIR", "CURSOR_DIR", "PI_DIR", "DSH_DIR",
                  "CLINE_DIR", "MUSE_DIR", "PRIME_DIR", "HERMES_DIR",
-                 "QODER_DIR", "QODER_IDE_DIR", "KIMI_DIR"):
+                 "QODER_DIR", "QODER_IDE_DIR", "KIMI_DIR", "OMP_DIR"):
         monkeypatch.setattr(hp_paths, name, absent, raising=False)
     monkeypatch.setattr(hp_paths, "ANTIGRAVITY_SURFACES", [], raising=False)
     monkeypatch.setattr(hp_paths, "smallcode_roots", lambda: [], raising=False)

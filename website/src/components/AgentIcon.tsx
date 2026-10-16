@@ -12,6 +12,10 @@ function PiMark({ size = 16 }: MarkProps) {
   return <svg aria-hidden width={size} height={size} viewBox="0 0 800 800" fill="currentColor"><path fillRule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" /><path d="M517.36 400H634.72V634.72H517.36Z" /></svg>;
 }
 
+function OmpMark({ size = 16 }: MarkProps) {
+  return <svg aria-hidden width={size} height={size} viewBox="4 4 56 56" fill="currentColor"><path d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" /></svg>;
+}
+
 function MuseMark({ size = 16 }: MarkProps) {
   return <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 2 1.5 6.5L20 10l-6.5 1.5L12 18l-1.5-6.5L4 10l6.5-1.5L12 2Z" /><path d="m18.5 16 .6 2.4 2.4.6-2.4.6-.6 2.4-.6-2.4-2.4-.6 2.4-.6.6-2.4Z" /></svg>;
 }
@@ -41,6 +45,7 @@ export default function AgentIcon({ name, size = 16 }: Props) {
     case "Hermes Agent": return <HermesAgent {...props} />;
     case "Cline": return <Cline {...props} />;
     case "Pi": return <PiMark {...props} />;
+    case "Oh My Pi": return <OmpMark {...props} />;
     case "Muse Code": return <MuseMark {...props} />;
     case "Prime Agent": return <PrimeMark {...props} />;
     case "DeepSeek Harness": return <DshMark {...props} />;

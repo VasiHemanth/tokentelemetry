@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-10-16",
+      "title": "Oh My Pi (OMP) support",
+      "highlights": [
+        {
+          "title": "Oh My Pi (OMP) joins the roster",
+          "description": "TokenTelemetry now auto-detects Oh My Pi (OMP) from ~/.omp/agent/sessions/. For each session it reads per-message input, output and cache tokens, the model and provider it routed through, its tool calls, and the conversation trace, and it uses the cost OMP reports rather than estimating one. Session latency and the latest context snapshot are shown too. OMP is a separate agent from Pi, with its own log format.",
+          "href": "/agents/omp"
+        }
+      ]
+    },
+    {
       "tag": "2026-10-01",
       "title": "Ask your own question about a session",
       "highlights": [

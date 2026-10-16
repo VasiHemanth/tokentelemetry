@@ -363,6 +363,17 @@ OLLAMA_DIR = HOME / ".ollama"
 # _scan_pi_sessions.
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
+# Oh My Pi (OMP, binary `omp`) — a separate terminal-first agent forked from Pi.
+# It stores one JSONL per session, bucketed by encoded cwd, under
+# ~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuidv7>.jsonl. Each file opens with a
+# {"type":"session", id, cwd, timestamp} header, then message events whose
+# assistant turns carry per-request usage + cost + provider/model, plus
+# {"type":"custom","customType":"tool_execution_start"} tool events. This is a
+# DIFFERENT on-disk format from Pi, so it gets its own scanner and its own key —
+# see _scan_omp_sessions. Overridable for containers and relocated home dirs,
+# matching the PRIME_SESSIONS_DIR contract.
+OMP_DIR = Path(os.environ.get("TT_OMP_DIR") or (HOME / ".omp" / "agent")).expanduser()
+OMP_SESSIONS_DIR = Path(os.environ.get("TT_OMP_SESSIONS_DIR") or (OMP_DIR / "sessions")).expanduser()
 # DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
 # multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
 # compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
@@ -3266,6 +3277,7 @@ def _list_available_agents() -> list:
     if _hermes_dbs(): agents.append("hermes")
     if GROK_SESSIONS_DIR.exists(): agents.append("grok")
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
+    if OMP_SESSIONS_DIR.exists(): agents.append("omp")
     if (CLINE_DIR / "data" / "db" / "sessions.db").exists() or (CLINE_VSCODE_DIR / "state" / "taskHistory.json").exists():
         agents.append("cline")
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
@@ -4658,6 +4670,202 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
                     "models_used": models_used,
                     "num_messages": msg_count,
                     "reasoning_tokens": tokens["reasoning"],
+                },
+            }
+            _attach_tool_usage(sess, tool_counts)
+            out.append(sess)
+
+    return out
+
+
+def _scan_omp_sessions() -> List[Dict[str, Any]]:
+    """Scan Oh My Pi (OMP) sessions under ~/.omp/agent/sessions/.
+
+    Layout: one JSONL per session, bucketed by encoded cwd:
+        ~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuidv7>.jsonl
+    (a sibling directory of the same basename holds per-tool artifact logs that
+    v1 does not read — only the depth-1 *.jsonl files are sessions).
+
+    Each file begins with a {"type":"session", id, cwd, timestamp} header, then a
+    stream of events. The ones we read:
+      - {"type":"model_change", model}               -> non-authoritative fallback
+      - {"type":"message", message:{...}}            -> a turn. Assistant turns
+        carry `provider`, `model`, a per-request `usage`
+        {input, output, cacheRead, cacheWrite, cost:{total}} and latency
+        (`duration`, `ttft`, `contextSnapshot`).
+      - {"type":"custom","customType":"tool_execution_start",data:{toolName}}
+                                                     -> one tool call.
+
+    Cost is reported VERBATIM — the sum of message.usage.cost.total — and never
+    recomputed. OMP records no reasoning-token split, so `reasoning` is always 0.
+    It is a separate agent from Pi (different on-disk format), so this scanner
+    deliberately shares no code with _scan_pi_sessions.
+    """
+    if not OMP_SESSIONS_DIR.exists():
+        return []
+
+    aliases = _load_project_aliases()
+    def _apply_alias(p: str) -> str:
+        return aliases.get(p, p)
+
+    out: List[Dict[str, Any]] = []
+
+    for bucket in OMP_SESSIONS_DIR.iterdir():
+        if not bucket.is_dir():
+            continue
+        for sess_file in bucket.glob("*.jsonl"):
+            try:
+                sid = None
+                project = None
+                header_ts = None
+                last_ts = None
+                display = None
+                cur_model = None
+                cur_provider = None
+                sess_model = None
+                sess_provider = None
+                msg_count = 0
+                tokens = {"input": 0, "output": 0, "cached": 0,
+                          "cache_creation": 0, "reasoning": 0, "total": 0}
+                cost = 0.0
+                tool_counts: Dict[str, int] = {}
+                models_used: List[str] = []
+                ttft_sum = 0.0
+                ttft_n = 0
+                dur_sum = 0.0
+                dur_n = 0
+                last_context: Optional[Dict[str, Any]] = None
+
+                with open(sess_file, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                        except Exception:
+                            continue
+                        etype = evt.get("type")
+
+                        if etype == "session":
+                            sid = evt.get("id") or sid
+                            cwd = evt.get("cwd")
+                            if cwd:
+                                project = _apply_alias(cwd)
+                            ts_raw = evt.get("timestamp")
+                            if ts_raw:
+                                try:
+                                    header_ts = _aware(datetime.fromisoformat(
+                                        str(ts_raw).replace("Z", "+00:00")))
+                                except Exception:
+                                    header_ts = None
+                            continue
+
+                        if etype == "model_change":
+                            cur_model = evt.get("model") or cur_model
+                            continue
+
+                        if etype == "custom":
+                            if evt.get("customType") == "tool_execution_start":
+                                data = evt.get("data")
+                                if isinstance(data, dict):
+                                    _count_tool(tool_counts, data.get("toolName"))
+                            continue
+
+                        if etype != "message":
+                            continue
+
+                        m = evt.get("message") or {}
+                        role = m.get("role")
+
+                        ts_raw = evt.get("timestamp")
+                        if ts_raw:
+                            try:
+                                _ts = _aware(datetime.fromisoformat(
+                                    str(ts_raw).replace("Z", "+00:00")))
+                                if last_ts is None or _ts > last_ts:
+                                    last_ts = _ts
+                            except Exception:
+                                pass
+
+                        # Every message record counts, including toolResult.
+                        msg_count += 1
+
+                        if role == "user" and display is None:
+                            for c in (m.get("content") or []):
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    t = (c.get("text") or "").strip()
+                                    preview = _strip_context_tags(t).strip()
+                                    if preview:
+                                        display = preview[:120]
+                                        break
+
+                        if role == "assistant":
+                            msg_model = m.get("model") or cur_model
+                            msg_provider = m.get("provider") or cur_provider
+                            if msg_model:
+                                sess_model = msg_model
+                                sess_provider = msg_provider
+                                if msg_model not in models_used:
+                                    models_used.append(msg_model)
+                            u = m.get("usage")
+                            if isinstance(u, dict):
+                                in_t = u.get("input", 0) or 0
+                                out_t = u.get("output", 0) or 0
+                                cr = u.get("cacheRead", 0) or 0
+                                cw = u.get("cacheWrite", 0) or 0
+                                tokens["input"] += in_t
+                                tokens["output"] += out_t
+                                tokens["cached"] += cr
+                                tokens["cache_creation"] += cw
+                                # Reported verbatim; never recomputed.
+                                _cost = u.get("cost")
+                                if isinstance(_cost, dict):
+                                    cost += _cost.get("total", 0) or 0
+                                elif isinstance(_cost, (int, float)):
+                                    cost += _cost
+                            _ttft = m.get("ttft")
+                            if isinstance(_ttft, (int, float)):
+                                ttft_sum += _ttft
+                                ttft_n += 1
+                            _dur = m.get("duration")
+                            if isinstance(_dur, (int, float)):
+                                dur_sum += _dur
+                                dur_n += 1
+                            _cs = m.get("contextSnapshot")
+                            if isinstance(_cs, dict):
+                                last_context = _cs
+            except Exception:
+                continue
+
+            if sid is None:
+                continue
+
+            ts = last_ts or header_ts or _file_mtime_utc(sess_file)
+            tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+
+            sess = {
+                "id": sid,
+                "agent": "omp",
+                "project": project or "unknown",
+                "timestamp": ts,
+                "display": display or f"OMP session {sid[:8]}",
+                "text": display,
+                "tokens": tokens,
+                "mcp_tools": [],
+                "has_plan": False,
+                "plans": [],
+                "model": sess_model or cur_model,
+                "artifacts": [{"name": sess_file.name, "path": str(sess_file), "type": "document"}],
+                "cost": cost,
+                "cost_source": "reported",
+                "omp": {
+                    "provider": sess_provider or cur_provider,
+                    "models_used": models_used,
+                    "num_messages": msg_count,
+                    "ttft_ms": round(ttft_sum / ttft_n, 2) if ttft_n else 0,
+                    "duration_ms": round(dur_sum / dur_n, 2) if dur_n else 0,
+                    "context_snapshot": last_context or {},
                 },
             }
             _attach_tool_usage(sess, tool_counts)
@@ -9204,6 +9412,9 @@ def _scan_sessions_sync():
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
 
+    # 8b2b. Oh My Pi (OMP) — one JSONL per session under ~/.omp/agent/sessions/
+    sessions.extend(_scan_omp_sessions())
+
     # 8b3. DeepSeek Harness (DSH) — zstd-compressed JSONL under ~/.dsh/sessions/
     sessions.extend(_scan_dsh_sessions())
 
@@ -10060,6 +10271,112 @@ async def get_session_detail(session_id: str, agent: str):
                 # pi records the thinking-level setting (off/medium/high) as
                 # dedicated events; pass them through so the context panel can
                 # show the reasoning effort the session ran at.
+                if evt.get("type") == "thinking_level_change":
+                    _tl = evt.get("thinkingLevel")
+                    if isinstance(_tl, str) and _tl:
+                        _tle = {"type": "thinking_level_change", "thinkingLevel": _tl}
+                        _tlts = evt.get("timestamp")
+                        if _tlts:
+                            try:
+                                _tle["normalized_timestamp"] = _aware(datetime.fromisoformat(str(_tlts).replace("Z", "+00:00"))).timestamp() * 1000
+                            except Exception:
+                                pass
+                        _tle.setdefault("normalized_timestamp", len(events) * 1000)
+                        events.append(_tle)
+                    continue
+                if evt.get("type") != "message":
+                    continue
+                m = evt.get("message") or {}
+                role = m.get("role")
+                norm = None
+
+                if role == "user":
+                    text = "".join(
+                        c.get("text", "") for c in (m.get("content") or [])
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                    norm = {"type": "user", "message": {"role": "user",
+                            "content": [{"type": "text", "text": text}]}}
+
+                elif role == "assistant":
+                    blocks: List[Dict[str, Any]] = []
+                    for c in (m.get("content") or []):
+                        if not isinstance(c, dict):
+                            continue
+                        ctype = c.get("type")
+                        if ctype == "thinking":
+                            think = c.get("thinking") or ""
+                            if think.strip():
+                                blocks.append({"type": "thinking", "thinking": think})
+                        elif ctype == "text":
+                            txt = c.get("text") or ""
+                            if txt.strip():
+                                blocks.append({"type": "text", "text": txt})
+                        elif ctype == "toolCall":
+                            blocks.append({
+                                "type": "tool_use",
+                                "id": c.get("id"),
+                                "name": c.get("name"),
+                                "input": c.get("arguments") or {},
+                            })
+                    if blocks:
+                        norm = {"type": "assistant", "message":
+                                {"role": "assistant", "content": blocks}}
+
+                elif role == "toolResult":
+                    content = m.get("content")
+                    if isinstance(content, list):
+                        content = "".join(
+                            c.get("text", "") for c in content
+                            if isinstance(c, dict) and c.get("type") == "text"
+                        )
+                    norm = {"type": "user", "message": {"role": "user", "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": m.get("toolCallId"),
+                        "content": content or "",
+                    }]}}
+
+                if norm is None:
+                    continue
+                ts_raw = evt.get("timestamp")
+                if ts_raw:
+                    try:
+                        _ts = _aware(datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")))
+                        norm["normalized_timestamp"] = _ts.timestamp() * 1000
+                    except Exception:
+                        pass
+                norm.setdefault("normalized_timestamp", len(events) * 1000)
+                events.append(norm)
+        return events
+
+    elif agent == "omp":
+        # Oh My Pi JSONL — a different on-disk format from Pi, but its message
+        # records carry the same content-block shapes (text / thinking /
+        # toolCall / toolResult), so we normalize them into the same
+        # Claude-shaped events the pi branch above produces and the existing
+        # EventCard renderer handles unchanged.
+        sess_file = None
+        if OMP_SESSIONS_DIR.exists():
+            for bucket in OMP_SESSIONS_DIR.iterdir():
+                if not bucket.is_dir():
+                    continue
+                match = list(bucket.glob(f"*{session_id}*.jsonl"))
+                if match:
+                    sess_file = match[0]
+                    break
+        if not sess_file:
+            return {"error": "Not found"}
+
+        events: List[Dict[str, Any]] = []
+        with open(sess_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    continue
                 if evt.get("type") == "thinking_level_change":
                     _tl = evt.get("thinkingLevel")
                     if isinstance(_tl, str) and _tl:

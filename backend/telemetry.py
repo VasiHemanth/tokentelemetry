@@ -197,7 +197,7 @@ _KNOWN_AGENTS = {
     "claude", "codex", "gemini", "antigravity", "qwen", "vibe",
     "cursor", "copilot", "opencode", "hermes", "grok",
     "pi", "cline", "muse", "prime", "smallcode", "dsh", "qoder",
-    "zcode", "kimi",
+    "zcode", "kimi", "omp",
 }
 
 # `agent` rides on harness.scanned and on page.viewed for an agent panel. It is

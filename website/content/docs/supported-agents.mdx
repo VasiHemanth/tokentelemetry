@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: The 19 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
+description: The 20 coding agents and Hermes autonomous agent that TokenTelemetry tracks, how each is detected, and what data each captures.
 ---
 
 TokenTelemetry reads log files from the agents listed below. Detection is automatic — no configuration needed. Just run your agent as normal and TokenTelemetry picks up the sessions.
@@ -28,6 +28,7 @@ TokenTelemetry reads log files from the agents listed below. Detection is automa
 | **Qoder** | Alibaba | `~/.qoder/projects/` | traces, credits, subagents, model, branch (no token counts — see below) |
 | **ZCode** | Z.ai | `~/.zcode/cli/db/db.sqlite` | tokens, traces, cost, model, provider, subagents |
 | **Kimi Code** | Moonshot AI | `~/.kimi/sessions/` | tokens, traces, cost, model |
+| **Oh My Pi** | Oh My Pi (open source) | `~/.omp/agent/sessions/` | tokens, traces, reported cost, model, provider, latency |
 
 ## Autonomous agents
 
@@ -119,6 +120,12 @@ Tokens are summed with the same semantics as OpenCode, whose store shares this s
 Kimi Code (Moonshot AI's coding CLI, the `kimi` command) writes one JSONL wire log per session to `~/.kimi/sessions/<workdir-hash>/<session-uuid>/wire.jsonl`. TokenTelemetry detects the agent from the `~/.kimi/` directory, reads each `wire.jsonl` read-only for per-call usage, model, and the conversation trace, and rolls the sessions up under the project named by the `work_dirs` entries in `~/.kimi/kimi.json`. TokenTelemetry surfaces no delegation breakdown for Kimi Code: the scanner records no subagent links, so a Kimi session reports delegation as unsupported and its trace carries no subagent overlay. A run writes everything to one `wire.jsonl`, so a session's totals already cover whatever that run did.
 
 `~/.kimi/` belongs to Kimi Code alone. Two sibling directories that look similar are different products and are not read as Kimi Code sessions: `~/.kimi-work/` (kimi-slides, a presentation tool) and `~/.kimi-webbridge/` (the browser-automation bridge).
+
+### Oh My Pi (OMP)
+
+Oh My Pi (OMP) writes one JSONL file per session to `~/.omp/agent/sessions/<encoded-cwd>/`, alongside a same-name sibling directory holding per-tool artifact logs. TokenTelemetry detects the agent from the `~/.omp/` directory and reads the session JSONL read-only — never the artifact directory — for per-message token usage, model, provider, tool calls, and the conversation trace. OMP reports its own per-request cost, so TokenTelemetry uses that figure verbatim instead of estimating one. It is billed as an API harness (bring your own key) and has no account quota of its own; OMP records bare tool names with no MCP server attribution, so per-call MCP usage cannot be derived.
+
+Oh My Pi (OMP) is a distinct product from Pi (see [Pi](#pi)); the two share no on-disk format and each is detected from its own directory.
 
 ### Hermes Agent
 

@@ -4,6 +4,7 @@ import {
   HermesAgent, Kimi, OpenCode, Qoder, Qwen, ZAI,
 } from "@lobehub/icons";
 import { getAgent, type AgentKey } from "@/lib/agents";
+import OmpIcon from "@/components/icons/OmpIcon";
 
 type LogoProps = Pick<SVGProps<SVGSVGElement>, "className" | "aria-hidden"> & {
   agent: string;
@@ -45,7 +46,7 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
   // `currentColor` from a container that uses the brand hex would leave them
   // invisible against a background of their own tone.
   const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder"
-    || agent === "zcode" || agent === "kimi";
+    || agent === "zcode" || agent === "kimi" || agent === "omp";
   const brandColor = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   const applyTint = color || isLightBrand;
   const props = {
@@ -76,6 +77,11 @@ export function AgentLogo({ agent, size = 16, decorative = true, className, colo
     case "qoder": return <Qoder {...props} />;
     case "zcode": return <ZAI {...props} />;
     case "kimi": return <Kimi {...props} />;
+    // OMP has no Lobe mark. Its real brand mark is a filled monochrome glyph
+    // that inherits `currentColor`, so the theme-aware `--agent-omp` tint from
+    // `isLightBrand` applies (and the default branch's literal `meta.hex` cannot
+    // force a colour that is invisible on the light theme).
+    case "omp": return <OmpIcon {...props} />;
     default: {
       const Fallback = meta.icon;
       return <Fallback {...props} color={meta.hex} />;

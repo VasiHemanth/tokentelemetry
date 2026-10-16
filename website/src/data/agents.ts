@@ -21,6 +21,7 @@ export const AGENTS: Agent[] = [
   { name: "Cline",          vendor: "Cline (open source)", captures: ["tokens", "traces", "cache", "cost", "model"], logPath: "~/.cline/data/db/ + VS Code",      hex: "#7c3aed" },
   { name: "SmallCode",      vendor: "SmallCode (open source)", captures: ["tokens", "traces", "model", "tools", "timing"], logPath: "<project>/.smallcode/traces/", hex: "#0d9488" },
   { name: "Pi",             vendor: "Pi Coding Agent", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.pi/agent/sessions/",             hex: "#fafafa" },
+  { name: "Oh My Pi",       vendor: "Oh My Pi (open source)", captures: ["tokens", "traces", "reported cost", "model", "provider", "latency"], logPath: "~/.omp/agent/sessions/", hex: "#e4e4e7" },
   { name: "Muse Code",      vendor: "Meta",      captures: ["tokens", "traces", "model", "subagents"],             logPath: "${XDG_DATA_HOME:-~/.local/share}/muse/sessions/", hex: "#2563eb" },
   { name: "Prime Agent",    vendor: "Prime Intellect", captures: ["tokens", "traces", "cost", "model", "branches"], logPath: "~/.prime/agent/sessions/",          hex: "#D4FF47" },
   { name: "DeepSeek Harness", vendor: "DeepSeek AI", captures: ["tokens", "traces", "cost", "model", "provider"], logPath: "~/.dsh/sessions/",                  hex: "#4D6BFE" },
