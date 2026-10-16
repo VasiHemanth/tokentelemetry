@@ -34,17 +34,11 @@ export default function SessionChat({ sessionId, agent }: { sessionId: string; a
   const inFlight = useRef(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    sessionRef.current = sessionId;
-    requestRef.current += 1;
-    inFlight.current = false;
-    setMessages([]);
-    setInput("");
-    setRunning(false);
-    setError(null);
-    setErrorInfo(null);
-  }, [sessionId, agent]);
-
+  // State is scoped to one session/agent by the parent's `key` (AskTabs): a
+  // session or agent change remounts this component with fresh state, so no
+  // reset effect is needed here. Refs start fresh on mount (see initializers
+  // above); `requestRef` invalidates any send that resolves after a remount
+  // because the old component is gone.
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [messages, running]);

@@ -34,16 +34,11 @@ export default function CustomPromptBox({ sessionId, agent }: { sessionId: strin
   // Set synchronously so a held key or double click cannot start two runs.
   const inFlight = useRef(false);
 
+  // State is scoped to one session/agent by the parent's `key` (AskTabs): a
+  // session or agent change remounts this component with fresh state instead
+  // of resetting via setState inside this effect. The effect only loads data.
   useEffect(() => {
     sessionRef.current = sessionId;
-    setPrompt("");
-    setItems([]);
-    setRunning(false);
-    setError(null);
-    setErrorInfo(null);
-    setErrorFor(null);
-    setLoadFailed(false);
-    setUnsaved(false);
     inFlight.current = false;
     let cancelled = false;
     getCustomSummaries(sessionId, agent)

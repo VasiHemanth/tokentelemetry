@@ -390,9 +390,11 @@ function AskTabs({ sessionId, agent }: { sessionId: string; agent: string }) {
           </button>
         ))}
       </div>
-      {/* Both stay mounted so switching tabs keeps drafts and the conversation. */}
-      <div hidden={tab !== "once"}><CustomPromptBox sessionId={sessionId} agent={agent} /></div>
-      <div hidden={tab !== "chat"}><SessionChat sessionId={sessionId} agent={agent} /></div>
+      {/* Both stay mounted so switching tabs keeps drafts and the conversation.
+          The key remounts per session/agent, resetting drafts, answers and chat
+          without setState-in-effect (see CustomPromptBox/SessionChat). */}
+      <div hidden={tab !== "once"}><CustomPromptBox key={`prompt-${sessionId}-${agent}`} sessionId={sessionId} agent={agent} /></div>
+      <div hidden={tab !== "chat"}><SessionChat key={`chat-${sessionId}-${agent}`} sessionId={sessionId} agent={agent} /></div>
     </div>
   );
 }
