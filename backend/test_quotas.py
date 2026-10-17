@@ -23,6 +23,7 @@ from quotas import (
     GeminiQuotaProvider,
     GrokQuotaProvider,
     OpenCodeQuotaProvider,
+    QuotaResource,
     QuotaService,
     QuotaSnapshot,
     StaticQuotaProvider,
@@ -1058,3 +1059,73 @@ def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
 
     assert base.live_quota("codex") is None
+
+
+def test_keychain_timeout_falls_back_to_stale_snapshot_not_not_signed_in(tmp_path):
+    """When has_local_credentials() returns False (e.g. macOS Keychain timeout)
+    but a prior snapshot exists, the provider should stay 'available' rather
+    than flipping to 'notSignedIn' and discarding valid cached data.
+    """
+    stale_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    now = stale_at + FRESHNESS + timedelta(seconds=60)  # snapshot is expired
+
+    class Provider:
+        provider_id = "claude"
+        display_name = "Claude"
+
+        def has_local_credentials(self):
+            return False  # simulates Keychain timeout → None → False
+
+        def refresh(self, _now):
+            raise AssertionError("must not call refresh when credentials absent")
+
+    service = QuotaService([Provider()], cache_path=tmp_path / "quotas.json", now=lambda: now)
+    # Seed a stale snapshot with a distinctive resource so the test can verify
+    # the cached data is preserved, not replaced with an empty or new snapshot.
+    service._snapshots["claude"] = QuotaSnapshot(
+        provider_id="claude",
+        display_name="Claude",
+        fetched_at=stale_at,
+        resources={
+            "weekly": QuotaResource(kind="consumption", unit="tokens", used=42.0, limit=100.0),
+        },
+    )
+
+    result = service.collect()
+
+    cap = result["capabilities"]["claude"]
+    assert cap["state"] == "available", (
+        "stale snapshot + credential-check failure must not produce notSignedIn"
+    )
+    # The capability detail must signal that this is a fallback, not a fresh read.
+    assert "detail" in cap, "fallback capability must carry a detail so the UI can warn"
+
+    provider_data = result["providers"]["claude"]
+    assert provider_data["stale"] is True, "expired snapshot must be marked stale"
+    assert provider_data["resources"]["weekly"]["used"] == 42.0, (
+        "cached resource data must be preserved unchanged"
+    )
+
+
+def test_no_snapshot_and_no_credentials_still_reports_not_signed_in(tmp_path):
+    """When there is no prior snapshot AND has_local_credentials() is False,
+    the provider should still report 'notSignedIn' (original behaviour unchanged).
+    """
+
+    class Provider:
+        provider_id = "claude"
+        display_name = "Claude"
+
+        def has_local_credentials(self):
+            return False
+
+        def refresh(self, _now):
+            raise AssertionError("must not be called")
+
+    result = QuotaService([Provider()], cache_path=tmp_path / "quotas.json").collect()
+
+    assert result["capabilities"]["claude"] == {
+        "displayName": "Claude",
+        "state": "notSignedIn",
+        "detail": "No local credentials found.",
+    }
