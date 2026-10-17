@@ -154,6 +154,13 @@ _RETENTION: Dict[str, Dict[str, Any]] = {
         "settings_hint": None,
         "note": "Per-session wire.jsonl under ~/.kimi/sessions; no auto-pruning.",
     },
+    "omp": {
+        "label": "Oh My Pi",
+        "default_days": None,
+        "configurable": False,
+        "settings_hint": None,
+        "note": "Per-session JSONL under ~/.omp/agent/sessions; no auto-pruning.",
+    },
 }
 
 # Which agents we can actually archive (single-file resolvable transcript).

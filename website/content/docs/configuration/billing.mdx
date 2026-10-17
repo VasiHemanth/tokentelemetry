@@ -41,6 +41,7 @@ TokenTelemetry detects the billing mode for each agent automatically:
 | Qoder | `subscription` (credit-metered; see below) |
 | ZCode | `subscription` (Z.ai coding / start plan) |
 | Kimi Code | `subscription` (Moonshot membership allowance) |
+| Oh My Pi | `api` (bring-your-own-key across providers) |
 | Hermes Agent | `api` or `local` depending on provider config |
 
 Detection is best-effort. If the agent's auth configuration can't be read, the mode defaults to `unknown`.
