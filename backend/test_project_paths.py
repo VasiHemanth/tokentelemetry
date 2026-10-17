@@ -258,6 +258,46 @@ def test_budget_filters_match_across_separator_styles():
         {"project": PROJ_FORWARD})
 
 
+def test_projects_rollup_includes_delegated_cost():
+    """U11: /projects cost must include delegated_cost, not just s.get('cost').
+
+    Claude subagent/workflow spend lives in delegated_cost, not cost.
+    A project card built from sessions with delegation showed lower cost than
+    the Analytics page by the full delegated amount.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        restore = _hermetic(d)
+        try:
+            proj = "/home/dev/myproject"
+            sessions = [
+                {"id": "s1", "agent": "claude", "project": proj,
+                 "model": "claude-sonnet-4-6", "timestamp": "2026-01-01T00:00:00+00:00",
+                 "cost": 1.0, "delegated_cost": 2.5,
+                 "tokens": {"input": 100, "output": 50, "cached": 0, "total": 150},
+                 "has_plan": False, "plans": [], "published_artifacts": [],
+                 "mcp_tools": [], "subagents": []},
+            ]
+
+            async def fake_cached(fresh=False):
+                return sessions
+
+            saved_cached, saved_hidden = main.get_sessions_cached, main.load_hidden
+            main.get_sessions_cached = fake_cached
+            main.load_hidden = lambda: set()
+            try:
+                cards = asyncio.run(main.get_projects())
+            finally:
+                main.get_sessions_cached = saved_cached
+                main.load_hidden = saved_hidden
+
+            assert len(cards) == 1
+            card = cards[0]
+            assert card["tokens"]["cost"] == 3.5, (
+                f"expected 1.0 + 2.5 = 3.5, got {card['tokens']['cost']}")
+        finally:
+            restore()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
