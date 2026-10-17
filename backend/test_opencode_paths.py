@@ -219,3 +219,46 @@ def test_detail_lookup_finds_session_in_channel_db(scan_env):
     assert main._opencode_db_for_session("ses_stable") == scan_env / "opencode-stable.db"
     assert main._opencode_db_for_session("ses_latest") == scan_env / "opencode.db"
     assert main._opencode_db_for_session("ses_nope") is None
+
+
+def _make_multi_turn_db(path: Path, sid: str, turns):
+    """OpenCode DB with multiple step-finish parts, one per turn spec (inp, out, cr)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = 1750000000000
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE session (id TEXT, project_id TEXT, parent_id TEXT, "
+                "directory TEXT, title TEXT, time_created INT, time_updated INT)")
+    con.execute("CREATE TABLE message (session_id TEXT, time_created INT, data TEXT)")
+    con.execute("CREATE TABLE part (session_id TEXT, time_created INT, data TEXT)")
+    con.execute("INSERT INTO session VALUES (?, 'p', NULL, '/tmp/x', ?, ?, ?)",
+                (sid, sid, now, now))
+    con.execute("INSERT INTO message VALUES (?, ?, ?)", (sid, now, json.dumps(
+        {"role": "assistant", "modelID": "gpt-5.2-codex", "providerID": "openai"})))
+    for i, (inp, out, cr) in enumerate(turns):
+        con.execute("INSERT INTO part VALUES (?, ?, ?)", (sid, now + i, json.dumps(
+            {"type": "step-finish",
+             "tokens": {"input": inp, "output": out, "cache": {"read": cr, "write": 0}}})))
+    con.commit()
+    con.close()
+
+
+def test_scan_opencode_cached_sum_is_cumulative_not_hwm(scan_env, monkeypatch):
+    """U5: _cached_sum must accumulate cache.read across all step-finish events
+    so analytics cache_reads and calculate_cost see the billed total, not the HWM."""
+    # Two turns: cache_read 100 then 200 → HWM=200, _cached_sum=300
+    _make_multi_turn_db(scan_env / "opencode.db", "ses_u5",
+                        [(500, 50, 100), (800, 80, 200)])
+    calls = []
+
+    def spy(model, inp, out, cached, **kw):
+        calls.append({"input": inp, "output": out, "cached": cached})
+        return 0.0
+
+    monkeypatch.setattr(main, "calculate_cost", spy)
+    sessions = [s for s in main._scan_sessions_sync() if s["id"] == "ses_u5"]
+    assert len(sessions) == 1
+    tk = sessions[0]["tokens"]
+    assert tk["cached"] == 200, "cached must be HWM (max of 100, 200)"
+    assert tk["_cached_sum"] == 300, "_cached_sum must be cumulative sum (100 + 200)"
+    cost_call = next(c for c in calls if c["input"] == 500 + 800)
+    assert cost_call["cached"] == 300, "calculate_cost must receive _cached_sum not HWM"
