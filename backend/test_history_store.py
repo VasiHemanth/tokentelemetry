@@ -116,6 +116,73 @@ def test_storage_and_coverage():
     assert stats["transcript_bytes"] > 0
 
 
+def test_upsert_recency_guard_rejects_older_scan_data():
+    """U14: a non-stub upsert with an earlier scan_started_at must not overwrite
+    a row that was already written by a newer scan.
+
+    Scan B (started at T+10) writes total=150. Scan A (started at T+1, but whose
+    persist thread fires later) tries to upsert total=100. The WHERE guard in the
+    conflict clause must reject A's update because its scan_started_at (T+1) is
+    older than the stored last_seen_at (T+10)."""
+    h = _fresh_store()
+    t_b = "2026-01-01T00:00:10+00:00"
+    t_a = "2026-01-01T00:00:01+00:00"
+
+    # Scan B (newer) persists first.
+    h.upsert_sessions(
+        [_session(total=150, tokens={"input": 100, "output": 45, "cached": 5, "total": 150})],
+        scan_started_at=t_b,
+    )
+    # Scan A (older) persist thread fires after B's — must be rejected.
+    h.upsert_sessions(
+        [_session(total=100, tokens={"input": 50, "output": 45, "cached": 5, "total": 100})],
+        scan_started_at=t_a,
+    )
+
+    rows = h.query()
+    assert len(rows) == 1
+    assert rows[0]["tokens"]["total"] == 150, (
+        f"older scan must not overwrite newer data; got {rows[0]['tokens']['total']}"
+    )
+
+
+def test_upsert_recency_guard_allows_newer_scan_data():
+    """The guard must still allow a newer scan to update an existing row."""
+    h = _fresh_store()
+    t_a = "2026-01-01T00:00:01+00:00"
+    t_b = "2026-01-01T00:00:10+00:00"
+    h.upsert_sessions([_session(total=17)], scan_started_at=t_a)
+    h.upsert_sessions(
+        [_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})],
+        scan_started_at=t_b,
+    )
+    rows = h.query()
+    assert rows[0]["tokens"]["total"] == 31, "newer scan must update the row"
+
+
+def test_upsert_recency_guard_allows_null_last_seen_at():
+    """Legacy rows with NULL last_seen_at must always accept an update."""
+    import sqlite3 as _sqlite3
+    from tt_paths import data_dir as _data_dir
+
+    h = _fresh_store()
+    h.upsert_sessions([_session(total=17)])
+
+    db_path = _data_dir() / "history.db"
+    con = _sqlite3.connect(str(db_path))
+    con.execute("UPDATE sessions SET last_seen_at=NULL WHERE id='s1'")
+    con.commit()
+    con.close()
+
+    # Even with an early scan_started_at, NULL last_seen_at must not block.
+    h.upsert_sessions(
+        [_session(total=31, tokens={"input": 20, "output": 9, "cached": 2, "total": 31})],
+        scan_started_at="2020-01-01T00:00:00+00:00",
+    )
+    rows = h.query()
+    assert rows[0]["tokens"]["total"] == 31, "NULL last_seen_at must not block the update"
+
+
 def test_bucket_key_day_week_month():
     # _bucket_key lives in the analytics endpoint module; import lazily so a
     # missing FastAPI dep degrades to a skip rather than a hard failure.
