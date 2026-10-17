@@ -283,3 +283,34 @@ def test_scan_zcode_resolves_model_from_degenerate_session(scan_env, monkeypatch
     assert out[0]["model"] == "GLM-5.3-Flash"
     assert out[0]["tokens"]["total"] == 0
     assert out[0]["has_plan"] is False
+
+
+def test_scan_zcode_null_timestamps_not_epoch(scan_env, monkeypatch, tmp_path):
+    """U7: a session with NULL time_created and time_updated must not produce a
+    1970-01-01 timestamp — it must use a modern fallback so it sorts correctly."""
+    import sqlite3 as _sqlite3
+    from datetime import timezone as _tz
+    db = tmp_path / "db.sqlite"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = _sqlite3.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE session(id TEXT PRIMARY KEY, directory TEXT, title TEXT,"
+        " parent_id TEXT, time_created INTEGER, time_updated INTEGER);"
+        " CREATE TABLE message(id TEXT PRIMARY KEY, session_id TEXT,"
+        " time_created INTEGER, data TEXT);"
+        " CREATE TABLE part(id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,"
+        " time_created INTEGER, data TEXT);"
+        " CREATE TABLE todo(session_id TEXT, content TEXT, status TEXT, position INTEGER);"
+    )
+    # Insert a session with NULL timestamps (both fields omitted → NULL)
+    conn.execute("INSERT INTO session VALUES (?,?,?,?,?,?)",
+                 ("sess_null_ts", r"D:\p", "T", None, None, None))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    monkeypatch.setattr(main, "calculate_cost", lambda *a, **k: 0.0)
+    out = main._scan_zcode_sessions()
+    assert len(out) == 1
+    ts = out[0]["timestamp"]
+    epoch = ts.replace(tzinfo=_tz.utc) if ts.tzinfo is None else ts
+    assert epoch.year >= 2020, f"timestamp must not be epoch; got {ts}"
