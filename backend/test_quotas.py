@@ -1047,6 +1047,53 @@ def test_every_native_provider_panel_surfaces_its_live_quota(tmp_path, monkeypat
         assert section["meters"][0]["severity"] == "ok"
 
 
+def test_signed_out_provider_evicts_its_stale_snapshot(tmp_path):
+    # Regression for #344: a provider the user has signed out of must not keep
+    # rendering its last-observed percentage as current. The notSignedIn branch
+    # must pop the snapshot so _wire produces no providers entry and _save does
+    # not re-persist the stale data.
+    class Provider:
+        provider_id = "claude"
+        display_name = "Claude"
+
+        def __init__(self, has_creds: bool):
+            self._has_creds = has_creds
+
+        def has_local_credentials(self):
+            return self._has_creds
+
+        def refresh(self, now):
+            if not self._has_creds:
+                raise AssertionError("must not call refresh when not signed in")
+            return QuotaSnapshot(
+                provider_id=self.provider_id,
+                display_name=self.display_name,
+                fetched_at=now,
+                resources={},
+            )
+
+    t0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    provider = Provider(has_creds=True)
+    service = QuotaService([provider], cache_path=tmp_path / "quotas.json", now=lambda: t0)
+
+    first = service.collect(force=True)
+    assert "claude" in first["providers"]
+
+    # User signs out — next collect must not serve the 97% snapshot.
+    provider._has_creds = False
+    t1 = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    service.now = lambda: t1
+    second = service.collect(force=True)
+
+    assert second["capabilities"]["claude"]["state"] == "notSignedIn"
+    assert "claude" not in second["providers"], (
+        "stale snapshot still present after sign-out (issue #344)"
+    )
+    # The eviction must also persist: reload the cache and confirm it's gone.
+    third = service.collect()
+    assert "claude" not in third["providers"]
+
+
 def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
     """A bar needs a maximum; credits and spend have none, so they are skipped."""
     import harness_panels.base as base
@@ -1058,3 +1105,43 @@ def test_live_quota_ignores_a_balance_with_no_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(base, "data_dir", lambda: tmp_path)
 
     assert base.live_quota("codex") is None
+
+
+def test_signed_out_during_freshness_window_not_served_as_available(tmp_path):
+    # Regression for #344 / Copilot review: signing out within the 5-minute
+    # freshness window must not return state="available". The credential check
+    # must run BEFORE the freshness fast-path returns.
+    class Provider:
+        provider_id = "claude"
+        display_name = "Claude"
+
+        def __init__(self, has_creds: bool):
+            self._has_creds = has_creds
+
+        def has_local_credentials(self):
+            return self._has_creds
+
+        def refresh(self, now):
+            return QuotaSnapshot(
+                provider_id=self.provider_id,
+                display_name=self.display_name,
+                fetched_at=now,
+                resources={},
+            )
+
+    t0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    provider = Provider(has_creds=True)
+    service = QuotaService([provider], cache_path=tmp_path / "quotas.json", now=lambda: t0)
+
+    # First collect stores snapshot.
+    first = service.collect(force=True)
+    assert first["capabilities"]["claude"]["state"] == "available"
+
+    # Sign out. Re-collect immediately (still within freshness window — same t0).
+    provider._has_creds = False
+    second = service.collect()  # NOT force — must go through freshness fast-path
+
+    assert second["capabilities"]["claude"]["state"] == "notSignedIn", (
+        "signed-out provider returned 'available' via freshness fast-path (Copilot #375)"
+    )
+    assert "claude" not in second["providers"]
