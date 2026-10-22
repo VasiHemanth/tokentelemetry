@@ -497,6 +497,8 @@ export default function SessionDetailPage() {
   const [allHermesSessions, setAllHermesSessions] = useState<Session[] | null>(null);
   const [grokForensics, setGrokForensics] = useState<TraceValue | null>(null);
   const [delegation, setDelegation] = useState<TraceValue | null>(null);
+  // File (or database) on disk the trace is read from, shown in the Context panel.
+  const [sourcePath, setSourcePath] = useState<string | null>(null);
   // Subagent drill-in: holds the spawn entry whose trace is open in the
   // slide-over viewer. Parent trace state (scrubber, tabs) stays untouched.
   const [subagentView, setSubagentView] = useState<TraceValue | null>(null);
@@ -590,6 +592,11 @@ export default function SessionDetailPage() {
           console.error("Failed to fetch session detail:", err);
           setLoading(false);
         });
+
+      apiFetch(`/sessions/${id}/source?agent=${agent}`)
+        .then(res => res.json())
+        .then(data => setSourcePath(typeof data?.path === "string" ? data.path : null))
+        .catch(() => setSourcePath(null));
 
       // 3. Hermes-only overlay: per-API-call latency, cache hit, memory I/O
       if (agent === "hermes") {
@@ -801,6 +808,7 @@ export default function SessionDetailPage() {
       modelsUsed,
       provider: meta?.model_provider,
       cwd: meta?.cwd || sessionInfo?.project,
+      sourcePath,
       sandbox: (() => {
         const sb = meta?.sandbox_policy || turnCtx?.sandbox_policy;
         // Codex sandbox_policy is an object ({type/mode, network_access, …});
@@ -824,7 +832,7 @@ export default function SessionDetailPage() {
       // run was actually offered.
       qoder: agent === "qoder" ? sessionInfo?.qoder : undefined,
     };
-  }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id]);
+  }, [agent, events, rawEvents, sessionInfo, modelsUsed, projectConfig, id, sourcePath]);
 
   // Fetch per-project config (skills + MCPs) once we know the cwd.
   // NOTE: /config reports what is installed for CLAUDE CODE on disk, so it must
@@ -2188,6 +2196,7 @@ function SessionUsageSection({ usage }: { usage: SessionUsage }) {
 
 function ContextPanel({ ctx }: { ctx: TraceValue }) {
   const [copiedId, setCopiedId] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(false);
   const hasAny = ctx.model || ctx.cwd || ctx.systemPrompt || ctx.instructions || ctx.sandbox;
   return (
     <div className="space-y-4">
@@ -2241,6 +2250,35 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       <ContextRow k="Approval Policy" v={ctx.approvalPolicy} />
       <ContextRow k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
       <ContextRow k="CWD" v={ctx.cwd} />
+      {ctx.sourcePath && (
+        <div className="space-y-1">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Session File</div>
+          <div className={`flex items-center gap-1.5 bg-[var(--tt-sunken)] border rounded px-2 py-1.5 transition-colors ${
+            copiedPath
+              ? "text-[var(--tt-success-fg)] border-[color:var(--tt-success)]/50"
+              : "border-[var(--tt-border)]"
+          }`}>
+            <span className={`text-[10px] font-mono break-all flex-1 ${copiedPath ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sourcePath}>
+              {copiedPath ? "Copied" : ctx.sourcePath}
+            </span>
+            <button
+              onClick={() => {navigator.clipboard?.writeText(ctx.sourcePath)
+                  .then(() => { setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1000); })
+                  .catch(() => {});
+              }}
+              title="Copy session file path"
+              className={`p-1 rounded transition-colors ${
+                copiedPath
+                  ? "text-[var(--tt-success-fg)]"
+                  : "text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
+              }`}
+            >
+              {copiedPath ? (<Check size={11} strokeWidth={3} className="text-[var(--tt-success-fg)]" />) : (<Copy size={11} className="opacity-60" />)}
+            </button>
+          </div>
+          <div className="text-[9px] font-mono text-[var(--tt-fg-faint)]">where TokenTelemetry reads this session from</div>
+        </div>
+      )}
 
       {ctx.usage && <SessionUsageSection usage={ctx.usage} />}
 

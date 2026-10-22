@@ -10115,6 +10115,131 @@ def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, An
     return collapsed
 
 
+def _session_source_path(session_id: str, agent: str) -> Optional[Path]:
+    """The file (or database) on disk that get_session_detail reads this
+    session's trace from. Mirrors the per-agent lookups there; None when the
+    session can't be resolved to one path."""
+    def first(paths) -> Optional[Path]:
+        return next(iter(paths), None)
+
+    def db_has_session(db: Path) -> bool:
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db), uri=True, timeout=1.0)
+            try:
+                return conn.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone() is not None
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
+    if agent == "claude":
+        return first(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or first(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
+    if agent == "codex":
+        return first(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
+    if agent == "grok":
+        for bucket in GROK_SESSIONS_DIR.glob("*"):
+            candidate = bucket / session_id
+            if candidate.is_dir() and (candidate / GROK_SUMMARY).exists():
+                return candidate / GROK_CHAT_HISTORY
+        return None
+    if agent in ("pi", "omp"):
+        sessions_dir = PI_SESSIONS_DIR if agent == "pi" else OMP_SESSIONS_DIR
+        if sessions_dir.exists():
+            for bucket in sessions_dir.iterdir():
+                if bucket.is_dir():
+                    match = first(bucket.glob(f"*{session_id}*.jsonl"))
+                    if match:
+                        return match
+        return None
+    if agent == "dsh":
+        return _dsh_session_file(session_id)
+    if agent == "qoder":
+        return _qoder_session_file(session_id)
+    if agent == "kimi":
+        return _kimi_session_file(session_id)
+    if agent in ("gemini", "antigravity"):
+        if agent == "antigravity":
+            cli_db = ANTIGRAVITY_CLI_DIR / "conversations" / f"{session_id}.db"
+            if cli_db.exists():
+                return cli_db
+            for bd in ANTIGRAVITY_BRAIN_DIRS:
+                if (bd / session_id).is_dir():
+                    return bd / session_id
+        return (first((GEMINI_DIR / "tmp").glob(f"**/chats/session-*{session_id[:8]}*.json*"))
+                or first((GEMINI_DIR / "tmp").glob(f"**/chats/*{session_id}*.json*")))
+    if agent == "muse":
+        return first(p for p in MUSE_SESSIONS_DIR.glob("*/*/*/*/session.jsonl") if p.parent.name == session_id)
+    if agent == "prime":
+        # The session id lives in the file's "session" header row, not its name.
+        for candidate in PRIME_SESSIONS_DIR.glob("*.jsonl"):
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        row = json.loads(line)
+                        if isinstance(row, dict) and row.get("type") == "session":
+                            if row.get("id") == session_id:
+                                return candidate
+                            break
+            except (OSError, ValueError):
+                continue
+        return None
+    if agent == "qwen":
+        return first(QWEN_DIR.glob(f"projects/**/chats/{session_id}.jsonl"))
+    if agent == "vibe":
+        short = (session_id or "").split("-")[0]
+        return first(VIBE_DIR.glob(f"logs/session/*{session_id}*.json")) or (
+            first(VIBE_DIR.glob(f"logs/session/*{short}*.json")) if short else None)
+    if agent == "cursor":
+        return first((CURSOR_DIR / "projects").glob(f"**/agent-transcripts/{session_id}/{session_id}.jsonl"))
+    if agent == "copilot":
+        cli_file = COPILOT_CLI_DIR / session_id / "events.jsonl"
+        if cli_file.exists():
+            return cli_file
+        return (first(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.json"))
+                or first(VSCODE_STORAGE.glob(f"**/chatSessions/{session_id}.jsonl")))
+    if agent == "opencode":
+        return _opencode_db_for_session(session_id)
+    if agent == "zcode":
+        return _zcode_db_for_session(session_id)
+    if agent == "hermes":
+        return first(db for db in _hermes_dbs() if db_has_session(db))
+    if agent == "smallcode":
+        roots: List[str] = list(SMALLCODE_EXTRA_ROOTS)
+        for s in (_sessions_cache.get("data") or []):
+            if s.get("agent") == "smallcode" and s.get("project"):
+                roots.append(s["project"])
+        for root in dict.fromkeys(roots):
+            p = Path(root).expanduser() / ".smallcode" / "traces" / f"{session_id}.json"
+            if p.exists():
+                return p
+        return None
+    if agent == "cline":
+        db_path = CLINE_DIR / "data" / "db" / "sessions.db"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True, timeout=1.0)
+                try:
+                    row = conn.execute("SELECT messages_path FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+                finally:
+                    conn.close()
+                if row and row[0] and Path(row[0]).exists():
+                    return Path(row[0])
+            except Exception:
+                pass
+        transcript_path = CLINE_VSCODE_DIR / "tasks" / session_id / "api_conversation_history.json"
+        return transcript_path if transcript_path.exists() else None
+    return None
+
+
+@app.get("/sessions/{session_id}/source")
+def get_session_source(session_id: str, agent: str):
+    """Where on disk TT reads this session's trace from (trace Context panel)."""
+    path = _session_source_path(session_id, agent)
+    return {"path": str(path) if path else None}
+
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str, agent: str):
     if agent == "claude":

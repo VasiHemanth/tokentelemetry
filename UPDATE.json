@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-10-22",
+      "title": "See where a session is stored",
+      "highlights": [
+        {
+          "title": "Session file in the Context tab",
+          "description": "A session's Context tab now shows the file or database on disk that TokenTelemetry reads it from, with a copy button. Use it to open the raw log yourself or to check which agent store a session came from. Works for every supported agent."
+        }
+      ]
+    },
+    {
       "tag": "2026-10-16",
       "title": "Oh My Pi (OMP) support",
       "highlights": [
