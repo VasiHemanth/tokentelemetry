@@ -9200,6 +9200,7 @@ def _scan_sessions_sync():
                         if nm and nm not in models_used: models_used.append(nm)
                     elif et == "session.shutdown":
                         shutdown_metrics = d.get("modelMetrics")
+                ts = last_ts or start_ts or _file_mtime_utc(ev_file)
                 tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
                 metr = _copilot_cli_tokens_from_metrics(shutdown_metrics)
                 if metr:
@@ -9211,7 +9212,6 @@ def _scan_sessions_sync():
                 tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
                                                 cache_creation_tokens=tokens.get("cache_creation", 0), at=ts)
                 if model and model not in models_used: models_used.insert(0, model)
-                ts = last_ts or start_ts or _file_mtime_utc(ev_file)
                 sessions.append({
                     "id": sid, "agent": "copilot", "project": apply_alias(project_path),
                     "timestamp": ts, "display": first_msg[:100], "tokens": tokens,
