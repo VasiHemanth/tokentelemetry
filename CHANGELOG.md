@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- Grok Bot (desktop app) panel data: the Grok agent page now also reads the app's own stores — its weekly plan meter (shown next to the CLI's, since the two clients can reset on different days), the bot roster with last activity, local-executor health, and the app's disk footprint. Conversation transcripts are never read.
 - ZCode (Z.ai) support: sessions, tokens, cost, tool calls, plans, subagent delegation and traces read locally from `~/.zcode/cli/db/db.sqlite` (override the location with `ZCODE_DATA_DIR`)
 - Oh My Pi (OMP) support: sessions, tokens, reported cost, models, tool calls and traces read locally from `~/.omp/agent/sessions/` (override the location with `TT_OMP_SESSIONS_DIR`)
 

@@ -695,6 +695,10 @@ def test_missing_directory_yields_not_installed(agent, tmp_path, monkeypatch):
     monkeypatch.setattr(claude_panel, "CLAUDE_JSON", absent / "x.json", raising=False)
     monkeypatch.setattr(copilot_panel, "STORE_DB", absent / "x.db", raising=False)
     monkeypatch.setattr(grok_panel, "UNIFIED_LOG", absent / "x.jsonl", raising=False)
+    # The Grok panel spans two stores; the desktop app's are not under ~/.grok.
+    for attr in ("GROK_BOT_DIR", "GROK_BOT_APP_DIR", "GROK_BOT_SLICES_DIR",
+                 "GROK_BOT_LOG", "GROK_BOT_COMPUTER_USE_DIR"):
+        monkeypatch.setattr(grok_panel, attr, absent / attr.lower(), raising=False)
 
     doc = harness_panels.BUILDERS[agent]()
     assert doc["installed"] is False
