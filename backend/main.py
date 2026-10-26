@@ -4942,6 +4942,56 @@ def _dsh_expand_streams(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _zstd_rollouts_supported() -> bool:
+    """True when the optional `zstandard` dependency is importable — required
+    to read zstd-compressed transcripts (Codex rollout-*.jsonl.zst)."""
+    try:
+        import zstandard  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _open_maybe_zst(path: Path):
+    """Text-mode reader for transcripts that may be zstd-compressed.
+
+    Recent Codex writes rollouts as rollout-*.jsonl.zst; return a StringIO
+    over the decompressed text so callers iterate lines exactly as with a
+    plain .jsonl file. Raises on unreadable/corrupt input — callers already
+    treat that like any other unreadable transcript.
+    """
+    if str(path).endswith(".zst"):
+        import io
+        import zstandard
+        with open(path, "rb") as fh:
+            # stream_reader tolerates a truncated tail by returning the
+            # decodable prefix — same semantics as reading a half-written
+            # .jsonl (the partial last line just fails json.loads).
+            text = zstandard.ZstdDecompressor().stream_reader(fh).read().decode("utf-8", errors="replace")
+        return io.StringIO(text)
+    return open(path, "r", encoding="utf-8", errors="replace")
+
+
+def _read_first_line_maybe_zst(path: Path) -> str:
+    """First line of a possibly-zstd transcript without decoding the whole
+    stream — delegation views open every rollout under the sessions dir."""
+    if str(path).endswith(".zst"):
+        import zstandard
+        with open(path, "rb") as fh:
+            with zstandard.ZstdDecompressor().stream_reader(fh) as reader:
+                # Stop at the first newline — Codex caps rollout lines at
+                # 16 MiB, so a single head chunk could truncate a legal line.
+                buf = b""
+                while b"\n" not in buf and len(buf) < (17 << 20):
+                    chunk = reader.read(1 << 20)
+                    if not chunk:
+                        break
+                    buf += chunk
+        return buf.decode("utf-8", errors="replace").split("\n", 1)[0]
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.readline()
+
+
 def _dsh_read_events(path: Path) -> Optional[List[Dict[str, Any]]]:
     """Decompress + parse one DSH session log (any generation) into JSON rows.
 
@@ -8252,11 +8302,28 @@ def _scan_sessions_sync():
     codex_index = CODEX_DIR / "session_index.jsonl"
     if codex_index.exists() or (CODEX_DIR / "sessions").is_dir():
         codex_sessions = {}
-        # Pre-index Codex rollout files
+        # Pre-index Codex rollout files. Newer Codex writes them zstd-compressed
+        # (rollout-*.jsonl.zst); index those only when the optional zstandard dep
+        # is importable — the same silent-skip convention as DSH.
         codex_file_map = {}
         try:
-            for f in (CODEX_DIR / "sessions").rglob("rollout-*.jsonl"):
-                parts = f.stem.split("-")
+            rollout_files = list((CODEX_DIR / "sessions").rglob("rollout-*.jsonl"))
+            if _zstd_rollouts_supported():
+                rollout_files += list((CODEX_DIR / "sessions").rglob("rollout-*.jsonl.zst"))
+            seen_stems = set()
+            for f in rollout_files:
+                # f.stem only strips the last suffix — drop ".jsonl" too so the
+                # trailing uuid parses identically for .jsonl and .jsonl.zst.
+                stem = f.stem
+                if stem.endswith(".jsonl"):
+                    stem = stem[:-len(".jsonl")]
+                # Codex compresses rollouts in the background and can leave a
+                # stale .zst twin beside the live .jsonl — index each rollout
+                # once (.jsonl files are listed first, so they win the twin).
+                if stem in seen_stems:
+                    continue
+                seen_stems.add(stem)
+                parts = stem.split("-")
                 if len(parts) >= 6:
                     sid = "-".join(parts[-5:])
                     if sid not in codex_file_map:
@@ -8350,7 +8417,7 @@ def _scan_sessions_sync():
 
             for rollout_file in rollout_files:
                 try:
-                    with open(rollout_file, "r", encoding="utf-8", errors="replace") as f:
+                    with _open_maybe_zst(rollout_file) as f:
                         _read_ok = True
                         for line in f:
                             try:
@@ -9720,8 +9787,9 @@ def _archive_opted_in_transcripts(data: List[Dict[str, Any]]) -> None:
         if not path:
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            with _open_maybe_zst(path) as fh:
+                text = fh.read()
+        except Exception:
             continue
         if text:
             history_store.put_transcript(agent, sid, text)
@@ -9735,6 +9803,8 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
             return hits[0] if hits else None
         if agent == "codex":
             hits = list(CODEX_DIR.glob(f"sessions/**/*{session_id}*.jsonl"))
+            if not hits and _zstd_rollouts_supported():
+                hits = list(CODEX_DIR.glob(f"sessions/**/*{session_id}*.jsonl.zst"))
             return hits[0] if hits else None
         if agent == "kimi":
             return _kimi_session_file(session_id)
@@ -9984,7 +10054,11 @@ def _parse_session_jsonl_cached(path: Path) -> List[Dict[str, Any]]:
         if hit is not None and hit[0] == stamp:
             return hit[1]
     events: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    try:
+        src = _open_maybe_zst(path)
+    except Exception:
+        return events
+    with src as f:
         for line in f:
             try:
                 data = json.loads(line)
@@ -10127,6 +10201,8 @@ async def get_session_detail(session_id: str, agent: str):
         return _parse_session_jsonl_cached(files[0])
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
+        if not files and _zstd_rollouts_supported():
+            files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl.zst"))
         if not files: return {"error": "Not found"}
         return _canonicalize_codex_trace(_parse_session_jsonl_cached(files[0]))
     elif agent == "grok":
@@ -11360,8 +11436,7 @@ async def session_delegation(session_id: str, agent: str):
         def _spawn_meta(path):
             """(payload, thread_spawn) from a rollout's session_meta first line."""
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    first = json.loads(f.readline())
+                first = json.loads(_read_first_line_maybe_zst(path))
             except Exception:
                 return None, None
             p = first.get("payload") or {}
@@ -11372,6 +11447,8 @@ async def session_delegation(session_id: str, agent: str):
             return p, spawn
 
         own = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
+        if not own and _zstd_rollouts_supported():
+            own = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl.zst"))
         if not own:
             return {"error": "Not found"}
         payload, spawn = _spawn_meta(own[0])
@@ -11384,7 +11461,11 @@ async def session_delegation(session_id: str, agent: str):
                     "depth": spawn.get("depth")}
         children = []
         try:
-            for f in (CODEX_DIR / "sessions").rglob("rollout-*.jsonl"):
+            child_files = list((CODEX_DIR / "sessions").rglob("rollout-*.jsonl"))
+            if _zstd_rollouts_supported():
+                child_files += list((CODEX_DIR / "sessions").rglob("rollout-*.jsonl.zst"))
+            seen_children = set()
+            for f in child_files:
                 if session_id in f.name:
                     continue
                 p, sp = _spawn_meta(f)
@@ -11393,9 +11474,16 @@ async def session_delegation(session_id: str, agent: str):
                 pid = sp.get("parent_thread_id") or (p or {}).get("forked_from_id")
                 if pid != session_id:
                     continue
-                parts = f.stem.split("-")
+                stem = f.stem[:-len(".jsonl")] if f.stem.endswith(".jsonl") else f.stem
+                parts = stem.split("-")
+                child_id = "-".join(parts[-5:]) if len(parts) >= 6 else stem
+                # A .jsonl/.zst twin or a second rollout of the same child
+                # must not link it twice.
+                if child_id in seen_children:
+                    continue
+                seen_children.add(child_id)
                 children.append({
-                    "child_session_id": "-".join(parts[-5:]) if len(parts) >= 6 else f.stem,
+                    "child_session_id": child_id,
                     "agent_role": sp.get("agent_role") or (p or {}).get("agent_role"),
                     "nickname": sp.get("agent_nickname") or (p or {}).get("agent_nickname"),
                 })

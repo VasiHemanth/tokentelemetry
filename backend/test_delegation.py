@@ -1528,6 +1528,101 @@ def test_codex_scan_cache_hit_reapplies_alias(scan_env, monkeypatch):
     assert "_raw_cwd" not in sess2
 
 
+def test_codex_scan_reads_zstd_compressed_rollouts(scan_env, monkeypatch):
+    """Recent Codex writes rollouts zstd-compressed (rollout-*.jsonl.zst);
+    they must be discovered and parsed exactly like plain .jsonl files."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-0000000000aa"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    lines = [
+        _codex_session_meta(),
+        _codex_token_event("2026-07-01T00:00:00Z", 1000, 400, 60),
+        _codex_token_event("2026-07-01T00:01:00Z", 1500, 600, 80),
+    ]
+    text = "".join(json.dumps(l) + "\n" for l in lines)
+    (day / f"rollout-2026-07-01T00-00-00-{sid}.jsonl.zst").write_bytes(
+        zstandard.ZstdCompressor().compress(text.encode("utf-8")))
+
+    session = next(s for s in main._scan_sessions_sync() if s["id"] == sid)
+    assert session["stub"] is False
+    # Last snapshot: gross input 1500 with 600 cached -> net 900;
+    # total = net + cached + output (Codex input is inclusive of cache reads).
+    assert session["tokens"]["input"] == 900
+    assert session["tokens"]["cached"] == 600
+    assert session["tokens"]["output"] == 80
+    assert session["tokens"]["total"] == 1580
+
+
+def test_codex_scan_skips_zstd_rollouts_when_zstandard_missing(scan_env, monkeypatch):
+    """Without the optional zstandard dep, .zst rollouts are skipped
+    (the DSH convention) — never indexed, never an ImportError."""
+    monkeypatch.setattr(main, "_zstd_rollouts_supported", lambda: False)
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    day = scan_env / ".codex" / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    sid = "019eb056-4eae-7280-8617-0000000000bb"
+    # Content doesn't matter — the file must be ignored before it is opened.
+    (day / f"rollout-2026-07-01T00-00-00-{sid}.jsonl.zst").write_bytes(b"\x28\xb5\x2f\xfd")
+
+    codex = [s for s in main._scan_sessions_sync() if s.get("agent") == "codex"]
+    assert all(s["id"] != sid for s in codex)
+
+
+def test_codex_scan_dedups_jsonl_zst_twins(scan_env, monkeypatch):
+    """Codex's background compressor can leave a stale .zst next to the live
+    .jsonl of the SAME rollout — the file must be indexed and counted once."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-0000000000cc"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    lines = [
+        _codex_session_meta(),
+        {"type": "response_item", "payload": {"type": "function_call",
+                                              "name": "shell", "arguments": "{}"}},
+        _codex_token_event("2026-07-01T00:00:00Z", 1000, 400, 60),
+    ]
+    text = "".join(json.dumps(l) + "\n" for l in lines)
+    base = f"rollout-2026-07-01T00-00-00-{sid}.jsonl"
+    (day / base).write_text(text, encoding="utf-8")
+    (day / (base + ".zst")).write_bytes(
+        zstandard.ZstdCompressor().compress(text.encode("utf-8")))
+
+    session = next(s for s in main._scan_sessions_sync() if s["id"] == sid)
+    # net input 1000-400=600 + cached 400 + output 60 — parsed once, not twice.
+    assert session["tokens"]["total"] == 1060
+    assert session["tool_counts"]["shell"] == 1  # counted once, not twice
+
+
+def test_codex_scan_handles_empty_zst_rollout(scan_env, monkeypatch):
+    """A .zst that compresses empty content (rollout aborted before its first
+    event, then compressed by the worker) must scan like an empty .jsonl —
+    not raise into an unreadable-file path."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    sid_plain = "019eb056-4eae-7280-8617-0000000000dd"
+    sid_zst = "019eb056-4eae-7280-8617-0000000000ee"
+    (day / f"rollout-2026-07-01T00-00-00-{sid_plain}.jsonl").write_bytes(b"")
+    (day / f"rollout-2026-07-01T00-01-00-{sid_zst}.jsonl.zst").write_bytes(
+        zstandard.ZstdCompressor().compress(b""))
+
+    result = {s["id"]: s for s in main._scan_sessions_sync() if s.get("agent") == "codex"}
+    # Both surface identically: an empty rollout is a stub either way.
+    assert result[sid_zst]["stub"] == result[sid_plain]["stub"]
+    assert result[sid_zst]["tokens"]["total"] == result[sid_plain]["tokens"]["total"] == 0
+
+
 def test_scan_cache_version_mismatch_is_miss(tmp_path, monkeypatch):
     """An entry written by a different CACHE_VERSION must read as a miss even
     when its _mtime is fresh — parser/pricing changes ship as a version bump,
