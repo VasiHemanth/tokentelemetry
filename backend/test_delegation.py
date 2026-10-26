@@ -81,7 +81,7 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
         return session_file
     sub = proj / sid / "subagents"
     sub.mkdir(parents=True)
-    # 1) Happy path: meta.json present, Haiku model, cache hwm across two calls,
+    # 1) Happy path: meta.json present, Haiku model, cumulative cache reads across two calls,
     #    a <synthetic> line and a truncated trailing line (agent still running).
     (sub / "agent-one.meta.json").write_text(json.dumps(
         {"agentType": "Explore", "description": "look around", "toolUseId": "toolu_1"}))
@@ -254,7 +254,10 @@ def test_helper_rollup_dedups_repeated_message_id(tmp_path):
     one = deleg["subagents"][0]
     assert one["tokens"]["input"] == 10 + 4
     assert one["tokens"]["output"] == 5 + 2
-    assert one["tokens"]["cached"] == max(100, 50)  # high-water-mark, not tripled
+    # The rollup keeps `cached` cumulative (identical to _cached_sum): each
+    # assistant message's cache_read is a distinct billable event — 100+50
+    # once each, not 3x msg_A. Anything without dedup would read 350.
+    assert one["tokens"]["cached"] == 100 + 50
     assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
     assert one["tokens"]["cache_creation"] == 20
 
