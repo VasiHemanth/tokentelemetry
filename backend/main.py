@@ -635,6 +635,10 @@ GROK_SESSIONS_DIR = GROK_DIR / "sessions"
 # Per-turn billed usage (prompt / cached / completion) lives here, not in the
 # session dir. Session files only expose a context-window footprint.
 GROK_UNIFIED_LOG = GROK_DIR / "logs" / "unified.jsonl"
+# The Grok Bot desktop app keeps its own state here (executor + Electron store).
+# A machine can run the bot without ever installing the `grok` CLI, so agent
+# detection must not key off ~/.grok alone or its panel would be unreachable.
+GROK_BOT_DIR = Path(os.environ.get("TT_GROK_BOT_DIR") or (HOME / ".grokbot")).expanduser()
 
 # Grok Build session file names (per <cwd-uuid> directory)
 GROK_SUMMARY = "summary.json"
@@ -3275,7 +3279,7 @@ def _list_available_agents() -> list:
     if OPENCODE_DB.exists(): agents.append("opencode")
     if ZCODE_DB.exists(): agents.append("zcode")
     if _hermes_dbs(): agents.append("hermes")
-    if GROK_SESSIONS_DIR.exists(): agents.append("grok")
+    if GROK_SESSIONS_DIR.exists() or GROK_BOT_DIR.exists(): agents.append("grok")
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
     if OMP_SESSIONS_DIR.exists(): agents.append("omp")
     if (CLINE_DIR / "data" / "db" / "sessions.db").exists() or (CLINE_VSCODE_DIR / "state" / "taskHistory.json").exists():
