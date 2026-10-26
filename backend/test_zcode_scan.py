@@ -283,3 +283,32 @@ def test_scan_zcode_resolves_model_from_degenerate_session(scan_env, monkeypatch
     assert out[0]["model"] == "GLM-5.3-Flash"
     assert out[0]["tokens"]["total"] == 0
     assert out[0]["has_plan"] is False
+
+
+def test_scan_zcode_cached_sum_is_cumulative_not_hwm(scan_env, monkeypatch, tmp_path):
+    """U5: _cached_sum must accumulate cache.read across all step-finish events
+    so analytics cache_reads and calculate_cost see the billed total, not the HWM."""
+    db = tmp_path / "db.sqlite"
+    # Two turns: cache_read 100 then 200 → HWM=200, _cached_sum=300
+    _mk_zcode_db(db, sessions=[{
+        "id": "sess_u5", "directory": r"D:\p", "title": "U5",
+        "messages": [({"role": "assistant", "modelID": "GLM-5.3-Flash"}, 1000)],
+        "parts": [
+            (_step_finish(1100, 50, 100), 1100),
+            (_step_finish(2200, 80, 200), 1200),
+        ],
+    }])
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    calls = []
+
+    def spy(model, inp, out, cached, **kw):
+        calls.append({"input": inp, "output": out, "cached": cached})
+        return 0.0
+
+    monkeypatch.setattr(main, "calculate_cost", spy)
+    s = main._scan_zcode_sessions()[0]
+    tk = s["tokens"]
+    assert tk["cached"] == 200, "cached must be HWM (max of 100, 200)"
+    assert tk["_cached_sum"] == 300, "_cached_sum must be cumulative sum (100 + 200)"
+    assert len(calls) == 1
+    assert calls[0]["cached"] == 300, "calculate_cost must receive _cached_sum not HWM"
