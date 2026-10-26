@@ -42,6 +42,8 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  /** Claude subagent/workflow spend folded into the session total (matches analytics). */
+  delegated_cost?: number;
   /** Copilot-only: cli / vscode */
   copilot_source?: string;
   /** Antigravity-only: cli / ide / app */
@@ -80,7 +82,7 @@ export default function Home() {
   const byModel = analyticsRes.data?.by_model ?? {};
 
   const totalTokens = sessions.reduce((a, s) => a + (s.tokens?.total ?? 0), 0);
-  const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0), 0);
+  const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0) + (s.delegated_cost ?? 0), 0);
   const projectCount = new Set(sessions.map((s) => s.project)).size;
   const framing = costFraming(billingRes.data?.agents);
 
