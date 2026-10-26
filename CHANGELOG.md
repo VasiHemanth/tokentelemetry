@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Copilot CLI sessions: the per-session timestamp was used in the cost lookup before it was bound, so the resulting `NameError` was swallowed by the scanner's per-session `except` and CLI sessions never appeared in recent activity or the Copilot panel (and later sessions could inherit the previous session's date). Sessions now bind `timestamp = last event time || startTime || file mtime` before pricing.
 - Cursor on-demand spend: a genuine zero on an individual spend field no longer falls back to the team pool's figure, so a team member with on-demand spend disabled is no longer shown the pool's usage as their own; a fully-zeroed individual reading now shows a $0 row instead of disappearing
 - `/analytics`: a session whose live rescan came back as a zero-value stub (e.g. its on-disk transcript was pruned) no longer overwrites that session's real, previously-persisted totals in the response; only a genuine live session can still update the merged view
+- Menu bar quota gauge: a stale cached reading (a provider signed out of, or one the app hasn't refreshed in a while) no longer renders as the current percentage; the menu now shows "No quota data" for that provider instead of a number that may be days or weeks old
 
 ## [1.0.0] - 2026-04-27
 
