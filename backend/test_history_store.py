@@ -116,6 +116,57 @@ def test_storage_and_coverage():
     assert stats["transcript_bytes"] > 0
 
 
+def test_mark_absent_skips_rows_upserted_by_newer_scan():
+    """U13: mark_absent must not clobber rows that a concurrent newer scan
+    upserted after the older scan began.
+
+    Scenario: scan A and scan B fire concurrently. Scan B sees session s2
+    (new); scan A does not. Both submit persist jobs to a thread executor.
+    If scan B's upsert runs first and then scan A's mark_absent fires, s2
+    must remain source_present=1 — scan A started before s2 existed."""
+    import time as _time
+    h = _fresh_store()
+
+    scan_a_started = datetime.now(timezone.utc).isoformat()
+
+    # Simulate scan B's upsert running AFTER scan A started.
+    _time.sleep(0.01)  # ensure last_seen_at > scan_a_started
+    h.upsert_sessions([_session("s1"), _session("s2")])
+
+    # Scan A's mark_absent: only saw s1, started before s2 was upserted.
+    h.mark_absent({("claude", "s1")}, scan_started_at=scan_a_started)
+
+    rows = {r["id"]: r for r in h.query()}
+    assert rows["s1"]["source_present"] is True, "s1 was seen by scan A"
+    assert rows["s2"]["source_present"] is True, (
+        "s2 was upserted by a newer scan after scan_a_started; mark_absent must not touch it"
+    )
+
+
+def test_mark_absent_does_clear_genuinely_absent_rows():
+    """Rows that were NOT seen by any scan since scan_started_at must still be
+    marked absent. Only rows with last_seen_at >= scan_started_at are protected."""
+    import time as _time
+    h = _fresh_store()
+
+    # Persist s_old before scan A starts.
+    h.upsert_sessions([_session("s_old")])
+
+    _time.sleep(0.01)
+    scan_a_started = datetime.now(timezone.utc).isoformat()
+    _time.sleep(0.01)
+
+    # Scan A sees only s_new (s_old was deleted between scans).
+    h.upsert_sessions([_session("s_new")])
+    h.mark_absent({("claude", "s_new")}, scan_started_at=scan_a_started)
+
+    rows = {r["id"]: r for r in h.query()}
+    assert rows["s_new"]["source_present"] is True
+    assert rows["s_old"]["source_present"] is False, (
+        "s_old last_seen_at < scan_a_started so it must be marked absent"
+    )
+
+
 def test_bucket_key_day_week_month():
     # _bucket_key lives in the analytics endpoint module; import lazily so a
     # missing FastAPI dep degrades to a skip rather than a hard failure.
