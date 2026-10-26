@@ -314,33 +314,35 @@ def _call_artifact(path):
 def test_artifacts_rejects_symlink_escape_and_outside_paths():
     # Outside the allow-list -> 403.
     assert _call_artifact("/etc/hosts")[0] == "denied"
-    # Symlink planted inside an allowed dir but pointing out -> 403 (resolved check).
-    evil = main.CLAUDE_DIR / "tt_symlink_escape_test"
-    try:
-        if not evil.exists():
-            os.symlink("/etc", evil)
-        assert _call_artifact(str(evil / "hosts"))[0] == "denied"
-    finally:
+    # Symlink planted inside an allowed dir but pointing out -> 403 (resolved
+    # check). Point CLAUDE_DIR at a tmpdir so the test doesn't depend on the
+    # agent being installed on the machine running it (e.g. a CI runner).
+    with tempfile.TemporaryDirectory() as d:
+        orig = main.CLAUDE_DIR
+        main.CLAUDE_DIR = Path(d)
         try:
-            evil.unlink()
-        except OSError:
-            pass
+            os.symlink("/etc", main.CLAUDE_DIR / "tt_symlink_escape_test")
+            assert _call_artifact(
+                str(main.CLAUDE_DIR / "tt_symlink_escape_test" / "hosts"))[0] == "denied"
+        finally:
+            main.CLAUDE_DIR = orig
 
 
 def test_artifacts_serves_legit_under_allowlist():
     with tempfile.TemporaryDirectory() as d:
-        # GEMINI_DIR is on the allow-list; create a file under it via the real root.
-        f = main.GEMINI_DIR / "tt_artifact_serve_test.txt"
+        # GEMINI_DIR is on the allow-list; point it at a tmpdir so the test
+        # doesn't depend on the agent being installed on the machine running
+        # it (e.g. a CI runner) or write into the user's real ~/.gemini.
+        orig = main.GEMINI_DIR
+        main.GEMINI_DIR = Path(d)
         try:
+            f = main.GEMINI_DIR / "tt_artifact_serve_test.txt"
             f.write_text("hello")
             status, served = _call_artifact(str(f))
             assert status == "ok"
             assert served == str(f.resolve())  # serves the resolved path
         finally:
-            try:
-                f.unlink()
-            except OSError:
-                pass
+            main.GEMINI_DIR = orig
 
 
 def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
