@@ -140,14 +140,23 @@ def has_user_config() -> bool:
 
 
 def local_power_enabled() -> bool:
-    """True only if the user explicitly set a power figure (loadWatts/costPerKwh).
+    """True only if the user has at least one local endpoint AND set a power figure.
 
     The local-model electricity branch in ``pricing.calculate_cost`` keys off
-    this, NOT merely ``has_user_config``. Otherwise a user who configured only
-    ``subscriptionEndpoints`` would have every *unknown cloud* model silently
-    re-priced as near-zero electricity instead of the ``_default`` per-token
-    rate — under-reporting real API spend. We require an explicit power figure
-    on disk so electricity pricing is opt-in independently of subscriptions.
+    this, NOT merely ``has_user_config``. Two guards are required together:
+
+    1. A non-empty ``localEndpoints`` list — electricity pricing only makes
+       sense when the user is actually running local models. Without this a
+       user who opens Settings only to add a ``subscriptionEndpoints`` entry
+       still round-trips the chip-detected ``loadWatts`` into power.json on
+       save, making ``local_power_enabled`` return True even though no local
+       model is configured — every unknown cloud model is then re-priced at
+       near-zero electricity instead of the ``_default`` per-token rate,
+       under-reporting real API spend by ~392x (issue #341).
+
+    2. An explicit power figure (loadWatts/costPerKwh/gridCarbonIntensity) —
+       so electricity pricing is an intentional opt-in, not a side-effect of
+       saving any other setting.
     """
     path = _config_path()
     if not path.exists():
@@ -159,6 +168,11 @@ def local_power_enabled() -> bool:
         return False
     if not isinstance(raw, dict):
         return False
+    # Guard 1: at least one local endpoint must be configured.
+    leps = raw.get("localEndpoints")
+    if not (isinstance(leps, list) and any(isinstance(e, str) and e.strip() for e in leps)):
+        return False
+    # Guard 2: at least one power figure must be in range.
     lw = raw.get("loadWatts")
     cpk = raw.get("costPerKwh")
     gci = raw.get("gridCarbonIntensity")
