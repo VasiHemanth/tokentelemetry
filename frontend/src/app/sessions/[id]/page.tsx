@@ -21,6 +21,8 @@ import { timeAgo } from "@/lib/notifications";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
 import { normalizeTraceEvents, type Event } from "@/lib/traceEvents";
+import { traceAdapter, type TraceSpan } from "@/lib/traceTree";
+import TraceView from "@/components/trace/TraceView";
 
 // Harnesses emit different event schemas. Keep that compatibility boundary
 // explicit while the normalized Event shape remains intentionally permissive.
@@ -332,6 +334,13 @@ export default function SessionDetailPage() {
   // Subagent drill-in: holds the spawn entry whose trace is open in the
   // slide-over viewer. Parent trace state (scrubber, tabs) stays untouched.
   const [subagentView, setSubagentView] = useState<TraceValue | null>(null);
+
+  // Span tree view, for harnesses whose traces carry real timing and paired
+  // tool results (see lib/traceTree/index.ts). Others keep the step view only.
+  const [stepView, setStepView] = useState(false);
+  // Child spans fetched on demand, keyed by the agent span they belong under.
+  // Tagged with the session id so navigating to another session drops them.
+  const [fetchedChildren, setFetchedChildren] = useState<{ sid?: string; byAgent: Record<string, TraceSpan[]> }>({ byAgent: {} });
 
   // Trace View States
   const [splitView, setSplitView] = useState(false);
@@ -880,6 +889,55 @@ export default function SessionDetailPage() {
      return tools;
   }, [events, toolResultByUseId]);
 
+  const adapter = traceAdapter(agent);
+  const baseSpans = useMemo(
+    () => (adapter && events.length ? adapter.build(events, delegation) : []),
+    [adapter, events, delegation],
+  );
+  // Splice fetched children under their agent span. An agent span the harness
+  // has no child trace for is marked loaded so it shows no expand control.
+  const traceRoots = useMemo(() => {
+    if (!adapter || !id) return baseSpans;
+    const childSpans = fetchedChildren.sid === id ? fetchedChildren.byAgent : {};
+    const splice = (s: TraceSpan): TraceSpan => {
+      if (s.kind === "agent" && s.agent && !s.agent.loaded) {
+        const kids = childSpans[s.id];
+        if (kids) return { ...s, children: kids.map(splice), agent: { ...s.agent, loaded: true } };
+        if (!adapter.childFetch?.(id, s)) return { ...s, agent: { ...s.agent, loaded: true } };
+      }
+      return s.children.length ? { ...s, children: s.children.map(splice) } : s;
+    };
+    return baseSpans.map(splice);
+  }, [adapter, baseSpans, fetchedChildren, id]);
+  const showTrace = !!adapter && traceRoots.length > 0 && !stepView;
+
+  const loadChildSpans = async (span: TraceSpan) => {
+    const target = adapter && id ? adapter.childFetch?.(id, span) : null;
+    if (!adapter || !target) throw new Error("No child trace for this subagent");
+    const res = await apiFetch(target.path);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const evts = normalizeTraceEvents(target.agent, await res.json());
+    const built = adapter.buildChild ? adapter.buildChild(evts) : adapter.build(evts, null);
+    // Child ids are only unique within the child, and its event indices point
+    // into the child's events, not this page's step cards.
+    const scope = (s: TraceSpan): TraceSpan => ({
+      ...s,
+      id: `${span.id}/${s.id}`,
+      eventIndex: undefined,
+      children: s.children.map(scope),
+    });
+    setFetchedChildren((prev) => ({
+      sid: id,
+      byAgent: { ...(prev.sid === id ? prev.byAgent : {}), [span.id]: built.map(scope) },
+    }));
+  };
+
+  const openStep = (idx: number) => {
+    setStepView(true);
+    // The step list mounts on the next render; wait for its refs.
+    setTimeout(() => jumpTo(idx), 60);
+  };
+
   const untrackedBackground = agent === "claude" ? sessionInfo?.untracked_background : undefined;
 
   return (
@@ -1040,14 +1098,27 @@ export default function SessionDetailPage() {
                   )}
                 </div>
               )}
-              <Button
-                variant={splitView ? "primary" : "secondary"}
-                size="md"
-                onClick={() => setSplitView(!splitView)}
-              >
-                <LayoutPanelLeft size={14} />
-                {splitView ? "Unified view" : "Split brain"}
-              </Button>
+              {adapter && traceRoots.length > 0 && (
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setStepView((v) => !v)}
+                  title={stepView ? "Turns, model calls, tools and subagents on one timeline" : "Every event as a card, in order"}
+                >
+                  <GitBranch size={14} />
+                  {stepView ? "Trace view" : "Step view"}
+                </Button>
+              )}
+              {!showTrace && (
+                <Button
+                  variant={splitView ? "primary" : "secondary"}
+                  size="md"
+                  onClick={() => setSplitView(!splitView)}
+                >
+                  <LayoutPanelLeft size={14} />
+                  {splitView ? "Unified view" : "Split brain"}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -1137,6 +1208,15 @@ export default function SessionDetailPage() {
             </div>
           </div>
         </div>
+      ) : showTrace ? (
+        <main className="flex-1 w-full max-w-[1800px] mx-auto min-h-0 overflow-y-auto px-6 py-5">
+          <TraceView
+            roots={traceRoots}
+            timing={adapter?.timing ?? "real"}
+            onLoadChild={loadChildSpans}
+            onJumpToEvent={openStep}
+          />
+        </main>
       ) : (
         <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
           {/* LEFT: Step Index */}
@@ -1401,7 +1481,7 @@ export default function SessionDetailPage() {
       )}
 
       {/* RESTORED: Waterfall Footer */}
-      {!loading && waterfallData.length > 0 && (
+      {!loading && !showTrace && waterfallData.length > 0 && (
          <footer className="bg-[var(--tt-panel)] border-t border-[var(--tt-border)] shrink-0 z-40 backdrop-blur-xl bg-opacity-80">
             <div className={`max-w-[1600px] mx-auto ${timelineOpen ? "p-6" : "px-6 py-2"}`}>
                <div className={`flex items-center justify-between ${timelineOpen ? "mb-6" : ""}`}>
