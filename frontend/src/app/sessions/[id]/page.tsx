@@ -926,9 +926,13 @@ export default function SessionDetailPage() {
       eventIndex: undefined,
       children: s.children.map(scope),
     });
+    // A child's opening prompt is the task its parent handed it, not a user turn.
+    const scoped = built.map(scope).map((s, i) =>
+      i === 0 && s.kind === "turn" && s.turnKind === "prompt" ? { ...s, title: "Task" } : s,
+    );
     setFetchedChildren((prev) => ({
       sid: id,
-      byAgent: { ...(prev.sid === id ? prev.byAgent : {}), [span.id]: built.map(scope) },
+      byAgent: { ...(prev.sid === id ? prev.byAgent : {}), [span.id]: scoped },
     }));
   };
 
@@ -1135,8 +1139,8 @@ export default function SessionDetailPage() {
             </div>
           )}
 
-          {/* Timeline scrubber */}
-          {!loading && events.length > 0 && (
+          {/* Timeline scrubber (drives the step cards, so the trace view has no use for it) */}
+          {!loading && !showTrace && events.length > 0 && (
             <div className="bg-[var(--tt-sunken)] px-4 py-3 rounded-[var(--tt-radius)] border border-[var(--tt-border)] flex items-center gap-4">
               <div className="flex items-center gap-1">
                 <button
