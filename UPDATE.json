@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "tag": "2026-10-28",
+      "title": "Trace view for sessions and subagents",
+      "highlights": [
+        {
+          "title": "See when each subagent ran",
+          "description": "A session now opens as a trace: each prompt holds its model calls and tool calls on one timeline, and every subagent sits under the call that spawned it, with bars showing when it started, how long it ran, and whether it kept working in the background. Expand a subagent to load its own calls. Available for Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, ZCode, DSH, Pi, Qoder, Hermes Agent and Prime; other agents keep the step view, which every session can still switch to."
+        }
+      ]
+    },
+    {
       "tag": "2026-10-16",
       "title": "Oh My Pi (OMP) support",
       "highlights": [

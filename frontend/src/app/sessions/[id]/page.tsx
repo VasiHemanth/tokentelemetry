@@ -926,8 +926,20 @@ export default function SessionDetailPage() {
       eventIndex: undefined,
       children: s.children.map(scope),
     });
+    // A forked child (Codex) opens with a replay of its parent's history. Those
+    // turns predate the spawn or, when re-stamped at fork time, carry no model
+    // calls of their own; either way they are the parent's, not the child's.
+    const spawnedAt = (span.agent?.callStart ?? span.start) - 2000;
+    const own = built.filter((s) => s.start >= spawnedAt);
+    const usedTokens = (s: TraceSpan): boolean =>
+      (s.kind === "llm" && !!s.tokens && s.tokens.input + s.tokens.output > 0) || s.children.some(usedTokens);
+    const calledTools = (s: TraceSpan): boolean => s.kind === "tool" || s.kind === "agent" || s.children.some(calledTools);
+    const recordsTokens = own.some(usedTokens);
+    const isReplay = (s: TraceSpan) =>
+      s.kind === "turn" && !calledTools(s) && (recordsTokens ? !usedTokens(s) : s.children.length === 0);
+    while (own.length > 1 && isReplay(own[0])) own.shift();
     // A child's opening prompt is the task its parent handed it, not a user turn.
-    const scoped = built.map(scope).map((s, i) =>
+    const scoped = (own.length ? own : built).map(scope).map((s, i) =>
       i === 0 && s.kind === "turn" && s.turnKind === "prompt" ? { ...s, title: "Task" } : s,
     );
     setFetchedChildren((prev) => ({
@@ -1212,18 +1224,10 @@ export default function SessionDetailPage() {
             </div>
           </div>
         </div>
-      ) : showTrace ? (
-        <main className="flex-1 w-full max-w-[1800px] mx-auto min-h-0 overflow-y-auto px-6 py-5">
-          <TraceView
-            roots={traceRoots}
-            timing={adapter?.timing ?? "real"}
-            onLoadChild={loadChildSpans}
-            onJumpToEvent={openStep}
-          />
-        </main>
       ) : (
-        <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
-          {/* LEFT: Step Index */}
+        <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[1fr_380px]" : "grid-cols-[1fr_40px]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
+          {/* LEFT: Step Index (step view only) */}
+          {!showTrace && (
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full scroll-pt-10">
              <div className="sticky top-0 z-30 px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between bg-[var(--tt-sunken)] backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-sunken)]/85">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
@@ -1299,6 +1303,7 @@ export default function SessionDetailPage() {
                 })}
              </div>
           </aside>
+          )}
 
           {/* CENTER: Conversation */}
           <section className="overflow-y-auto h-full p-4">
@@ -1342,6 +1347,15 @@ export default function SessionDetailPage() {
                  onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
                />
              )}
+             {showTrace ? (
+               <TraceView
+                 roots={traceRoots}
+                 timing={adapter?.timing ?? "real"}
+                 onLoadChild={loadChildSpans}
+                 onJumpToEvent={openStep}
+               />
+             ) : (
+             <>
              {/* Split View Header & Boundary Gap Mode Controller */}
              {splitView && (
                <div className="relative grid grid-cols-2 gap-8 items-center mb-6 pb-2 border-b border-[var(--tt-border)]">
@@ -1425,6 +1439,8 @@ export default function SessionDetailPage() {
                     })}
                  </div>
               )}
+             </>
+             )}
            </section>
 
           {/* RIGHT: Sidebar */}

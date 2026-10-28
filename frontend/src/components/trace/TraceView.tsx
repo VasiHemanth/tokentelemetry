@@ -76,7 +76,8 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       wall: scale.t1 - scale.t0,
       active: scale.busyMs,
       prompts,
-      agents: index.agents.length,
+      // A spawn call that never produced a subagent is still a row, but not a subagent.
+      agents: index.agents.filter((a) => !a.error).length,
       peak: peakConcurrency(index.agents),
       tokens: mainTokens(roots),
     };
@@ -199,7 +200,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
   const types = [...new Set(index.agents.map((a) => a.agent?.agentType ?? a.title))];
 
   return (
-    <div className={`flex flex-col gap-3 ${className}`}>
+    <div className={`@container flex flex-col gap-3 ${className}`}>
       <div className={`${card} flex flex-wrap divide-x divide-[var(--tt-border)]`}>
         {real && stat(fmtDur(stats.wall), "Wall clock")}
         {real && stat(fmtDur(stats.active), "Active")}
@@ -225,7 +226,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
         </section>
       )}
 
-      <div className="grid items-start gap-3 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid items-start gap-3 @min-[960px]:grid-cols-[minmax(0,1fr)_340px]">
         <section className={`${card} min-w-0 overflow-hidden`}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--tt-border)] px-3 py-2">
             <div className="flex items-center gap-1" role="group" aria-label="Filter spans">
@@ -280,7 +281,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
           />
         </section>
 
-        <aside className={`${card} min-w-0 p-3 min-[1100px]:sticky min-[1100px]:top-4 min-[1100px]:max-h-[calc(100vh-2rem)] min-[1100px]:overflow-y-auto`}>
+        <aside className={`${card} min-w-0 p-3 @min-[960px]:sticky @min-[960px]:top-4 @min-[960px]:max-h-[calc(100vh-2rem)] @min-[960px]:overflow-y-auto`}>
           <SpanDetail
             span={selected}
             index={index}
