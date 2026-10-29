@@ -28,6 +28,13 @@ interface BuildOpts {
 const LABEL_MAX = 120;
 const BACKGROUND_SLACK_MS = 5000;
 const AGENT_ID_RE = /\ba[0-9a-f]{16}\b/g;
+// Claude Code's own slash commands. Any other /name is a skill or a plugin command.
+const BUILTIN_COMMANDS = new Set([
+  "add-dir", "agents", "bug", "clear", "compact", "config", "context", "cost", "doctor", "effort", "exit",
+  "export", "fast", "help", "hooks", "ide", "init", "login", "logout", "mcp", "memory", "model",
+  "output-style", "permissions", "plugin", "plugins", "pr-comments", "privacy-settings", "release-notes",
+  "resume", "rewind", "status", "statusline", "terminal-setup", "upgrade", "usage", "vim",
+]);
 
 function clean(text: unknown, max = LABEL_MAX): string | undefined {
   if (typeof text !== "string") return undefined;
@@ -200,7 +207,25 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
       prevWasAssistant = false;
       if (text == null || !text.trim()) return;
       const trimmed = text.trimStart();
-      if (trimmed.startsWith("<local-command-") || trimmed.startsWith("<command-name>")) return;
+      if (trimmed.startsWith("<local-command-")) return;
+      if (trimmed.startsWith("<command-name>")) {
+        // A typed /command is the prompt for the turn that follows. Anything
+        // that is not a built-in command is a skill (or a plugin's command).
+        const name = /<command-name>\/?([^<]+)<\/command-name>/.exec(trimmed)?.[1]?.trim();
+        if (!name) return;
+        const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(trimmed)?.[1]?.trim() || undefined;
+        const typed = `/${name}${args ? ` ${args}` : ""}`;
+        const span = startTurn(index, t, "prompt", clean(typed));
+        span.content = { input: typed };
+        if (!BUILTIN_COMMANDS.has(name)) {
+          span.children.push({
+            id: `skill-${index}`, kind: "skill", title: name, label: args ? clean(args) : undefined,
+            start: t, end: t, children: [], eventIndex: index,
+            content: { input: args }, skill: { name, via: "command" },
+          });
+        }
+        return;
+      }
       // A skill body is injected as user text mid-turn; it is not a new prompt.
       if (trimmed.startsWith("Base directory for this skill")) {
         touchTurn(t);

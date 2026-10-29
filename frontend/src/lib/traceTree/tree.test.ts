@@ -12,6 +12,8 @@ import {
   mainTokens,
   ownWork,
   peakConcurrency,
+  skillLanes,
+  matchesFilter,
 } from "./tree";
 
 const MIN = 60_000;
@@ -135,4 +137,40 @@ test("lazy agent needs a loader, unloaded flag and no children", () => {
   assert.equal(isLazyAgent(a, false), false);
   a.agent!.loaded = true;
   assert.equal(isLazyAgent(a, true), false);
+});
+
+function skillFixture() {
+  const turn = span("t", "turn", 0, 10 * MIN, { turnKind: "prompt" });
+  const typed = span("s0", "skill", 0, 0, { skill: { name: "make-reel", via: "command" }, content: { input: "args" } });
+  const llm = span("l", "llm", MIN, 2 * MIN, { tokens: tok(5) });
+  const called = span("s1", "skill", 1.5 * MIN, 1.6 * MIN, { skill: { name: "make-reel", via: "tool" } });
+  const other = span("s2", "skill", 5 * MIN, 5.1 * MIN, { skill: { name: "plan", via: "tool" } });
+  llm.children.push(called);
+  turn.children.push(typed, llm, other);
+  return [turn];
+}
+
+test("skills are indexed, counted and grouped into lanes by name", () => {
+  const roots = skillFixture();
+  const idx = buildIndex(roots);
+  assert.deepEqual(idx.skills.map((s) => s.id), ["s0", "s1", "s2"]);
+  assert.equal(computeRollups(roots).get("t")!.skills, 3);
+  const lanes = skillLanes(idx);
+  assert.deepEqual(lanes.map((l) => [l.name, l.spans.length]), [["make-reel", 2], ["plan", 1]]);
+});
+
+test("skills do not count as tools or model calls, and keep their parents' tokens", () => {
+  const roots = skillFixture();
+  assert.deepEqual(ownWork(roots[0]), { llm: 1, tools: 0, tokens: 5 });
+});
+
+test("llm rows containing a skill open by default", () => {
+  assert.ok(defaultExpanded(skillFixture()).has("l"));
+});
+
+test("the agents filter matches skills too", () => {
+  const roots = skillFixture();
+  assert.equal(matchesFilter(roots[0].children[0], "agents"), true);
+  const rows = flattenVisible(roots, new Set(), "agents").map((r) => r.span.id);
+  assert.deepEqual(rows, ["t", "s0", "l", "s1", "s2"]);
 });

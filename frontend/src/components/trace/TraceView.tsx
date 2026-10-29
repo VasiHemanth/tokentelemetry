@@ -19,7 +19,7 @@ import { buildScale, fmtClock, fmtDur, fmtTokens } from "@/lib/traceTree/timeSca
 import Swimlanes from "./Swimlanes";
 import SpanTable, { type LoadState, type TableRow } from "./SpanTable";
 import SpanDetail from "./SpanDetail";
-import { SECTION_LABEL, makeColorOf } from "./shared";
+import { SECTION_LABEL, SKILL_COLOR, makeColorOf } from "./shared";
 
 export interface TraceViewProps {
   roots: TraceSpan[];
@@ -34,7 +34,7 @@ export interface TraceViewProps {
 
 const FILTERS: Array<[TraceFilter, string]> = [
   ["all", "Everything"],
-  ["agents", "Subagents"],
+  ["agents", "Agents & skills"],
   ["errors", "Errors"],
 ];
 
@@ -78,6 +78,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       prompts,
       // A spawn call that never produced a subagent is still a row, but not a subagent.
       agents: index.agents.filter((a) => !a.error).length,
+      skills: index.skills.length,
       peak: peakConcurrency(index.agents),
       tokens: mainTokens(roots),
     };
@@ -206,6 +207,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
         {real && stat(fmtDur(stats.active), "Active")}
         {stat(stats.prompts, "Prompts")}
         {stat(stats.agents, "Subagents")}
+        {stat(stats.skills, "Skills")}
         {stat(stats.peak, "Peak parallel")}
         {stat(fmtTokens(stats.tokens), "Main tokens")}
       </div>
@@ -216,13 +218,23 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
             <span className={SECTION_LABEL}>Timeline</span>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--tt-fg-muted)]">
               <Legend color="var(--tt-brand)" label="main agent" />
+              {index.skills.length > 0 && <Legend color={SKILL_COLOR} label="skill" />}
               {types.map((t) => (
                 <Legend key={t} color={colorOf(t)} label={t} />
               ))}
-              <span className="text-[var(--tt-fg-dim)]">drag to zoom, double-click to reset</span>
+              {zoomed ? (
+                <>
+                  <span className="font-mono text-[var(--tt-fg-dim)]">
+                    {fmtClock(scale.tOf(win[0]))} to {fmtClock(scale.tOf(win[1]))}
+                  </span>
+                  <ToolBtn onClick={() => setWin([0, 1])} icon={<RotateCcw size={11} />} label="Reset zoom" />
+                </>
+              ) : (
+                <span className="text-[var(--tt-fg-dim)]">drag to zoom, double-click to reset</span>
+              )}
             </div>
           </div>
-          <Swimlanes roots={roots} index={index} scale={scale} win={win} onWin={setWin} selectedId={selectedId} onSelect={onSelectReveal} colorOf={colorOf} />
+          <Swimlanes roots={roots} index={index} scale={scale} win={win} onWin={setWin} selected={selected} onSelect={onSelectReveal} colorOf={colorOf} />
         </section>
       )}
 
@@ -247,14 +259,6 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
               ))}
             </div>
             <div className="flex items-center gap-2">
-              {real && zoomed && (
-                <>
-                  <span className="font-mono text-[10px] text-[var(--tt-fg-dim)]">
-                    {fmtClock(scale.tOf(win[0]))} to {fmtClock(scale.tOf(win[1]))}
-                  </span>
-                  <ToolBtn onClick={() => setWin([0, 1])} icon={<RotateCcw size={11} />} label="Reset zoom" />
-                </>
-              )}
               <ToolBtn onClick={() => setExpanded((prev) => new Set([...prev, ...expandAllIds(roots)]))} icon={<ListChevronsUpDown size={11} />} label="Expand all" />
               <ToolBtn onClick={() => setExpanded(new Set())} icon={<ListChevronsDownUp size={11} />} label="Collapse" />
             </div>
@@ -263,8 +267,6 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
             rows={rows}
             index={index}
             rollups={rollups}
-            scale={scale}
-            win={win}
             real={real}
             selectedId={selectedId}
             expanded={expanded}

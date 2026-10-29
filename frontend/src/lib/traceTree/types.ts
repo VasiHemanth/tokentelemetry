@@ -7,7 +7,7 @@
  * adding a harness means writing an adapter, not touching the components.
  */
 
-export type SpanKind = "turn" | "llm" | "tool" | "agent";
+export type SpanKind = "turn" | "llm" | "tool" | "agent" | "skill";
 
 export interface SpanTokens {
   input: number;
@@ -45,11 +45,19 @@ export interface AgentInfo {
  * - llm: reasoning = thinking text; output = the reply text.
  * - tool: input = the call's arguments; output = the result it returned.
  * - agent: input = the task handed to the subagent; output = what came back to the parent.
+ * - skill: input = the arguments it was invoked with; output = what the skill tool returned.
  */
 export interface SpanContent {
   input?: unknown;
   reasoning?: unknown;
   output?: unknown;
+}
+
+export interface SkillInfo {
+  /** Skill name as invoked ("make-reel", "plugin:skill"). */
+  name: string;
+  /** "tool": the model called a skill tool. "command": the user typed /name. */
+  via: "tool" | "command";
 }
 
 export interface TraceSpan {
@@ -79,6 +87,8 @@ export interface TraceSpan {
   resumes?: string;
   /** agent only. */
   agent?: AgentInfo;
+  /** skill only. */
+  skill?: SkillInfo;
 }
 
 /**

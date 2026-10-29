@@ -16,6 +16,8 @@ export interface TraceIndex {
   depth: Map<string, number>;
   /** Every agent span at any depth, sorted by start. */
   agents: TraceSpan[];
+  /** Every skill invocation at any depth, sorted by start. */
+  skills: TraceSpan[];
   agentByChild: Map<string, TraceSpan>;
   /** childId -> notification turns started by that agent finishing. */
   reports: Map<string, TraceSpan[]>;
@@ -38,6 +40,7 @@ export function buildIndex(roots: TraceSpan[]): TraceIndex {
   for (const r of roots) walk(r, null, 0);
 
   const agents = all.filter((s) => s.kind === "agent").sort((a, b) => a.start - b.start);
+  const skills = all.filter((s) => s.kind === "skill").sort((a, b) => a.start - b.start);
   const agentByChild = new Map<string, TraceSpan>();
   for (const a of agents) if (a.agent?.childId) agentByChild.set(a.agent.childId, a);
 
@@ -47,7 +50,7 @@ export function buildIndex(roots: TraceSpan[]): TraceIndex {
     if (s.kind === "turn" && s.notifiedBy) pushTo(reports, s.notifiedBy, s);
     if (s.kind === "tool" && s.resumes) pushTo(resumers, s.resumes, s);
   }
-  return { roots, all, byId, parent, depth, agents, agentByChild, reports, resumers };
+  return { roots, all, byId, parent, depth, agents, skills, agentByChild, reports, resumers };
 }
 
 function pushTo(m: Map<string, TraceSpan[]>, k: string, v: TraceSpan) {
@@ -64,6 +67,7 @@ export interface Rollup {
   tools: number;
   errs: number;
   agents: number;
+  skills: number;
 }
 
 /** Subtree totals. An agent span reports its own totalTokens when set, so its children are not double counted. */
@@ -76,6 +80,7 @@ export function computeRollups(roots: TraceSpan[]): Map<string, Rollup> {
       tools: s.kind === "tool" ? 1 : 0,
       errs: s.error ? 1 : 0,
       agents: s.kind === "agent" ? 1 : 0,
+      skills: s.kind === "skill" ? 1 : 0,
     };
     for (const c of s.children) {
       const cr = visit(c);
@@ -84,6 +89,7 @@ export function computeRollups(roots: TraceSpan[]): Map<string, Rollup> {
       r.tools += cr.tools;
       r.errs += cr.errs;
       r.agents += cr.agents;
+      r.skills += cr.skills;
     }
     if (s.kind === "agent" && s.agent) {
       if (s.agent.totalTokens != null) r.tokens = s.agent.totalTokens;
@@ -182,16 +188,33 @@ export function peakConcurrency(agents: TraceSpan[]): number {
   return peak;
 }
 
+export interface SkillLane {
+  name: string;
+  spans: TraceSpan[];
+}
+
+/** One lane per distinct skill name, in order of first use. */
+export function skillLanes(index: TraceIndex): SkillLane[] {
+  const lanes = new Map<string, SkillLane>();
+  for (const s of index.skills) {
+    const name = s.skill?.name ?? s.title;
+    const lane = lanes.get(name);
+    if (lane) lane.spans.push(s);
+    else lanes.set(name, { name, spans: [s] });
+  }
+  return [...lanes.values()];
+}
+
 export function overlappingAgents(index: TraceIndex, span: TraceSpan): TraceSpan[] {
   return index.agents.filter((o) => o !== span && o.start < span.end && o.end > span.start);
 }
 
-/** Prompt turns open, plus model calls that spawned a subagent. */
+/** Prompt turns open, plus model calls that spawned a subagent or invoked a skill. */
 export function defaultExpanded(roots: TraceSpan[]): Set<string> {
   const out = new Set<string>();
   const visit = (s: TraceSpan) => {
     if (s.kind === "turn" && s.turnKind !== "notification") out.add(s.id);
-    if (s.kind === "llm" && s.children.some((c) => c.kind === "agent")) out.add(s.id);
+    if (s.kind === "llm" && s.children.some((c) => c.kind === "agent" || c.kind === "skill")) out.add(s.id);
     s.children.forEach(visit);
   };
   roots.forEach(visit);
@@ -216,7 +239,7 @@ export interface Row {
 }
 
 export function matchesFilter(span: TraceSpan, filter: TraceFilter): boolean {
-  if (filter === "agents") return span.kind === "agent";
+  if (filter === "agents") return span.kind === "agent" || span.kind === "skill";
   if (filter === "errors") return !!span.error;
   return true;
 }

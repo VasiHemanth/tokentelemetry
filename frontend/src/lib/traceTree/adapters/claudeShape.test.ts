@@ -236,3 +236,21 @@ test("content: dsh, pi and qoder fill tool and agent content too", () => {
     assert.equal(tool.content?.input, shape === "dsh" ? "do x" : events[1].message.content[0].input);
   }
 });
+
+test("claude: a typed /skill starts a turn holding a skill span; built-in commands do not", () => {
+  const events = [
+    user(T0, "<command-name>/make-reel</command-name>\n<command-message>make-reel</command-message>\n<command-args>https://example.com/p</command-args>"),
+    asst(T0 + 10, [{ type: "text", text: "on it" }], { id: "m1" }),
+    user(T0 + 20, "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"),
+  ];
+  const spans = claudeShapeAdapter("claude").build(events, null);
+  assert.equal(spans.length, 2);
+  assert.equal(spans[0].label, "/make-reel https://example.com/p");
+  const [skill, llm] = spans[0].children;
+  assert.equal(skill.kind, "skill");
+  assert.deepEqual(skill.skill, { name: "make-reel", via: "command" });
+  assert.equal(skill.content?.input, "https://example.com/p");
+  assert.equal(llm.kind, "llm");
+  assert.equal(spans[1].label, "/clear");
+  assert.equal(spans[1].children.length, 0);
+});

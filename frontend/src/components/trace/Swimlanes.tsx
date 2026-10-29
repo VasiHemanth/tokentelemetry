@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TraceSpan } from "@/lib/traceTree/types";
 import type { TraceIndex } from "@/lib/traceTree/tree";
-import { agentBursts } from "@/lib/traceTree/tree";
+import { agentBursts, ownerAgent, skillLanes } from "@/lib/traceTree/tree";
 import { axisMarks, fmtClock, fmtDur, type TimeScale } from "@/lib/traceTree/timeScale";
-import { Axis, HATCH, type ColorOf } from "./shared";
+import { Axis, HATCH, SKILL_COLOR, type ColorOf } from "./shared";
 
 const LANE = 20;
 const DRAG_MIN = 0.01;
@@ -16,12 +16,12 @@ interface Props {
   scale: TimeScale;
   win: [number, number];
   onWin: (w: [number, number]) => void;
-  selectedId: string | null;
+  selected: TraceSpan | null;
   onSelect: (id: string) => void;
   colorOf: ColorOf;
 }
 
-export default function Swimlanes({ roots, index, scale, win, onWin, selectedId, onSelect, colorOf }: Props) {
+export default function Swimlanes({ roots, index, scale, win, onWin, selected, onSelect, colorOf }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
@@ -37,10 +37,18 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
     return () => ro.disconnect();
   }, []);
 
-  const marks = useMemo(() => axisMarks(scale, 0, 1, width), [scale, width]);
-  const pct = (t: number) => scale.u(t) * 100;
+  const [w0, w1] = win;
+  const range = w1 - w0;
+  const marks = useMemo(() => axisMarks(scale, w0, w1, width), [scale, w0, w1, width]);
+  const lanesOfSkills = useMemo(() => skillLanes(index), [index]);
+  const pct = (t: number) => ((scale.u(t) - w0) / range) * 100;
   const mainSpan = roots[0];
-  const zoomed = win[0] > 0 || win[1] < 1;
+  const laneCount = 1 + index.agents.length + lanesOfSkills.length;
+
+  // Which lane labels to emphasise for the selected span.
+  const owner = selected ? (selected.kind === "agent" ? selected : ownerAgent(index, selected)) : null;
+  const mainActive = !!selected && !owner;
+  const activeSkill = selected?.kind === "skill" ? (selected.skill?.name ?? selected.title) : null;
 
   const fracAt = (clientX: number) => {
     const r = trackRef.current!.getBoundingClientRect();
@@ -60,7 +68,7 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
     if (cur && tip) {
       cur.style.display = tip.style.display = "block";
       cur.style.left = tip.style.left = `${x * 100}%`;
-      tip.textContent = fmtClock(scale.tOf(x));
+      tip.textContent = fmtClock(scale.tOf(w0 + x * range));
     }
     const d = drag.current;
     if (!d) return;
@@ -76,12 +84,11 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
   const onUp = (e: React.PointerEvent) => {
     const d = drag.current;
     drag.current = null;
+    if (brushRef.current) brushRef.current.style.display = "none";
     if (!d) return;
     const x = fracAt(e.clientX);
     if (d.moved && Math.abs(x - d.x0) > DRAG_MIN) {
-      onWin([Math.min(x, d.x0), Math.max(x, d.x0)]);
-      // Keep showing the committed window; the persistent brush below takes over.
-      if (brushRef.current) brushRef.current.style.display = "none";
+      onWin([w0 + Math.min(x, d.x0) * range, w0 + Math.max(x, d.x0) * range]);
     } else if (d.id) {
       onSelect(d.id);
     }
@@ -93,7 +100,10 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
   };
 
   const barBase = "absolute top-[3px] h-[14px] rounded-[3px] cursor-pointer";
-  const ring = (id: string) => (selectedId === id ? " ring-1 ring-[var(--tt-fg)]" : "");
+  const labelBase = "flex items-center gap-1.5 truncate pr-2 text-left text-[11px] hover:text-[var(--tt-fg)]";
+  const labelTone = (on: boolean) => (on ? "font-semibold text-[var(--tt-fg)]" : "text-[var(--tt-fg-muted)]");
+  const selStart = selected ? pct(selected.start) : 0;
+  const selEnd = selected ? pct(Math.max(selected.end, selected.start)) : 0;
 
   return (
     <div className="select-none">
@@ -108,7 +118,7 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
               <button
                 type="button"
                 onClick={() => onSelect(mainSpan.id)}
-                className="flex h-5 items-center truncate pr-2 text-left text-[11px] font-medium text-[var(--tt-brand)] hover:text-[var(--tt-fg)]"
+                className={`${labelBase} ${mainActive ? "font-semibold text-[var(--tt-brand)]" : "text-[var(--tt-brand)]/80"}`}
                 style={{ height: LANE }}
               >
                 main agent
@@ -120,7 +130,7 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
                 type="button"
                 title={`${a.agent?.agentType ?? a.title}${a.label ? ` · ${a.label}` : ""}`}
                 onClick={() => onSelect(a.id)}
-                className={`flex items-center gap-1.5 truncate pr-2 text-left text-[11px] hover:text-[var(--tt-fg)] ${selectedId === a.id ? "text-[var(--tt-fg)]" : "text-[var(--tt-fg-muted)]"}`}
+                className={`${labelBase} ${labelTone(owner?.id === a.id)}`}
                 style={{ height: LANE }}
               >
                 <span className="size-1.5 shrink-0 rounded-full" style={{ background: colorOf(a.agent?.agentType) }} />
@@ -130,12 +140,28 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
                 </span>
               </button>
             ))}
+            {lanesOfSkills.map((l) => (
+              <button
+                key={l.name}
+                type="button"
+                title={`skill · ${l.name}`}
+                onClick={() => onSelect(l.spans[0].id)}
+                className={`${labelBase} ${labelTone(activeSkill === l.name)}`}
+                style={{ height: LANE }}
+              >
+                <span className="size-1.5 shrink-0 rotate-45" style={{ background: SKILL_COLOR }} />
+                <span className="truncate">
+                  skill · {l.name}
+                  {l.spans.length > 1 ? ` ×${l.spans.length}` : ""}
+                </span>
+              </button>
+            ))}
           </div>
 
           <div
             ref={trackRef}
-            className="relative cursor-crosshair touch-none border-l border-[var(--tt-border)]"
-            style={{ height: LANE * (index.agents.length + 1) }}
+            className="relative cursor-crosshair touch-none overflow-hidden border-l border-[var(--tt-border)]"
+            style={{ height: LANE * laneCount }}
             onPointerDown={onDown}
             onPointerMove={onMove}
             onPointerUp={onUp}
@@ -145,19 +171,30 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
             {scale.pieces.map(
               (p, i) =>
                 p.gap && (
-                  <div key={i} className="absolute inset-y-0" style={{ ...HATCH, left: `${p.u0 * 100}%`, width: `${(p.u1 - p.u0) * 100}%` }} />
+                  <div
+                    key={i}
+                    className="absolute inset-y-0"
+                    style={{ ...HATCH, left: `${((p.u0 - w0) / range) * 100}%`, width: `${((p.u1 - p.u0) / range) * 100}%` }}
+                  />
                 ),
             )}
-            {Array.from({ length: index.agents.length + 1 }, (_, i) => (
+            {Array.from({ length: laneCount }, (_, i) => (
               <div key={i} className="absolute inset-x-0 border-b border-[var(--tt-border)]" style={{ top: (i + 1) * LANE - 1 }} />
             ))}
+
+            {selected && (
+              <div
+                className="pointer-events-none absolute inset-y-0 border-x border-[var(--tt-brand)] bg-[var(--tt-brand)]/15"
+                style={{ left: `${selStart}%`, width: `max(2px, ${selEnd - selStart}%)` }}
+              />
+            )}
 
             {roots.map((r) => (
               <div
                 key={r.id}
                 data-span-id={r.id}
                 title={`${r.title} · ${fmtClock(r.start)}`}
-                className={`${barBase} ${r.turnKind === "notification" ? "bg-[var(--tt-brand)]/35" : "bg-[var(--tt-brand)]"}${ring(r.id)}`}
+                className={`${barBase} ${r.turnKind === "notification" ? "bg-[var(--tt-brand)]/35" : "bg-[var(--tt-brand)]"}${selected?.id === r.id ? " ring-1 ring-[var(--tt-fg)]" : ""}`}
                 style={{ left: `${pct(r.start)}%`, width: `max(2px, ${pct(r.end) - pct(r.start)}%)` }}
               />
             ))}
@@ -180,7 +217,7 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
                       key={k}
                       data-span-id={a.id}
                       title={tip}
-                      className={`${barBase}${ring(a.id)}`}
+                      className={`${barBase}${selected?.id === a.id ? " ring-1 ring-[var(--tt-fg)]" : ""}`}
                       style={{ top: top + 3, background: c, left: `${pct(b0)}%`, width: `max(2px, ${pct(b1) - pct(b0)}%)` }}
                     />
                   ))}
@@ -199,12 +236,28 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selectedId,
               );
             })}
 
-            {zoomed && (
-              <div
-                className="pointer-events-none absolute inset-y-0 border-x border-[var(--tt-brand)] bg-[var(--tt-brand-glow)]"
-                style={{ left: `${win[0] * 100}%`, width: `${(win[1] - win[0]) * 100}%` }}
-              />
-            )}
+            {lanesOfSkills.map((l, i) => {
+              const top = (1 + index.agents.length + i) * LANE;
+              return l.spans.map((sp) => {
+                const by = ownerAgent(index, sp);
+                const c = by ? colorOf(by.agent?.agentType) : SKILL_COLOR;
+                return (
+                  <div
+                    key={sp.id}
+                    data-span-id={sp.id}
+                    title={`skill · ${l.name} · ${fmtClock(sp.start)}${by ? ` (in ${by.agent?.agentType ?? by.title})` : ""}`}
+                    className="absolute flex h-5 w-3.5 -translate-x-1/2 cursor-pointer items-center justify-center"
+                    style={{ top, left: `${pct(sp.start)}%` }}
+                  >
+                    <span
+                      className={`pointer-events-none size-2.5 rotate-45 ${selected?.id === sp.id ? "ring-1 ring-[var(--tt-fg)]" : ""}`}
+                      style={{ background: c }}
+                    />
+                  </div>
+                );
+              });
+            })}
+
             <div ref={brushRef} className="pointer-events-none absolute inset-y-0 hidden border-x border-[var(--tt-brand)] bg-[var(--tt-brand-glow)]" />
             <div ref={cursorRef} className="pointer-events-none absolute inset-y-0 hidden w-px bg-[var(--tt-fg-muted)]/60" />
             <div

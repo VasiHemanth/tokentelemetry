@@ -6,11 +6,13 @@ export type ColorOf = (agentType: string | undefined) => string;
 
 const AGENT_COLORS = [
   "var(--tt-violet-fg)",
-  "var(--tt-cyan-fg)",
   "var(--tt-warn-fg)",
   "var(--tt-success-fg)",
   "var(--tt-info-fg)",
 ];
+
+/** Skills own the cyan token; the agent palette above avoids it. */
+export const SKILL_COLOR = "var(--tt-cyan-fg)";
 
 /** Stable color per agent type, assigned in order of first appearance. */
 export function makeColorOf(types: string[]): ColorOf {
@@ -31,10 +33,10 @@ export function KindChip({ span, color }: { span: TraceSpan; color?: string }) {
   if (span.error) {
     return <span className={`${CHIP} border border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)]`}>{span.kind}</span>;
   }
-  if (span.kind === "agent") {
+  if (span.kind === "agent" || span.kind === "skill") {
     return (
-      <span className={`${CHIP} text-[var(--tt-canvas)]`} style={{ background: color }}>
-        agent
+      <span className={`${CHIP} text-[var(--tt-canvas)]`} style={{ background: span.kind === "skill" ? SKILL_COLOR : color }}>
+        {span.kind}
       </span>
     );
   }

@@ -15,6 +15,7 @@ import { qwenAdapter } from "./adapters/qwen";
 import { opencodeAdapter } from "./adapters/opencode";
 import { hermesAdapter } from "./adapters/hermes";
 import { primeAdapter } from "./adapters/prime";
+import { markSkills } from "./skills";
 
 export interface ChildFetch {
   /** apiFetch path for the child's raw trace, e.g. `/sessions/<child>?agent=opencode`. */
@@ -52,8 +53,19 @@ const ADAPTERS: Record<string, HarnessAdapter> = {
   prime: primeAdapter,
 };
 
+// Every adapter's output goes through the shared skill pass. Wrapped once here
+// so each harness keeps one stable adapter object (the page memoizes on it).
+const withSkills = (a: HarnessAdapter): HarnessAdapter => ({
+  ...a,
+  build: (events, delegation) => markSkills(a.build(events, delegation)),
+  buildChild: (events) => markSkills(a.buildChild ? a.buildChild(events) : a.build(events, null)),
+});
+const WRAPPED: Record<string, HarnessAdapter> = Object.fromEntries(
+  Object.entries(ADAPTERS).map(([k, a]) => [k, withSkills(a)]),
+);
+
 export function traceAdapter(agent: string | null | undefined): HarnessAdapter | null {
-  return (agent && ADAPTERS[agent]) || null;
+  return (agent && WRAPPED[agent]) || null;
 }
 
-export type { TraceSpan, TraceTiming, TraceTree, SpanKind, SpanTokens, AgentInfo } from "./types";
+export type { TraceSpan, TraceTiming, TraceTree, SpanKind, SpanTokens, AgentInfo, SkillInfo } from "./types";

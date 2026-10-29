@@ -130,6 +130,28 @@ export default function SpanDetail(p: Props) {
         )}
       </>
     );
+  } else if (span.kind === "skill") {
+    const by = ownerAgent(index, span);
+    const turn = turnOf(index, span);
+    const typed = span.skill?.via === "command";
+    body = (
+      <>
+        <Kv
+          rows={[
+            ...(real ? ([["Invoked at", fmtClock(span.start)], ["Into turn", `+${fmtDur(span.start - turn.start)}`]] as Array<[string, ReactNode]>) : []),
+            ["Invoked by", by ? (by.agent?.agentType ?? by.title) : "main agent"],
+            ["Origin", typed ? "typed by the user" : "called by the model"],
+          ]}
+        />
+        {by && (
+          <Section label="Inside subagent">
+            {agentLink(by)}
+          </Section>
+        )}
+        <ContentSection key={`${span.id}-in`} label="Arguments" value={span.content?.input} />
+        <ContentSection key={`${span.id}-out`} label="Result" value={span.content?.output} />
+      </>
+    );
   } else {
     const a = span.agent;
     const turn = turnOf(index, span);
@@ -198,9 +220,10 @@ export default function SpanDetail(p: Props) {
         <KindChip span={span} color={agentColor} />
         {span.kind === "turn" && span.turnKind === "notification" && <Tag>notification</Tag>}
         {span.kind === "agent" && !span.error && <Tag>{span.agent?.background ? "background" : "foreground"}</Tag>}
+        {span.kind === "skill" && span.skill?.via === "command" && <Tag>typed</Tag>}
         {span.error && <Tag color="var(--tt-danger-fg)">error</Tag>}
       </div>
-      <h2 className="break-words text-sm font-semibold text-[var(--tt-fg)]">{span.title}</h2>
+      <h2 className="break-words text-sm font-semibold text-[var(--tt-fg)]">{span.kind === "skill" ? (span.skill?.name ?? span.title) : span.title}</h2>
       {body}
       {(real || span.eventIndex != null) && (
         <Section label="View">
