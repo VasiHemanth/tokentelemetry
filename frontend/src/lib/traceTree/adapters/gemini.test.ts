@@ -36,3 +36,23 @@ test("a second user message starts a second turn", () => {
   const turns = geminiAdapter.build(events as never, null);
   assert.deepEqual(turns.map((t) => t.title), ["User prompt 1", "User prompt 2"]);
 });
+
+test("content: prompt, reply, thoughts, tool args and response", () => {
+  const thoughts = [{ subject: "Plan", description: "look first" }];
+  const args = { dir_path: "src" };
+  const response = { output: "a.ts" };
+  const events = [
+    user(1, "list"),
+    { ...reply(3, [{ id: "a", name: "list_directory", args, status: "success", timestamp: T(4),
+      result: [{ functionResponse: { id: "a", name: "list_directory", response } }] },
+      { id: "b", name: "x", args: {}, status: "success", timestamp: T(4), resultDisplay: "shown" }]), thoughts },
+  ];
+  const [turn] = geminiAdapter.build(events as never, null);
+  assert.deepEqual(turn.content?.input, [{ text: "list" }]);
+  const llm = turn.children[0];
+  assert.equal(llm.content?.reasoning, thoughts);
+  assert.equal(llm.content?.output, "working on it");
+  assert.equal(llm.children[0].content?.input, args);
+  assert.equal(llm.children[0].content?.output, response);
+  assert.equal(llm.children[1].content?.output, "shown");
+});

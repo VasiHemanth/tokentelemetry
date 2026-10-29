@@ -95,3 +95,25 @@ test("span ids are unique", () => {
   const walk = (s: TraceSpan) => { assert.ok(!seen.has(s.id)); seen.add(s.id); s.children.forEach(walk); };
   opencodeAdapter("opencode").build(events, null).forEach(walk);
 });
+
+test("content: prompt, reasoning, reply, tool args/result, agent task/output, error text", () => {
+  const input = { filePath: "a.ts" };
+  const events = [
+    user(T, "the prompt"),
+    think(T + 1, "hmm"),
+    think(T + 2, "ok"),
+    say(T + 3, "reply text"),
+    tool(T + 4, "read", { status: "completed", input, output: "file body", time: { start: T + 5, end: T + 6 } }),
+    tool(T + 7, "edit", { status: "error", input, error: "no match", output: "ignored", time: { start: T + 8, end: T + 9 } }),
+    tool(T + 10, "task", { status: "completed", input: { description: "d", prompt: "do the thing", subagent_type: "explore" }, output: "found it", metadata: { sessionId: "ses_c" }, time: { start: T + 11, end: T + 12 } }, tok(1, 1)),
+  ];
+  const [turn] = opencodeAdapter("opencode").build(events, null);
+  assert.deepEqual(turn.content, { input: "the prompt" });
+  const llm = turn.children[0];
+  assert.deepEqual(llm.content, { output: "reply text", reasoning: "hmm\n\nok" });
+  const [read, edit, agent] = llm.children;
+  assert.equal(read.content?.input, input, "arguments are referenced, not copied");
+  assert.equal(read.content?.output, "file body");
+  assert.equal(edit.content?.output, "no match");
+  assert.deepEqual(agent.content, { input: "do the thing", output: "found it" });
+});

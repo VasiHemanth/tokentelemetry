@@ -7,14 +7,14 @@
  */
 import type { Event, TraceValue } from "../../traceEvents";
 import type { TraceSpan } from "../types";
-import { clip, eventTime } from "./simpleLabels";
+import { clip, contentOf, eventTime, joinText } from "./simpleLabels";
 
 export interface GroupedOptions {
   /** How a result finds its call: by callID, or the oldest unpaired call of the same tool name. */
   pair: "callId" | "toolName";
   /** Injected user text (notifications, system notes) must not count as a prompt. */
   isNotification(text: string): boolean;
-  describe(payload: TraceValue): { title: string; label?: string };
+  describe(payload: TraceValue): { title: string; label?: string; input?: unknown };
   isError(content: unknown): boolean;
 }
 
@@ -30,14 +30,17 @@ export function buildGroupedTrace(events: Event[], options: GroupedOptions): Tra
   let llmTime = -1;
   let promptCount = 0;
   let lastTime = firstTime;
-  let text = "";
-  let thought = "";
+  let texts: string[] = [];
+  let thoughts: string[] = [];
 
   const closeLlm = () => {
-    if (llm) llm.label = clip(text || thought) || undefined;
+    if (llm) {
+      llm.label = clip(texts.filter(Boolean).pop() || thoughts.filter(Boolean).pop()) || undefined;
+      llm.content = contentOf(undefined, joinText(texts), joinText(thoughts));
+    }
     llm = null;
-    text = "";
-    thought = "";
+    texts = [];
+    thoughts = [];
   };
 
   const closeTurn = () => {
@@ -55,6 +58,7 @@ export function buildGroupedTrace(events: Event[], options: GroupedOptions): Tra
       kind: "turn",
       title: kind === "prompt" ? `User prompt ${promptCount}` : "Notification",
       label: clip(body) || undefined,
+      content: contentOf(body),
       start: time,
       end: time,
       children: [],
@@ -88,15 +92,16 @@ export function buildGroupedTrace(events: Event[], options: GroupedOptions): Tra
         llmTime = time;
         turn!.children.push(llm);
       }
-      if (event.type === "assistant") text = String(payload.content ?? "") || text;
-      else if (event.type === "assistant_thinking") thought = String(payload.text ?? "") || thought;
+      if (event.type === "assistant") texts.push(String(payload.content ?? ""));
+      else if (event.type === "assistant_thinking") thoughts.push(String(payload.text ?? ""));
       else {
-        const { title, label } = options.describe(payload);
+        const { title, label, input } = options.describe(payload);
         const span: TraceSpan = {
           id: `${prefix}:x${index}`,
           kind: "tool",
           title,
           label,
+          content: contentOf(input),
           start: time,
           end: time,
           children: [],
@@ -117,6 +122,7 @@ export function buildGroupedTrace(events: Event[], options: GroupedOptions): Tra
         : byName.get(String(payload.tool))?.shift();
       if (span) {
         span.end = Math.max(span.start, time);
+        span.content = contentOf(span.content?.input, payload.content);
         if (options.isError(payload.content)) span.error = true;
       }
     }

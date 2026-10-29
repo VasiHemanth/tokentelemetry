@@ -192,3 +192,47 @@ test("pi: plain tool calls pair without ids or usage", () => {
   assert.equal(turn.children[0].children[0].label, "app");
   assert.equal(turn.children[0].children[0].end, T0 + 30);
 });
+
+test("content: turn, llm, tool and agent spans reference the trace's own values", () => {
+  const input = { file_path: "/home/dev/a.ts" };
+  const toolOut = [{ type: "text", text: "file body" }];
+  const events = [
+    user(T0, "do it"),
+    asst(T0 + 10, [{ type: "thinking", thinking: "plan A" }], { id: "m" }),
+    asst(T0 + 20, [{ type: "thinking", thinking: "plan B" }, { type: "text", text: "reply 1" }, { type: "text", text: "reply 2" }, use("r", "Read", input), use("g", "Agent", { description: "d", prompt: "task body" })], { id: "m" }),
+    user(T0 + 30, [res("r", toolOut), res("g", "agent report")]),
+    asst(T0 + 40, [use("h", "Bash", { command: "ls" })], { id: "m2" }),
+    user(T0 + 50, "<task-notification>\n<summary>done</summary>", { origin: { kind: "task-notification" } }),
+    user(T0 + 60, "Another Claude session sent a message:\n<agent-message from=\"a0123456789abcdef\">\nreport body\n</agent-message>", { origin: { kind: "peer" } }),
+  ];
+  const spans = claudeShapeAdapter("claude").build(events, null);
+  assert.equal(spans[0].content?.input, "do it");
+  const llm = spans[0].children[0];
+  assert.equal(llm.content?.reasoning, "plan A\n\nplan B");
+  assert.equal(llm.content?.output, "reply 1\n\nreply 2");
+  const [read, agent] = llm.children;
+  assert.equal(read.content?.input, input);
+  assert.equal(read.content?.output, toolOut);
+  assert.equal(agent.content?.input, "task body");
+  assert.equal(agent.content?.output, "agent report");
+  const second = spans[0].children[1];
+  assert.equal(second.content, undefined, "no text or thinking leaves the llm content unset");
+  assert.equal(second.children[0].content?.output, undefined);
+  assert.equal(spans[1].content?.input, "<task-notification>\n<summary>done</summary>");
+  assert.equal(spans[2].content?.input, "report body");
+});
+
+test("content: dsh, pi and qoder fill tool and agent content too", () => {
+  const events = [
+    user(T0, [{ type: "text", text: "hi" }]),
+    asst(T0 + 10, [use("s", "subagent", { description: "x", prompt: "do x" })]),
+    user(T0 + 20, [res("s", "started subagent 11111111-2222-3333-4444-555555555555")]),
+  ];
+  for (const shape of ["dsh", "pi", "qoder"] as const) {
+    const [turn] = claudeShapeAdapter(shape).build(events, null);
+    assert.equal(turn.content?.input, "hi");
+    const tool = turn.children[0].children[0];
+    assert.equal(tool.content?.output, "started subagent 11111111-2222-3333-4444-555555555555");
+    assert.equal(tool.content?.input, shape === "dsh" ? "do x" : events[1].message.content[0].input);
+  }
+});

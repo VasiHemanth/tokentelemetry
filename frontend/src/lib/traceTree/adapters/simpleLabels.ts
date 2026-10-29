@@ -3,10 +3,26 @@
  * timestamps and the short, never-a-shell-command labels shown on spans.
  */
 import type { Event, TraceValue } from "../../traceEvents";
+import type { SpanContent } from "../types";
 
 export function clip(text: unknown, max = 120): string {
   const flat = String(text ?? "").replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** Join step texts; a single part is returned as is, nothing yields undefined. */
+export function joinText(parts: string[]): string | undefined {
+  const kept = parts.filter(Boolean);
+  return kept.length ? (kept.length === 1 ? kept[0] : kept.join("\n\n")) : undefined;
+}
+
+/** SpanContent with only the fields that are set, or undefined when none are. */
+export function contentOf(input?: unknown, output?: unknown, reasoning?: unknown): SpanContent | undefined {
+  const content: SpanContent = {};
+  if (input !== undefined && input !== null && input !== "") content.input = input;
+  if (reasoning !== undefined && reasoning !== null && reasoning !== "") content.reasoning = reasoning;
+  if (output !== undefined && output !== null && output !== "") content.output = output;
+  return Object.keys(content).length ? content : undefined;
 }
 
 export function eventTime(event: Event): number | undefined {

@@ -8,8 +8,8 @@ import type { HarnessAdapter } from "../index";
 import { buildGroupedTrace } from "./groupedTrace";
 import { toolLabel } from "./simpleLabels";
 
-function describe(payload: TraceValue): { title: string; label?: string } {
-  return { title: String(payload.tool ?? "tool"), label: toolLabel(payload.args) };
+function describe(payload: TraceValue): { title: string; label?: string; input?: unknown } {
+  return { title: String(payload.tool ?? "tool"), label: toolLabel(payload.args), input: payload.args };
 }
 
 export const primeAdapter: HarnessAdapter = {

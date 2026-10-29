@@ -191,6 +191,8 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
   const resumed = span.resumes ? index.agentByChild.get(span.resumes) : undefined;
   const woke = span.kind === "turn" && span.notifiedBy ? index.agentByChild.get(span.notifiedBy) : undefined;
   const errs = rollup?.errs ?? 0;
+  const promptText = span.kind === "turn" ? span.content?.input : undefined;
+  const label = typeof promptText === "string" && promptText.trim() ? promptText.trim().split("\n", 1)[0].slice(0, 200) : span.label;
 
   return (
     <div
@@ -220,9 +222,9 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
         {span.kind === "agent" && span.agent?.background && <Tag title="The spawning call returned and the subagent kept running">bg</Tag>}
         {resumed && <Tag color={colorOf(resumed.agent?.agentType)}>{`→ ${resumed.agent?.agentType ?? "agent"}`}</Tag>}
         {errs > 0 && span.kind !== "tool" && <Tag color="var(--tt-danger-fg)">{errs} err</Tag>}
-        {span.label && (
-          <span className="min-w-0 flex-1 truncate text-[var(--tt-fg-dim)]" title={span.label}>
-            {span.label}
+        {label && (
+          <span className="min-w-0 flex-1 truncate text-[var(--tt-fg-dim)]" title={label}>
+            {label}
           </span>
         )}
       </div>

@@ -12,14 +12,14 @@ import { clip, toolLabel } from "./simpleLabels";
 
 const INJECTED = /^\[(ASYNC DELEGATION COMPLETE|CONTEXT COMPACTION|Note: model was just switched|System:)/;
 
-function describe(payload: TraceValue): { title: string; label?: string } {
+function describe(payload: TraceValue): { title: string; label?: string; input?: unknown } {
   const tool = String(payload.tool ?? "tool");
   const args = payload.args ?? {};
   if (tool === "tool_call" && typeof args.name === "string") {
-    return { title: args.name, label: toolLabel(args.arguments) };
+    return { title: args.name, label: toolLabel(args.arguments), input: args.arguments };
   }
   const label = toolLabel(args) ?? (typeof args.name === "string" ? clip(args.name) : undefined);
-  return { title: tool, label };
+  return { title: tool, label, input: args };
 }
 
 function isError(content: unknown): boolean {

@@ -13,6 +13,7 @@ import {
   type TraceIndex,
 } from "@/lib/traceTree/tree";
 import { fmtClock, fmtCost, fmtDur, fmtHm, fmtTokens } from "@/lib/traceTree/timeScale";
+import ContentSection from "./ContentSection";
 import { KindChip, SECTION_LABEL, Tag, type ColorOf } from "./shared";
 
 interface Props {
@@ -67,6 +68,7 @@ export default function SpanDetail(p: Props) {
       <>
         {span.label && <Quote>{span.label}</Quote>}
         <Kv rows={[...when, ["Model calls", work.llm], ["Tool calls", work.tools], ["Main-agent tokens", fmtTokens(work.tokens)]]} />
+        <ContentSection key={`${span.id}-in`} label="Prompt" value={span.content?.input} />
         {spawns.length > 0 && (
           <Section label="Spawned in this turn">
             {spawns.map((a) => agentLink(a, real ? `+${fmtDur((a.agent?.callStart ?? a.start) - span.start)}` : undefined))}
@@ -93,6 +95,8 @@ export default function SpanDetail(p: Props) {
           ]}
         />
         {t && <TokenBar t={t} />}
+        <ContentSection key={`${span.id}-re`} label="Reasoning" value={span.content?.reasoning} collapseLong />
+        <ContentSection key={`${span.id}-out`} label="Response" value={span.content?.output} />
         {span.children.length > 0 && (
           <Section label="Calls made">
             {span.children.slice(0, 12).map((c) =>
@@ -114,6 +118,8 @@ export default function SpanDetail(p: Props) {
       <>
         {span.label && <p className="text-xs leading-relaxed text-[var(--tt-fg-muted)]">{span.label}</p>}
         <Kv rows={[...when, ...(span.error ? ([["Result", <span key="e" className="text-[var(--tt-danger-fg)]">error</span>]] as Array<[string, ReactNode]>) : [])]} />
+        <ContentSection key={`${span.id}-in`} label="Input" value={span.content?.input} plain />
+        <ContentSection key={`${span.id}-out`} label="Output" value={span.content?.output} error={span.error} plain />
         {resumed && (
           <Section label="Resumed">
             <Callout>
@@ -163,6 +169,8 @@ export default function SpanDetail(p: Props) {
             ["Tool errors", a?.toolErrors ?? roll?.errs ?? 0],
           ]}
         />
+        <ContentSection key={`${span.id}-in`} label="Task" value={span.content?.input} />
+        <ContentSection key={`${span.id}-out`} label="Returned" value={span.content?.output} />
         {!loaded && <Callout>The subagent&apos;s own model calls load when you expand this row.</Callout>}
         {overlap.length > 0 && (
           <Section label="Ran in parallel with">

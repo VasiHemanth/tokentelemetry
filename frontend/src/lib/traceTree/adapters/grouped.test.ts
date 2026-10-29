@@ -56,3 +56,30 @@ test("prime pairs a result with the oldest unpaired call of the same tool", () =
   assert.equal(one.label, undefined, "code is not used as a label");
   assert.equal(primeAdapter.timing, "real");
 });
+
+test("content: hermes and prime fill turn, llm and tool content", () => {
+  const args = { name: "mcp__x__y", arguments: { q: "z" } };
+  const hermes = [
+    user(T, "hi"),
+    think(T + 1, "plan"),
+    say(T + 1, "calling"),
+    { type: "tool_call", payload: { tool: "tool_call", callID: "a", args }, normalized_timestamp: T + 1 },
+    { type: "tool_result", payload: { tool: "x", callID: "a", content: "res" }, normalized_timestamp: T + 2 },
+  ];
+  const [turn] = hermesAdapter.build(hermes, null);
+  assert.deepEqual(turn.content, { input: "hi" });
+  assert.deepEqual(turn.children[0].content, { output: "calling", reasoning: "plan" });
+  const tool = turn.children[0].children[0];
+  assert.equal(tool.content?.input, args.arguments);
+  assert.equal(tool.content?.output, "res");
+
+  const pargs = { code: "1" };
+  const prime = [
+    user(T, "q"),
+    { type: "tool_call", payload: { tool: "ipython", args: pargs }, normalized_timestamp: T + 1 },
+    { type: "tool_result", payload: { tool: "ipython", content: "out" }, normalized_timestamp: T + 2 },
+  ];
+  const ptool = primeAdapter.build(prime, null)[0].children[0].children[0];
+  assert.equal(ptool.content?.input, pargs);
+  assert.equal(ptool.content?.output, "out");
+});

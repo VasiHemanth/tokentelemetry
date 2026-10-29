@@ -356,7 +356,10 @@ export default function SessionDetailPage() {
   const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "agents" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The context sidebar starts open in the step view and closed in the trace
+  // view, which needs the width to keep its detail panel beside the tree.
+  const [stepSidebarOpen, setStepSidebarOpen] = useState(true);
+  const [traceSidebarOpen, setTraceSidebarOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [projectConfig, setProjectConfig] = useState<TraceValue>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -910,6 +913,8 @@ export default function SessionDetailPage() {
     return baseSpans.map(splice);
   }, [adapter, baseSpans, fetchedChildren, id]);
   const showTrace = !!adapter && traceRoots.length > 0 && !stepView;
+  const sidebarOpen = showTrace ? traceSidebarOpen : stepSidebarOpen;
+  const setSidebarOpen = showTrace ? setTraceSidebarOpen : setStepSidebarOpen;
 
   const loadChildSpans = async (span: TraceSpan) => {
     const target = adapter && id ? adapter.childFetch?.(id, span) : null;

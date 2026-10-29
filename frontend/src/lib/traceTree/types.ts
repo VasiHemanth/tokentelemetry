@@ -36,6 +36,22 @@ export interface AgentInfo {
   loaded: boolean;
 }
 
+/**
+ * What a span said and did, for the detail panel. Values are the trace's own
+ * objects, not copies: a string, a content-block array, or a tool's argument
+ * object. The panel formats them when shown, so a 60MB trace costs nothing extra.
+ *
+ * - turn: input = the prompt (or notification) text.
+ * - llm: reasoning = thinking text; output = the reply text.
+ * - tool: input = the call's arguments; output = the result it returned.
+ * - agent: input = the task handed to the subagent; output = what came back to the parent.
+ */
+export interface SpanContent {
+  input?: unknown;
+  reasoning?: unknown;
+  output?: unknown;
+}
+
 export interface TraceSpan {
   /** Stable within one tree; used as a React key and for selection. */
   id: string;
@@ -49,6 +65,7 @@ export interface TraceSpan {
   end: number;
   children: TraceSpan[];
   tokens?: SpanTokens;
+  content?: SpanContent;
   error?: boolean;
   /** Index into the page's normalized events[], for jumping to the step card. */
   eventIndex?: number;

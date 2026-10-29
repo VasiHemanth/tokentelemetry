@@ -68,3 +68,26 @@ test("cancelled tools are not errors; agent calls carry their telemetry totals",
   assert.equal(agent.agent?.toolErrors, 1);
   assert.equal(qwenAdapter.childFetch, undefined);
 });
+
+test("content: prompt, thought and reply parts, tool args and response, agent task and result", () => {
+  const args = { absolute_path: "/home/dev/x/a.ts" };
+  const agentArgs = { description: "Look", subagent_type: "Explore", prompt: "find it" };
+  const response = { output: "file body" };
+  const events = [
+    user(0, "go"),
+    api(1000, 10, 5, 100),
+    assistant(1010, [{ text: "thinking", thought: true }, { text: "Reading." }, fc("a", "read_file", args), fc("g", "agent", agentArgs)], 10, 5),
+    { ...result(1100, "a", "success"), message: { role: "user", parts: [{ functionResponse: { id: "a", response } }] } },
+    { ...result(1200, "g", "success"), message: { role: "user", parts: [{ functionResponse: { id: "g", response: { output: "report" } } }] } },
+  ];
+  const [turn] = qwenAdapter.build(events as never, null);
+  assert.deepEqual(turn.content?.input, [{ text: "go" }]);
+  const llm = turn.children[0];
+  assert.deepEqual(llm.content?.reasoning, [{ text: "thinking", thought: true }]);
+  assert.deepEqual(llm.content?.output, [{ text: "Reading." }]);
+  const [tool, agent] = llm.children;
+  assert.equal(tool.content?.input, args);
+  assert.equal(tool.content?.output, response);
+  assert.equal(agent.content?.input, agentArgs);
+  assert.deepEqual(agent.content?.output, { output: "report" });
+});

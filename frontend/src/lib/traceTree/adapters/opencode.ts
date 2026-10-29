@@ -11,7 +11,7 @@
 import type { Event, TraceValue } from "../../traceEvents";
 import type { HarnessAdapter, ChildFetch } from "../index";
 import type { SpanTokens, TraceSpan } from "../types";
-import { clip, eventTime, toolLabel } from "./simpleLabels";
+import { clip, contentOf, eventTime, joinText, toolLabel } from "./simpleLabels";
 
 type Harness = "opencode" | "zcode";
 
@@ -99,6 +99,7 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
         kind: "turn",
         title: kind === "prompt" ? `User prompt ${promptCount}` : "Notification",
         label: clip(text) || undefined,
+        content: contentOf(text),
         start: time,
         end: time,
         children: [],
@@ -125,6 +126,7 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
         end,
         children: [],
         eventIndex: index,
+        content: contentOf(input, error ? state.error : state.output),
         ...(error ? { error: true } : {}),
       };
       if (AGENT_TOOLS.has(name.toLowerCase())) {
@@ -136,6 +138,7 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
           ...base,
           kind: "agent",
           title: type,
+          content: contentOf(input?.prompt ?? input, error ? state.error : state.output),
           label: description && description !== type ? clip(description) : undefined,
           agent: {
             agentType: type,
@@ -163,8 +166,8 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
       const children: TraceSpan[] = [];
       let end = runPrev;
       let toolEnd = 0;
-      let text = "";
-      let thought = "";
+      const texts: string[] = [];
+      const thoughts: string[] = [];
       for (const index of run) {
         const event = events[index];
         const time = eventTime(event) ?? end;
@@ -174,9 +177,9 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
           toolEnd = Math.max(toolEnd, span.end);
           children.push(span);
         } else if (event.type === "assistant") {
-          text = String(event.payload?.content ?? "") || text;
+          texts.push(String(event.payload?.content ?? ""));
         } else if (event.type === "assistant_thinking") {
-          thought = String(event.payload?.text ?? "") || thought;
+          thoughts.push(String(event.payload?.text ?? ""));
         }
       }
       // The model starts after the previous step's tools returned, not when they were requested.
@@ -185,7 +188,8 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
         id: `${prefix}:l${run[0]}`,
         kind: "llm",
         title: "Model response",
-        label: clip(text || thought) || undefined,
+        label: clip(texts.filter(Boolean).pop() || thoughts.filter(Boolean).pop()) || undefined,
+        content: contentOf(undefined, joinText(texts), joinText(thoughts)),
         start,
         end,
         children,

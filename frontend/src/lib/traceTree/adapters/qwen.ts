@@ -37,16 +37,27 @@ interface SubGroup {
   used: boolean;
 }
 
+/** The functionResponse.response, else the non-empty resultDisplay or error. */
+function qwenResult(event: Event, callId: string): unknown {
+  const e = event as TraceValue;
+  const part = (e.message?.parts || []).find((p: TraceValue) => p.functionResponse?.id === callId);
+  if (part?.functionResponse?.response !== undefined) return part.functionResponse.response;
+  const r = e.toolCallResult;
+  if (r?.resultDisplay) return r.resultDisplay;
+  if (r?.error && (typeof r.error === "string" || Object.keys(r.error).length)) return r.error;
+  return undefined;
+}
+
 function build(events: Event[]): TraceSpan[] {
   const ui = (e: Event): TraceValue => (e.type === "system" ? (e as TraceValue).systemPayload?.uiEvent : null);
 
   // Results by call id.
-  const results = new Map<string, { ts: number; status: string }>();
+  const results = new Map<string, { ts: number; status: string; event: Event }>();
   events.forEach((e) => {
     if (e.type !== "tool_result") return;
     const callId = (e as TraceValue).toolCallResult?.callId;
     const ts = eventMs(e);
-    if (callId && ts !== undefined) results.set(callId, { ts, status: (e as TraceValue).toolCallResult?.status || "" });
+    if (callId && ts !== undefined) results.set(callId, { ts, status: (e as TraceValue).toolCallResult?.status || "", event: e });
   });
 
   // api_responses of the main conversation vs. subagent groups.
@@ -90,6 +101,7 @@ function build(events: Event[]): TraceSpan[] {
       };
       const text = partsText((e.message as TraceValue)?.parts);
       if (text) turn.label = collapse(text);
+      turn.content = { input: (e.message as TraceValue)?.parts };
       roots.push(turn);
       last = t;
       return;
@@ -127,6 +139,13 @@ function build(events: Event[]): TraceSpan[] {
     };
     const text = partsText(parts.filter((p) => !p.thought));
     if (text) llm.label = collapse(text);
+    const thoughtParts = parts.filter((p) => p.thought && p.text);
+    const replyParts = parts.filter((p) => !p.thought && p.text);
+    if (thoughtParts.length || replyParts.length) {
+      llm.content = {};
+      if (thoughtParts.length) llm.content.reasoning = thoughtParts;
+      if (replyParts.length) llm.content.output = replyParts;
+    }
 
     let latest = t;
     for (const p of parts) {
@@ -144,6 +163,11 @@ function build(events: Event[]): TraceSpan[] {
       const label = toolLabel(args);
       if (label) span.label = label;
       if (res?.status === "error") span.error = true;
+      const content: NonNullable<TraceSpan["content"]> = {};
+      if (fc.args !== undefined) content.input = fc.args;
+      const output = res ? qwenResult(res.event, fc.id) : undefined;
+      if (output !== undefined) content.output = output;
+      if (content.input !== undefined || output !== undefined) span.content = content;
       if (isAgent) {
         span.agent = { agentType: span.title, callStart: t, callEnd: end, loaded: false };
         // Subagent telemetry that finished last before this call returned.

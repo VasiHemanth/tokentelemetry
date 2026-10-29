@@ -26,6 +26,15 @@ export function geminiTokens(t: TraceValue): SpanTokens | undefined {
   };
 }
 
+/** The tool's functionResponse.response, else its resultDisplay. */
+function geminiResult(call: TraceValue): unknown {
+  const res = Array.isArray(call.result) ? call.result : [];
+  const responses = res.map((r: TraceValue) => r?.functionResponse?.response).filter((r: unknown) => r !== undefined);
+  if (responses.length === 1) return responses[0];
+  if (responses.length > 1) return responses;
+  return call.resultDisplay || undefined;
+}
+
 function build(events: Event[]): TraceSpan[] {
   const roots: TraceSpan[] = [];
   let turn: TraceSpan | null = null;
@@ -44,6 +53,7 @@ function build(events: Event[]): TraceSpan[] {
       };
       const text = partsText(e.content);
       if (text) turn.label = collapse(text);
+      turn.content = { input: e.content };
       roots.push(turn);
       last = t;
       return;
@@ -62,6 +72,11 @@ function build(events: Event[]): TraceSpan[] {
     };
     const text = partsText(e.content);
     if (text) llm.label = collapse(text);
+    const thoughts = (e as TraceValue).thoughts;
+    const content: NonNullable<TraceSpan["content"]> = {};
+    if (Array.isArray(thoughts) && thoughts.length) content.reasoning = thoughts;
+    if (text) content.output = e.content;
+    if (content.reasoning !== undefined || content.output !== undefined) llm.content = content;
     let latest = t;
     for (const call of e.toolCalls || []) {
       const end = Math.max(t, eventMs(call.timestamp) ?? t);
@@ -72,6 +87,11 @@ function build(events: Event[]): TraceSpan[] {
       const label = toolLabel(call.args);
       if (label) tool.label = label;
       if (call.status === "error") tool.error = true;
+      const toolContent: NonNullable<TraceSpan["content"]> = {};
+      if (call.args !== undefined) toolContent.input = call.args;
+      const output = geminiResult(call);
+      if (output !== undefined) toolContent.output = output;
+      if (toolContent.input !== undefined || output !== undefined) tool.content = toolContent;
       llm.children.push(tool);
       latest = Math.max(latest, end);
     }

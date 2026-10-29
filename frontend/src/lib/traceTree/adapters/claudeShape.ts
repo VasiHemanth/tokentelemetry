@@ -211,13 +211,16 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
         trimmed.startsWith("<task-notification>") || origin === "task-notification" || origin === "peer";
       if (isNotice) {
         const span = startTurn(index, t, "notification", clean(summaryOf(trimmed)));
+        // A peer hand-back wraps the report in <agent-message>; show just the body.
+        const body = /<agent-message[^>]*>([\s\S]*)<\/agent-message>/.exec(text)?.[1];
+        span.content = { input: body?.trim() || text };
         const ids = trimmed.match(AGENT_ID_RE) || [];
         const known = ids.find((id) => byAgentId.has(id));
         const from = /\bfrom="(a[0-9a-f]{16})"/.exec(trimmed)?.[1];
         const id = from || known || ids[0];
         if (id) span.notifiedBy = id;
       } else {
-        startTurn(index, t, "prompt", clean(text));
+        startTurn(index, t, "prompt", clean(text)).content = { input: typeof e.message?.content === "string" ? e.message.content : text };
       }
       return;
     }
@@ -258,6 +261,8 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
 
     content.forEach((b: TraceValue, bi: number) => {
       if (b?.type === "text" && !span!.label) span!.label = clean(b.text);
+      if (b?.type === "text" && typeof b.text === "string" && b.text) addContent(span!, "output", b.text);
+      if (b?.type === "thinking" && typeof b.thinking === "string" && b.thinking) addContent(span!, "reasoning", b.thinking);
       if (b?.type !== "tool_use" || !b.id) return;
       const name = String(b.name || "tool");
       const input = b.input || {};
@@ -280,11 +285,18 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
           if (typeof to === "string" && to) tool.resumes = to;
         }
       }
+      tool.content = { input: tool.kind === "agent" ? (input.prompt ?? input) : input };
       span!.children.push(tool);
       pending.set(b.id, { span: tool, callTime: t });
     });
     prevTime = t;
   });
+
+  /** Join text pieces of one message; a single piece stays a reference to the trace's string. */
+  function addContent(span: TraceSpan, key: "reasoning" | "output", text: string) {
+    const c = (span.content ??= {});
+    c[key] = typeof c[key] === "string" ? `${c[key]}\n\n${text}` : text;
+  }
 
   function summaryOf(text: string): string {
     const m = /<summary>([\s\S]*?)<\/summary>/.exec(text);
@@ -341,6 +353,7 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
 
   function closeTool(span: TraceSpan, callTime: number, t: number, result: TraceValue) {
     if (result.is_error) span.error = true;
+    if (result.content != null) (span.content ??= {}).output = result.content;
     if (span.kind !== "agent") {
       span.end = Math.max(t, callTime);
       return;

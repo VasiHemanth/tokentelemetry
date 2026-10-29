@@ -103,3 +103,29 @@ test("older rollouts without records use the _tt_tokens the normalizer attaches"
   assert.equal(turn.label, "real ask");
   assert.deepEqual(turn.children[0].tokens, { input: 40, output: 5, cacheRead: 10, cacheWrite: 0 });
 });
+
+test("content: prompt, reply, readable reasoning, tool args and outputs are the trace's own values", () => {
+  const msg = [{ type: "output_text", text: "All done." }];
+  const cipher = "gAAAAAB" + "x".repeat(60);
+  const outputList = [{ type: "input_text", text: "Script completed" }];
+  const events = [
+    started(0), prompt("hello", 1),
+    item({ type: "Reasoning", summary_text: ["**Plan**"] }, 5),
+    item({ type: "Reasoning", summary_text: [] }, 6),
+    exec("c1", 10), record(5, 0, 1, 11), out("c1", outputList, 20),
+    call("s1", "spawn_agent", { task_name: "scout", message: cipher }, 30),
+    item({ type: "AgentMessage", content: [{ type: "Text", text: "dup" }] }, 35),
+    ev("response_item", { type: "message", role: "assistant", content: msg }, 36),
+    record(5, 0, 1, 37), out("s1", '{"task_name":"/root/scout"}', 40), done(50),
+  ];
+  const [turn] = codexAdapter.build(events as never, null);
+  assert.deepEqual(turn.content?.input, [{ type: "text", text: "hello" }]);
+  const [first, second] = turn.children;
+  assert.deepEqual(first.content?.reasoning, [["**Plan**"]].flat());
+  assert.equal(first.children[0].content?.input, "rm -rf /tmp/x");
+  assert.equal(first.children[0].content?.output, outputList, "same reference, not a copy");
+  assert.equal(second.content?.output, msg, "response_item wins over its AgentMessage mirror");
+  const agent = second.children[0];
+  assert.deepEqual(agent.content?.input, { task_name: "scout" }, "ciphertext dropped");
+  assert.equal(agent.content?.output, '{"task_name":"/root/scout"}');
+});

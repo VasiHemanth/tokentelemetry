@@ -59,6 +59,24 @@ export function codexOutputFailed(text: string): boolean {
   return !!code && Number(code[1]) !== 0;
 }
 
+// Encrypted blobs (spawn/send messages, hidden reasoning) are not readable content.
+const CIPHER = /^gAAAAA[\w-]{40,}/;
+const isCipher = (v: unknown) => typeof v === "string" && CIPHER.test(v);
+
+/** The args object itself, or a shallow copy without ciphertext fields. */
+function readableArgs(args: TraceValue): TraceValue {
+  if (!args || typeof args !== "object") return args;
+  const bad = Object.keys(args).filter((k) => isCipher(args[k]));
+  if (!bad.length) return args;
+  return Object.fromEntries(Object.entries(args).filter(([k]) => !bad.includes(k)));
+}
+
+/** Content blocks of several messages in one array (block objects are shared, not copied). */
+function joinBlocks(parts: TraceValue[]): unknown {
+  if (!parts.length) return undefined;
+  return parts.length === 1 ? parts[0] : parts.flat();
+}
+
 interface Nested {
   label: string;
   error: boolean;
@@ -135,6 +153,10 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
   let lastRecord = 0;
   let pending: TraceSpan[] = [];
   let text = "";
+  // Per-response content: response_item messages are canonical, AgentMessage items mirror them.
+  let respMsgs: TraceValue[] = [];
+  let itemMsgs: TraceValue[] = [];
+  let thoughts: TraceValue[] = [];
   let lastEventTs = 0;
   const nested = new Map<string, Nested[]>(); // exec span id -> items run inside it
   const execSpans: Array<{ span: TraceSpan; callIdx: number; outIdx: number }> = [];
@@ -165,16 +187,26 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
       children: pending, tokens, eventIndex: i, approxStart: true,
     };
     if (text) span.label = collapse(text);
+    const output = joinBlocks(respMsgs.length ? respMsgs : itemMsgs);
+    const reasoning = joinBlocks(thoughts);
+    if (output !== undefined || reasoning !== undefined) {
+      span.content = {};
+      if (reasoning !== undefined) span.content.reasoning = reasoning;
+      if (output !== undefined) span.content.output = output;
+    }
     return span;
   };
 
   // Tool calls or text that never got a usage record (aborted turn).
   const flushOrphans = (end: number) => {
-    if (!turn || (!pending.length && !text)) return;
+    if (!turn || (!pending.length && !text && !respMsgs.length && !itemMsgs.length && !thoughts.length)) return;
     const first = pending[0]?.start ?? end;
     turn.children.push(llmSpan(pending[0]?.eventIndex ?? turn.eventIndex ?? 0, Math.max(first, end), undefined));
     pending = [];
     text = "";
+    respMsgs = [];
+    itemMsgs = [];
+    thoughts = [];
   };
 
   const closeLlm = (i: number, tokens: SpanTokens | undefined) => {
@@ -184,6 +216,9 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
     lastRecord = end;
     pending = [];
     text = "";
+    respMsgs = [];
+    itemMsgs = [];
+    thoughts = [];
   };
 
   const toolSpan = (e: Event, i: number): TraceSpan => {
@@ -200,6 +235,11 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
       start, end: Math.max(start, end), children: [], eventIndex: i,
     };
     if (failed) base.error = true;
+    const rawInput = p.type === "custom_tool_call" ? p.input : readableArgs(args);
+    const content: NonNullable<TraceSpan["content"]> = {};
+    if (rawInput && (typeof rawInput === "string" || Object.keys(rawInput).length)) content.input = rawInput;
+    if (outIdx !== undefined) content.output = events[outIdx].payload?.output;
+    if (content.input !== undefined || content.output !== undefined) base.content = content;
 
     if (name === "spawn_agent") {
       const taskName = String(args.task_name || "");
@@ -277,6 +317,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
         cur.turnKind = "prompt";
         cur.title = `User prompt ${++promptCount}`;
         cur.label = collapse(prompt);
+        cur.content = { input: p?.item?.content ?? p.content };
       }
       boundary = t;
       return;
@@ -293,9 +334,15 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
       const open = execSpans.find((x) => x.callIdx < i && i < x.outIdx);
       const n = open ? nestedItem(p.item) : null;
       if (open && n) nested.set(open.span.id, [...(nested.get(open.span.id) || []), n]);
-      if (p.item.type === "AgentMessage" && !text) text = partsText(p.item.content);
+      if (p.item.type === "AgentMessage") {
+        if (!text) text = partsText(p.item.content);
+        if (!isCipher(partsText(p.item.content))) itemMsgs.push(p.item.content);
+      } else if (p.item.type === "Reasoning" && Array.isArray(p.item.summary_text) && p.item.summary_text.length) {
+        thoughts.push(p.item.summary_text);
+      }
     } else if (e.type === "response_item" && p?.type === "message" && p.role === "assistant") {
       text = partsText(p.content) || text;
+      if (!isCipher(partsText(p.content))) respMsgs.push(p.content);
     }
 
     if (e.type === "token_usage_record") {
