@@ -60,7 +60,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       <QuotaProvider>
       <body className="min-h-full flex bg-[var(--tt-canvas)] overflow-hidden">
         <Navigation isCollapsed={isCollapsed} setIsCollapsed={toggle} />
-        <main className="flex-1 h-screen overflow-y-auto relative">
+        <main className="min-w-0 flex-1 h-screen overflow-y-auto relative">
           {/* Ambient canvas — single source of background atmosphere */}
           <div aria-hidden className="pointer-events-none absolute inset-0 tt-canvas-glow" />
           <div aria-hidden className="pointer-events-none absolute inset-0 tt-grid opacity-40" />

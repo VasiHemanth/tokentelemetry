@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Copy, Check, Star, Lock, Monitor, TrendingUp } from "lucide-react";
+import { Copy, Check, Star, Lock, Monitor } from "lucide-react";
 import { track } from "@/lib/track";
 import { useGithubStats } from "@/lib/useGithubStats";
 
@@ -45,26 +45,17 @@ export default function Hero() {
                 </span>
                 100% local
               </span>
-              {["MIT open source", "21 agents", "No signup"].map((c) => (
-                <span key={c} className="inline-flex items-center h-7 px-2.5 rounded-full text-[11.5px] font-medium text-[var(--tt-fg-muted)] bg-[var(--tt-panel)] border border-[var(--tt-border)]">
-                  {c}
-                </span>
-              ))}
+
             </div>
 
             {/* Headline */}
             <h1 className="text-[clamp(33px,5.4vw,58px)] leading-[1.04] tracking-[-0.028em] font-semibold text-[var(--tt-fg)] mb-4 text-balance">
-              See what your AI coding agents{" "}
-              <span className="text-[var(--tt-brand)]">cost, think, and do</span> —{" "}
-              <span className="bg-gradient-to-r from-[#86efac] to-[#34d399] bg-clip-text text-transparent">
-                100% on your machine.
-              </span>
+              Understand what your agents <span className="text-[var(--tt-brand)]">actually did.</span>
             </h1>
 
             {/* Subhead */}
             <p className="text-[clamp(15px,1.7vw,17px)] text-[var(--tt-fg-muted)] leading-relaxed max-w-[540px] mx-auto lg:mx-0 mb-6">
-              Read-only observability for Claude Code, Codex, Cursor, Gemini CLI &amp; 12 more. It reads the logs
-              your agents already write — no SDK, no signup, and your data never leaves your computer.
+              Follow sessions across coding agents and projects. Inspect recorded activity, token usage, and estimated API costs from logs already on your machine. No SDK or signup.
             </p>
 
             {/* CTA — mobile: star primary; desktop: install primary */}
@@ -75,11 +66,11 @@ export default function Hero() {
                 target="_blank" rel="noopener noreferrer"
                 onClick={() => track("click_github", { location: "hero" })}
                 className="order-1 lg:order-2 self-stretch lg:self-start inline-flex items-center justify-center gap-2.5 h-[52px] lg:h-12 px-5 rounded-[var(--tt-radius)] text-[15px] lg:text-[14.5px] font-semibold transition-colors
-                  bg-[var(--tt-brand-strong)] lg:bg-[var(--tt-raised)] text-white lg:text-[var(--tt-fg)] border border-transparent lg:border-[var(--tt-border-strong)] hover:bg-[var(--tt-brand)] lg:hover:bg-[var(--tt-overlay)] lg:hover:border-[var(--tt-brand)] shadow-[0_12px_30px_-14px_var(--tt-brand-glow)] lg:shadow-none"
+                  bg-[var(--tt-raised)] text-[var(--tt-fg)] border border-[var(--tt-border-strong)] hover:bg-[var(--tt-overlay)] hover:border-[var(--tt-brand)]"
               >
                 <Star size={17} className="text-[#fde68a] lg:text-[var(--tt-warn)]" fill="currentColor" />
                 Star on GitHub
-                <span className="inline-flex items-center gap-1 pl-2.5 ml-0.5 border-l border-white/25 lg:border-[var(--tt-border2,rgba(255,255,255,0.1))] text-[13px] font-medium text-white/85 lg:text-[var(--tt-fg-muted)]">
+                <span className="inline-flex items-center gap-1 pl-2.5 ml-0.5 border-l border-white/25 lg:border-[var(--tt-border2,rgba(255,255,255,0.1))] text-[13px] font-medium text-[var(--tt-fg-muted)]">
                   {stars} ★
                 </span>
               </a>
@@ -102,7 +93,7 @@ export default function Hero() {
                   </code>
                   <button onClick={copy}
                     className="shrink-0 inline-flex items-center gap-1.5 h-[38px] px-3.5 rounded-[var(--tt-radius)] text-[12.5px] font-semibold transition-colors
-                      bg-[var(--tt-brand-strong)] text-white hover:bg-[var(--tt-brand)] shadow-[0_8px_22px_-12px_var(--tt-brand-glow)]
+                      bg-[var(--tt-brand)] text-[#101113] hover:bg-[#93c5fd] shadow-[0_8px_22px_-12px_var(--tt-brand-glow)]
                       max-sm:bg-[var(--tt-raised)] max-sm:text-[var(--tt-fg)] max-sm:border max-sm:border-[var(--tt-border-strong)] max-sm:shadow-none"
                     aria-label={copied ? "Copied" : "Copy install command"}>
                     {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -139,15 +130,7 @@ export default function Hero() {
                   className="block w-full h-auto object-cover object-top" loading="eager" decoding="async" />
               </div>
             </div>
-            {/* Floating tags (desktop) */}
-            <span className="hidden lg:inline-flex items-center gap-1.5 absolute z-20 top-[14%] -left-5 px-2.5 py-1.5 rounded-[var(--tt-radius)] text-[11.5px] font-semibold text-[#86efac] border border-[var(--tt-border-strong)] backdrop-blur shadow-[0_12px_30px_-14px_rgba(0,0,0,0.7)]"
-              style={{ background: "color-mix(in srgb, var(--tt-overlay) 92%, transparent)" }}>
-              <Lock size={13} className="text-[var(--tt-success-fg,#10b981)]" /> 0 bytes leave your machine
-            </span>
-            <span className="hidden lg:inline-flex items-center gap-1.5 absolute z-20 bottom-[16%] -right-4 px-2.5 py-1.5 rounded-[var(--tt-radius)] text-[11.5px] font-semibold text-[#fbbf24] border border-[var(--tt-border-strong)] backdrop-blur shadow-[0_12px_30px_-14px_rgba(0,0,0,0.7)]"
-              style={{ background: "color-mix(in srgb, var(--tt-overlay) 92%, transparent)" }}>
-              <TrendingUp size={13} className="text-[var(--tt-warn)]" /> $599 burned · last 90 days
-            </span>
+
           </div>
         </div>
       </div>
