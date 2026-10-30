@@ -40,7 +40,7 @@ export default function ContentSection({ label, value, error, collapseLong, plai
     }
   };
   const tone = error ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]" : "border-[var(--tt-border)] bg-[var(--tt-sunken)]";
-  const btn = "text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)]";
+  const btn = "text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]";
 
   return (
     <div className="space-y-1">
@@ -60,7 +60,7 @@ export default function ContentSection({ label, value, error, collapseLong, plai
       </div>
       <div className={`rounded-md border px-2.5 py-2 ${tone} ${collapsed ? "max-h-16 overflow-hidden" : "max-h-80 overflow-auto scrollbar-thin"}`}>
         {f.kind === "text" && !plain && f.text.length <= MARKDOWN_MAX ? (
-          <div className={`prose prose-sm max-w-none break-words text-[11px] leading-relaxed text-[var(--tt-fg)] [&_pre]:overflow-x-auto [&_pre]:text-[10px] ${error ? "text-[var(--tt-danger-fg)]" : ""}`}>
+          <div className={`prose prose-sm max-w-none break-words text-[12px] leading-relaxed text-[var(--tt-fg)] [&_pre]:overflow-x-auto [&_pre]:text-[11px] ${error ? "text-[var(--tt-danger-fg)]" : ""}`}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{ img: ({ alt }) => <span>{`[image${alt ? `: ${alt}` : ""}]`}</span> }}
@@ -69,11 +69,11 @@ export default function ContentSection({ label, value, error, collapseLong, plai
             </ReactMarkdown>
           </div>
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-[var(--tt-fg)]">{f.text}</pre>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--tt-fg)]">{f.text}</pre>
         )}
       </div>
       {f.truncated && (
-        <div className="flex items-center gap-2 text-[10px] text-[var(--tt-fg-dim)]">
+        <div className="flex items-center gap-2 text-[11px] text-[var(--tt-fg-muted)]">
           <span>{showAll ? `Showing the first ${f.text.length.toLocaleString()} characters` : `Showing the first ${f.text.length.toLocaleString()} of ${f.fullLength.toLocaleString()}${f.kind === "json" ? "+" : ""} characters`}</span>
           {!showAll && (
             <button type="button" className={btn} onClick={() => setShowAll(true)}>

@@ -7,7 +7,7 @@ import { agentBursts, ownerAgent, skillLanes } from "@/lib/traceTree/tree";
 import { axisMarks, fmtClock, fmtDur, type TimeScale } from "@/lib/traceTree/timeScale";
 import { Axis, HATCH, SKILL_COLOR, type ColorOf } from "./shared";
 
-const LANE = 20;
+const LANE = 24;
 const DRAG_MIN = 0.01;
 
 interface Props {
@@ -99,20 +99,20 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selected, o
     if (tipRef.current) tipRef.current.style.display = "none";
   };
 
-  const barBase = "absolute top-[3px] h-[14px] rounded-[3px] cursor-pointer";
-  const labelBase = "flex items-center gap-1.5 truncate pr-2 text-left text-[11px] hover:text-[var(--tt-fg)]";
+  const barBase = "absolute top-[4px] h-[16px] rounded-[3px] cursor-pointer";
+  const labelBase = "flex items-center gap-1.5 truncate pr-2 text-left text-[12px] hover:text-[var(--tt-fg)]";
   const labelTone = (on: boolean) => (on ? "font-semibold text-[var(--tt-fg)]" : "text-[var(--tt-fg-muted)]");
   const selStart = selected ? pct(selected.start) : 0;
   const selEnd = selected ? pct(Math.max(selected.end, selected.start)) : 0;
 
   return (
     <div className="select-none">
-      <div className="grid grid-cols-[11rem_minmax(0,1fr)]">
+      <div className="grid grid-cols-[13rem_minmax(0,1fr)]">
         <div />
         <Axis marks={marks} />
       </div>
-      <div className="max-h-64 overflow-y-auto scrollbar-thin">
-        <div className="grid grid-cols-[11rem_minmax(0,1fr)]">
+      <div className="max-h-[min(20rem,22vh)] overflow-y-auto overscroll-contain scrollbar-thin">
+        <div className="grid grid-cols-[13rem_minmax(0,1fr)]">
           <div className="flex flex-col">
             {mainSpan && (
               <button
@@ -246,11 +246,11 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selected, o
                     key={sp.id}
                     data-span-id={sp.id}
                     title={`skill · ${l.name} · ${fmtClock(sp.start)}${by ? ` (in ${by.agent?.agentType ?? by.title})` : ""}`}
-                    className="absolute flex h-5 w-3.5 -translate-x-1/2 cursor-pointer items-center justify-center"
+                    className="absolute flex h-6 w-4 -translate-x-1/2 cursor-pointer items-center justify-center"
                     style={{ top, left: `${pct(sp.start)}%` }}
                   >
                     <span
-                      className={`pointer-events-none size-2.5 rotate-45 ${selected?.id === sp.id ? "ring-1 ring-[var(--tt-fg)]" : ""}`}
+                      className={`pointer-events-none size-3 rotate-45 ${selected?.id === sp.id ? "ring-1 ring-[var(--tt-fg)]" : ""}`}
                       style={{ background: c }}
                     />
                   </div>
@@ -262,7 +262,7 @@ export default function Swimlanes({ roots, index, scale, win, onWin, selected, o
             <div ref={cursorRef} className="pointer-events-none absolute inset-y-0 hidden w-px bg-[var(--tt-fg-muted)]/60" />
             <div
               ref={tipRef}
-              className="pointer-events-none absolute top-0.5 z-10 hidden translate-x-1 rounded bg-[var(--tt-overlay)] px-1.5 font-mono text-[10px] leading-4 text-[var(--tt-fg)] shadow"
+              className="pointer-events-none absolute top-0.5 z-10 hidden translate-x-1 rounded bg-[var(--tt-overlay)] px-1.5 font-mono text-[11px] leading-4 text-[var(--tt-fg)] shadow"
             />
           </div>
         </div>

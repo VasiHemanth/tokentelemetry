@@ -106,10 +106,10 @@ export default function SpanDetail(p: Props) {
                 <LinkBtn key={c.id} onClick={() => p.onSelect(c.id)} text={`${c.title}${c.label ? ` · ${c.label}` : ""}`} right={real ? fmtDur(c.end - c.start) : undefined} />
               ),
             )}
-            {span.children.length > 12 && <div className="px-2 text-[11px] text-[var(--tt-fg-dim)]">{span.children.length - 12} more</div>}
+            {span.children.length > 12 && <div className="px-2 text-[12px] text-[var(--tt-fg-muted)]">{span.children.length - 12} more</div>}
           </Section>
         )}
-        {owner && <div className="text-[11px] text-[var(--tt-fg-dim)]">Inside {owner.agent?.agentType ?? owner.title}</div>}
+        {owner && <div className="text-[12px] text-[var(--tt-fg-muted)]">Inside {owner.agent?.agentType ?? owner.title}</div>}
       </>
     );
   } else if (span.kind === "tool") {
@@ -263,7 +263,7 @@ function Kv({ rows }: { rows: Array<[string, ReactNode]> }) {
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
-          <dt className="text-[var(--tt-fg-dim)]">{k}</dt>
+          <dt className="text-[var(--tt-fg-muted)]">{k}</dt>
           <dd className="break-words text-right font-mono text-[var(--tt-fg)]">{v}</dd>
         </div>
       ))}
@@ -281,7 +281,7 @@ function LinkBtn({ text, right, dot, icon, onClick }: { text: string; right?: st
       {dot && <span className="size-1.5 shrink-0 rounded-full" style={{ background: dot }} />}
       {icon}
       <span className="min-w-0 flex-1 truncate">{text}</span>
-      {right && <span className="shrink-0 font-mono text-[10px] text-[var(--tt-fg-dim)]">{right}</span>}
+      {right && <span className="shrink-0 font-mono text-[11px] text-[var(--tt-fg-muted)]">{right}</span>}
     </button>
   );
 }
@@ -302,7 +302,7 @@ function TokenBar({ t }: { t: SpanTokens }) {
           t[k] ? <span key={k} title={`${label}: ${t[k].toLocaleString()}`} style={{ width: `${(t[k] / total) * 100}%`, background: c }} /> : null,
         )}
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[var(--tt-fg-dim)]">
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[var(--tt-fg-muted)]">
         {TOKEN_SEGS.map(([k, label, c]) => (
           <span key={k} className="inline-flex items-center gap-1">
             <i className="size-1.5 rounded-full" style={{ background: c }} />

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown, PanelRight } from "lucide-react";
 import Link from "next/link";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import AgentSigil from "@/components/icons/AgentSigil";
@@ -962,24 +962,21 @@ export default function SessionDetailPage() {
   const untrackedBackground = agent === "claude" ? sessionInfo?.untracked_background : undefined;
 
   return (
-    <div className="h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col overflow-hidden">
-      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-4 shrink-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
-        <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="flex items-start gap-3 min-w-0">
+    <div className="flex-1 basis-0 min-h-0 bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col overflow-hidden">
+      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-2.5 shrink-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
+        <div className={`${showTrace ? "" : "max-w-[1600px]"} mx-auto flex flex-col gap-2`}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
               <button
                 onClick={() => router.push(resolveSessionBackTarget(searchParams.get("from"), agent))}
                 title="Back"
                 aria-label="Back"
-                className="h-9 w-9 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0 mt-0.5"
+                className="h-8 w-8 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0"
               >
                 <ArrowLeft size={16} />
               </button>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-1">
-                  <Activity size={11} className="text-[var(--tt-brand)]" />
-                  Session trace
-                </div>
+                <h1 className="sr-only">Session trace</h1>
                 <div className="flex items-center gap-2 flex-wrap">
                   {agent && <AgentBadge agent={agent} />}
                   {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
@@ -1017,50 +1014,6 @@ export default function SessionDetailPage() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <div className="flex items-center gap-1 flex-wrap">
-                <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
-                <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
-                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
-                <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
-                <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
-                <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
-                <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
-                {sessionInfo?.loop?.is_loop && (() => {
-                  const lp = sessionInfo.loop;
-                  const state: string = lp.state ?? "unknown";
-                  const variant =
-                    state === "active"    ? "success" :
-                    state === "expired"   ? "neutral" :
-                    state === "cancelled" ? "warn" :
-                    "outline";
-                  const tip = `${lp.mode} · ${lp.cadence} · ≥${lp.iterations} fires${lp.expired_reason ? " · " + lp.expired_reason : ""}`;
-                  return (
-                    <Badge variant={variant} size="sm" className="normal-case" title={tip}>
-                      <Repeat size={11} /> Loop · {state}
-                    </Badge>
-                  );
-                })()}
-                {/* Hermes: how the session ended, and how its cost was arrived at.
-                    Lives in this always-visible row rather than the chain banner,
-                    which only mounts for chained (compression) sessions. */}
-                {agent === "hermes" && sessionInfo && (
-                  <HermesOutcomeBadge outcome={sessionInfo.outcome} raw={sessionInfo.outcome_raw} />
-                )}
-                {agent === "hermes" && sessionInfo && (
-                  <HermesCostPill
-                    cost={sessionInfo.tokens?.cost ?? sessionInfo.cost}
-                    status={sessionInfo.cost_status}
-                  />
-                )}
-                {agent !== "hermes" && sessionInfo?.cost != null && (
-                   <StatPill
-                     icon={<DollarSign size={11} />}
-                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
-                     value={formatCost(sessionInfo.cost)}
-                     tone="amber"
-                   />
-                 )}
-              </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
                   {agent === "qoder" ? (
@@ -1130,6 +1083,17 @@ export default function SessionDetailPage() {
                   {stepView ? "Trace view" : "Step view"}
                 </Button>
               )}
+              {showTrace && (
+                <Button
+                  variant={sidebarOpen ? "primary" : "secondary"}
+                  size="md"
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  title="Context, tools, artifacts and raw events for this session"
+                >
+                  <PanelRight size={14} />
+                  Inspector
+                </Button>
+              )}
               {!showTrace && (
                 <Button
                   variant={splitView ? "primary" : "secondary"}
@@ -1141,6 +1105,54 @@ export default function SessionDetailPage() {
                 </Button>
               )}
             </div>
+          </div>
+
+          {/* Session counters on their own row, so the controls above never wrap under them */}
+          <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 flex-wrap">
+                <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
+                <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
+                <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
+                <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
+                <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
+                <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
+                {sessionInfo?.loop?.is_loop && (() => {
+                  const lp = sessionInfo.loop;
+                  const state: string = lp.state ?? "unknown";
+                  const variant =
+                    state === "active"    ? "success" :
+                    state === "expired"   ? "neutral" :
+                    state === "cancelled" ? "warn" :
+                    "outline";
+                  const tip = `${lp.mode} · ${lp.cadence} · ≥${lp.iterations} fires${lp.expired_reason ? " · " + lp.expired_reason : ""}`;
+                  return (
+                    <Badge variant={variant} size="sm" className="normal-case" title={tip}>
+                      <Repeat size={11} /> Loop · {state}
+                    </Badge>
+                  );
+                })()}
+                {/* Hermes: how the session ended, and how its cost was arrived at.
+                    Lives in this always-visible row rather than the chain banner,
+                    which only mounts for chained (compression) sessions. */}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesOutcomeBadge outcome={sessionInfo.outcome} raw={sessionInfo.outcome_raw} />
+                )}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesCostPill
+                    cost={sessionInfo.tokens?.cost ?? sessionInfo.cost}
+                    status={sessionInfo.cost_status}
+                  />
+                )}
+                {agent !== "hermes" && sessionInfo?.cost != null && (
+                   <StatPill
+                     icon={<DollarSign size={11} />}
+                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
+                     value={formatCost(sessionInfo.cost)}
+                     tone="amber"
+                   />
+                 )}
+              </div>
           </div>
 
           {untrackedBackground && untrackedBackground.total > 0 && (
@@ -1230,7 +1242,7 @@ export default function SessionDetailPage() {
           </div>
         </div>
       ) : (
-        <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[1fr_380px]" : "grid-cols-[1fr_40px]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
+        <main className={`flex-1 w-full ${showTrace ? "" : "max-w-[1800px]"} mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[minmax(0,1fr)_380px]" : "grid-cols-[minmax(0,1fr)]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
           {/* LEFT: Step Index (step view only) */}
           {!showTrace && (
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full scroll-pt-10">
@@ -1312,6 +1324,17 @@ export default function SessionDetailPage() {
 
           {/* CENTER: Conversation */}
           <section className="overflow-y-auto h-full p-4">
+             {/* Trace view fills the visible height so the timeline, span table and
+                 detail panel fit on one screen; the session cards follow below it. */}
+             {showTrace && (
+               <TraceView
+                 roots={traceRoots}
+                 timing={adapter?.timing ?? "real"}
+                 onLoadChild={loadChildSpans}
+                 onJumpToEvent={openStep}
+                 className="mb-8 h-full min-h-[520px]"
+               />
+             )}
              {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
              {agent && (
                 <div className="mb-8">
@@ -1352,14 +1375,7 @@ export default function SessionDetailPage() {
                  onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
                />
              )}
-             {showTrace ? (
-               <TraceView
-                 roots={traceRoots}
-                 timing={adapter?.timing ?? "real"}
-                 onLoadChild={loadChildSpans}
-                 onJumpToEvent={openStep}
-               />
-             ) : (
+             {!showTrace && (
              <>
              {/* Split View Header & Boundary Gap Mode Controller */}
              {splitView && (
@@ -1448,7 +1464,9 @@ export default function SessionDetailPage() {
              )}
            </section>
 
-          {/* RIGHT: Sidebar */}
+          {/* RIGHT: Sidebar. In trace view the closed rail is dropped (the header
+              has an Inspector button instead) so the trace gets the width. */}
+          {!(showTrace && !sidebarOpen) && (
           <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full">
              {!sidebarOpen ? (
                 <button
@@ -1502,6 +1520,7 @@ export default function SessionDetailPage() {
              </>
              )}
           </aside>
+          )}
         </main>
       )}
 

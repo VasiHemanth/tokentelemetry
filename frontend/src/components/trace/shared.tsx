@@ -27,7 +27,7 @@ export const HATCH: CSSProperties = {
   backgroundColor: "var(--tt-sunken)",
 };
 
-const CHIP = "inline-flex shrink-0 items-center rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.12em] leading-4";
+const CHIP = "inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.12em] leading-4";
 
 export function KindChip({ span, color }: { span: TraceSpan; color?: string }) {
   if (span.error) {
@@ -45,7 +45,7 @@ export function KindChip({ span, color }: { span: TraceSpan; color?: string }) {
       ? "border-[var(--tt-brand-glow)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]"
       : span.kind === "llm"
         ? "border-[var(--tt-border)] bg-[var(--tt-raised)] text-[var(--tt-fg-muted)]"
-        : "border-[var(--tt-border)] bg-[var(--tt-sunken)] text-[var(--tt-fg-dim)]";
+        : "border-[var(--tt-border)] bg-[var(--tt-sunken)] text-[var(--tt-fg-muted)]";
   return <span className={`${CHIP} border ${tone}`}>{span.kind}</span>;
 }
 
@@ -53,7 +53,7 @@ export function Tag({ children, color, title }: { children: React.ReactNode; col
   return (
     <span
       title={title}
-      className="inline-flex shrink-0 items-center rounded border border-[var(--tt-border-strong)] px-1 text-[9px] leading-4 text-[var(--tt-fg-muted)]"
+      className="inline-flex shrink-0 items-center rounded border border-[var(--tt-border-strong)] px-1 text-[10px] leading-4 text-[var(--tt-fg-muted)]"
       style={color ? { color, borderColor: color } : undefined}
     >
       {children}
@@ -68,7 +68,7 @@ export function Axis({ marks, className = "" }: { marks: AxisMark[]; className?:
         m.kind === "idle" ? (
           <span
             key={`i${i}`}
-            className="absolute top-0.5 -translate-x-1/2 whitespace-nowrap rounded bg-[var(--tt-sunken)] px-1 text-[9px] italic leading-4 text-[var(--tt-fg-dim)]"
+            className="absolute top-0.5 -translate-x-1/2 whitespace-nowrap rounded bg-[var(--tt-sunken)] px-1 text-[10px] italic leading-4 text-[var(--tt-fg-muted)]"
             style={{ left: `${m.x * 100}%` }}
           >
             {m.label}
@@ -76,7 +76,7 @@ export function Axis({ marks, className = "" }: { marks: AxisMark[]; className?:
         ) : (
           <span
             key={`${m.kind}${i}`}
-            className={`absolute top-1 -translate-x-1/2 whitespace-nowrap font-mono text-[9px] leading-4 ${m.kind === "day" ? "font-semibold text-[var(--tt-fg-muted)]" : "text-[var(--tt-fg-dim)]"}`}
+            className={`absolute top-1 -translate-x-1/2 whitespace-nowrap font-mono text-[10px] leading-4 ${m.kind === "day" ? "font-semibold text-[var(--tt-fg-muted)]" : "text-[var(--tt-fg-muted)]"}`}
             style={{ left: `${m.x * 100}%` }}
           >
             {m.label}
@@ -87,4 +87,4 @@ export function Axis({ marks, className = "" }: { marks: AxisMark[]; className?:
   );
 }
 
-export const SECTION_LABEL = "text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]";
+export const SECTION_LABEL = "text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]";

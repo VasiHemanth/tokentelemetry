@@ -19,7 +19,7 @@ import { buildScale, fmtClock, fmtDur, fmtTokens } from "@/lib/traceTree/timeSca
 import Swimlanes from "./Swimlanes";
 import SpanTable, { type LoadState, type TableRow } from "./SpanTable";
 import SpanDetail from "./SpanDetail";
-import { SECTION_LABEL, SKILL_COLOR, makeColorOf } from "./shared";
+import { SKILL_COLOR, makeColorOf } from "./shared";
 
 export interface TraceViewProps {
   roots: TraceSpan[];
@@ -146,10 +146,22 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
   useEffect(() => {
     const req = scrollReq.current;
     if (!req) return;
-    const el = scrollRef.current?.querySelector(`[data-span-id="${CSS.escape(req.id)}"]`);
-    if (el) {
-      scrollReq.current = null;
-      el.scrollIntoView({ block: req.block, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    const box = scrollRef.current;
+    const el = box?.querySelector<HTMLElement>(`[data-span-id="${CSS.escape(req.id)}"]`);
+    if (!box || !el) return;
+    scrollReq.current = null;
+    // Scroll only the table. scrollIntoView would also move the page section the
+    // trace sits in, pushing the timeline out of view.
+    const b = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const head = (box.querySelector<HTMLElement>(".sticky")?.offsetHeight ?? 0);
+    const top = r.top - b.top + box.scrollTop;
+    let target: number | null = null;
+    if (req.block === "center") target = top - (box.clientHeight - r.height) / 2;
+    else if (r.top < b.top + head) target = top - head;
+    else if (r.bottom > b.bottom) target = top + r.height - box.clientHeight;
+    if (target !== null) {
+      box.scrollTo({ top: Math.max(0, target), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     }
   }, [selectedId, rows]);
 
@@ -187,36 +199,39 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
   };
 
   if (!roots.length) {
-    return <div className={`rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)] p-6 text-center text-xs text-[var(--tt-fg-dim)] ${className}`}>No spans recorded for this session.</div>;
+    return <div className={`rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)] p-6 text-center text-xs text-[var(--tt-fg-muted)] ${className}`}>No spans recorded for this session.</div>;
   }
 
   const zoomed = win[0] > 0 || win[1] < 1;
   const card = "rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)]";
   const stat = (v: string | number, k: string) => (
-    <div key={k} className="flex min-w-[88px] flex-col gap-0.5 px-3 py-2">
-      <b className="font-mono text-sm font-semibold text-[var(--tt-fg)]">{v}</b>
-      <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">{k}</span>
+    <span key={k} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+      <b className="font-mono text-[13px] font-semibold tabular-nums text-[var(--tt-fg)]">{v}</b>
+      <span className="text-[11px] text-[var(--tt-fg-muted)]">{k}</span>
+    </span>
+  );
+  const statLine = (
+    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+      {real && stat(fmtDur(stats.wall), "wall clock")}
+      {real && stat(fmtDur(stats.active), "active")}
+      {stat(stats.prompts, stats.prompts === 1 ? "prompt" : "prompts")}
+      {stat(stats.agents, stats.agents === 1 ? "subagent" : "subagents")}
+      {stat(stats.skills, stats.skills === 1 ? "skill" : "skills")}
+      {stat(stats.peak, "peak parallel")}
+      {stat(fmtTokens(stats.tokens), "main tokens")}
     </div>
   );
   const types = [...new Set(index.agents.map((a) => a.agent?.agentType ?? a.title))];
 
   return (
-    <div className={`@container flex flex-col gap-3 ${className}`}>
-      <div className={`${card} flex flex-wrap divide-x divide-[var(--tt-border)]`}>
-        {real && stat(fmtDur(stats.wall), "Wall clock")}
-        {real && stat(fmtDur(stats.active), "Active")}
-        {stat(stats.prompts, "Prompts")}
-        {stat(stats.agents, "Subagents")}
-        {stat(stats.skills, "Skills")}
-        {stat(stats.peak, "Peak parallel")}
-        {stat(fmtTokens(stats.tokens), "Main tokens")}
-      </div>
+    <div className={`@container flex min-h-0 flex-col gap-3 ${className}`}>
+      {!real && <div className={`${card} shrink-0 px-3 py-2`}>{statLine}</div>}
 
       {real && (
-        <section className={`${card} p-3`}>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className={SECTION_LABEL}>Timeline</span>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--tt-fg-muted)]">
+        <section className={`${card} shrink-0 p-3`}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            {statLine}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--tt-fg-muted)]">
               <Legend color="var(--tt-brand)" label="main agent" />
               {index.skills.length > 0 && <Legend color={SKILL_COLOR} label="skill" />}
               {types.map((t) => (
@@ -224,13 +239,13 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
               ))}
               {zoomed ? (
                 <>
-                  <span className="font-mono text-[var(--tt-fg-dim)]">
+                  <span className="font-mono text-[var(--tt-fg-muted)]">
                     {fmtClock(scale.tOf(win[0]))} to {fmtClock(scale.tOf(win[1]))}
                   </span>
                   <ToolBtn onClick={() => setWin([0, 1])} icon={<RotateCcw size={11} />} label="Reset zoom" />
                 </>
               ) : (
-                <span className="text-[var(--tt-fg-dim)]">drag to zoom, double-click to reset</span>
+                <span className="text-[var(--tt-fg-muted)]">drag to zoom, double-click to reset</span>
               )}
             </div>
           </div>
@@ -238,9 +253,9 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
         </section>
       )}
 
-      <div className="grid items-start gap-3 @min-[960px]:grid-cols-[minmax(0,1fr)_340px]">
-        <section className={`${card} min-w-0 overflow-hidden`}>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--tt-border)] px-3 py-2">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] gap-3 @min-[960px]:grid-cols-[minmax(0,1fr)_clamp(340px,30%,560px)] @min-[960px]:grid-rows-1">
+        <section className={`${card} flex min-h-0 min-w-0 flex-col overflow-hidden`}>
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--tt-border)] px-3 py-2">
             <div className="flex items-center gap-1" role="group" aria-label="Filter spans">
               {FILTERS.map(([f, label]) => (
                 <button
@@ -248,7 +263,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
                   type="button"
                   aria-pressed={filter === f}
                   onClick={() => setFilter(f)}
-                  className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors ${
                     filter === f
                       ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]"
                       : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
@@ -283,7 +298,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
           />
         </section>
 
-        <aside className={`${card} min-w-0 p-3 @min-[960px]:sticky @min-[960px]:top-4 @min-[960px]:max-h-[calc(100vh-2rem)] @min-[960px]:overflow-y-auto`}>
+        <aside className={`${card} min-h-0 min-w-0 overflow-y-auto overscroll-contain p-3 scrollbar-thin`}>
           <SpanDetail
             span={selected}
             index={index}
@@ -315,7 +330,7 @@ function ToolBtn({ onClick, icon, label }: { onClick: () => void; icon: React.Re
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--tt-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--tt-fg-muted)] transition-colors hover:border-[var(--tt-border-strong)] hover:text-[var(--tt-fg)]"
+      className="inline-flex items-center gap-1 rounded-md border border-[var(--tt-border)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--tt-fg-muted)] transition-colors hover:border-[var(--tt-border-strong)] hover:text-[var(--tt-fg)]"
     >
       {icon}
       {label}

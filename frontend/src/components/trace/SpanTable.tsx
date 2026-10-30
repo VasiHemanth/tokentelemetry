@@ -13,8 +13,8 @@ export type TableRow =
   | ({ type: "span" } & Row)
   | { type: "status"; id: string; depth: number; load: LoadState };
 
-const COLS_REAL = "minmax(0,1fr) 64px 64px";
-const COLS_ORDER = "minmax(0,1fr) 60px";
+const COLS_REAL = "minmax(0,1fr) 88px 72px";
+const COLS_ORDER = "minmax(0,1fr) 72px";
 
 interface Props {
   rows: TableRow[];
@@ -57,11 +57,11 @@ export default function SpanTable(p: Props) {
       onKeyDown={onKeyDown}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      className="max-h-[70vh] overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin"
+      className="min-h-0 flex-1 overflow-auto overscroll-contain outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin"
     >
       <div className="min-w-[420px]">
         <div
-          className="sticky top-0 z-20 grid items-end border-b border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]"
+          className="sticky top-0 z-20 grid items-end border-b border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]"
           style={{ gridTemplateColumns: cols }}
         >
           <div className="px-3 py-1.5">Span</div>
@@ -70,7 +70,7 @@ export default function SpanTable(p: Props) {
         </div>
 
         <div className="relative">
-          {rows.length === 0 && <div className="px-3 py-6 text-center text-xs text-[var(--tt-fg-dim)]">Nothing matches this filter.</div>}
+          {rows.length === 0 && <div className="px-3 py-6 text-center text-xs text-[var(--tt-fg-muted)]">Nothing matches this filter.</div>}
           {rows.map((r) =>
             r.type === "status" ? (
               <StatusRow key={`status-${r.id}`} id={r.id} depth={r.depth} load={r.load} cols={cols} onRetry={p.onRetry} />
@@ -102,8 +102,8 @@ function StatusRow({ id, depth, load, cols, onRetry }: { id: string; depth: numb
       <div className="flex items-center gap-2 pr-2" style={{ paddingLeft: depth * 14 + 34 }}>
         {load.state === "pending" ? (
           <>
-            <Loader2 size={12} className="animate-spin text-[var(--tt-fg-dim)]" />
-            <span className="text-[var(--tt-fg-dim)]">Loading subagent trace</span>
+            <Loader2 size={12} className="animate-spin text-[var(--tt-fg-muted)]" />
+            <span className="text-[var(--tt-fg-muted)]">Loading subagent trace</span>
           </>
         ) : (
           <>
@@ -116,7 +116,7 @@ function StatusRow({ id, depth, load, cols, onRetry }: { id: string; depth: numb
                 e.stopPropagation();
                 onRetry(id);
               }}
-              className="inline-flex items-center gap-1 rounded border border-[var(--tt-border-strong)] px-1.5 py-0.5 text-[10px] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
+              className="inline-flex items-center gap-1 rounded border border-[var(--tt-border-strong)] px-1.5 py-0.5 text-[11px] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
             >
               <RotateCw size={10} /> Retry
             </button>
@@ -156,7 +156,7 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
       aria-selected={selected}
       aria-expanded={hasKids ? open : undefined}
       data-span-id={span.id}
-      className={`relative grid items-center border-b border-[var(--tt-border)]/50 text-xs [content-visibility:auto] [contain-intrinsic-size:auto_28px] hover:bg-[var(--tt-raised)] ${selected ? "bg-[var(--tt-brand-glow)]" : ""}`}
+      className={`relative grid items-center border-b border-[var(--tt-border)]/50 text-[13px] leading-5 [content-visibility:auto] [contain-intrinsic-size:auto_29px] hover:bg-[var(--tt-raised)] ${selected ? "bg-[var(--tt-brand-glow)]" : ""}`}
       style={{ gridTemplateColumns: cols }}
     >
       <div className="flex min-w-0 items-center gap-1.5 py-1 pr-2" style={{ paddingLeft: depth * 14 + 8 }}>
@@ -165,7 +165,7 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
           tabIndex={-1}
           data-chevron
           aria-label={open ? "Collapse" : "Expand"}
-          className={`flex size-4 shrink-0 items-center justify-center text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] ${hasKids ? "" : "invisible"}`}
+          className={`flex size-4 shrink-0 items-center justify-center text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] ${hasKids ? "" : "invisible"}`}
         >
           <ChevronRight size={12} className={`transition-transform ${open ? "rotate-90" : ""}`} />
         </button>
@@ -179,18 +179,18 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
         {resumed && <Tag color={colorOf(resumed.agent?.agentType)}>{`→ ${resumed.agent?.agentType ?? "agent"}`}</Tag>}
         {errs > 0 && span.kind !== "tool" && <Tag color="var(--tt-danger-fg)">{errs} err</Tag>}
         {label && (
-          <span className="min-w-0 flex-1 truncate text-[var(--tt-fg-dim)]" title={label}>
+          <span className="min-w-0 flex-1 truncate text-[var(--tt-fg-muted)]" title={label}>
             {label}
           </span>
         )}
       </div>
       {real && (
-        <div className="px-2 text-right font-mono text-[11px] text-[var(--tt-fg-muted)]" title={span.approxStart ? "Start time is approximate" : undefined}>
-          {span.approxStart ? "~" : ""}
+        <div className="whitespace-nowrap px-2 text-right font-mono text-[12px] tabular-nums text-[var(--tt-fg-muted)]" title={span.approxStart ? "Start time is approximate" : undefined}>
+          {span.approxStart && <span className="mr-0.5 text-[var(--tt-warn-fg)]">≈</span>}
           {fmtDur(span.end - span.start)}
         </div>
       )}
-      <div className="px-2 text-right font-mono text-[11px] text-[var(--tt-fg-muted)]">{fmtTokens(rollup?.tokens ?? 0)}</div>
+      <div className="whitespace-nowrap px-2 text-right font-mono text-[12px] tabular-nums text-[var(--tt-fg-muted)]">{fmtTokens(rollup?.tokens ?? 0)}</div>
     </div>
   );
 });
