@@ -117,3 +117,15 @@ test("content: prompt, reasoning, reply, tool args/result, agent task/output, er
   assert.equal(edit.content?.output, "no match");
   assert.deepEqual(agent.content, { input: "do the thing", output: "found it" });
 });
+
+test("usage-only step has its own model span and keeps prior content separate", () => {
+  const events = [user(T, "go"), say(T + 10, "first", tok(10, 1)),
+    { type: "step_usage", tokens: tok(20, 2), normalized_timestamp: T + 20 },
+    say(T + 30, "next", tok(30, 3))];
+  for (const agent of ["opencode", "zcode"] as const) {
+    const llms = opencodeAdapter(agent).build(events, null)[0].children;
+    assert.deepEqual(llms.map(s => s.tokens?.input), [10, 20, 30]);
+    assert.equal(llms[1].content?.output, undefined);
+    assert.equal(llms[0].content?.output, "first");
+  }
+});

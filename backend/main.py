@@ -10120,7 +10120,7 @@ def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 @app.get("/sessions/{session_id}")
-async def get_session_detail(session_id: str, agent: str):
+async def get_session_detail(session_id: str, agent: str, raw: bool = False):
     if agent == "claude":
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
@@ -10128,7 +10128,8 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        return _canonicalize_codex_trace(_parse_session_jsonl_cached(files[0]))
+        parsed = _parse_session_jsonl_cached(files[0])
+        return parsed if raw else _canonicalize_codex_trace(parsed)
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
@@ -10325,7 +10326,9 @@ async def get_session_detail(session_id: str, agent: str):
                             })
                     if blocks:
                         norm = {"type": "assistant", "message":
-                                {"role": "assistant", "content": blocks}}
+                                {"role": "assistant", "content": blocks,
+                                 **({"model": m["model"]} if m.get("model") else {}),
+                                 **({"usage": m["usage"]} if isinstance(m.get("usage"), dict) else {})}}
 
                 elif role == "toolResult":
                     content = m.get("content")
@@ -10338,6 +10341,7 @@ async def get_session_detail(session_id: str, agent: str):
                         "type": "tool_result",
                         "tool_use_id": m.get("toolCallId"),
                         "content": content or "",
+                        **({"is_error": m["isError"]} if isinstance(m.get("isError"), bool) else {}),
                     }]}}
 
                 if norm is None:
@@ -10634,12 +10638,13 @@ async def get_session_detail(session_id: str, agent: str):
             ts = row.get("timestamp")
             try: ts_ms = _aware(datetime.fromisoformat(ts.replace("Z", "+00:00"))).timestamp() * 1000 if isinstance(ts, str) else None
             except ValueError: ts_ms = None
-            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms, "messageID": row.get("id")}
             role = message.get("role")
             if role == "user":
                 text = _prime_text(message.get("content"))
                 if text: events.append({"type": "user", "payload": {"content": text}, **base})
             elif role == "assistant":
+                first_event = len(events)
                 for part in message.get("content") or []:
                     if not isinstance(part, dict): continue
                     if part.get("type") == "text" and isinstance(part.get("text"), str):
@@ -10647,10 +10652,15 @@ async def get_session_detail(session_id: str, agent: str):
                     elif part.get("type") == "thinking" and isinstance(part.get("thinking"), str):
                         events.append({"type": "assistant_thinking", "payload": {"text": part["thinking"]}, **base})
                     elif part.get("type") == "toolCall":
-                        events.append({"type": "tool_call", "payload": {"tool": part.get("name"), "args": part.get("arguments")}, **base})
+                        events.append({"type": "tool_call", "payload": {"tool": part.get("name"), "args": part.get("arguments"), "callID": part.get("id")}, **base})
+                if len(events) > first_event:
+                    if isinstance(message.get("usage"), dict): events[-1]["usage"] = message["usage"]
+                    if message.get("model"): events[-1]["model"] = message["model"]
+                elif isinstance(message.get("usage"), dict):
+                    events.append({"type": "assistant", "payload": {}, "usage": message["usage"], "model": message.get("model"), **base})
             elif role == "toolResult":
                 text = _prime_text(message.get("content"))
-                events.append({"type": "tool_result", "payload": {"tool": message.get("toolName"), "content": text}, **base})
+                events.append({"type": "tool_result", "payload": {"tool": message.get("toolName"), "content": text, "callID": message.get("toolCallId"), "is_error": message.get("isError")}, **base})
         return events
     elif agent == "qwen":
         files = list(QWEN_DIR.glob(f"projects/**/chats/{session_id}.jsonl"))
@@ -10784,6 +10794,7 @@ async def get_session_detail(session_id: str, agent: str):
                 except Exception: md = {}
                 role_by_msg[mrow["id"]] = md.get("role") or "assistant"
             events: List[Dict[str, Any]] = []
+            step_event: Dict[str, int] = {}
             for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
                 try:
                     p = json.loads(prow["data"] or "{}")
@@ -10792,7 +10803,11 @@ async def get_session_detail(session_id: str, agent: str):
                 ts_ms = prow["time_created"]
                 base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
                 ptype = p.get("type")
-                if ptype == "text":
+                mid = prow["message_id"]
+                before = len(events)
+                if ptype == "step-start":
+                    step_event.pop(mid, None)
+                elif ptype == "text":
                     if role == "user":
                         events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
                     else:
@@ -10810,9 +10825,14 @@ async def get_session_detail(session_id: str, agent: str):
                     # the step's token usage, so attach it to the step's last
                     # emitted event for the per-step usage UI (#128).
                     tk = p.get("tokens")
-                    if isinstance(tk, dict) and events:
-                        events[-1]["tokens"] = tk
-                # step-start is a lifecycle marker; skip in trace
+                    index = step_event.pop(mid, None)
+                    if isinstance(tk, dict):
+                        if index is not None:
+                            events[index]["tokens"] = tk
+                        else:
+                            events.append({"type": "step_usage", "tokens": tk, **base})
+                if ptype in ("text", "reasoning", "tool") and len(events) > before:
+                    step_event[mid] = len(events) - 1
             return events
         finally:
             conn.close()
@@ -10837,6 +10857,7 @@ async def get_session_detail(session_id: str, agent: str):
                     md = {}
                 role_by_msg[mrow["id"]] = md.get("role") or "assistant"
             events: List[Dict[str, Any]] = []
+            step_event: Dict[str, int] = {}
             for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
                 try:
                     p = json.loads(prow["data"] or "{}")
@@ -10846,7 +10867,11 @@ async def get_session_detail(session_id: str, agent: str):
                 ts_ms = prow["time_created"]
                 base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
                 ptype = p.get("type")
-                if ptype == "text":
+                mid = prow["message_id"]
+                before = len(events)
+                if ptype == "step-start":
+                    step_event.pop(mid, None)
+                elif ptype == "text":
                     if role == "user":
                         events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
                     else:
@@ -10864,9 +10889,14 @@ async def get_session_detail(session_id: str, agent: str):
                     # the step's token usage, so attach it to the step's last
                     # emitted event for the per-step usage UI (#128).
                     tk = p.get("tokens")
-                    if isinstance(tk, dict) and events:
-                        events[-1]["tokens"] = tk
-                # step-start is a lifecycle marker; skip in trace
+                    index = step_event.pop(mid, None)
+                    if isinstance(tk, dict):
+                        if index is not None:
+                            events[index]["tokens"] = tk
+                        else:
+                            events.append({"type": "step_usage", "tokens": tk, **base})
+                if ptype in ("text", "reasoning", "tool") and len(events) > before:
+                    step_event[mid] = len(events) - 1
             return events
         finally:
             conn.close()

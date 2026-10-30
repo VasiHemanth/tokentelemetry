@@ -10,7 +10,7 @@
  * - dsh: no ids or usage. Its "subagent" tool acknowledges with
  *   "started subagent <uuid>", which is the delegation agent_id and the id of
  *   a full child session.
- * - pi: no ids, usage, is_error or subagents.
+ * - pi: native usage and tool errors; no subagents.
  * - qoder: no ids or usage. Delegation has credits but no times or tokens, so
  *   Agent calls link by description and are never drilled into.
  */
@@ -281,7 +281,10 @@ function buildSpans(shape: Shape, events: Event[], delegation: TraceValue | null
     touchTurn(t);
 
     // Usage is copied onto every event of one message; keep the fullest copy once.
-    const tokens = shape === "claude" ? usageTokens(msg.usage) : undefined;
+    const tokens = shape === "claude" ? usageTokens(msg.usage) : shape === "pi" && msg.usage && typeof msg.usage === "object"
+      ? { input: Number(msg.usage.input) || 0, output: Number(msg.usage.output) || 0,
+          cacheRead: Number(msg.usage.cacheRead) || 0, cacheWrite: Number(msg.usage.cacheWrite) || 0 }
+      : undefined;
     if (tokens && (!span.tokens || tokens.output >= span.tokens.output)) span.tokens = tokens;
 
     content.forEach((b: TraceValue, bi: number) => {

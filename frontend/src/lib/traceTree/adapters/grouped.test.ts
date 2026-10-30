@@ -83,3 +83,26 @@ test("content: hermes and prime fill turn, llm and tool content", () => {
   assert.equal(ptool.content?.input, pargs);
   assert.equal(ptool.content?.output, "out");
 });
+
+test("prime pairs same-name calls by id, retains usage, and marks failures", () => {
+  const events = [user(T, "q"),
+    { type: "tool_call", payload: { tool: "run", callID: "a" }, normalized_timestamp: T + 10 },
+    { type: "tool_call", payload: { tool: "run", callID: "b" }, usage: { input: 10, output: 3, cacheRead: 5, cacheWrite: 2 }, model: "test-model", normalized_timestamp: T + 10 },
+    { type: "tool_result", payload: { tool: "run", callID: "b", content: "failed", is_error: true }, normalized_timestamp: T + 20 },
+    { type: "tool_result", payload: { tool: "run", callID: "a", content: "ok" }, normalized_timestamp: T + 30 }];
+  const llm = primeAdapter.build(events, null)[0].children[0];
+  assert.equal(llm.title, "test-model");
+  assert.deepEqual(llm.tokens, { input: 10, output: 3, cacheRead: 5, cacheWrite: 2 });
+  assert.equal(llm.children[0].content?.output, "ok");
+  assert.equal(llm.children[1].content?.output, "failed");
+  assert.equal(llm.children[1].error, true);
+});
+
+test("prime keeps distinct same-timestamp messages and usage separate", () => {
+  const events = [user(T, "q"),
+    { type: "assistant", payload: { content: "one" }, messageID: "m1", usage: { input: 10, output: 1 }, normalized_timestamp: T + 1 },
+    { type: "assistant", payload: { content: "two" }, messageID: "m2", usage: { input: 20, output: 2 }, normalized_timestamp: T + 1 }];
+  const llms = primeAdapter.build(events, null)[0].children;
+  assert.equal(llms.length, 2);
+  assert.deepEqual(llms.map(s => s.tokens?.input), [10, 20]);
+});

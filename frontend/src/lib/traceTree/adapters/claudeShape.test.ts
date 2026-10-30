@@ -254,3 +254,11 @@ test("claude: a typed /skill starts a turn holding a skill span; built-in comman
   assert.equal(spans[1].label, "/clear");
   assert.equal(spans[1].children.length, 0);
 });
+
+test("pi preserves native usage, model and tool errors", () => {
+  const events = [user(T0, "go"), asst(T0 + 10, [use("c", "run")], { model: "test-model", usage: { input: 10, output: 3, cacheRead: 5, cacheWrite: 2 } }), user(T0 + 20, [res("c", "failed", true)])];
+  const llm = claudeShapeAdapter("pi").build(events, null)[0].children[0];
+  assert.equal(llm.title, "test-model");
+  assert.deepEqual(llm.tokens, { input: 10, output: 3, cacheRead: 5, cacheWrite: 2 });
+  assert.equal(llm.children[0].error, true);
+});

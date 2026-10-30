@@ -1,7 +1,5 @@
 /**
- * Prime trace -> span tree. Tool calls and results carry no ids, so each result
- * closes the oldest unpaired call of the same tool name. No token counts, no
- * error flag, no subagents.
+ * Prime trace -> span tree. Pair calls by id, falling back to tool name for older recordings.
  */
 import type { TraceValue } from "../../traceEvents";
 import type { HarnessAdapter } from "../index";
@@ -15,5 +13,10 @@ function describe(payload: TraceValue): { title: string; label?: string; input?:
 export const primeAdapter: HarnessAdapter = {
   timing: "real",
   build: (events) =>
-    buildGroupedTrace(events, { pair: "toolName", isNotification: () => false, describe, isError: () => false }),
+    buildGroupedTrace(events, {
+      pair: "callIdOrName", isNotification: () => false, describe,
+      isError: (_content, payload) => payload.is_error === true,
+      tokens: (usage) => ({ input: Number(usage.input) || 0, output: Number(usage.output) || 0,
+        cacheRead: Number(usage.cacheRead) || 0, cacheWrite: Number(usage.cacheWrite) || 0 }),
+    }),
 };

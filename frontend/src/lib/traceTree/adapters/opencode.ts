@@ -214,6 +214,17 @@ export function opencodeAdapter(agent: Harness): HarnessAdapter {
         lastTime = time;
         return;
       }
+      if (event.type === "step_usage") {
+        flushRun(undefined);
+        if (!turn) startTurn(index, time, "notification", "");
+        turn!.children.push({
+          id: `${prefix}:l${index}`, kind: "llm", title: "Model response",
+          start: time, end: time, children: [], eventIndex: index,
+          tokens: toTokens((event as TraceValue).tokens),
+        });
+        lastTime = time;
+        return;
+      }
       if (event.type !== "assistant" && event.type !== "assistant_thinking" && event.type !== "tool_call") {
         lastTime = time;
         return;

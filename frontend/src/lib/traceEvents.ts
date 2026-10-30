@@ -145,6 +145,8 @@ export function normalizeTraceEvents(agent: string | null, data: TraceValue): Ev
     evts = [];
   }
   if (agent === "codex") {
+    // Step-only enrichment must not modify the API records used by the event log.
+    evts = evts.map((event: TraceValue) => ({ ...event }));
     // token_count events are filtered as noise, but they carry the turn's
     // usage — hand it to the preceding kept event for the per-step chip (#128).
     let lastKept: TraceValue = null;
