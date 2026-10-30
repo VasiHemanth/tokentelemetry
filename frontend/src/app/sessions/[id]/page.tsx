@@ -419,7 +419,7 @@ export default function SessionDetailPage() {
         .catch(() => {});
 
       // 2. Fetch Detailed Trace
-      apiFetch(`/sessions/${id}?agent=${agent}`)
+      apiFetch(`/sessions/${id}?agent=${agent}${agent === "codex" ? "&raw=true" : ""}`)
         .then((res) => res.json())
         .then((data) => {
           const evts = normalizeTraceEvents(agent, data);
@@ -935,14 +935,14 @@ export default function SessionDetailPage() {
     // turns predate the spawn or, when re-stamped at fork time, carry no model
     // calls of their own; either way they are the parent's, not the child's.
     const spawnedAt = (span.agent?.callStart ?? span.start) - 2000;
-    const own = built.filter((s) => s.start >= spawnedAt);
+    const own = target.agent === "codex" ? built.filter((s) => s.start >= spawnedAt) : built;
     const usedTokens = (s: TraceSpan): boolean =>
       (s.kind === "llm" && !!s.tokens && s.tokens.input + s.tokens.output > 0) || s.children.some(usedTokens);
     const calledTools = (s: TraceSpan): boolean => s.kind === "tool" || s.kind === "agent" || s.children.some(calledTools);
     const recordsTokens = own.some(usedTokens);
     const isReplay = (s: TraceSpan) =>
       s.kind === "turn" && !calledTools(s) && (recordsTokens ? !usedTokens(s) : s.children.length === 0);
-    while (own.length > 1 && isReplay(own[0])) own.shift();
+    if (target.agent === "codex") while (own.length > 1 && isReplay(own[0])) own.shift();
     // A child's opening prompt is the task its parent handed it, not a user turn.
     const scoped = (own.length ? own : built).map(scope).map((s, i) =>
       i === 0 && s.kind === "turn" && s.turnKind === "prompt" ? { ...s, title: "Task" } : s,
@@ -976,7 +976,7 @@ export default function SessionDetailPage() {
                 <ArrowLeft size={16} />
               </button>
               <div className="min-w-0">
-                <h1 className="sr-only">Session trace</h1>
+                <h1 className="mb-1.5 max-w-[min(55vw,900px)] truncate text-lg font-semibold tracking-tight text-[var(--tt-fg)]" title={sessionInfo?.display || sessionInfo?.text || "Session workspace"}>{sessionInfo?.display || sessionInfo?.text || "Session workspace"}</h1>
                 <div className="flex items-center gap-2 flex-wrap">
                   {agent && <AgentBadge agent={agent} />}
                   {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
@@ -1080,7 +1080,7 @@ export default function SessionDetailPage() {
                   title={stepView ? "Turns, model calls, tools and subagents on one timeline" : "Every event as a card, in order"}
                 >
                   <GitBranch size={14} />
-                  {stepView ? "Trace view" : "Step view"}
+                  {stepView ? "Session workspace" : "Legacy step view"}
                 </Button>
               )}
               {showTrace && (
@@ -1328,7 +1328,9 @@ export default function SessionDetailPage() {
                  detail panel fit on one screen; the session cards follow below it. */}
              {showTrace && (
                <TraceView
+                 key={`${agent}:${id}`}
                  roots={traceRoots}
+                 sourceEvents={rawEvents}
                  timing={adapter?.timing ?? "real"}
                  onLoadChild={loadChildSpans}
                  onJumpToEvent={openStep}
@@ -3362,6 +3364,10 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
         <span className="ml-3">{(usage.input || 0).toLocaleString()} in · {(usage.output || 0).toLocaleString()} out · {(usage.cached || 0).toLocaleString()} cached</span>
       </div>
     );
+  }
+
+  if (type === "step_usage") {
+    parts.push(<div key="usage-only" className="rounded-lg border border-[var(--tt-border)] bg-[var(--tt-panel)] p-4 text-sm text-[var(--tt-fg-muted)]">Usage-only model step. The harness recorded usage without readable response content.</div>);
   }
 
   // 11. SYSTEM METADATA

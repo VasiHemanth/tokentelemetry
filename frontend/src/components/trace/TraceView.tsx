@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ListChevronsDownUp, ListChevronsUpDown, RotateCcw } from "lucide-react";
+import { ListChevronsDownUp, ListChevronsUpDown, RotateCcw, Copy, Check, Search, ChevronDown, GitBranch, MessageSquare, FileCode } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import type { Event } from "@/lib/traceEvents";
+import { readWorkspaceLocation, updateWorkspaceLocation, type WorkspaceView } from "@/lib/traceTree/workspace";
 import type { TraceSpan, TraceTiming } from "@/lib/traceTree/types";
 import {
   buildIndex,
@@ -13,12 +16,17 @@ import {
   mainTokens,
   matchesFilter,
   peakConcurrency,
+  ownerAgent,
+  turnOf,
   type TraceFilter,
 } from "@/lib/traceTree/tree";
 import { buildScale, fmtClock, fmtDur, fmtTokens } from "@/lib/traceTree/timeScale";
 import Swimlanes from "./Swimlanes";
 import SpanTable, { type LoadState, type TableRow } from "./SpanTable";
 import SpanDetail from "./SpanDetail";
+import Conversation from "./Conversation";
+import EventLog from "./EventLog";
+import ContentSection from "./ContentSection";
 import { SKILL_COLOR, makeColorOf } from "./shared";
 
 export interface TraceViewProps {
@@ -29,6 +37,8 @@ export interface TraceViewProps {
   /** Fetch an agent span's own trace; the parent re-renders with new roots when it resolves. */
   onLoadChild?: (span: TraceSpan) => Promise<void>;
   onJumpToEvent?: (eventIndex: number) => void;
+  /** API event records, including metadata filtered out of the readable trace. */
+  sourceEvents?: Event[];
   className?: string;
 }
 
@@ -40,7 +50,10 @@ const FILTERS: Array<[TraceFilter, string]> = [
 
 const MIN_WINDOW = 0.002;
 
-export default function TraceView({ roots, timing, sessionStart, onLoadChild, onJumpToEvent, className = "" }: TraceViewProps) {
+export default function TraceView({ roots, timing, sessionStart, onLoadChild, onJumpToEvent, sourceEvents = [], className = "" }: TraceViewProps) {
+  const searchParams = useSearchParams();
+  const location = readWorkspaceLocation(searchParams);
+  const view = location.view;
   const real = timing === "real";
   const index = useMemo(() => buildIndex(roots), [roots]);
   const rollups = useMemo(() => computeRollups(roots), [roots]);
@@ -51,13 +64,21 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
 
   const [expanded, setExpanded] = useState<Set<string>>(() => defaultExpanded(roots));
   const [filter, setFilter] = useState<TraceFilter>("all");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedId = location.span ?? roots[0]?.id ?? null;
+  const [sourceEvent, setSourceEvent] = useState<Event | null>(null);
+  const [search, setSearch] = useState("");
+  const [copied, setCopied] = useState(false);
   const [win, setWinState] = useState<[number, number]>([0, 1]);
   const [loads, setLoads] = useState<Record<string, LoadState>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollReq = useRef<{ id: string; block: ScrollLogicalPosition } | null>(null);
+  const restoredSelection = useRef<string | null>(null);
 
-  const spanRows = useMemo(() => flattenVisible(roots, expanded, filter), [roots, expanded, filter]);
+  const spanRows = useMemo(() => {
+    const all = flattenVisible(roots, expanded, filter);
+    const query = search.toLowerCase().trim();
+    return query ? all.filter(({ span }) => `${span.title} ${span.label || ""}`.toLowerCase().includes(query)) : all;
+  }, [roots, expanded, filter, search]);
   const rows = useMemo<TableRow[]>(() => {
     const out: TableRow[] = [];
     for (const r of spanRows) {
@@ -70,8 +91,15 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
 
   const selected = selectedId ? (index.byId.get(selectedId) ?? null) : null;
 
+  const updateLocation = useCallback((patch: { view?: WorkspaceView; span?: string | null }) => {
+    const params = updateWorkspaceLocation(new URLSearchParams(window.location.search), patch);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params}${window.location.hash}`);
+  }, []);
+
   const stats = useMemo(() => {
     const prompts = roots.filter((r) => r.kind === "turn" && r.turnKind !== "notification").length;
+    const mainCalls = index.all.filter(s => s.kind === "llm" && !ownerAgent(index, s));
+    const withUsage = mainCalls.filter(s => s.tokens != null).length;
     return {
       wall: scale.t1 - scale.t0,
       active: scale.busyMs,
@@ -81,6 +109,8 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       skills: index.skills.length,
       peak: peakConcurrency(index.agents),
       tokens: mainTokens(roots),
+      hasUsage: withUsage > 0,
+      partialUsage: withUsage < mainCalls.length,
     };
   }, [roots, scale, index]);
 
@@ -131,8 +161,9 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
     (id: string, mode?: "reveal" | "keyboard") => {
       const span = index.byId.get(id);
       if (!span) return;
-      setSelectedId(id);
+      updateLocation({ span: id });
       if (mode === "reveal") {
+        setSearch("");
         if (!matchesFilter(span, filter)) setFilter("all");
         const anc: string[] = [];
         for (let p = index.parent.get(id); p; p = index.parent.get(p.id)) anc.push(p.id);
@@ -140,33 +171,66 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       }
       if (mode) scrollReq.current = { id, block: mode === "reveal" ? "center" : "nearest" };
     },
-    [index, filter],
+    [index, filter, updateLocation],
   );
+
+  // A link into an already-known child can restore it without loading unrelated agents.
+  useEffect(() => {
+    if (!selectedId || selected) return;
+    const ancestor = index.agents.find(a => selectedId.startsWith(`${a.id}/`) && lazyIds.has(a.id));
+    if (!ancestor || loads[ancestor.id]) return;
+    const task = window.setTimeout(() => startLoad(ancestor), 0);
+    return () => window.clearTimeout(task);
+  }, [selectedId, selected, index, lazyIds, loads, startLoad]);
+
+  // Restore ancestor expansion after a linked child recording arrives. Do this
+  // once per selection/view so a user's later collapse action still works.
+  useEffect(() => {
+    if (view !== "execution") { restoredSelection.current = null; return; }
+    if (!selected) return;
+    const key = `${view}:${selected.id}`;
+    if (restoredSelection.current === key) return;
+    const ancestors: string[] = [];
+    for (let parent = index.parent.get(selected.id); parent; parent = index.parent.get(parent.id)) ancestors.push(parent.id);
+    const task = window.setTimeout(() => {
+      restoredSelection.current = key;
+      setExpanded(previous => new Set([...previous, ...ancestors]));
+      scrollReq.current = { id: selected.id, block: "center" };
+    }, 0);
+    return () => window.clearTimeout(task);
+  }, [view, selected, index]);
 
   useEffect(() => {
     const req = scrollReq.current;
     if (!req) return;
     const box = scrollRef.current;
-    const el = box?.querySelector<HTMLElement>(`[data-span-id="${CSS.escape(req.id)}"]`);
-    if (!box || !el) return;
+    const rowIndex = rows.findIndex(r => r.type === "span" && r.span.id === req.id);
+    if (!box || rowIndex < 0) return;
     scrollReq.current = null;
     // Scroll only the table. scrollIntoView would also move the page section the
     // trace sits in, pushing the timeline out of view.
-    const b = box.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    const head = (box.querySelector<HTMLElement>(".sticky")?.offsetHeight ?? 0);
-    const top = r.top - b.top + box.scrollTop;
+    const head = 36;
+    const top = head + rowIndex * 36;
     let target: number | null = null;
-    if (req.block === "center") target = top - (box.clientHeight - r.height) / 2;
-    else if (r.top < b.top + head) target = top - head;
-    else if (r.bottom > b.bottom) target = top + r.height - box.clientHeight;
+    if (req.block === "center") target = top - (box.clientHeight - 36) / 2;
+    else if (top < box.scrollTop + head) target = top - head;
+    else if (top + 36 > box.scrollTop + box.clientHeight) target = top + 36 - box.clientHeight;
     if (target !== null) {
       box.scrollTo({ top: Math.max(0, target), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     }
-  }, [selectedId, rows]);
+  }, [selectedId, rows, view]);
 
   const onSelectReveal = useCallback((id: string) => select(id, "reveal"), [select]);
   const onSelectPlain = useCallback((id: string) => select(id), [select]);
+  const setView = (next: WorkspaceView) => {
+    updateLocation({ view: next });
+    if (next === "execution" && selectedId) select(selectedId, "reveal");
+  };
+  const inspectExecution = (id: string) => {
+    setExpanded(prev => new Set([...prev, id]));
+    updateLocation({ view: "execution", span: id });
+    scrollReq.current = { id, block: "center" };
+  };
 
   const zoomTo = useCallback(
     (span: TraceSpan) => {
@@ -218,19 +282,25 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       {stat(stats.agents, stats.agents === 1 ? "subagent" : "subagents")}
       {stat(stats.skills, stats.skills === 1 ? "skill" : "skills")}
       {stat(stats.peak, "peak parallel")}
-      {stat(fmtTokens(stats.tokens), "main tokens")}
+      {stat(stats.hasUsage ? `${fmtTokens(stats.tokens)}${stats.partialUsage ? "+" : ""}` : "Unavailable", stats.partialUsage ? "recorded main tokens" : "main tokens")}
     </div>
   );
   const types = [...new Set(index.agents.map((a) => a.agent?.agentType ?? a.title))];
 
   return (
     <div className={`@container flex min-h-0 flex-col gap-3 ${className}`}>
-      {!real && <div className={`${card} shrink-0 px-3 py-2`}>{statLine}</div>}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--tt-border)] pb-3">
+        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Session workspace views">
+          {([["conversation", "Conversation", MessageSquare], ["execution", "Execution", GitBranch], ["events", "Event log", FileCode]] as const).map(([key, label, Icon]) => <button key={key} type="button" onClick={() => setView(key)} aria-pressed={view === key} className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${view === key ? "bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] hover:text-[var(--tt-fg)]"}`}><Icon size={15} />{label}</button>)}
+        </div>
+        <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { setCopied(false); } }} className="inline-flex items-center gap-2 rounded-md border border-[var(--tt-border)] px-3 py-2 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)]">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied" : "Copy view link"}</button>
+      </div>
+      <div className="shrink-0 px-1 py-1">{statLine}</div>
 
-      {real && (
-        <section className={`${card} shrink-0 p-3`}>
+      {real && view === "execution" && (
+        <details className={`${card} group shrink-0 p-3`} open>
+          <summary className="mb-3 flex cursor-pointer list-none items-center justify-between text-sm font-medium text-[var(--tt-fg)]">Execution timeline<span className="inline-flex items-center gap-2 text-xs font-normal text-[var(--tt-fg-muted)]">Recorded activity · approximate starts marked ≈ <ChevronDown size={14} /></span></summary>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            {statLine}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--tt-fg-muted)]">
               <Legend color="var(--tt-brand)" label="main agent" />
               {index.skills.length > 0 && <Legend color={SKILL_COLOR} label="skill" />}
@@ -250,12 +320,14 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
             </div>
           </div>
           <Swimlanes roots={roots} index={index} scale={scale} win={win} onWin={setWin} selected={selected} onSelect={onSelectReveal} colorOf={colorOf} />
-        </section>
+        </details>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] gap-3 @min-[960px]:grid-cols-[minmax(0,1fr)_clamp(340px,30%,560px)] @min-[960px]:grid-rows-1">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(240px,3fr)_minmax(180px,2fr)] gap-4 @min-[800px]:grid-cols-[minmax(0,1fr)_clamp(280px,30%,420px)] @min-[800px]:grid-rows-1">
         <section className={`${card} flex min-h-0 min-w-0 flex-col overflow-hidden`}>
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--tt-border)] px-3 py-2">
+          {view === "conversation" && <Conversation roots={roots} selectedId={selectedId} focusTurnId={selected ? turnOf(index, selected).id : null} onSelect={onSelectPlain} onInspectExecution={inspectExecution} real={real} />}
+          {view === "events" && <EventLog events={sourceEvents} selected={sourceEvent} onSelect={setSourceEvent} />}
+          {view === "execution" && <><div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--tt-border)] px-3 py-2">
             <div className="flex items-center gap-1" role="group" aria-label="Filter spans">
               {FILTERS.map(([f, label]) => (
                 <button
@@ -263,7 +335,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
                   type="button"
                   aria-pressed={filter === f}
                   onClick={() => setFilter(f)}
-                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                     filter === f
                       ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]"
                       : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]"
@@ -273,6 +345,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
                 </button>
               ))}
             </div>
+            <label className="flex min-w-0 items-center gap-2 text-[var(--tt-fg-muted)]"><Search size={13} /><input aria-label="Search visible span labels" value={search} onChange={e => setSearch(e.target.value)} placeholder="Find a span…" className="w-32 rounded border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2 py-1.5 text-xs text-[var(--tt-fg)]" /></label>
             <div className="flex items-center gap-2">
               <ToolBtn onClick={() => setExpanded((prev) => new Set([...prev, ...expandAllIds(roots)]))} icon={<ListChevronsUpDown size={11} />} label="Expand all" />
               <ToolBtn onClick={() => setExpanded(new Set())} icon={<ListChevronsDownUp size={11} />} label="Collapse" />
@@ -295,11 +368,11 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
               if (s) startLoad(s);
             }}
             onKeyDown={onKeyDown}
-          />
+          /></>}
         </section>
 
         <aside className={`${card} min-h-0 min-w-0 overflow-y-auto overscroll-contain p-3 scrollbar-thin`}>
-          <SpanDetail
+          {view === "events" && sourceEvent ? <div className="space-y-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">API event record</h2><p className="text-xs leading-6 text-[var(--tt-fg-muted)]">Event returned by the harness reader. Some harnesses normalize their native records on the backend. Payloads are formatted only when selected.</p><ContentSection label="Event payload" value={sourceEvent} plain /></div> : <SpanDetail
             span={selected}
             index={index}
             rollups={rollups}
@@ -309,7 +382,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
             onSelect={onSelectReveal}
             onZoom={zoomTo}
             onJumpToEvent={onJumpToEvent}
-          />
+          />}
         </aside>
       </div>
     </div>

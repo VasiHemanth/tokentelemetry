@@ -63,6 +63,7 @@ export const tokenSum = (t?: SpanTokens): number => (t ? t.input + t.output + t.
 
 export interface Rollup {
   tokens: number;
+  tokenState: "recorded" | "partial" | "unavailable";
   llm: number;
   tools: number;
   errs: number;
@@ -74,8 +75,11 @@ export interface Rollup {
 export function computeRollups(roots: TraceSpan[]): Map<string, Rollup> {
   const out = new Map<string, Rollup>();
   const visit = (s: TraceSpan): Rollup => {
+    let recorded = s.kind === "llm" && s.tokens != null;
+    let missing = s.kind === "llm" && s.tokens == null;
     const r: Rollup = {
       tokens: s.kind === "llm" ? tokenSum(s.tokens) : 0,
+      tokenState: "unavailable",
       llm: s.kind === "llm" ? 1 : 0,
       tools: s.kind === "tool" ? 1 : 0,
       errs: s.error ? 1 : 0,
@@ -90,14 +94,26 @@ export function computeRollups(roots: TraceSpan[]): Map<string, Rollup> {
       r.errs += cr.errs;
       r.agents += cr.agents;
       r.skills += cr.skills;
+      if (cr.tokenState !== "unavailable") recorded = true;
+      if (cr.tokenState === "partial" || (cr.tokenState === "unavailable" && (cr.llm > 0 || cr.agents > 0))) missing = true;
     }
     if (s.kind === "agent" && s.agent) {
-      if (s.agent.totalTokens != null) r.tokens = s.agent.totalTokens;
+      if (s.agent.totalTokens != null) {
+        r.tokens = s.agent.totalTokens;
+        recorded = true;
+        // The delegation total is authoritative for this agent, but may not
+        // include nested agents whose usage is absent from the recording.
+        missing = s.children.some(c => {
+          const child = out.get(c.id);
+          return child?.tokenState === "partial" || (!!child?.agents && child.tokenState === "unavailable");
+        });
+      } else if (!s.agent.loaded && !s.children.length) missing = true;
       if (!s.agent.loaded && !s.children.length) {
         r.tools += s.agent.toolCalls ?? 0;
         r.errs += s.agent.toolErrors ?? 0;
       }
     }
+    r.tokenState = recorded ? (missing ? "partial" : "recorded") : "unavailable";
     out.set(s.id, r);
     return r;
   };

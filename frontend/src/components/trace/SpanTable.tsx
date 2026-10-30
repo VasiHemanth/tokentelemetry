@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, type KeyboardEvent, type RefObject } from "react";
+import { memo, useEffect, useState, type KeyboardEvent, type RefObject } from "react";
+import { windowRows } from "@/lib/traceTree/workspace";
 import { ChevronRight, Loader2, RotateCw } from "lucide-react";
 import type { TraceSpan } from "@/lib/traceTree/types";
 import type { Rollup, Row, TraceIndex } from "@/lib/traceTree/tree";
@@ -35,6 +36,21 @@ interface Props {
 export default function SpanTable(p: Props) {
   const { rows, real, scrollRef, onKeyDown, onToggle, onSelect } = p;
   const cols = real ? COLS_REAL : COLS_ORDER;
+  const [viewport, setViewport] = useState({ scroll: 0, height: 600 });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setViewport({ scroll: Math.max(0, el.scrollTop - 36), height: el.clientHeight });
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    update();
+    return () => observer.disconnect();
+  }, [scrollRef]);
+  const range = windowRows(rows.length, viewport.scroll, viewport.height, 36);
+  const selectedIndex = rows.findIndex(r => r.type === "span" && r.span.id === p.selectedId);
+  const visibleRows = rows.slice(range.start, range.end).map((row, offset) => ({ row, index: range.start + offset }));
+  // Keep the active descendant mounted even if the user scrolls it out of view.
+  if (selectedIndex >= 0 && (selectedIndex < range.start || selectedIndex >= range.end)) visibleRows.push({ row: rows[selectedIndex], index: selectedIndex });
 
   const onClick = (e: React.MouseEvent) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-span-id]");
@@ -53,15 +69,17 @@ export default function SpanTable(p: Props) {
       ref={scrollRef}
       role="tree"
       aria-label="Span tree"
+      aria-activedescendant={selectedIndex >= 0 && p.selectedId ? `trace-row-${p.selectedId}` : undefined}
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
+      onScroll={e => setViewport({ scroll: Math.max(0, e.currentTarget.scrollTop - 36), height: e.currentTarget.clientHeight })}
       className="min-h-0 flex-1 overflow-auto overscroll-contain outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin"
     >
       <div className="min-w-[420px]">
         <div
-          className="sticky top-0 z-20 grid items-end border-b border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]"
+          className="sticky top-0 z-20 grid h-9 items-center border-b border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-xs font-medium text-[var(--tt-fg-muted)]"
           style={{ gridTemplateColumns: cols }}
         >
           <div className="px-3 py-1.5">Span</div>
@@ -69,9 +87,10 @@ export default function SpanTable(p: Props) {
           <div className="px-2 py-1.5 text-right">Tokens</div>
         </div>
 
-        <div className="relative">
+        <div className="relative" style={{ height: rows.length ? rows.length * 36 : 80 }}>
           {rows.length === 0 && <div className="px-3 py-6 text-center text-xs text-[var(--tt-fg-muted)]">Nothing matches this filter.</div>}
-          {rows.map((r) =>
+          {visibleRows.map(({ row: r, index }) => <div key={r.type === "status" ? `status-${r.id}` : r.span.id} className="absolute left-0 w-full" style={{ top: index * 36, height: 36 }}>
+            {(
             r.type === "status" ? (
               <StatusRow key={`status-${r.id}`} id={r.id} depth={r.depth} load={r.load} cols={cols} onRetry={p.onRetry} />
             ) : (
@@ -88,7 +107,7 @@ export default function SpanTable(p: Props) {
                 cols={cols}
                 colorOf={p.colorOf}
               />
-            ),
+            ))}</div>,
           )}
         </div>
       </div>
@@ -156,7 +175,8 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
       aria-selected={selected}
       aria-expanded={hasKids ? open : undefined}
       data-span-id={span.id}
-      className={`relative grid items-center border-b border-[var(--tt-border)]/50 text-[13px] leading-5 [content-visibility:auto] [contain-intrinsic-size:auto_29px] hover:bg-[var(--tt-raised)] ${selected ? "bg-[var(--tt-brand-glow)]" : ""}`}
+      id={`trace-row-${span.id}`}
+      className={`relative grid h-9 items-center border-b border-[var(--tt-border)]/50 text-[13px] leading-5 hover:bg-[var(--tt-raised)] ${selected ? "bg-[var(--tt-brand-glow)]" : ""}`}
       style={{ gridTemplateColumns: cols }}
     >
       <div className="flex min-w-0 items-center gap-1.5 py-1 pr-2" style={{ paddingLeft: depth * 14 + 8 }}>
@@ -190,7 +210,7 @@ const SpanRow = memo(function SpanRow({ span, depth, open, lazy, selected, rollu
           {fmtDur(span.end - span.start)}
         </div>
       )}
-      <div className="whitespace-nowrap px-2 text-right font-mono text-[12px] tabular-nums text-[var(--tt-fg-muted)]">{fmtTokens(rollup?.tokens ?? 0)}</div>
+      <div className="whitespace-nowrap px-2 text-right font-mono text-[12px] tabular-nums text-[var(--tt-fg-muted)]" title={rollup?.tokenState === "partial" ? "Recorded usage only; some calls have no usage" : rollup?.tokenState === "unavailable" ? "Usage not recorded for this span" : undefined}>{rollup?.tokenState === "unavailable" || !rollup ? "—" : `${fmtTokens(rollup.tokens)}${rollup.tokenState === "partial" ? "+" : ""}`}</div>
     </div>
   );
 });

@@ -1,6 +1,24 @@
 {
   "releases": [
     {
+      "tag": "2026-10-31",
+      "title": "A clearer workspace for long sessions",
+      "highlights": [
+        {
+          "title": "Read conversations or inspect execution",
+          "description": "Switch between grouped conversations, execution traces, and event records while keeping your selection. Long traces render visible rows and load child recordings on demand. The legacy step view remains available."
+        },
+        {
+          "title": "Graphite surfaces with clearer text",
+          "description": "The app and website keep their blue accent with neutral surfaces, more readable labels, recent activity first, and a compact project list."
+        },
+        {
+          "title": "More faithful usage and tool evidence",
+          "description": "Pi and Prime traces retain recorded usage, and OpenCode and ZCode usage stays attached to its own model step. Prime tool results keep their call identifiers and error flags."
+        }
+      ]
+    },
+    {
       "tag": "2026-10-28",
       "title": "Trace view for sessions and subagents",
       "highlights": [

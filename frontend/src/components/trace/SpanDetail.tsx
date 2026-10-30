@@ -67,7 +67,7 @@ export default function SpanDetail(p: Props) {
     body = (
       <>
         {span.label && <Quote>{span.label}</Quote>}
-        <Kv rows={[...when, ["Model calls", work.llm], ["Tool calls", work.tools], ["Main-agent tokens", fmtTokens(work.tokens)]]} />
+        <Kv rows={[...when, ["Model calls", work.llm], ["Tool calls", work.tools], ["Main-agent tokens", hasOwnUsage(span) ? fmtTokens(work.tokens) : "Not recorded"]]} />
         <ContentSection key={`${span.id}-in`} label="Prompt" value={span.content?.input} />
         {spawns.length > 0 && (
           <Section label="Spawned in this turn">
@@ -184,7 +184,7 @@ export default function SpanDetail(p: Props) {
           rows={[
             ...when,
             ["Model", a?.model ?? "-"],
-            ["Tokens", roll ? roll.tokens.toLocaleString() : "-"],
+            ["Recorded tokens", roll && roll.tokenState !== "unavailable" ? `${roll.tokens.toLocaleString()}${roll.tokenState === "partial" ? " (partial)" : ""}` : "Not recorded"],
             ...(a?.cost != null ? ([["Cost", fmtCost(a.cost)]] as Array<[string, ReactNode]>) : []),
             ...(loaded ? ([["Model calls", roll?.llm ?? 0]] as Array<[string, ReactNode]>) : []),
             ["Tool calls", a?.toolCalls ?? roll?.tools ?? 0],
@@ -244,6 +244,11 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
       <div className="flex flex-col gap-1">{children}</div>
     </div>
   );
+}
+
+function hasOwnUsage(span: TraceSpan): boolean {
+  if (span.kind === "agent") return false;
+  return (span.kind === "llm" && span.tokens != null) || span.children.some(hasOwnUsage);
 }
 
 function Quote({ children }: { children: ReactNode }) {
