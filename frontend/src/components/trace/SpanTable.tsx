@@ -18,6 +18,7 @@ const COLS_REAL = "minmax(0,1fr) 88px 72px";
 const COLS_ORDER = "minmax(0,1fr) 72px";
 
 interface Props {
+  compact?: boolean;
   rows: TableRow[];
   index: TraceIndex;
   rollups: Map<string, Rollup>;
@@ -35,7 +36,7 @@ interface Props {
 
 export default function SpanTable(p: Props) {
   const { rows, real, scrollRef, onKeyDown, onToggle, onSelect } = p;
-  const cols = real ? COLS_REAL : COLS_ORDER;
+  const cols = p.compact ? "minmax(0,1fr) 60px" : real ? COLS_REAL : COLS_ORDER;
   const [viewport, setViewport] = useState({ scroll: 0, height: 600 });
   useEffect(() => {
     const el = scrollRef.current;
@@ -77,13 +78,13 @@ export default function SpanTable(p: Props) {
       onScroll={e => setViewport({ scroll: Math.max(0, e.currentTarget.scrollTop - 36), height: e.currentTarget.clientHeight })}
       className="min-h-0 flex-1 overflow-auto overscroll-contain outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin"
     >
-      <div className="min-w-[420px]">
+      <div className={p.compact ? "min-w-0" : "min-w-[420px]"}>
         <div
           className="sticky top-0 z-20 grid h-9 items-center border-b border-[var(--tt-border-strong)] bg-[var(--tt-panel)] text-xs font-medium text-[var(--tt-fg-muted)]"
           style={{ gridTemplateColumns: cols }}
         >
           <div className="px-3 py-1.5">Span</div>
-          {real && <div className="px-2 py-1.5 text-right">Dur</div>}
+          {real && !p.compact && <div className="px-2 py-1.5 text-right">Dur</div>}
           <div className="px-2 py-1.5 text-right">Tokens</div>
         </div>
 
@@ -103,7 +104,7 @@ export default function SpanTable(p: Props) {
                 selected={p.selectedId === r.span.id}
                 rollup={p.rollups.get(r.span.id)}
                 index={p.index}
-                real={real}
+                real={real && !p.compact}
                 cols={cols}
                 colorOf={p.colorOf}
               />

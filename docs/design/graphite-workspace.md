@@ -8,7 +8,7 @@ Apply the approved blue/Graphite visual direction to the real local application 
 
 1. Correct Pi/Prime usage preservation and OpenCode/ZCode usage ownership, with regression tests and independent recording comparisons.
 2. Apply readable semantic surfaces/text, restrained blue actions, and typography to the app and website. Retain light mode.
-3. Add a paginated conversation projection over the existing spans. Preserve selection between views and in the URL; expose available reasoning and tool evidence through the inspector.
+3. Add a continuous conversation projection over the existing spans. Preserve selection between views and in the URL; expose available reasoning and tool evidence through the inspector.
 4. Bound execution/event rendering for large recordings, without dropping source data. Keep prompt/model/tool/notification distinctions explicit and label unknown usage.
 5. Verify populated pages, representative large Claude/Codex recordings, child expansion, filters, light mode, narrow screens, and source links. Run TypeScript, relevant lint/tests, and real-source numeric reconciliation.
 
@@ -30,8 +30,18 @@ This change does not promise permanent source retention or source-stable cross-p
 - A 124.6 MB Claude recording contained 6,364 source records and 791 unique model calls. Independent source totals matched the tree: 1,598 input, 900,263 output, 346,839,424 cache read, and 4,693,443 cache write tokens.
 - On a 1600 × 1100 viewport, its expanded execution list had 1,725 rows while mounting about 18–19 tree items during top/bottom scrolling. A 68.2 MB Codex recording also retained selection across Conversation, Execution, and Event log with about 20–21 mounted tree items.
 - Development workspace readiness was approximately 10 seconds for the 124.6 MB recording and 2.6 seconds for the 68.2 MB recording in this local run. These are observations, not a production performance guarantee; fetching/parsing still reads the full recording.
-- Event log rendering is paginated at 80 records. Conversation groups and long response sequences are paginated separately, and selected context is revealed when entering a view.
-- Frontend trace/usage regression run: 101 passing tests. Production frontend build completed successfully in an isolated output directory. App and website TypeScript checks passed; modified frontend files passed ESLint.
+- Event log rendering is paginated at 80 records. Conversation entries use measured heights and a bounded render window, and selected context is revealed when entering a view.
+- Frontend trace/usage regression run: 100 passing tests. Production frontend build completed successfully in an isolated output directory. App and website TypeScript checks passed; modified frontend files passed ESLint.
 - The expanded backend regression run exposed an existing stale delegation assertion on untouched HEAD: it expected cache high-water usage while the helper already returned cumulative reads. The assertion now checks cumulative reads across distinct calls and preserves the duplicate-message guard.
 - Website home, docs, resources, and privacy were inspected locally. Existing marketing screenshots remain unchanged; no private live-session capture was added to public assets.
 - Backend parser/delegation regression suite: 90 tests passed with background telemetry disabled for the test process. Child expansion and reload of a linked child turn were checked in a real session; keyboard selection, event paging, and light mode completed without browser errors.
+
+## Unified reading workspace
+
+The default Session view places execution navigation on the left and a continuous conversation on the right. Tree selection reveals the matching entry; user scrolling follows the active entry in the tree. Model calls, routine tools, reports, and expanded child recordings retain their trace order. Child work remains attached to its handoff, rather than being interleaved by wall-clock time.
+
+The reader uses measured heights and a bounded render window instead of conversation pagination. Long text previews are capped at 6,000 characters, with full recorded content available in an evidence drawer. Reasoning remains an explicit disclosure. The drawer uses native modal focus handling and Escape dismissal. Execution focus preserves the full-width tree and timeline; Event log and the legacy step view remain available.
+
+On narrow windows, the conversation opens first and a button switches to execution navigation. Existing links using `view=conversation` still open the unified Session view. Selection identifiers retain their existing within-recording stability limits.
+
+Unified-view browser checks passed on both large recordings: late-entry link reloads, switching into execution focus, and jumping to the end. The reader mounted approximately 7–14 entries in the sampled checks. A linked child task restored its recording and aligned in the reader; native drawer focus and Escape dismissal passed. At 320, 375, 768, and 1024 px, the document had no horizontal overflow and the reader/navigation remained usable. Dark and light themes were inspected. The current frontend regression suite has 100 passing tests after replacing the prior paginated projection tests with continuous-reader tests.

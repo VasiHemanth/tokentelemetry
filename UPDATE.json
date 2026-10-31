@@ -5,8 +5,8 @@
       "title": "A clearer workspace for long sessions",
       "highlights": [
         {
-          "title": "Read conversations or inspect execution",
-          "description": "Switch between grouped conversations, execution traces, and event records while keeping your selection. Long traces render visible rows and load child recordings on demand. The legacy step view remains available."
+          "title": "Read conversations beside execution",
+          "description": "Follow a continuous conversation beside its execution tree, with synchronized selection and evidence available on demand. Long traces render nearby entries and load child recordings when expanded. Execution focus, event records, and the legacy step view remain available."
         },
         {
           "title": "Graphite surfaces with clearer text",

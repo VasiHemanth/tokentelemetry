@@ -1,48 +1,4 @@
-import type { TraceSpan } from "./types";
-
 export type WorkspaceView = "conversation" | "execution" | "events";
-
-export interface ConversationGroup {
-  prompt: TraceSpan | null;
-  notifications: TraceSpan[];
-}
-
-/** Reports are evidence within the conversation, not additional user requests. */
-export function conversationGroups(roots: TraceSpan[]): ConversationGroup[] {
-  const groups: ConversationGroup[] = [];
-  for (const span of roots) {
-    if (span.kind === "turn" && span.turnKind !== "notification") {
-      groups.push({ prompt: span, notifications: [] });
-    } else {
-      if (!groups.length) groups.push({ prompt: null, notifications: [] });
-      groups[groups.length - 1].notifications.push(span);
-    }
-  }
-  return groups;
-}
-
-/** Keep the owner's narrative and handoffs; never inline a child's entire trace. */
-export function conversationSignals(turn: TraceSpan) {
-  const visible: TraceSpan[] = [];
-  const tools: TraceSpan[] = [];
-  const models: TraceSpan[] = [];
-  const visit = (span: TraceSpan) => {
-    if (span.kind === "agent" || span.kind === "skill") {
-      visible.push(span);
-      return;
-    }
-    if (span.kind === "llm") {
-      models.push(span);
-      if (span.content?.output != null && span.content.output !== "") visible.push(span);
-    } else if (span.kind === "tool") {
-      if (span.error) visible.push(span);
-      else tools.push(span);
-    }
-    span.children.forEach(visit);
-  };
-  turn.children.forEach(visit);
-  return { visible, tools, models, modelCalls: models.length };
-}
 
 /** Fixed-height execution rows keep DOM work proportional to viewport size. */
 export function windowRows(count: number, scroll: number, height: number, rowHeight: number, overscan = 8) {

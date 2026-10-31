@@ -1,93 +1,172 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowDownToLine, Brain, ChevronLeft, ChevronRight, GitBranch, MessageSquare, Wrench } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownToLine, Brain, ChevronRight, FileSearch, GitBranch, MessageSquare, Wrench } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { TraceSpan } from "@/lib/traceTree/types";
-import { conversationGroups, conversationSignals } from "@/lib/traceTree/workspace";
+import { conversationLayout, conversationRowAt, conversationRows } from "@/lib/traceTree/conversation";
 import { formatContent } from "@/lib/traceTree/content";
 import { fmtClock, fmtDur } from "@/lib/traceTree/timeScale";
-
-const PAGE_SIZE = 12;
-const button = "rounded-md border border-[var(--tt-border)] px-3 py-1.5 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] disabled:opacity-40";
+import type { LoadState } from "./SpanTable";
 
 interface Props {
   roots: TraceSpan[];
   selectedId: string | null;
-  onSelect: (id: string) => void;
-  onInspectExecution: (id: string) => void;
+  expanded: ReadonlySet<string>;
+  loads: Record<string, LoadState>;
+  onFollow: (id: string) => void;
+  onInspect: (id: string) => void;
+  onToggle: (id: string) => void;
+  onRetry: (id: string) => void;
   real: boolean;
-  focusTurnId?: string | null;
 }
 
-export default function Conversation({ roots, selectedId, focusTurnId, onSelect, onInspectExecution, real }: Props) {
-  const groups = useMemo(() => conversationGroups(roots), [roots]);
-  const [paging, setPaging] = useState<{ page: number; selection: string | null }>({ page: 0, selection: null });
-  const focusedGroup = groups.findIndex(g => g.prompt?.id === focusTurnId || g.notifications.some(n => n.id === focusTurnId));
-  const last = Math.max(0, Math.ceil(groups.length / PAGE_SIZE) - 1);
-  const current = Math.min(paging.selection === selectedId ? paging.page : Math.floor(Math.max(0, focusedGroup) / PAGE_SIZE), last);
-  const start = current * PAGE_SIZE;
+/** Continuous reading with measured rows: format only nearby payloads. */
+export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real }: Props) {
+  const rows = useMemo(() => conversationRows(roots, expanded), [roots, expanded]);
+  const measured = useRef(new Map<string, number>());
+  const [heights, setHeights] = useState(new Map<string, number>());
+  const layout = useMemo(() => conversationLayout(rows, heights), [rows, heights]);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 700 });
+  const followed = useRef<string | null>(null);
+  const handled = useRef<string | null>(null);
+  const pendingReveal = useRef<string | null>(null);
+  const userScrolling = useRef(false);
+  const pinBottom = useRef(false);
+  const layoutRef = useRef({ rows, layout });
+  useEffect(() => { layoutRef.current = { rows, layout }; }, [rows, layout]);
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const observer = new ResizeObserver(() => { if (box.clientHeight > 0) setViewport({ top: box.scrollTop, height: box.clientHeight }); });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  const measure = useCallback((id: string, height: number) => {
+    if (height <= 0 || measured.current.get(id) === height) return;
+    const { rows, layout } = layoutRef.current;
+    const i = rows.findIndex(row => row.span.id === id);
+    const box = boxRef.current;
+    const oldHeight = i >= 0 ? (layout.offsets[i + 1] ?? layout.total) - layout.offsets[i] : height;
+    measured.current.set(id, height);
+    // Preserve the visible position when earlier content changes height.
+    if (box && i >= 0 && layout.offsets[i] + oldHeight <= box.scrollTop) box.scrollTop += height - oldHeight;
+    setHeights(previous => new Map(previous).set(id, height));
+  }, []);
+  useEffect(() => {
+    if (!selectedId || handled.current === selectedId) return;
+    if (followed.current === selectedId) { handled.current = selectedId; return; }
+    const i = rows.findIndex(row => row.span.id === selectedId);
+    if (i < 0) return;
+    handled.current = selectedId;
+    if (selectedId !== rows.at(-1)?.span.id) pinBottom.current = false;
+    userScrolling.current = false;
+    pendingReveal.current = pinBottom.current ? null : selectedId;
+    boxRef.current?.scrollTo({ top: layout.offsets[i], behavior: "instant" });
+  }, [selectedId, rows, layout]);
+  useEffect(() => {
+    const id = pendingReveal.current;
+    if (!id) return;
+    const i = rows.findIndex(row => row.span.id === id);
+    if (i < 0) return;
+    const frame = requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (box) {
+        box.scrollTo({ top: layout.offsets[i], behavior: "instant" });
+        setViewport(previous => previous.top === box.scrollTop && previous.height === box.clientHeight ? previous : { top: box.scrollTop, height: box.clientHeight });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rows, layout, heights, viewport]);
+  useEffect(() => {
+    if (!pinBottom.current) return;
+    const frame = requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (box) {
+        box.scrollTop = box.scrollHeight;
+        setViewport(previous => previous.top === box.scrollTop && previous.height === box.clientHeight ? previous : { top: box.scrollTop, height: box.clientHeight });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [layout, viewport]);
+  const first = Math.max(0, conversationRowAt(layout.offsets, viewport.top) - 3);
+  const last = Math.min(rows.length, conversationRowAt(layout.offsets, viewport.top + viewport.height) + 5);
+  const latest = () => {
+    const row = rows.at(-1);
+    if (!row) return;
+    pinBottom.current = true;
+    pendingReveal.current = null;
+    followed.current = null;
+    onFollow(row.span.id);
+    userScrolling.current = false;
+    boxRef.current?.scrollTo({ top: layout.total, behavior: "instant" });
+  };
+  const beginScroll = () => {
+    userScrolling.current = true;
+    pinBottom.current = false;
+    pendingReveal.current = null;
+  };
   return (
-    <section aria-label="Session conversation" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 scrollbar-thin">
-      <div className="mx-auto max-w-4xl space-y-7">
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--tt-fg-muted)]">
-          <span>Requests, responses, and delegated work. Select an item to inspect its evidence.</span>
-          <span>{groups.length} conversation groups</span>
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Session conversation">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--tt-border)] px-4 py-3">
+        <div><h2 className="text-sm font-medium text-[var(--tt-fg)]">Conversation</h2><p className="mt-0.5 text-xs text-[var(--tt-fg-muted)]">Follow the session · open any entry for evidence</p></div>
+        <button type="button" onClick={latest} className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--tt-border)] px-2.5 py-1.5 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)]"><ArrowDownToLine size={13} /> Latest</button>
+      </div>
+      <div ref={boxRef} tabIndex={0} aria-label="Continuous conversation" className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin [overflow-anchor:none]"
+        onWheel={beginScroll} onTouchMove={beginScroll} onPointerDown={beginScroll} onKeyDown={e => { if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(e.key)) beginScroll(); }}
+        onScroll={e => {
+          const box = e.currentTarget;
+          setViewport({ top: box.scrollTop, height: box.clientHeight });
+          if (!userScrolling.current) return;
+          const row = rows[conversationRowAt(layout.offsets, box.scrollTop + 32)];
+          if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
+        }}>
+        <div className="relative mx-auto max-w-4xl" style={{ height: layout.total }}>
+          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} selected={selectedId === row.span.id} real={real} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
         </div>
-        {groups.slice(start, start + PAGE_SIZE).map((group, offset) => (
-          <article key={(group.prompt ?? group.notifications[0]).id} className="border-b border-[var(--tt-border)] pb-6 [content-visibility:auto] [contain-intrinsic-size:auto_400px]">
-            {group.prompt ? (
-              <>
-                <div className="mb-3 flex items-center justify-between gap-3 text-xs text-[var(--tt-fg-muted)]"><span className="inline-flex items-center gap-2"><MessageSquare size={14} />{group.prompt.title}</span>{real && <time>{fmtClock(group.prompt.start)}</time>}</div>
-                <button type="button" onClick={() => onSelect(group.prompt!.id)} className={`w-full rounded-lg border p-4 text-left text-sm leading-7 text-[var(--tt-fg)] hover:border-[var(--tt-border-strong)] ${selectedId === group.prompt.id ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)]" : "border-[var(--tt-border)] bg-[var(--tt-panel)]"}`} aria-pressed={selectedId === group.prompt.id}>
-                  <Preview value={group.prompt.content?.input ?? group.prompt.label ?? group.prompt.title} cap={1200} />
-                </button>
-                <TurnContent turn={group.prompt} selectedId={selectedId} onSelect={onSelect} onInspectExecution={onInspectExecution} real={real} />
-              </>
-            ) : <h2 className="text-base font-medium text-[var(--tt-fg)]">Recorded activity before the first request</h2>}
-            {group.notifications.length > 0 && (
-              <details open={group.notifications.some(n => n.id === focusTurnId) || undefined} className="mt-4 rounded-lg border border-[var(--tt-border)] bg-[var(--tt-panel)] px-4 py-3 text-sm">
-                <summary className="cursor-pointer text-[var(--tt-fg-muted)]">Agent reports & notifications · {group.notifications.length}</summary>
-                <div className="mt-3 space-y-4">{group.notifications.map(turn => <div key={turn.id}><button type="button" onClick={() => onSelect(turn.id)} className="text-left text-xs text-[var(--tt-brand)] hover:underline">{turn.title}{real ? ` · ${fmtClock(turn.start)}` : ""}</button><TurnContent turn={turn} selectedId={selectedId} onSelect={onSelect} onInspectExecution={onInspectExecution} real={real} /></div>)}</div>
-              </details>
-            )}
-            <div className="sr-only">Conversation group {start + offset + 1} of {groups.length}</div>
-          </article>
-        ))}
-        {groups.length === 0 && <p className="text-sm text-[var(--tt-fg-muted)]">No conversation content recorded.</p>}
-        {last > 0 && <div className="flex items-center justify-between gap-3"><button type="button" className={button} disabled={!current} onClick={() => setPaging({ page: current - 1, selection: selectedId })}><ChevronLeft size={14} className="inline" /> Previous</button><span className="text-xs text-[var(--tt-fg-muted)]" aria-live="polite">Page {current + 1} of {last + 1}</span><button type="button" className={button} disabled={current === last} onClick={() => setPaging({ page: current + 1, selection: selectedId })}>Next <ChevronRight size={14} className="inline" /></button></div>}
+        {!rows.length && <p className="p-6 text-sm text-[var(--tt-fg-muted)]">No conversation content recorded.</p>}
       </div>
     </section>
   );
 }
 
-function TurnContent({ turn, selectedId, onSelect, onInspectExecution, real }: Omit<Props, "roots"> & { turn: TraceSpan }) {
-  const signals = useMemo(() => conversationSignals(turn), [turn]);
-  const [paging, setPaging] = useState<{ offset: number; selection: string | null }>({ offset: 0, selection: null });
-  const selectedIndex = signals.visible.findIndex(s => s.id === selectedId);
-  const offset = paging.selection === selectedId ? paging.offset : Math.max(0, Math.floor(selectedIndex / 8) * 8);
-  const visible = signals.visible.slice(offset, offset + 8);
-  const selectedModel = signals.models.find(s => s.id === selectedId && !signals.visible.includes(s));
+function MeasuredEntry({ top, onMeasure, span, depth, selected, real, open, load, onInspect, onToggle, onRetry }: {
+  top: number; onMeasure: (id: string, height: number) => void; span: TraceSpan; depth: number; selected: boolean; real: boolean; open: boolean; load?: LoadState;
+  onInspect: (id: string) => void; onToggle: (id: string) => void; onRetry: (id: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const observer = new ResizeObserver(entries => onMeasure(span.id, Math.ceil(entries[0].borderBoxSize[0].blockSize)));
+    observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, [span.id, onMeasure]);
+  const isPrompt = span.kind === "turn", isReply = span.kind === "llm", isAgent = span.kind === "agent";
+  const value = isPrompt ? span.content?.input : isReply ? span.content?.output : undefined;
+  const text = useMemo(() => formatContent(value, 6000), [value]);
+  const label = isPrompt ? span.turnKind === "notification" ? "Agent report / notification" : span.title : isReply ? "Assistant" : span.title;
+  const Icon = isPrompt || isReply ? MessageSquare : isAgent ? GitBranch : Wrench;
+  const canExpand = isAgent && (!!span.agent?.childId || span.children.length > 0);
   return (
-    <div className="mt-4 space-y-3">
-      {selectedModel && <button type="button" onClick={() => onSelect(selectedModel.id)} className="w-full rounded-lg border border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)] p-3 text-left text-xs text-[var(--tt-brand)]">Selected model call · {selectedModel.title} · inspect recorded reasoning and calls</button>}
-      {visible.map(span => {
-        const isResponse = span.kind === "llm";
-        return (
-          <button type="button" key={span.id} data-conversation-span={span.id} aria-pressed={selectedId === span.id} onClick={() => onSelect(span.id)} className={`block w-full rounded-lg border px-4 py-3 text-left transition-colors ${selectedId === span.id ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)]" : "border-[var(--tt-border)] bg-[var(--tt-panel)] hover:bg-[var(--tt-raised)]"}`}>
-            <span className="flex items-center justify-between gap-3"><span className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--tt-fg)]">{isResponse ? <MessageSquare size={14} className="shrink-0 text-[var(--tt-fg-muted)]" /> : span.kind === "agent" ? <GitBranch size={14} className="shrink-0 text-[var(--tt-brand)]" /> : <Wrench size={14} className="shrink-0 text-[var(--tt-fg-muted)]" />}<span className="truncate">{isResponse ? "Assistant response" : span.label || span.title}</span></span>{real && !isResponse && <span className="shrink-0 text-xs tabular-nums text-[var(--tt-fg-muted)]">{fmtDur(span.end - span.start)}</span>}</span>
-            {isResponse ? <span className="mt-2 block whitespace-pre-wrap break-words text-sm leading-7 text-[var(--tt-fg-muted)]"><Preview value={span.content?.output} cap={1200} /></span> : <span className="mt-1.5 block text-xs text-[var(--tt-fg-muted)]">{span.title}{span.kind === "agent" ? ` · ${span.agent?.background ? "Background agent" : "Delegated agent"}` : " · Recorded call"}</span>}
-            {span.content?.reasoning != null && <span className="mt-2 inline-flex items-center gap-1.5 text-xs text-[var(--tt-fg-muted)]"><Brain size={12} /> Recorded reasoning available in inspector</span>}
-            {span.error && <span className="mt-2 block text-xs text-[var(--tt-danger-fg)]">Recorded error · inspect input and result</span>}
-          </button>
-        );
-      })}
-      {signals.visible.length > 8 && <div className="flex flex-wrap items-center gap-2"><button type="button" className={button} disabled={!offset} onClick={() => setPaging({ offset: Math.max(0, offset - 8), selection: selectedId })}>Earlier responses</button><span className="text-xs text-[var(--tt-fg-muted)]">{offset + 1}–{Math.min(offset + 8, signals.visible.length)} of {signals.visible.length}</span><button type="button" className={button} disabled={offset + 8 >= signals.visible.length} onClick={() => setPaging({ offset: offset + 8, selection: selectedId })}>Later responses</button></div>}
-      {(signals.tools.length > 0 || signals.models.length > 0) && <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-[var(--tt-fg-muted)]">{signals.modelCalls} model calls · {signals.tools.length} other tool calls</span><button type="button" className={button} onClick={() => onInspectExecution(turn.id)}><ArrowDownToLine size={12} className="mr-1 inline" /> Inspect execution</button></div>}
+    <div ref={ref} data-conversation-span={span.id} className="absolute left-0 w-full px-3 pb-3 pt-1 sm:px-5" style={{ top }}>
+      <article className={`min-w-0 rounded-lg border px-4 py-3 ${selected ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)]" : isPrompt ? "border-[var(--tt-border)] bg-[var(--tt-raised)]" : "border-transparent"} ${depth ? "border-l-2 border-l-[var(--tt-brand)]" : ""}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--tt-fg)]"><Icon size={14} className={`shrink-0 ${isAgent ? "text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)]"}`} /><span className="truncate">{depth > 0 ? "↳ " : ""}{label}</span>{span.error && <span className="text-xs text-[var(--tt-danger-fg)]">Error</span>}</div>
+          <button type="button" aria-label={`Inspect ${span.title}`} onClick={() => onInspect(span.id)} className="shrink-0 rounded px-1.5 py-1 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)]"><FileSearch size={14} /></button>
+        </div>
+        {(isPrompt || isReply) && text.text ? <div className="mt-2 break-words text-sm leading-7 text-[var(--tt-fg)]">{isReply ? <div className="space-y-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[var(--tt-sunken)] [&_pre]:p-3 [&_pre]:text-xs [&_code]:font-mono [&_a]:text-[var(--tt-brand)] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:block [&_table]:overflow-x-auto [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>{`[image${alt ? `: ${alt}` : ""}]`}</span> }}>{text.text}</ReactMarkdown></div> : <span className="whitespace-pre-wrap">{text.text}</span>}{text.truncated && <button type="button" onClick={() => onInspect(span.id)} className="ml-1 text-[var(--tt-brand)]">… Read full record</button>}</div> : <p className="mt-1 break-words text-xs leading-6 text-[var(--tt-fg-muted)]">{span.label || (isReply ? "Model call · no response text recorded" : isPrompt ? "No readable request recorded" : isAgent ? "Delegated work" : "Recorded tool call")}</p>}
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--tt-fg-muted)]">
+          {real && <span className="font-mono tabular-nums">{fmtClock(span.start)}{!isPrompt ? ` · ${span.approxStart ? "≈ " : ""}${fmtDur(span.end - span.start)}` : ""}</span>}
+          {isReply && <span>{span.title}</span>}
+          {span.content?.reasoning != null && <button type="button" onClick={() => onInspect(span.id)} className="inline-flex items-center gap-1 hover:text-[var(--tt-brand)]"><Brain size={12} /> Recorded reasoning</button>}
+          {!isPrompt && !isReply && <button type="button" onClick={() => onInspect(span.id)} className="text-[var(--tt-brand)]">Input & result</button>}
+          {canExpand && <button type="button" onClick={() => onToggle(span.id)} aria-expanded={open} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={open ? "rotate-90" : ""} />{open ? "Hide child recording" : "Explore child recording"}</button>}
+          {load?.state === "pending" && <span role="status">Loading child recording…</span>}
+          {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
+        </div>
+      </article>
     </div>
   );
-}
-
-function Preview({ value, cap }: { value: unknown; cap: number }) {
-  const text = useMemo(() => formatContent(value, cap), [value, cap]);
-  return <>{text.text || "No readable text recorded."}{text.truncated && <span className="text-[var(--tt-brand)]"> … Select to read more</span>}</>;
 }
