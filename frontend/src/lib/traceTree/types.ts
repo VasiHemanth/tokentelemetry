@@ -68,7 +68,9 @@ export interface TraceSpan {
   title: string;
   /** Short secondary text: tool description, prompt excerpt, response excerpt. */
   label?: string;
-  /** Epoch ms. */
+  /** A reader message, without a verified one-to-one model-call boundary. */
+  recordOnly?: boolean;
+  /** Epoch ms, or recording position when timing is order-only. */
   start: number;
   end: number;
   children: TraceSpan[];

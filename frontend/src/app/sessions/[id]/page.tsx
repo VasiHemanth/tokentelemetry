@@ -335,8 +335,8 @@ export default function SessionDetailPage() {
   // slide-over viewer. Parent trace state (scrubber, tabs) stays untouched.
   const [subagentView, setSubagentView] = useState<TraceValue | null>(null);
 
-  // Span tree view, for harnesses whose traces carry real timing and paired
-  // tool results (see lib/traceTree/index.ts). Others keep the step view only.
+  // The workspace uses rich trace adapters where verified, and recording-order
+  // adapters elsewhere. Every harness can still open its legacy step view.
   const [stepView, setStepView] = useState(false);
   // Child spans fetched on demand, keyed by the agent span they belong under.
   // Tagged with the session id so navigating to another session drops them.
@@ -894,7 +894,7 @@ export default function SessionDetailPage() {
 
   const adapter = traceAdapter(agent);
   const baseSpans = useMemo(
-    () => (adapter && events.length ? adapter.build(events, delegation) : []),
+    () => (adapter ? adapter.build(events, delegation) : []),
     [adapter, events, delegation],
   );
   // Splice fetched children under their agent span. An agent span the harness
@@ -912,7 +912,7 @@ export default function SessionDetailPage() {
     };
     return baseSpans.map(splice);
   }, [adapter, baseSpans, fetchedChildren, id]);
-  const showTrace = !!adapter && traceRoots.length > 0 && !stepView;
+  const showTrace = !!adapter && !stepView;
   const sidebarOpen = showTrace ? traceSidebarOpen : stepSidebarOpen;
   const setSidebarOpen = showTrace ? setTraceSidebarOpen : setStepSidebarOpen;
 
@@ -1072,7 +1072,7 @@ export default function SessionDetailPage() {
                   )}
                 </div>
               )}
-              {adapter && traceRoots.length > 0 && (
+              {adapter && (
                 <Button
                   variant="secondary"
                   size="md"
@@ -1225,7 +1225,7 @@ export default function SessionDetailPage() {
           </div>
           <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Loading session trace…</span>
         </div>
-      ) : events.length === 0 ? (
+      ) : events.length === 0 && !showTrace ? (
         <div className="flex-1 flex items-center justify-center p-12">
           <div className="max-w-md text-center space-y-4">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-[var(--tt-radius-lg)] bg-[var(--tt-panel)] border border-[var(--tt-border)] text-[var(--tt-fg-dim)]">
@@ -1332,6 +1332,7 @@ export default function SessionDetailPage() {
                  roots={traceRoots}
                  sourceEvents={rawEvents}
                  timing={adapter?.timing ?? "real"}
+                 notice={adapter?.notice}
                  onLoadChild={loadChildSpans}
                  onJumpToEvent={openStep}
                  className="mb-8 h-full min-h-[520px]"

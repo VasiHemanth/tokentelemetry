@@ -40,13 +40,14 @@ export function KindChip({ span, color }: { span: TraceSpan; color?: string }) {
       </span>
     );
   }
+  const label = span.recordOnly && span.kind === "llm" ? "msg" : span.recordOnly && span.kind === "turn" ? "entry" : span.kind;
   const tone =
     span.kind === "turn"
       ? "border-[var(--tt-brand-glow)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]"
       : span.kind === "llm"
         ? "border-[var(--tt-border)] bg-[var(--tt-raised)] text-[var(--tt-fg-muted)]"
         : "border-[var(--tt-border)] bg-[var(--tt-sunken)] text-[var(--tt-fg-muted)]";
-  return <span className={`${CHIP} border ${tone}`}>{span.kind}</span>;
+  return <span className={`${CHIP} border ${tone}`} title={span.recordOnly ? "Recorded entry; model-call boundaries are unavailable" : undefined}>{label}</span>;
 }
 
 export function Tag({ children, color, title }: { children: React.ReactNode; color?: string; title?: string }) {

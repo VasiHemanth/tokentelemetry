@@ -27,7 +27,6 @@ interface Props {
 export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real }: Props) {
   const rows = useMemo(() => conversationRows(roots, expanded), [roots, expanded]);
   const [evidenceExpanded, setEvidenceExpanded] = useState<Set<string>>(new Set());
-  const toggleEvidence = (id: string) => setEvidenceExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const measured = useRef(new Map<string, number>());
   const [heights, setHeights] = useState(new Map<string, number>());
   const layout = useMemo(() => conversationLayout(rows, heights), [rows, heights]);
@@ -111,6 +110,12 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
     pinBottom.current = false;
     pendingReveal.current = null;
   };
+  const toggleEvidence = (id: string) => {
+    pendingReveal.current = null;
+    followed.current = id;
+    onFollow(id);
+    setEvidenceExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  };
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Session conversation">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--tt-border)] px-4 py-3">
@@ -149,7 +154,7 @@ function MeasuredEntry({ top, onMeasure, span, depth, selected, real, evidenceOp
   const isPrompt = span.kind === "turn", isReply = span.kind === "llm", isAgent = span.kind === "agent";
   const value = isPrompt ? span.content?.input : isReply ? span.content?.output : undefined;
   const text = useMemo(() => formatContent(value, 6000), [value]);
-  const label = isPrompt ? span.turnKind === "notification" ? "Agent report / notification" : span.title : isReply ? "Assistant" : span.title;
+  const label = isReply ? "Assistant" : isPrompt && span.turnKind === "notification" && !span.recordOnly ? "Agent report / notification" : span.title;
   const Icon = isPrompt || isReply ? MessageSquare : isAgent ? GitBranch : Wrench;
   const canExpand = isAgent && (!!span.agent?.childId || span.children.length > 0);
   return (
@@ -159,13 +164,14 @@ function MeasuredEntry({ top, onMeasure, span, depth, selected, real, evidenceOp
           <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--tt-fg)]"><Icon size={14} className={`shrink-0 ${isAgent ? "text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)]"}`} /><span className="truncate">{depth > 0 ? "↳ " : ""}{label}</span>{span.error && <span className="text-xs text-[var(--tt-danger-fg)]">Error</span>}</div>
           <button type="button" aria-label={`Inspect ${span.title}`} onClick={() => onInspect(span.id)} className="shrink-0 rounded px-1.5 py-1 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)]"><FileSearch size={14} /></button>
         </div>
-        {(isPrompt || isReply) && text.text ? <div className="mt-2 break-words text-sm leading-7 text-[var(--tt-fg)]">{isReply ? <div className="space-y-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[var(--tt-sunken)] [&_pre]:p-3 [&_pre]:text-xs [&_code]:font-mono [&_a]:text-[var(--tt-brand)] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:block [&_table]:overflow-x-auto [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>{`[image${alt ? `: ${alt}` : ""}]`}</span> }}>{text.text}</ReactMarkdown></div> : <span className="whitespace-pre-wrap">{text.text}</span>}{text.truncated && <button type="button" onClick={() => onInspect(span.id)} className="ml-1 text-[var(--tt-brand)]">… Read full record</button>}</div> : <p className="mt-1 break-words text-xs leading-6 text-[var(--tt-fg-muted)]">{span.label || (isReply ? "Model call · no response text recorded" : isPrompt ? "No readable request recorded" : isAgent ? "Delegated work" : "Recorded tool call")}</p>}
+        {(isPrompt || isReply) && text.text ? <div className="mt-2 break-words text-sm leading-7 text-[var(--tt-fg)]">{isReply ? <div className="space-y-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[var(--tt-sunken)] [&_pre]:p-3 [&_pre]:text-xs [&_code]:font-mono [&_a]:text-[var(--tt-brand)] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:block [&_table]:overflow-x-auto [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>{`[image${alt ? `: ${alt}` : ""}]`}</span> }}>{text.text}</ReactMarkdown></div> : <span className="whitespace-pre-wrap">{text.text}</span>}{text.truncated && <button type="button" onClick={() => onInspect(span.id)} className="ml-1 text-[var(--tt-brand)]">… Read full record</button>}</div> : <p className="mt-1 break-words text-xs leading-6 text-[var(--tt-fg-muted)]">{span.label || (isReply ? `${span.recordOnly ? "Assistant entry" : "Model call"} · no response text recorded` : isPrompt ? "No readable request recorded" : isAgent ? "Delegated work" : "Recorded tool call")}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--tt-fg-muted)]">
           {real && <span className="font-mono tabular-nums">{fmtClock(span.start)}{!isPrompt ? ` · ${span.approxStart ? "≈ " : ""}${fmtDur(span.end - span.start)}` : ""}</span>}
           {isReply && <span>{span.title}</span>}
           {span.content?.reasoning != null && <button type="button" onClick={() => onInspect(span.id)} className="inline-flex items-center gap-1 hover:text-[var(--tt-brand)]"><Brain size={12} /> Recorded reasoning</button>}
           {!isPrompt && !isReply && <button type="button" onClick={() => onToggleEvidence(span.id)} aria-expanded={evidenceOpen} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={evidenceOpen ? "rotate-90" : ""} />Input & result</button>}
           {canExpand && <button type="button" onClick={() => onToggle(span.id)} aria-expanded={open} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={open ? "rotate-90" : ""} />{open ? "Hide child recording" : "Explore child recording"}</button>}
+          {isAgent && open && span.agent?.loaded && span.children.length === 0 && <span>No readable child records returned.</span>}
           {load?.state === "pending" && <span role="status">Loading child recording…</span>}
           {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
         </div>

@@ -6,11 +6,15 @@
       "highlights": [
         {
           "title": "Read conversations beside execution",
-          "description": "Follow a continuous conversation beside its execution tree, with synchronized selection and evidence available on demand. Long traces render nearby entries and load child recordings when expanded. Execution focus, event records, and the legacy step view remain available."
+          "description": "Follow a continuous conversation beside its execution tree, with synchronized selection and evidence available on demand. Long traces render nearby entries and load child recordings when expanded. Execution focus, event records, and the legacy step view remain available. Blue accents and Graphite surfaces keep long sessions readable."
         },
         {
-          "title": "Graphite surfaces with clearer text",
-          "description": "The app and website keep their blue accent with neutral surfaces, more readable labels, recent activity first, and a compact project list."
+          "title": "Resize panes and inspect tools in place",
+          "description": "Drag the divider to adjust execution and conversation widths. Expand input and result inside a conversation entry, with the evidence drawer still available for deeper inspection."
+        },
+        {
+          "title": "One workspace across coding agents",
+          "description": "Grok Build, Cursor, Copilot, Antigravity, Vibe, Cline, Muse, SmallCode, Kimi and Oh My Pi can use the session workspace. Readers without verified timing or model-call boundaries show recording order and explicitly identify missing evidence."
         },
         {
           "title": "More faithful usage and tool evidence",

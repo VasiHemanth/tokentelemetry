@@ -12,7 +12,7 @@ export default function InlineEvidence({ span }: { span: TraceSpan }) {
 }
 
 function RecordedField({ label, value, error }: { label: string; value: unknown; error?: boolean }) {
-  if (value === undefined) return <p className="text-xs text-[var(--tt-fg-muted)]">{label} not recorded.</p>;
+  if (value === undefined) return <p className="text-xs text-[var(--tt-fg-muted)]">{label} unavailable in this trace.</p>;
   if (value === null || value === "") return <p className="text-xs text-[var(--tt-fg-muted)]">{label}: {value === null ? "null" : "empty string"}</p>;
   return <ContentSection label={label} value={value} plain error={error} />;
 }

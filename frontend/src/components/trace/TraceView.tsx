@@ -33,6 +33,7 @@ import { SKILL_COLOR, makeColorOf } from "./shared";
 export interface TraceViewProps {
   roots: TraceSpan[];
   timing: TraceTiming;
+  notice?: string;
   /** Epoch ms of the session's first event; adds an "Into session" offset to the detail panel. */
   sessionStart?: number;
   /** Fetch an agent span's own trace; the parent re-renders with new roots when it resolves. */
@@ -51,7 +52,7 @@ const FILTERS: Array<[TraceFilter, string]> = [
 
 const MIN_WINDOW = 0.002;
 
-export default function TraceView({ roots, timing, sessionStart, onLoadChild, onJumpToEvent, sourceEvents = [], className = "" }: TraceViewProps) {
+export default function TraceView({ roots, timing, notice, sessionStart, onLoadChild, onJumpToEvent, sourceEvents = [], className = "" }: TraceViewProps) {
   const searchParams = useSearchParams();
   const location = readWorkspaceLocation(searchParams);
   const view = location.view;
@@ -109,6 +110,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
       wall: scale.t1 - scale.t0,
       active: scale.busyMs,
       prompts,
+      recordOnly: roots.some(root => root.recordOnly),
       // A spawn call that never produced a subagent is still a row, but not a subagent.
       agents: index.agents.filter((a) => !a.error).length,
       skills: index.skills.length,
@@ -266,9 +268,6 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
     e.preventDefault();
   };
 
-  if (!roots.length) {
-    return <div className={`rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)] p-6 text-center text-xs text-[var(--tt-fg-muted)] ${className}`}>No spans recorded for this session.</div>;
-  }
 
   const zoomed = win[0] > 0 || win[1] < 1;
   const card = "rounded-xl border border-[var(--tt-border)] bg-[var(--tt-panel)]";
@@ -282,10 +281,10 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
       {real && stat(fmtDur(stats.wall), "wall clock")}
       {real && stat(fmtDur(stats.active), "active")}
-      {stat(stats.prompts, stats.prompts === 1 ? "prompt" : "prompts")}
+      {stat(stats.prompts, stats.recordOnly ? (stats.prompts === 1 ? "user entry" : "user entries") : stats.prompts === 1 ? "prompt" : "prompts")}
       {stat(stats.agents, stats.agents === 1 ? "subagent" : "subagents")}
       {stat(stats.skills, stats.skills === 1 ? "skill" : "skills")}
-      {stat(stats.peak, "peak parallel")}
+      {real && stat(stats.peak, "peak parallel")}
       {stat(stats.hasUsage ? `${fmtTokens(stats.tokens)}${stats.partialUsage ? "+" : ""}` : "Unavailable", stats.partialUsage ? "recorded main tokens" : "main tokens")}
     </div>
   );
@@ -300,6 +299,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
         <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { setCopied(false); } }} className="inline-flex items-center gap-2 rounded-md border border-[var(--tt-border)] px-3 py-2 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)]">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied" : "Copy view link"}</button>
       </div>
       <div className="shrink-0 px-1 py-1">{statLine}</div>
+      {notice && <p className="shrink-0 px-1 text-xs leading-5 text-[var(--tt-fg-muted)]">{notice}</p>}
       {view === "conversation" && <button type="button" onClick={() => setOutlineOpen(value => !value)} aria-expanded={outlineOpen} className="shrink-0 self-start rounded-md border border-[var(--tt-border)] px-3 py-2 text-xs text-[var(--tt-brand)] @min-[800px]:hidden">{outlineOpen ? "Back to conversation" : "Show execution navigation"}</button>}
 
       {real && view === "execution" && (

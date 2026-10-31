@@ -45,3 +45,15 @@ The reader uses measured heights and a bounded render window instead of conversa
 On narrow windows, the conversation opens first and a button switches to execution navigation. Existing links using `view=conversation` still open the unified Session view. Selection identifiers retain their existing within-recording stability limits.
 
 Unified-view browser checks passed on both large recordings: late-entry link reloads, switching into execution focus, and jumping to the end. The reader mounted approximately 7–14 entries in the sampled checks. A linked child task restored its recording and aligned in the reader; native drawer focus and Escape dismissal passed. At 320, 375, 768, and 1024 px, the document had no horizontal overflow and the reader/navigation remained usable. Dark and light themes were inspected. The current frontend regression suite has 100 passing tests after replacing the prior paginated projection tests with continuous-reader tests.
+
+## Resizing, inline evidence, and agent coverage
+
+The Session split can be dragged or adjusted using the divider's arrow keys, Home, and End; double-click restores 34%. Pane limits preserve 240 px for execution and 320 px for reading. The divider is hidden when the narrow-screen navigation switch is used.
+
+Input and result expand together inside their conversation entry. Only expanded entries format payloads, and expansion state survives row virtualization. Empty results remain distinct from unavailable results. Reasoning and complete span metadata remain accessible through the evidence drawer.
+
+Every registered agent has a workspace adapter. Existing rich adapters remain in use, including ZCode/Z.ai. Grok Build, Cursor, Copilot, Antigravity, Vibe, Cline, Muse, SmallCode, Kimi, Oh My Pi, and the OpenAI-compatible registration have a conservative recording-order adapter. It preserves source evidence without claiming verified model-call boundaries, clock durations, parallelism, or per-call usage. Unmatched results remain independent records. SmallCode's immediately adjacent same-name call/result contract is the only pairing fallback without IDs. Delegation metadata without a join key is explicitly unplaced, with child recordings linked only through their recorded identifiers.
+
+Independent comparisons across 29 additional local recordings from eight newly adapted reader types retained all 1,580 tool calls and 93 result records exposed by the APIs. These comparisons validate reader output, not completeness against every native harness artifact. Copilot and several other current readers omit results or usage; the workspace discloses those gaps. Kimi and Oh My Pi have schema-level coverage but no local recordings were available for this validation. OpenAI-compatible availability still depends on a reader supplying session records.
+
+The frontend regression suite now has 109 passing tests, including registry coverage, conservative pairing, structured input, missing/empty results, delegation links, and divider bounds. Browser checks cover the eight additional populated reader types, empty-recording controls, and inline disclosure without opening the drawer.

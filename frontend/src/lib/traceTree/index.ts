@@ -1,11 +1,5 @@
-/**
- * Which harnesses get the trace tree, and the adapter that builds it.
- *
- * A harness is listed only when its trace has real per-event times and tool
- * calls that pair with their results, checked against real sessions. Harnesses
- * left out (synthetic timestamps, no tool results, no tool events at all) keep
- * the old step view; see the audit notes on each adapter for why.
- */
+/** Shared session workspace adapters. Rich adapters use verified call/timing
+ * contracts; recording adapters preserve order and disclose missing evidence. */
 import type { Event, TraceValue } from "../traceEvents";
 import type { TraceSpan, TraceTiming } from "./types";
 import { claudeShapeAdapter } from "./adapters/claudeShape";
@@ -15,6 +9,7 @@ import { qwenAdapter } from "./adapters/qwen";
 import { opencodeAdapter } from "./adapters/opencode";
 import { hermesAdapter } from "./adapters/hermes";
 import { primeAdapter } from "./adapters/prime";
+import { recordingAdapter } from "./adapters/recording";
 import { markSkills } from "./skills";
 
 export interface ChildFetch {
@@ -26,6 +21,8 @@ export interface ChildFetch {
 
 export interface HarnessAdapter {
   timing: TraceTiming;
+  /** Reader limitations displayed beside the workspace controls. */
+  notice?: string;
   /**
    * Build turn -> llm -> tool spans from the page's normalized events (the same
    * array the step cards render, so `eventIndex` lines up). Calls that spawned a
@@ -51,6 +48,17 @@ const ADAPTERS: Record<string, HarnessAdapter> = {
   zcode: opencodeAdapter("zcode"),
   hermes: hermesAdapter,
   prime: primeAdapter,
+  grok: recordingAdapter("grok"),
+  cursor: recordingAdapter("cursor"),
+  copilot: recordingAdapter("copilot"),
+  antigravity: recordingAdapter("antigravity"),
+  vibe: recordingAdapter("vibe"),
+  cline: recordingAdapter("cline"),
+  smallcode: recordingAdapter("smallcode"),
+  muse: recordingAdapter("muse"),
+  kimi: recordingAdapter("kimi"),
+  omp: recordingAdapter("omp"),
+  openai_compat: recordingAdapter("openai_compat"),
 };
 
 // Every adapter's output goes through the shared skill pass. Wrapped once here

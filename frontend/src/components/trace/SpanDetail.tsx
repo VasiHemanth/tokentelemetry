@@ -67,8 +67,8 @@ export default function SpanDetail(p: Props) {
     body = (
       <>
         {span.label && <Quote>{span.label}</Quote>}
-        <Kv rows={[...when, ["Model calls", work.llm], ["Tool calls", work.tools], ["Main-agent tokens", hasOwnUsage(span) ? fmtTokens(work.tokens) : "Not recorded"]]} />
-        <ContentSection key={`${span.id}-in`} label="Prompt" value={span.content?.input} />
+        <Kv rows={[...when, [span.recordOnly ? "Assistant entries" : "Model calls", work.llm], ["Tool calls", work.tools], ["Main-agent tokens", hasOwnUsage(span) ? fmtTokens(work.tokens) : "Not recorded"]]} />
+        <ContentSection key={`${span.id}-in`} label={span.recordOnly ? "Recorded entry" : "Prompt"} value={span.content?.input} />
         {spawns.length > 0 && (
           <Section label="Spawned in this turn">
             {spawns.map((a) => agentLink(a, real ? `+${fmtDur((a.agent?.callStart ?? a.start) - span.start)}` : undefined))}
