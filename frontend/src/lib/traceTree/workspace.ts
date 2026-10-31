@@ -23,3 +23,9 @@ export function updateWorkspaceLocation(params: { toString(): string }, patch: {
   else if (patch.span !== undefined) next.set("span", patch.span);
   return next;
 }
+
+/** Leave 240 px for navigation, 320 px for reading, and 12 px for the handle. */
+export function clampWorkspaceSplit(percent: number, width: number): number {
+  if (!Number.isFinite(percent) || !Number.isFinite(width) || width < 800) return 34;
+  return Math.min(100 * (width - 332) / width, Math.max(24_000 / width, percent));
+}

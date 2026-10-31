@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { TraceSpan } from "./types";
-import { readWorkspaceLocation, updateWorkspaceLocation, windowRows } from "./workspace";
+import { clampWorkspaceSplit, readWorkspaceLocation, updateWorkspaceLocation, windowRows } from "./workspace";
 import { computeRollups } from "./tree";
 
 function span(id: string, kind: TraceSpan["kind"], children: TraceSpan[] = [], extra: Partial<TraceSpan> = {}): TraceSpan {
@@ -36,4 +36,11 @@ test("unknown usage is distinct from recorded zero and mixed coverage", () => {
   assert.equal(rollups.get("missing")?.tokenState, "unavailable");
   assert.equal(rollups.get("zero")?.tokenState, "recorded");
   assert.equal(rollups.get("partial")?.tokenState, "partial");
+});
+
+test("workspace divider keeps both panes usable and rejects invalid widths", () => {
+  assert.equal(clampWorkspaceSplit(1, 1000), 24);
+  assert.equal(clampWorkspaceSplit(99, 1000), 66.8);
+  assert.equal(clampWorkspaceSplit(34, 1400), 34);
+  assert.equal(clampWorkspaceSplit(Number.NaN, 1000), 34);
 });

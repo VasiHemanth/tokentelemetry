@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type CSSProperties } from "react";
 import { ListChevronsDownUp, ListChevronsUpDown, RotateCcw, Copy, Check, Search, ChevronDown, GitBranch, MessageSquare, FileCode } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import type { Event } from "@/lib/traceEvents";
@@ -26,6 +26,7 @@ import SpanDetail from "./SpanDetail";
 import Conversation from "./Conversation";
 import EventLog from "./EventLog";
 import EvidenceDrawer from "./EvidenceDrawer";
+import WorkspaceDivider from "./WorkspaceDivider";
 import ContentSection from "./ContentSection";
 import { SKILL_COLOR, makeColorOf } from "./shared";
 
@@ -73,6 +74,8 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
   const [win, setWinState] = useState<[number, number]>([0, 1]);
   const [loads, setLoads] = useState<Record<string, LoadState>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [splitPercent, setSplitPercent] = useState(34);
   const scrollReq = useRef<{ id: string; block: ScrollLogicalPosition } | null>(null);
   const restoredSelection = useRef<string | null>(null);
 
@@ -325,7 +328,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
         </details>
       )}
 
-      <div className={`grid flex-1 gap-3 ${view === "conversation" ? "min-h-[360px] @min-[800px]:min-h-0 grid-rows-1 @min-[800px]:grid-cols-[minmax(280px,34%)_minmax(0,1fr)] @min-[800px]:grid-rows-1" : "min-h-0 grid-rows-[minmax(240px,3fr)_minmax(180px,2fr)] @min-[800px]:grid-cols-[minmax(0,1fr)_clamp(280px,30%,420px)] @min-[800px]:grid-rows-1"}`}>
+      <div ref={workspaceRef} style={{ "--trace-split": `${splitPercent}%` } as CSSProperties} className={`grid flex-1 gap-3 ${view === "conversation" ? "min-h-[360px] @min-[800px]:min-h-0 grid-rows-1 @min-[800px]:gap-0 @min-[800px]:grid-cols-[var(--trace-split)_12px_minmax(0,1fr)] @min-[800px]:grid-rows-1" : "min-h-0 grid-rows-[minmax(240px,3fr)_minmax(180px,2fr)] @min-[800px]:grid-cols-[minmax(0,1fr)_clamp(280px,30%,420px)] @min-[800px]:grid-rows-1"}`}>
         <section className={`${card} ${view === "conversation" && !outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 flex-col overflow-hidden`}>
           {view === "events" ? <EventLog events={sourceEvents} selected={sourceEvent} onSelect={setSourceEvent} /> : <>
           <div className="flex shrink-0 items-center justify-between border-b border-[var(--tt-border)] px-3 py-2"><h2 className="text-sm font-medium text-[var(--tt-fg)]">Execution</h2>{view === "conversation" && <button type="button" onClick={() => setEvidenceOpen(true)} className="text-xs text-[var(--tt-brand)]">Inspect selected</button>}</div>
@@ -374,6 +377,7 @@ export default function TraceView({ roots, timing, sessionStart, onLoadChild, on
           />
           </>}
         </section>
+        {view === "conversation" && <WorkspaceDivider value={splitPercent} onChange={setSplitPercent} container={workspaceRef} />}
         {view === "conversation" ? <div className={`${card} ${outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 overflow-hidden`}><Conversation roots={roots} selectedId={selectedId} expanded={expanded} loads={loads} onFollow={onSelectReveal} onInspect={inspectEvidence} onToggle={toggle} onRetry={id => { const span = index.byId.get(id); if (span) startLoad(span); }} real={real} /></div> :
         <aside className={`${card} min-h-0 min-w-0 overflow-y-auto overscroll-contain p-3 scrollbar-thin`}>
           {view === "events" ? sourceEvent ? <div className="space-y-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">API event record</h2><p className="text-xs leading-6 text-[var(--tt-fg-muted)]">Event returned by the harness reader. Some harnesses normalize their native records on the backend.</p><ContentSection label="Event payload" value={sourceEvent} plain /></div> : <p className="p-3 text-sm text-[var(--tt-fg-muted)]">Select a record to inspect its payload.</p> : <SpanDetail

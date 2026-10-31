@@ -8,6 +8,7 @@ import type { TraceSpan } from "@/lib/traceTree/types";
 import { conversationLayout, conversationRowAt, conversationRows } from "@/lib/traceTree/conversation";
 import { formatContent } from "@/lib/traceTree/content";
 import { fmtClock, fmtDur } from "@/lib/traceTree/timeScale";
+import InlineEvidence from "./InlineEvidence";
 import type { LoadState } from "./SpanTable";
 
 interface Props {
@@ -25,6 +26,8 @@ interface Props {
 /** Continuous reading with measured rows: format only nearby payloads. */
 export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real }: Props) {
   const rows = useMemo(() => conversationRows(roots, expanded), [roots, expanded]);
+  const [evidenceExpanded, setEvidenceExpanded] = useState<Set<string>>(new Set());
+  const toggleEvidence = (id: string) => setEvidenceExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const measured = useRef(new Map<string, number>());
   const [heights, setHeights] = useState(new Map<string, number>());
   const layout = useMemo(() => conversationLayout(rows, heights), [rows, heights]);
@@ -124,7 +127,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
           if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
         }}>
         <div className="relative mx-auto max-w-4xl" style={{ height: layout.total }}>
-          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} selected={selectedId === row.span.id} real={real} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
+          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} selected={selectedId === row.span.id} real={real} evidenceOpen={evidenceExpanded.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
         </div>
         {!rows.length && <p className="p-6 text-sm text-[var(--tt-fg-muted)]">No conversation content recorded.</p>}
       </div>
@@ -132,8 +135,8 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
   );
 }
 
-function MeasuredEntry({ top, onMeasure, span, depth, selected, real, open, load, onInspect, onToggle, onRetry }: {
-  top: number; onMeasure: (id: string, height: number) => void; span: TraceSpan; depth: number; selected: boolean; real: boolean; open: boolean; load?: LoadState;
+function MeasuredEntry({ top, onMeasure, span, depth, selected, real, evidenceOpen, onToggleEvidence, open, load, onInspect, onToggle, onRetry }: {
+  top: number; onMeasure: (id: string, height: number) => void; span: TraceSpan; depth: number; selected: boolean; real: boolean; evidenceOpen: boolean; onToggleEvidence: (id: string) => void; open: boolean; load?: LoadState;
   onInspect: (id: string) => void; onToggle: (id: string) => void; onRetry: (id: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -161,11 +164,12 @@ function MeasuredEntry({ top, onMeasure, span, depth, selected, real, open, load
           {real && <span className="font-mono tabular-nums">{fmtClock(span.start)}{!isPrompt ? ` · ${span.approxStart ? "≈ " : ""}${fmtDur(span.end - span.start)}` : ""}</span>}
           {isReply && <span>{span.title}</span>}
           {span.content?.reasoning != null && <button type="button" onClick={() => onInspect(span.id)} className="inline-flex items-center gap-1 hover:text-[var(--tt-brand)]"><Brain size={12} /> Recorded reasoning</button>}
-          {!isPrompt && !isReply && <button type="button" onClick={() => onInspect(span.id)} className="text-[var(--tt-brand)]">Input & result</button>}
+          {!isPrompt && !isReply && <button type="button" onClick={() => onToggleEvidence(span.id)} aria-expanded={evidenceOpen} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={evidenceOpen ? "rotate-90" : ""} />Input & result</button>}
           {canExpand && <button type="button" onClick={() => onToggle(span.id)} aria-expanded={open} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={open ? "rotate-90" : ""} />{open ? "Hide child recording" : "Explore child recording"}</button>}
           {load?.state === "pending" && <span role="status">Loading child recording…</span>}
           {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
         </div>
+        {evidenceOpen && <InlineEvidence span={span} />}
       </article>
     </div>
   );
