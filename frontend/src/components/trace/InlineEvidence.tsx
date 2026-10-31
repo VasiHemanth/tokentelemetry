@@ -5,9 +5,9 @@ import ContentSection from "./ContentSection";
 
 /** Mounted only on expansion; full payloads stay out of the scrolling hot path. */
 export default function InlineEvidence({ span }: { span: TraceSpan }) {
-  return <div className="mt-3 space-y-3 border-t border-[var(--tt-border)] pt-3" aria-label="Inline tool evidence">
-    <RecordedField label="Input" value={span.content?.input} />
-    <RecordedField label="Result" value={span.content?.output} error={span.error} />
+  return <div className="@container mt-3 border-t border-[var(--tt-border)] pt-3" aria-label="Inline tool evidence">
+    <div className="grid min-w-0 grid-cols-1 gap-4 @min-[720px]:grid-cols-2 [&_pre]:text-xs [&_pre]:leading-6"><RecordedField label="Input" value={span.content?.input} />
+    <RecordedField label="Result" value={span.content?.output} error={span.error} /></div>
   </div>;
 }
 

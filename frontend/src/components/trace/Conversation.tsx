@@ -1,15 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Brain, ChevronRight, FileSearch, GitBranch, MessageSquare, Wrench } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ArrowDownToLine, MessageSquare } from "lucide-react";
 import type { TraceSpan } from "@/lib/traceTree/types";
 import { conversationLayout, conversationRowAt, conversationRows } from "@/lib/traceTree/conversation";
-import { formatContent } from "@/lib/traceTree/content";
-import { fmtClock, fmtDur } from "@/lib/traceTree/timeScale";
-import InlineEvidence from "./InlineEvidence";
+import ConversationEntry, { type ConversationEntryProps } from "./ConversationEntry";
 import type { LoadState } from "./SpanTable";
+import type { ColorOf } from "./shared";
 
 interface Props {
   roots: TraceSpan[];
@@ -21,10 +18,11 @@ interface Props {
   onToggle: (id: string) => void;
   onRetry: (id: string) => void;
   real: boolean;
+  colorOf: ColorOf;
 }
 
 /** Continuous reading with measured rows: format only nearby payloads. */
-export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real }: Props) {
+export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real, colorOf }: Props) {
   const rows = useMemo(() => conversationRows(roots, expanded), [roots, expanded]);
   const [evidenceExpanded, setEvidenceExpanded] = useState<Set<string>>(new Set());
   const measured = useRef(new Map<string, number>());
@@ -119,7 +117,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Session conversation">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--tt-border)] px-4 py-3">
-        <div><h2 className="text-sm font-medium text-[var(--tt-fg)]">Conversation</h2><p className="mt-0.5 text-xs text-[var(--tt-fg-muted)]">Follow the session · open any entry for evidence</p></div>
+        <div className="flex min-w-0 items-center gap-3"><span className="hidden size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--tt-border)] bg-[var(--tt-canvas)] text-[var(--tt-fg-muted)] sm:flex"><MessageSquare size={15} /></span><div><h2 className="text-sm font-semibold text-[var(--tt-fg)]">Conversation</h2><p className="mt-0.5 text-xs text-[var(--tt-fg-muted)]">Requests, responses & recorded activity</p></div></div>
         <button type="button" onClick={latest} className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--tt-border)] px-2.5 py-1.5 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)]"><ArrowDownToLine size={13} /> Latest</button>
       </div>
       <div ref={boxRef} tabIndex={0} aria-label="Continuous conversation" className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-1 focus-visible:ring-[var(--tt-border-focus)] scrollbar-thin [overflow-anchor:none]"
@@ -132,7 +130,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
           if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
         }}>
         <div className="relative mx-auto max-w-4xl" style={{ height: layout.total }}>
-          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} selected={selectedId === row.span.id} real={real} evidenceOpen={evidenceExpanded.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
+          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} agentColor={row.span.kind === "agent" ? colorOf(row.span.agent?.agentType) : undefined} selected={selectedId === row.span.id} real={real} evidenceOpen={evidenceExpanded.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
         </div>
         {!rows.length && <p className="p-6 text-sm text-[var(--tt-fg-muted)]">No conversation content recorded.</p>}
       </div>
@@ -140,43 +138,13 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
   );
 }
 
-function MeasuredEntry({ top, onMeasure, span, depth, selected, real, evidenceOpen, onToggleEvidence, open, load, onInspect, onToggle, onRetry }: {
-  top: number; onMeasure: (id: string, height: number) => void; span: TraceSpan; depth: number; selected: boolean; real: boolean; evidenceOpen: boolean; onToggleEvidence: (id: string) => void; open: boolean; load?: LoadState;
-  onInspect: (id: string) => void; onToggle: (id: string) => void; onRetry: (id: string) => void;
-}) {
+function MeasuredEntry({ top, onMeasure, ...entry }: ConversationEntryProps & { top: number; onMeasure: (id: string, height: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current) return;
-    const observer = new ResizeObserver(entries => onMeasure(span.id, Math.ceil(entries[0].borderBoxSize[0].blockSize)));
+    const observer = new ResizeObserver(entries => onMeasure(entry.span.id, Math.ceil(entries[0].borderBoxSize[0].blockSize)));
     observer.observe(ref.current);
     return () => observer.disconnect();
-  }, [span.id, onMeasure]);
-  const isPrompt = span.kind === "turn", isReply = span.kind === "llm", isAgent = span.kind === "agent";
-  const value = isPrompt ? span.content?.input : isReply ? span.content?.output : undefined;
-  const text = useMemo(() => formatContent(value, 6000), [value]);
-  const label = isReply ? "Assistant" : isPrompt && span.turnKind === "notification" && !span.recordOnly ? "Agent report / notification" : span.title;
-  const Icon = isPrompt || isReply ? MessageSquare : isAgent ? GitBranch : Wrench;
-  const canExpand = isAgent && (!!span.agent?.childId || span.children.length > 0);
-  return (
-    <div ref={ref} data-conversation-span={span.id} className="absolute left-0 w-full px-3 pb-3 pt-1 sm:px-5" style={{ top }}>
-      <article className={`min-w-0 rounded-lg border px-4 py-3 ${selected ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)]" : isPrompt ? "border-[var(--tt-border)] bg-[var(--tt-raised)]" : "border-transparent"} ${depth ? "border-l-2 border-l-[var(--tt-brand)]" : ""}`}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--tt-fg)]"><Icon size={14} className={`shrink-0 ${isAgent ? "text-[var(--tt-brand)]" : "text-[var(--tt-fg-muted)]"}`} /><span className="truncate">{depth > 0 ? "↳ " : ""}{label}</span>{span.error && <span className="text-xs text-[var(--tt-danger-fg)]">Error</span>}</div>
-          <button type="button" aria-label={`Inspect ${span.title}`} onClick={() => onInspect(span.id)} className="shrink-0 rounded px-1.5 py-1 text-xs text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)]"><FileSearch size={14} /></button>
-        </div>
-        {(isPrompt || isReply) && text.text ? <div className="mt-2 break-words text-sm leading-7 text-[var(--tt-fg)]">{isReply ? <div className="space-y-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[var(--tt-sunken)] [&_pre]:p-3 [&_pre]:text-xs [&_code]:font-mono [&_a]:text-[var(--tt-brand)] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:block [&_table]:overflow-x-auto [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>{`[image${alt ? `: ${alt}` : ""}]`}</span> }}>{text.text}</ReactMarkdown></div> : <span className="whitespace-pre-wrap">{text.text}</span>}{text.truncated && <button type="button" onClick={() => onInspect(span.id)} className="ml-1 text-[var(--tt-brand)]">… Read full record</button>}</div> : <p className="mt-1 break-words text-xs leading-6 text-[var(--tt-fg-muted)]">{span.label || (isReply ? `${span.recordOnly ? "Assistant entry" : "Model call"} · no response text recorded` : isPrompt ? "No readable request recorded" : isAgent ? "Delegated work" : "Recorded tool call")}</p>}
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--tt-fg-muted)]">
-          {real && <span className="font-mono tabular-nums">{fmtClock(span.start)}{!isPrompt ? ` · ${span.approxStart ? "≈ " : ""}${fmtDur(span.end - span.start)}` : ""}</span>}
-          {isReply && <span>{span.title}</span>}
-          {span.content?.reasoning != null && <button type="button" onClick={() => onInspect(span.id)} className="inline-flex items-center gap-1 hover:text-[var(--tt-brand)]"><Brain size={12} /> Recorded reasoning</button>}
-          {!isPrompt && !isReply && <button type="button" onClick={() => onToggleEvidence(span.id)} aria-expanded={evidenceOpen} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={evidenceOpen ? "rotate-90" : ""} />Input & result</button>}
-          {canExpand && <button type="button" onClick={() => onToggle(span.id)} aria-expanded={open} className="inline-flex items-center gap-1 text-[var(--tt-brand)]"><ChevronRight size={12} className={open ? "rotate-90" : ""} />{open ? "Hide child recording" : "Explore child recording"}</button>}
-          {isAgent && open && span.agent?.loaded && span.children.length === 0 && <span>No readable child records returned.</span>}
-          {load?.state === "pending" && <span role="status">Loading child recording…</span>}
-          {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
-        </div>
-        {evidenceOpen && <InlineEvidence span={span} />}
-      </article>
-    </div>
-  );
+  }, [entry.span.id, onMeasure]);
+  return <div ref={ref} data-conversation-span={entry.span.id} className="absolute left-0 w-full px-3 pb-4 pt-1 sm:px-5" style={{ top }}><ConversationEntry {...entry} /></div>;
 }

@@ -6,7 +6,7 @@
       "highlights": [
         {
           "title": "Read conversations beside execution",
-          "description": "Follow a continuous conversation beside its execution tree, with synchronized selection and evidence available on demand. Long traces render nearby entries and load child recordings when expanded. Execution focus, event records, and the legacy step view remain available. Blue accents and Graphite surfaces keep long sessions readable."
+          "description": "Read a structured conversation beside its execution tree, with synchronized selection, clear request blocks, formatted assistant responses, and compact tool activity. Long traces render nearby entries, load child recordings on demand, and keep execution focus, event records, and the legacy view available."
         },
         {
           "title": "Resize panes and inspect tools in place",

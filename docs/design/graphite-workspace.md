@@ -65,3 +65,11 @@ The trace summary and its existing Ask once / Chat controls now precede delegate
 The session inspector opens by default. At widths of 1440 px and above it docks beside the reader; below that it remains open beneath the reader to preserve conversation width. Inspector body values use 14 px text with readable line spacing, labels use 12 px, and technical identifiers/paths retain monospace styling. Context, agents, tools, artifacts, and raw records use the revised typography.
 
 Browser checks verified overview-before-workspace ordering, the shortcut, default inspector state, close/reopen behavior, and no document horizontal overflow at 1600, 1440, 1024, 768, 375, and 320 px. The 1440 px view retains both execution and conversation beside the inspector. No summary generation or question submission was triggered during validation.
+
+## Conversation visual hierarchy
+
+A connected activity rail distinguishes request anchors, assistant documents, compact terminal-style tool entries, skills, and child-agent handoffs. Agent colors match the execution tree. Selection has a visible label and focus outline; errors have explicit text, an icon, and a separate border treatment. Result availability is labelled as recorded evidence rather than inferred success.
+
+Assistant Markdown uses a 15 px reading size, a heading hierarchy, spaced lists, bordered tables, blockquotes, and language-labelled code panels with copy controls. Inline tool evidence uses two columns only when its own container has sufficient width. Missing response text does not expose a model's reasoning through its short-label fallback; reasoning remains an explicit disclosure.
+
+Browser validation covered real-session inline evidence, divider resizing, dark/light themes, and widths from 320 through 1800 px. A sanitized browser-only fixture checked Markdown headings, tables, blockquotes, exact code-copy contents, and narrow-screen overflow; no fixture or generated text was inserted into recorded session data.

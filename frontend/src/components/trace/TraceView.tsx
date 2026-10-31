@@ -378,7 +378,7 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
           </>}
         </section>
         {view === "conversation" && <WorkspaceDivider value={splitPercent} onChange={setSplitPercent} container={workspaceRef} />}
-        {view === "conversation" ? <div className={`${card} ${outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 overflow-hidden`}><Conversation roots={roots} selectedId={selectedId} expanded={expanded} loads={loads} onFollow={onSelectReveal} onInspect={inspectEvidence} onToggle={toggle} onRetry={id => { const span = index.byId.get(id); if (span) startLoad(span); }} real={real} /></div> :
+        {view === "conversation" ? <div className={`${card} ${outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 overflow-hidden`}><Conversation colorOf={colorOf} roots={roots} selectedId={selectedId} expanded={expanded} loads={loads} onFollow={onSelectReveal} onInspect={inspectEvidence} onToggle={toggle} onRetry={id => { const span = index.byId.get(id); if (span) startLoad(span); }} real={real} /></div> :
         <aside className={`${card} min-h-0 min-w-0 overflow-y-auto overscroll-contain p-3 scrollbar-thin`}>
           {view === "events" ? sourceEvent ? <div className="space-y-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">API event record</h2><p className="text-xs leading-6 text-[var(--tt-fg-muted)]">Event returned by the harness reader. Some harnesses normalize their native records on the backend.</p><ContentSection label="Event payload" value={sourceEvent} plain /></div> : <p className="p-3 text-sm text-[var(--tt-fg-muted)]">Select a record to inspect its payload.</p> : <SpanDetail
             span={selected}
