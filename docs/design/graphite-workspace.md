@@ -94,6 +94,12 @@ Browser checks verified level payload body positions before and after raw/Markdo
 
 ## Token composition chart
 
-The evidence drawer shows a 100% stacked token-usage bar above the category cards. Segment colors match the cards: input blue, cache reads violet, cache writes amber, output teal. Exact count shares determine widths; no minimum segment width inflates tiny categories. Hover titles, accessible chart text, and category percentages retain small values. Nonzero shares below 0.01% are labelled accordingly instead of appearing as zero.
+The evidence drawer shows a 100% stacked token-usage bar above the category cards. Segment colors match the cards: input blue, cache reads violet, cache writes amber, output teal. Exact count shares determine widths; no minimum segment width inflates tiny categories. Color-matched hover cards, accessible chart text, and category percentages retain small values. Nonzero shares below 0.01% are labelled accordingly instead of appearing as zero.
 
 Recorded all-zero usage has an empty track and an explicit zero-count note. Invalid or negative counts cannot generate a misleading composition chart. The frontend regression suite has 115 passing tests, including exact proportions, zero totals, and invalid input. Browser shares were compared against an independent decimal calculation and the recorded counts; dark and light themes retain the same encoding.
+
+## Color-matched hover cards
+
+Token segments and category cards open a custom colored hover card with the category, exact count, description, and share of the recorded total. The card uses the category's border and tinted background. Native popovers place it above the evidence dialog without clipping. Pointer transfer onto the card keeps it open; keyboard focus exposes the same information, including categories too small to hover precisely in the stacked bar. Escape dismisses the hover card before the underlying dialog. Scroll and resize dismiss stale positioning.
+
+Browser checks verified segment/card hover, matching colors and values, hover persistence, keyboard focus, Escape behavior, dark/light themes, and 320 px positioning.
