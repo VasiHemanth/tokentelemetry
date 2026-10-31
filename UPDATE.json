@@ -19,6 +19,10 @@
         {
           "title": "More faithful usage and tool evidence",
           "description": "Pi and Prime traces retain recorded usage, and OpenCode and ZCode usage stays attached to its own model step. Prime tool results keep their call identifiers and error flags."
+        },
+        {
+          "title": "Summary and context up front",
+          "description": "Trace summary, session questions, and delegated work appear before the conversation. The inspector opens by default with clearer text and a responsive layout."
         }
       ]
     },

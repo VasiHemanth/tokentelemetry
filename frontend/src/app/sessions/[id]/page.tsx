@@ -356,10 +356,9 @@ export default function SessionDetailPage() {
   const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "agents" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
-  // The context sidebar starts open in the step view and closed in the trace
-  // view, which needs the width to keep its detail panel beside the tree.
+  // Session context is available immediately in both reading modes.
   const [stepSidebarOpen, setStepSidebarOpen] = useState(true);
-  const [traceSidebarOpen, setTraceSidebarOpen] = useState(false);
+  const [traceSidebarOpen, setTraceSidebarOpen] = useState(true);
   const [copiedId, setCopiedId] = useState(false);
   const [projectConfig, setProjectConfig] = useState<TraceValue>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -1089,6 +1088,8 @@ export default function SessionDetailPage() {
                   size="md"
                   onClick={() => setSidebarOpen(!sidebarOpen)}
                   title="Context, tools, artifacts and raw events for this session"
+                  aria-expanded={sidebarOpen}
+                  aria-controls="session-inspector"
                 >
                   <PanelRight size={14} />
                   Inspector
@@ -1242,7 +1243,7 @@ export default function SessionDetailPage() {
           </div>
         </div>
       ) : (
-        <main className={`flex-1 w-full ${showTrace ? "" : "max-w-[1800px]"} mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[minmax(0,1fr)_380px]" : "grid-cols-[minmax(0,1fr)]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
+        <main className={`flex-1 w-full ${showTrace ? "" : "max-w-[1800px]"} mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[minmax(0,1fr)] grid-rows-[minmax(680px,1fr)_480px] overflow-y-auto min-[1440px]:grid-cols-[minmax(0,1fr)_320px] min-[1440px]:grid-rows-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
           {/* LEFT: Step Index (step view only) */}
           {!showTrace && (
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full scroll-pt-10">
@@ -1324,10 +1325,29 @@ export default function SessionDetailPage() {
 
           {/* CENTER: Conversation */}
           <section className="overflow-y-auto h-full p-4">
-             {/* Trace view fills the visible height so the timeline, span table and
-                 detail panel fit on one screen; the session cards follow below it. */}
+             <div data-session-overview>
+               <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">Session overview</h2>{showTrace && <a href="#session-workspace" className="text-sm text-[var(--tt-brand)] hover:underline">Read session ↓</a>}</div>
+             {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
+             {agent && (
+                <div className="mb-4">
+                  <SummaryPanel key={id} sessionId={id} agent={agent} />
+                </div>
+              )}
+             {/* Delegated work — subagent spawns and what they actually cost */}
+             {(delegation || context.usage) && agent && (
+               <DelegationCard
+                 delegation={delegation ?? {}}
+                 usage={context.usage}
+                 agent={agent}
+                 sessionId={id}
+                 onOpenSubagent={setSubagentView}
+                 onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
+               />
+             )}
+             </div>
+             {/* Reading follows the summary and delegated work. */}
              {showTrace && (
-               <TraceView
+               <div id="session-workspace" className="h-full min-h-[600px] scroll-mt-4"><TraceView
                  key={`${agent}:${id}`}
                  roots={traceRoots}
                  sourceEvents={rawEvents}
@@ -1335,15 +1355,9 @@ export default function SessionDetailPage() {
                  notice={adapter?.notice}
                  onLoadChild={loadChildSpans}
                  onJumpToEvent={openStep}
-                 className="mb-8 h-full min-h-[520px]"
-               />
+                 className="mb-8 h-full min-h-[600px]"
+               /></div>
              )}
-             {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
-             {agent && (
-                <div className="mb-8">
-                  <SummaryPanel key={id} sessionId={id} agent={agent} />
-                </div>
-              )}
              {/* Messages exchanged with other local sessions. Self-hides when this
                  session has no peer traffic, which is the usual case. Gated on
                  claude because only Claude transcripts record peer envelopes, so
@@ -1367,17 +1381,6 @@ export default function SessionDetailPage() {
              {Array.isArray(sessionInfo?.goals) && sessionInfo.goals.map((g: TraceValue, i: number) => (
                <GoalCard key={g.goal_id || i} goal={g} sessionTokens={sessionInfo?.tokens?.total} />
              ))}
-             {/* Delegated work — subagent spawns and what they actually cost */}
-             {(delegation || context.usage) && agent && (
-               <DelegationCard
-                 delegation={delegation ?? {}}
-                 usage={context.usage}
-                 agent={agent}
-                 sessionId={id}
-                 onOpenSubagent={setSubagentView}
-                 onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
-               />
-             )}
              {!showTrace && (
              <>
              {/* Split View Header & Boundary Gap Mode Controller */}
@@ -1470,7 +1473,7 @@ export default function SessionDetailPage() {
           {/* RIGHT: Sidebar. In trace view the closed rail is dropped (the header
               has an Inspector button instead) so the trace gets the width. */}
           {!(showTrace && !sidebarOpen) && (
-          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full">
+          <aside id="session-inspector" aria-label="Session inspector" className={`min-w-0 border-l border-[var(--tt-border)] bg-[var(--tt-panel)] overflow-y-auto scrollbar-thin ${showTrace ? "h-[480px] min-[1440px]:h-full" : "h-full"}`}>
              {!sidebarOpen ? (
                 <button
                    onClick={() => setSidebarOpen(true)}
@@ -1482,7 +1485,7 @@ export default function SessionDetailPage() {
                 </button>
              ) : (
              <>
-             <div className="flex items-stretch gap-1 px-1.5 border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.08em]">
+             <div className="sticky top-0 z-10 flex items-stretch gap-1 overflow-x-auto bg-[var(--tt-panel)] px-1.5 border-b border-[var(--tt-border)] text-xs font-medium [&>button]:shrink-0">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
                 {subagentCount > 0 && <TabBtn active={sidebarTab === "agents"} onClick={() => setSidebarTab("agents")} icon={<GitBranch size={12} />}>Agents</TabBtn>}
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
@@ -1491,12 +1494,13 @@ export default function SessionDetailPage() {
                 <button
                    onClick={() => setSidebarOpen(false)}
                    title="Close inspector"
+                   aria-label="Close inspector"
                    className="px-3 border-l border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] hover:bg-[var(--tt-panel)] transition-colors"
                 >
                    <ChevronRight size={14} />
                 </button>
              </div>
-             <div className="p-4 text-[11px]">
+             <div className="p-5 text-sm leading-6">
                 {sidebarTab === "context" && <ContextPanel ctx={context} />}
                 {sidebarTab === "agents" && (
                   <SubagentsSidebar
@@ -1515,7 +1519,7 @@ export default function SessionDetailPage() {
                 }} />}
                 {sidebarTab === "artifacts" && <ArtifactsPanel artifacts={sessionInfo?.artifacts || []} published={sessionInfo?.published_artifacts || []} />}
                 {sidebarTab === "raw" && (
-                   <pre className="text-[9px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
+                   <pre className="text-xs leading-6 font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
                       {JSON.stringify(activeStep !== null ? events[activeStep] : events[0], null, 2)}
                    </pre>
                 )}
@@ -1623,7 +1627,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
 
   if (entries.length === 0) {
     return (
-      <div className="px-1 py-8 text-center text-[11px] text-[var(--tt-fg-dim)]">
+      <div className="px-1 py-8 text-center text-sm text-[var(--tt-fg-dim)]">
         This session spawned no subagents.
       </div>
     );
@@ -1650,7 +1654,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
 
   const group = (label: string, rows: TraceValue[]) => (
     <div>
-      <div className="flex items-center gap-2 px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+      <div className="flex items-center gap-2 px-1 pb-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
         <span>{label}</span>
         <span className="tabular text-[var(--tt-fg-faint)]">{rows.length}</span>
       </div>
@@ -1675,7 +1679,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
       {/* Delegated spend is a separate bucket from the parent's own tokens
           (count-once), so it is worth stating rather than leaving the reader
           to add up the rows. */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--tt-border)] pt-3 px-1 text-[10px] tabular text-[var(--tt-fg-dim)]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--tt-border)] pt-3 px-1 text-xs tabular text-[var(--tt-fg-dim)]">
         <span>{entries.length} spawned</span>
         {failed > 0 && <span className="text-[var(--tt-warn-fg)]">· {failed} failed</span>}
         {delegation?.workflow_count > 0 && <span>· {delegation.workflow_count} in workflows</span>}
@@ -1724,17 +1728,17 @@ function SubagentRow({ sa, running, onOpen }: { sa: TraceValue; running: boolean
           <span className="flex items-baseline gap-1.5 min-w-0">
             <span className="text-[12px] text-[var(--tt-fg)] truncate" title={title}>{title}</span>
             {sa.status && !["completed", "success", "done", "running", "in_progress"].includes(sa.status) && (
-              <span className="text-[9px] uppercase tracking-[0.12em] shrink-0 text-[var(--tt-warn-fg)]">
+              <span className="text-xs uppercase tracking-[0.12em] shrink-0 text-[var(--tt-warn-fg)]">
                 {sa.status}
               </span>
             )}
           </span>
-          <span className="text-[10px] tabular shrink-0 text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg-dim)]">
+          <span className="text-xs tabular shrink-0 text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg-dim)]">
             {running ? "running" : when ? relativeStamp(when) : ""}
           </span>
         </span>
         {meta.length > 0 && (
-          <span className="block text-[10px] tabular text-[var(--tt-fg-dim)] truncate mt-0.5">
+          <span className="block text-xs tabular text-[var(--tt-fg-dim)] truncate mt-0.5">
             {meta.join(" · ")}
           </span>
         )}
@@ -1744,7 +1748,7 @@ function SubagentRow({ sa, running, onOpen }: { sa: TraceValue; running: boolean
             no page of its own, so surface it here. */}
         {sa.sandbox?.approval && (
           <span
-            className="block text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5"
+            className="block text-xs tabular text-[var(--tt-fg-dim)] mt-0.5"
             title="File-sandbox mode and approval policy this subagent ran under"
           >
             sandbox {sa.sandbox.mode || "?"} · approval{" "}
@@ -1984,12 +1988,12 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
   );
 }
 
-function ContextRow({ k, v, mono = true }: { k: string; v?: TraceValue; mono?: boolean }) {
+function ContextRow({ k, v, mono = false }: { k: string; v?: TraceValue; mono?: boolean }) {
   if (!v) return null;
   return (
-    <div className="space-y-0.5">
-      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">{k}</div>
-      <div className={`text-[var(--tt-fg)] break-all ${mono ? "font-mono text-[10px]" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
+    <div className="space-y-1">
+      <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">{k}</div>
+      <div className={`text-sm leading-6 text-[var(--tt-fg)] break-words ${mono ? "font-mono text-xs" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
     </div>
   );
 }
@@ -2006,7 +2010,7 @@ const byScopeThenName = (a: TraceValue, b: TraceValue) =>
 function ScopeLegend({ tone }: { tone: "cyan" | "blue" }) {
   const project = tone === "cyan" ? "bg-cyan-500/10 border-cyan-500/20" : "bg-blue-500/10 border-blue-500/20";
   return (
-    <div className="flex items-center gap-3 mt-1.5 text-[9px] font-mono text-[var(--tt-fg-faint)]">
+    <div className="flex items-center gap-3 mt-1.5 text-xs font-mono text-[var(--tt-fg-faint)]">
       <span className="flex items-center gap-1">
         <span className={`inline-block w-2 h-2 rounded-sm border ${project}`} /> project
       </span>
@@ -2029,7 +2033,7 @@ function DetailRow({ k, v, accent }: { k: string; v: React.ReactNode; accent?: s
 function UsageErrorPill({ n, label = "failed" }: { n: number; label?: string }) {
   if (!n) return null;
   return (
-    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+    <span className="text-xs font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
       {n} {label}
     </span>
   );
@@ -2053,17 +2057,17 @@ function UsageName({ row }: { row: UsageRow }) {
 
 function SessionUsageSection({ usage }: { usage: SessionUsage }) {
   const heading = (label: string, count: number) => (
-    <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+    <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">
       {label} ({count})
     </div>
   );
   const rowCls = (errors: number) =>
-    `flex items-center justify-between gap-2 text-[10px] font-mono rounded px-2 py-1 border ${
+    `flex items-center justify-between gap-2 text-xs font-mono rounded px-2 py-1 border ${
       errors ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]/40" : "border-[var(--tt-border)] bg-[var(--tt-panel)]/70"
     }`;
   return (
     <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
         <Activity size={12} /> Used This Session
         {usage.totalErrors > 0 && (
           <span className="ml-auto flex items-center gap-1 normal-case tracking-normal text-[var(--tt-danger-fg)]">
@@ -2097,7 +2101,7 @@ function SessionUsageSection({ usage }: { usage: SessionUsage }) {
                   <UsageErrorPill n={r.errors} />×{r.calls}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-x-2 gap-y-0.5 pl-1 text-[9px] text-[var(--tt-fg-dim)]">
+              <div className="flex flex-wrap gap-x-2 gap-y-0.5 pl-1 text-xs text-[var(--tt-fg-dim)]">
                 {r.tools.map((t) => (
                   <span key={t.name} className={t.errors ? "text-[var(--tt-danger-fg)]" : undefined}>
                     {t.name} ×{t.calls}{t.errors ? ` (${t.errors === t.calls ? "all" : t.errors} failed)` : ""}
@@ -2134,7 +2138,7 @@ function SessionUsageSection({ usage }: { usage: SessionUsage }) {
           {heading("Other failed tool calls", usage.otherToolErrors.length)}
           <div className="flex flex-wrap gap-1.5">
             {usage.otherToolErrors.map((t) => (
-              <span key={t.name} className="text-[10px] font-mono px-2 py-0.5 rounded border bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+              <span key={t.name} className="text-xs font-mono px-2 py-0.5 rounded border bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
                 {t.name} ×{t.errors}
               </span>
             ))}
@@ -2150,18 +2154,18 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
   const hasAny = ctx.model || ctx.cwd || ctx.systemPrompt || ctx.instructions || ctx.sandbox;
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
-        <Cpu size={12} /> Session Context
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
+        <Cpu size={15} /> Session context
       </div>
       {ctx.sessionId && (
         <div className="space-y-1">
-          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Session ID</div>
+          <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">Session ID</div>
           <div className={`flex items-center gap-1.5 bg-[var(--tt-sunken)] border rounded px-2 py-1.5 transition-colors ${
             copiedId
               ? "text-[var(--tt-success-fg)] border-[color:var(--tt-success)]/50"
               : "border-[var(--tt-border)]"
           }`}>
-            <span className={`text-[10px] font-mono break-all flex-1 ${copiedId ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sessionId}>
+            <span className={`text-xs font-mono break-all flex-1 ${copiedId ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sessionId}>
               {copiedId ? "Copied" : ctx.sessionId}
             </span>
             <button
@@ -2179,17 +2183,17 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
               {copiedId ? (<Check size={11} strokeWidth={3} className="text-[var(--tt-success-fg)]" />) : (<Copy size={11} className="opacity-60" />)}
             </button>
           </div>
-          {ctx.agent && <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
+          {ctx.agent && <div className="text-xs font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
         </div>
       )}
       <ContextRow k="Model" v={ctx.model} />
       <ContextRow k="Provider" v={ctx.provider} />
       {ctx.modelsUsed && ctx.modelsUsed.length > 0 && (
         <div className="space-y-1">
-          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Models Used ({ctx.modelsUsed.length})</div>
+          <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">Models Used ({ctx.modelsUsed.length})</div>
           <div className="flex flex-wrap gap-1.5">
             {ctx.modelsUsed.map((m: string) => (
-              <span key={m} className="flex items-center gap-1 text-[10px] font-mono text-[var(--tt-success-fg)] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              <span key={m} className="flex items-center gap-1 text-xs font-mono text-[var(--tt-success-fg)] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                 <Cpu size={10} /> {m}
               </span>
             ))}
@@ -2199,21 +2203,21 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       <ContextRow k="Sandbox" v={ctx.sandbox} />
       <ContextRow k="Approval Policy" v={ctx.approvalPolicy} />
       <ContextRow k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
-      <ContextRow k="CWD" v={ctx.cwd} />
+      <ContextRow k="Working directory" v={ctx.cwd} mono />
 
       {ctx.usage && <SessionUsageSection usage={ctx.usage} />}
 
       {ctx.projectConfig && (ctx.projectConfig.counts?.skills > 0 || ctx.projectConfig.counts?.mcps > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Settings2 size={12} /> Installed in Project
           </div>
-          <div className="text-[9px] text-[var(--tt-fg-faint)] -mt-2">
+          <div className="text-xs text-[var(--tt-fg-faint)] -mt-2">
             Everything on disk for this project, not what this session used.
           </div>
           {ctx.projectConfig.counts.skills > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills ({ctx.projectConfig.counts.skills}) ▸
               </summary>
               <ScopeLegend tone="cyan" />
@@ -2222,7 +2226,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                   <span
                     key={`${s?.scope}-${s?.agent}-${s?.name}`}
                     title={`${s?.scope} · ${s?.agent}${s?.description ? "\n" + s?.description : ""}`}
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded border ${s?.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
+                    className={`text-xs font-mono px-2 py-0.5 rounded border ${s?.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
                   >
                     {s?.name}
                   </span>
@@ -2232,13 +2236,13 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {ctx.projectConfig.counts.mcps > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 MCP Servers ({ctx.projectConfig.counts.mcps}) ▸
               </summary>
               <ScopeLegend tone="blue" />
               <div className="mt-2 space-y-1">
                 {[...(ctx.projectConfig.mcps ?? [])].sort(byScopeThenName).map((m: TraceValue) => (
-                  <div key={`${m?.scope}-${m?.agent}-${m?.name}`} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
+                  <div key={`${m?.scope}-${m?.agent}-${m?.name}`} className="flex items-center justify-between gap-2 text-xs font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
                     <span className="text-[var(--tt-fg)] truncate" title={m?.command || m?.url || ""}>{m?.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m?.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m?.agent}</span>
                   </div>
@@ -2251,16 +2255,16 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.qoder && ((ctx.qoder.skills_available?.length ?? 0) > 0 || (ctx.qoder.mcp_servers?.length ?? 0) > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Settings2 size={12} /> Runtime Capabilities
           </div>
-          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+          <div className="text-xs text-[var(--tt-fg-dim)] leading-relaxed">
             What Qoder offered this run, from its own session log — not a scan of
             what is installed now. Plugin-scoped entries carry their plugin prefix.
           </div>
           {(ctx.qoder.skills_available?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills ({ctx.qoder.skills_available.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2270,7 +2274,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                     <span
                       key={s}
                       title={plugin ? `provided by the ${plugin} plugin` : "user-level skill"}
-                      className={`text-[10px] font-mono px-2 py-0.5 rounded border ${plugin
+                      className={`text-xs font-mono px-2 py-0.5 rounded border ${plugin
                         ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
                         : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
                     >
@@ -2283,12 +2287,12 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {(ctx.qoder.mcp_servers?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 MCP Servers ({ctx.qoder.mcp_servers.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {ctx.qoder.mcp_servers.map((m: string) => (
-                  <span key={m} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                  <span key={m} className="text-xs font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
                     {m}
                   </span>
                 ))}
@@ -2300,15 +2304,15 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.dsh && ((ctx.dsh.skills_catalog?.length ?? 0) > 0 || (ctx.dsh.tools_available?.length ?? 0) > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Settings2 size={12} /> Runtime Capabilities
           </div>
-          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+          <div className="text-xs text-[var(--tt-fg-dim)] leading-relaxed">
             Resolved by DSH at run time and read back from this session&apos;s log — not a scan of what is installed now.
           </div>
           {(ctx.dsh.skills_catalog?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills Loaded ({ctx.dsh.skills_catalog.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2316,7 +2320,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                   <span
                     key={i}
                     title={s.description || ""}
-                    className="text-[10px] font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
+                    className="text-xs font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
                   >
                     {s.name}
                   </span>
@@ -2326,12 +2330,12 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {(ctx.dsh.tools_available?.length ?? 0) > 0 && (
             <details>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Tools Available ({ctx.dsh.tools_available.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {ctx.dsh.tools_available.map((t: string, i: number) => (
-                  <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                  <span key={i} className="text-xs font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
                     {t}
                   </span>
                 ))}
@@ -2340,7 +2344,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {ctx.dsh.metrics && (ctx.dsh.metrics.llm_ms || ctx.dsh.metrics.tool_ms) && (
             <div className="space-y-1.5 pt-1">
-              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+              <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">
                 Latency Breakdown
               </div>
               {/* Wall-clock split. Tool time routinely dwarfs model time, which
@@ -2390,14 +2394,14 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.instructions && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">{ctx.instructions}</pre>
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">{ctx.instructions}</pre>
         </details>
       )}
       {ctx.systemPrompt && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">System Prompt ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">System Prompt ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">
             {ctx.systemPrompt.slice(0, 4000)}
             {ctx.systemPrompt.length > 4000 ? "\n…(truncated)" : ""}
           </pre>
@@ -2405,33 +2409,33 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       )}
       {ctx.env && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Environment ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-48 overflow-y-auto">{JSON.stringify(ctx.env, null, 2)}</pre>
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Environment ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-48 overflow-y-auto">{JSON.stringify(ctx.env, null, 2)}</pre>
         </details>
       )}
-      {!hasAny && <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No context metadata found for this session.</div>}
+      {!hasAny && <div className="text-[var(--tt-fg-faint)] text-xs italic">No context metadata found for this session.</div>}
     </div>
   );
 }
 
 function ToolsPanel({ summary, onJump }: { summary: { name: string; count: number; avg: number }[]; onJump: (name: string) => void }) {
-  if (!summary.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No tool calls in this session.</div>;
+  if (!summary.length) return <div className="text-[var(--tt-fg-faint)] text-xs italic">No tool calls in this session.</div>;
   const maxCount = summary[0]?.count || 1;
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
         <Wrench size={12} /> Tool Summary
       </div>
       {summary.map((t) => (
         <button key={t.name} onClick={() => onJump(t.name)} className="w-full text-left bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] hover:border-[var(--tt-border-strong)] rounded-lg px-3 py-2 transition-colors">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-mono text-[var(--tt-fg)] truncate">{t.name}</span>
-            <span className="text-[9px] font-black text-[var(--tt-brand)] tabular-nums">×{t.count}</span>
+            <span className="text-sm font-mono text-[var(--tt-fg)] truncate">{t.name}</span>
+            <span className="text-xs font-black text-[var(--tt-brand)] tabular-nums">×{t.count}</span>
           </div>
           <div className="h-1 tt-tint-2 rounded overflow-hidden">
             <div className="h-full bg-blue-500/60" style={{ width: `${(t.count / maxCount) * 100}%` }} />
           </div>
-          <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] mt-1">avg {t.avg >= 1000 ? `${(t.avg / 1000).toFixed(2)}s` : `${t.avg.toFixed(0)}ms`}</div>
+          <div className="text-xs font-mono text-[var(--tt-fg-faint)] mt-1">avg {t.avg >= 1000 ? `${(t.avg / 1000).toFixed(2)}s` : `${t.avg.toFixed(0)}ms`}</div>
         </button>
       ))}
     </div>
@@ -2445,13 +2449,13 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
   // are local files already shown in the Session Artifacts list below.
   const published = publishedAll.filter((p) => p.url);
 
-  if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
+  if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-xs italic">No artifacts for this session.</div>;
 
   return (
     <div className="space-y-6">
       {published.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Globe size={12} /> Published Deliverables
           </div>
           {published.map((p) => (
@@ -2463,7 +2467,7 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
               className="block bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl px-3 py-2.5 hover:border-[var(--tt-brand)] transition-colors group"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
+                <span className="text-sm font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
                   {p.title || p.file_name || "Untitled artifact"}
                 </span>
                 {p.kind === "site" && (
@@ -2474,27 +2478,27 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
                 <ExternalLink size={10} className="shrink-0 text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-brand)] transition-colors" />
               </div>
               {p.description && (
-                <div className="mt-1 text-[10px] text-[var(--tt-fg-muted)] line-clamp-2">{p.description}</div>
+                <div className="mt-1 text-xs text-[var(--tt-fg-muted)] line-clamp-2">{p.description}</div>
               )}
             </a>
           ))}
         </div>
       )}
       {artifacts.length === 0 ? null : (
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
         <LayoutPanelLeft size={12} /> Session Artifacts
       </div>
       )}
       <div className="space-y-4">
         {artifacts.map((a, i) => (
-          <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-[11px]">
+          <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-sm">
             <div className="px-3 py-2 border-b border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 flex items-center justify-between">
                <div className="flex items-center gap-2 min-w-0">
                   {a.type === 'video' ? <Play size={10} className="text-[var(--tt-brand)]" /> :
                    a.type === 'image' ? <LayoutPanelLeft size={10} className="text-[var(--tt-success-fg)]" /> :
                    a.type === 'terminal' ? <Terminal size={10} className="text-[var(--tt-violet-fg)]" /> :
                    <FileText size={10} className="text-[var(--tt-fg-muted)]" />}
-                  <span className="text-[10px] font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
+                  <span className="text-xs font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
                </div>
                <div className="flex items-center gap-2 shrink-0">
                  <button
@@ -3711,7 +3715,7 @@ function DelegationCard({ delegation, usage, agent, sessionId, onOpenSubagent, o
   const inlineChildIds = new Set(subagents.map((s: TraceValue) => s.child_session_id).filter(Boolean));
   const backTo = encodeURIComponent(`/sessions/${sessionId}?agent=${agent}`);
   return (
-    <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
+    <div className="mb-4 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-brand)] flex items-center gap-2">
           <GitBranch size={12} strokeWidth={3} /> Delegated work
@@ -3732,7 +3736,7 @@ function DelegationCard({ delegation, usage, agent, sessionId, onOpenSubagent, o
       )}
       {plugins.length > 0 && <PluginPassFail plugins={plugins} onShowDetails={onShowDetails} />}
       {subagents.length > 0 && (
-        <div className="space-y-1">
+        <div className="max-h-64 space-y-1 overflow-y-auto overscroll-contain scrollbar-thin">
           {subagents.map((s: TraceValue, i: number) => (
             <div
               key={s.agent_id ?? s.child_session_id ?? i}

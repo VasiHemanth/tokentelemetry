@@ -57,3 +57,11 @@ Every registered agent has a workspace adapter. Existing rich adapters remain in
 Independent comparisons across 29 additional local recordings from eight newly adapted reader types retained all 1,580 tool calls and 93 result records exposed by the APIs. These comparisons validate reader output, not completeness against every native harness artifact. Copilot and several other current readers omit results or usage; the workspace discloses those gaps. Kimi and Oh My Pi have schema-level coverage but no local recordings were available for this validation. OpenAI-compatible availability still depends on a reader supplying session records.
 
 The frontend regression suite now has 109 passing tests, including registry coverage, conservative pairing, structured input, missing/empty results, delegation links, and divider bounds. Browser checks cover the eight additional populated reader types, empty-recording controls, and inline disclosure without opening the drawer.
+
+## Overview first and default inspector
+
+The trace summary and its existing Ask once / Chat controls now precede delegated work and the session reader. A Read session shortcut moves directly to the workspace. Delegation entries remain fully available in a bounded scrolling list so large agent rosters do not expand the overview indefinitely.
+
+The session inspector opens by default. At widths of 1440 px and above it docks beside the reader; below that it remains open beneath the reader to preserve conversation width. Inspector body values use 14 px text with readable line spacing, labels use 12 px, and technical identifiers/paths retain monospace styling. Context, agents, tools, artifacts, and raw records use the revised typography.
+
+Browser checks verified overview-before-workspace ordering, the shortcut, default inspector state, close/reopen behavior, and no document horizontal overflow at 1600, 1440, 1024, 768, 375, and 320 px. The 1440 px view retains both execution and conversation beside the inspector. No summary generation or question submission was triggered during validation.
