@@ -12,8 +12,14 @@ export default function InlineEvidence({ span }: { span: TraceSpan }) {
 }
 
 function RecordedField({ label, value, error }: { label: string; value: unknown; error?: boolean }) {
-  if (value === undefined) return <p className="text-xs text-[var(--tt-fg-muted)]">{label} unavailable in this trace.</p>;
-  if (Array.isArray(value) && value.length === 0 || value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) return <p className="text-xs text-[var(--tt-fg-muted)]">{label}: <code className="font-mono text-[var(--tt-fg)]">{Array.isArray(value) ? "[]" : "{}"}</code></p>;
-  if (value === null || value === "") return <p className="text-xs text-[var(--tt-fg-muted)]">{label}: {value === null ? "null" : "empty string"}</p>;
+  let placeholder: string | undefined;
+  if (value === undefined) placeholder = "Unavailable in this trace.";
+  else if (Array.isArray(value) && value.length === 0 || value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) placeholder = Array.isArray(value) ? "[]" : "{}";
+  else if (value === null || value === "") placeholder = value === null ? "null" : '""';
+  if (placeholder !== undefined) return <div data-content-label={label} className="min-w-0 space-y-2">
+    <div className="flex h-8 items-center"><span className="text-xs font-medium" style={{ color: label === "Input" ? "var(--tt-brand)" : "var(--tt-cyan-fg)" }}>{label}</span></div>
+    <div className="flex h-8 items-center text-xs text-[var(--tt-fg-muted)]">{value === undefined ? "No record" : "Empty value"}</div>
+    <div data-content-body className="rounded-md border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3 text-xs text-[var(--tt-fg-muted)]">{placeholder}</div>
+  </div>;
   return <ContentSection label={label} value={value} autoFormat accent={label === "Input" ? "input" : "output"} error={error} />;
 }

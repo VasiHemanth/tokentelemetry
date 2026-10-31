@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
-import { ArrowUpRight, Brain, Check, ChevronRight, CircleAlert, FileSearch, GitBranch, MessageSquare, Sparkles, Terminal, User, Wrench } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowUpRight, Brain, Check, ChevronRight, CircleAlert, FileSearch, GitBranch, MessageSquare, Maximize2, Sparkles, Terminal, User, Wrench } from "lucide-react";
 import type { TraceSpan } from "@/lib/traceTree/types";
 import { formatContent } from "@/lib/traceTree/content";
 import { fmtClock, fmtDur } from "@/lib/traceTree/timeScale";
 import type { LoadState } from "./SpanTable";
 import InlineEvidence from "./InlineEvidence";
 import ConversationMarkdown from "./ConversationMarkdown";
+import ContentModal from "./ContentModal";
 
 export interface ConversationEntryProps {
   span: TraceSpan;
@@ -25,6 +26,7 @@ export interface ConversationEntryProps {
 }
 
 export default function ConversationEntry({ span, depth, agentColor, selected, real, evidenceOpen, onToggleEvidence, open, load, onInspect, onToggle, onRetry }: ConversationEntryProps) {
+  const [expandedResponse, setExpandedResponse] = useState(false);
   const isRequest = span.kind === "turn", isReply = span.kind === "llm", isAgent = span.kind === "agent", isSkill = span.kind === "skill";
   const notification = isRequest && span.turnKind === "notification";
   const activity = !isRequest && !isReply;
@@ -56,7 +58,10 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
             {span.error ? <span className="inline-flex items-center gap-1 rounded bg-[var(--tt-danger-bg)] px-1.5 py-0.5 text-xs font-medium text-[var(--tt-danger-fg)]"><CircleAlert size={11} />Error</span> : activity && !isAgent && <span className={`inline-flex items-center gap-1 text-[11px] ${hasResult ? "text-[var(--tt-cyan-fg)]" : "text-[var(--tt-fg-muted)]"}`}>{hasResult && <Check size={11} />}{hasResult ? "Result recorded" : "Call recorded"}</span>}
             {selected && <span className="text-[10px] font-medium text-[var(--tt-brand)]">Selected</span>}
           </div>
+          <div className="flex shrink-0 items-center gap-1">
+          {hasResponse && <button type="button" aria-label="Expand response in modal" title="Open expanded response" onClick={() => setExpandedResponse(true)} className="mt-0.5 rounded-md p-1.5 text-[var(--tt-fg-muted)] hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)]"><Maximize2 size={14} /></button>}
           <button type="button" aria-label={`Inspect ${span.title}`} title="Open full evidence" onClick={() => onInspect(span.id)} className="mt-0.5 shrink-0 rounded-md p-1.5 text-[var(--tt-fg-dim)] transition-colors hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)] focus-visible:outline focus-visible:outline-[var(--tt-border-focus)]"><FileSearch size={14} /></button>
+          </div>
         </div>
         {(isRequest || hasResponse) && text.text ? <div className={`${isRequest ? "mt-3" : "mt-2"} min-w-0 break-words`}>
           {hasResponse ? <ConversationMarkdown text={text.text} /> : <p className="whitespace-pre-wrap text-[15px] leading-7 text-[var(--tt-fg)]">{text.text}</p>}
@@ -73,6 +78,7 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
           {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-xs text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
         </div>
         {activity && evidenceOpen && <InlineEvidence span={span} />}
+        {expandedResponse && <ContentModal label="Assistant response" value={value} initialFormatted onClose={() => setExpandedResponse(false)} />}
       </div>
     </article>
   </div>;

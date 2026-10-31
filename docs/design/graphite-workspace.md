@@ -83,3 +83,11 @@ Text payloads recognize Markdown structure and render headings, lists, tables, l
 Input is blue, cache reads violet, cache writes amber, and output/results teal. Errors retain red. The evidence drawer replaces the proportional token strip with four independently labelled metric cards, retaining exact recorded values and visible zero categories. The labels and descriptions make category meaning available without color recognition. Input/result field accents use the same blue/teal roles.
 
 The frontend regression suite has 112 passing tests. Browser checks verified default expansion, persistent collapse after unmount/remount, Markdown/raw switching, literal error logs, and four distinct token colors with exact source-value matches including zero. Both large real recordings retained bounded rendering, linked selection, and narrow-layout behavior during validation.
+
+## Aligned fields and expanded reading
+
+Input and result use separate, consistently sized label and format-control rows. JSON, missing records, and empty values retain the same toolbar space as formatted/raw text so two-column payload bodies align. Expand controls use compact icons at narrow widths.
+
+Payloads and assistant responses can open a large centered modal. It formats the original value beyond the inline preview, supports formatted/raw views and copying, and keeps existing content-size limits explicit. Native dialog focus handling restores the trigger after closing. Escape dismisses the top modal; expanding content from the evidence drawer keeps the underlying drawer open. Close handlers ignore descendant dialog events.
+
+Browser checks verified level payload body positions before and after raw/Markdown switches, full expanded content beyond the inline cap, assistant-response expansion, focus restoration, nested dialog dismissal, and modal bounds at 320 px. No recorded session data is modified by changing the view.
