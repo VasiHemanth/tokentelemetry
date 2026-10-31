@@ -24,7 +24,7 @@ interface Props {
 /** Continuous reading with measured rows: format only nearby payloads. */
 export default function Conversation({ roots, selectedId, expanded, loads, onFollow, onInspect, onToggle, onRetry, real, colorOf }: Props) {
   const rows = useMemo(() => conversationRows(roots, expanded), [roots, expanded]);
-  const [evidenceExpanded, setEvidenceExpanded] = useState<Set<string>>(new Set());
+  const [evidenceCollapsed, setEvidenceCollapsed] = useState<Set<string>>(new Set());
   const measured = useRef(new Map<string, number>());
   const [heights, setHeights] = useState(new Map<string, number>());
   const layout = useMemo(() => conversationLayout(rows, heights), [rows, heights]);
@@ -112,7 +112,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
     pendingReveal.current = null;
     followed.current = id;
     onFollow(id);
-    setEvidenceExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+    setEvidenceCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Session conversation">
@@ -130,7 +130,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
           if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
         }}>
         <div className="relative mx-auto max-w-4xl" style={{ height: layout.total }}>
-          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} agentColor={row.span.kind === "agent" ? colorOf(row.span.agent?.agentType) : undefined} selected={selectedId === row.span.id} real={real} evidenceOpen={evidenceExpanded.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
+          {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} agentColor={row.span.kind === "agent" ? colorOf(row.span.agent?.agentType) : undefined} selected={selectedId === row.span.id} real={real} evidenceOpen={!evidenceCollapsed.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
         </div>
         {!rows.length && <p className="p-6 text-sm text-[var(--tt-fg-muted)]">No conversation content recorded.</p>}
       </div>

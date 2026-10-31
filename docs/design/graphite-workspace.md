@@ -73,3 +73,13 @@ A connected activity rail distinguishes request anchors, assistant documents, co
 Assistant Markdown uses a 15 px reading size, a heading hierarchy, spaced lists, bordered tables, blockquotes, and language-labelled code panels with copy controls. Inline tool evidence uses two columns only when its own container has sufficient width. Missing response text does not expose a model's reasoning through its short-label fallback; reasoning remains an explicit disclosure.
 
 Browser validation covered real-session inline evidence, divider resizing, dark/light themes, and widths from 320 through 1800 px. A sanitized browser-only fixture checked Markdown headings, tables, blockquotes, exact code-copy contents, and narrow-screen overflow; no fixture or generated text was inserted into recorded session data.
+
+## Expanded evidence and color meaning
+
+Input and result now open by default for tool, skill, and delegated-agent activity. Individual collapse choices survive row virtualization. User requests and assistant responses retain their existing presentation without duplicated input/result panels. Rendering remains bounded to nearby entries, with capped payload previews and scrollable content.
+
+Text payloads recognize Markdown structure and render headings, lists, tables, links, and code blocks. Formatted / Raw controls allow explicit correction of the presentation hint. JSON remains structured code; diffs, stack traces, and plain terminal output default to literal text. Reasoning still requires explicit expansion.
+
+Input is blue, cache reads violet, cache writes amber, and output/results teal. Errors retain red. The evidence drawer replaces the proportional token strip with four independently labelled metric cards, retaining exact recorded values and visible zero categories. The labels and descriptions make category meaning available without color recognition. Input/result field accents use the same blue/teal roles.
+
+The frontend regression suite has 112 passing tests. Browser checks verified default expansion, persistent collapse after unmount/remount, Markdown/raw switching, literal error logs, and four distinct token colors with exact source-value matches including zero. Both large real recordings retained bounded rendering, linked selection, and narrow-layout behavior during validation.

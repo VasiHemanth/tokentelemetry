@@ -5,8 +5,8 @@ import { Check, Code2, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export default function ConversationMarkdown({ text }: { text: string }) {
-  return <div className="conversation-prose text-[15px] leading-7 text-[var(--tt-fg)]">
+export default function ConversationMarkdown({ text, compact = false }: { text: string; compact?: boolean }) {
+  return <div className={`conversation-prose text-[var(--tt-fg)] ${compact ? "text-sm leading-6" : "text-[15px] leading-7"}`}>
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
       pre: ({ children }) => <CodePanel>{children}</CodePanel>,
       img: ({ alt }) => <span className="text-sm text-[var(--tt-fg-muted)]">{`[image${alt ? `: ${alt}` : ""}]`}</span>,

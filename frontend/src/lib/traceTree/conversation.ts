@@ -19,7 +19,7 @@ export function conversationLayout(rows: ConversationRow[], heights: ReadonlyMap
   let total = 0;
   for (const { span } of rows) {
     offsets.push(total);
-    total += heights.get(span.id) ?? (span.kind === "turn" ? 180 : span.kind === "llm" ? 240 : 100);
+    total += heights.get(span.id) ?? (span.kind === "turn" ? 180 : span.kind === "llm" ? 240 : span.kind === "agent" ? 260 : 440);
   }
   return { offsets, total };
 }

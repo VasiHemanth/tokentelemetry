@@ -35,7 +35,7 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
   const canExpand = isAgent && (!!span.agent?.childId || span.children.length > 0);
   const label = isReply ? hasResponse ? "Assistant" : span.recordOnly ? "Assistant entry" : "Model call" : notification && !span.recordOnly ? "Agent report" : span.title;
   const Icon = isRequest ? notification ? MessageSquare : User : isReply ? Sparkles : isAgent ? GitBranch : isSkill ? Wrench : Terminal;
-  const nodeTone = isRequest && !notification ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]" : isAgent ? "border-[var(--tt-violet-bd)] bg-[var(--tt-violet-bg)] text-[var(--tt-violet-fg)]" : "border-[var(--tt-border)] bg-[var(--tt-panel)] text-[var(--tt-fg-muted)]";
+  const nodeTone = isRequest && !notification ? "border-[var(--tt-border-focus)] bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]" : hasResponse ? "border-[var(--tt-cyan-bd)] bg-[var(--tt-cyan-bg)] text-[var(--tt-cyan-fg)]" : isAgent ? "border-[var(--tt-violet-bd)] bg-[var(--tt-violet-bg)] text-[var(--tt-violet-fg)]" : "border-[var(--tt-border)] bg-[var(--tt-panel)] text-[var(--tt-fg-muted)]";
   const surface = isRequest ? "border-[var(--tt-border)] bg-[var(--tt-raised)]" : isAgent ? "border-[var(--tt-violet-bd)] bg-[var(--tt-violet-bg)]" : activity ? "border-[var(--tt-border)] bg-[var(--tt-canvas)]" : "border-transparent";
   const branchStyle = isAgent && agentColor ? { color: agentColor, borderColor: `color-mix(in srgb, ${agentColor} 30%, transparent)`, backgroundColor: `color-mix(in srgb, ${agentColor} 7%, var(--tt-panel))` } : undefined;
   const action = "inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--tt-raised)] hover:text-[var(--tt-fg)]";
@@ -53,7 +53,7 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
             {isAgent && <span style={{ color: agentColor }} className="text-xs text-[var(--tt-violet-fg)]">{span.agent?.background ? "Background agent" : "Delegated agent"}</span>}
             {isSkill && <span className="text-xs text-[var(--tt-cyan-fg)]">Skill</span>}
             {depth > 0 && <span className="inline-flex items-center gap-1 text-[11px] text-[var(--tt-fg-muted)]"><GitBranch size={11} />Child trace</span>}
-            {span.error ? <span className="inline-flex items-center gap-1 rounded bg-[var(--tt-danger-bg)] px-1.5 py-0.5 text-xs font-medium text-[var(--tt-danger-fg)]"><CircleAlert size={11} />Error</span> : activity && !isAgent && <span className="inline-flex items-center gap-1 text-[11px] text-[var(--tt-fg-muted)]">{hasResult && <Check size={11} />}{hasResult ? "Result recorded" : "Call recorded"}</span>}
+            {span.error ? <span className="inline-flex items-center gap-1 rounded bg-[var(--tt-danger-bg)] px-1.5 py-0.5 text-xs font-medium text-[var(--tt-danger-fg)]"><CircleAlert size={11} />Error</span> : activity && !isAgent && <span className={`inline-flex items-center gap-1 text-[11px] ${hasResult ? "text-[var(--tt-cyan-fg)]" : "text-[var(--tt-fg-muted)]"}`}>{hasResult && <Check size={11} />}{hasResult ? "Result recorded" : "Call recorded"}</span>}
             {selected && <span className="text-[10px] font-medium text-[var(--tt-brand)]">Selected</span>}
           </div>
           <button type="button" aria-label={`Inspect ${span.title}`} title="Open full evidence" onClick={() => onInspect(span.id)} className="mt-0.5 shrink-0 rounded-md p-1.5 text-[var(--tt-fg-dim)] transition-colors hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)] focus-visible:outline focus-visible:outline-[var(--tt-border-focus)]"><FileSearch size={14} /></button>
@@ -72,7 +72,7 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
           {load?.state === "pending" && <span role="status">Loading child recording…</span>}
           {load?.state === "error" && <button type="button" onClick={() => onRetry(span.id)} className="text-xs text-[var(--tt-danger-fg)]">Could not load · Retry</button>}
         </div>
-        {evidenceOpen && <InlineEvidence span={span} />}
+        {activity && evidenceOpen && <InlineEvidence span={span} />}
       </div>
     </article>
   </div>;

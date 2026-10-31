@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ExternalLink, ZoomIn } from "lucide-react";
-import type { SpanTokens, TraceSpan } from "@/lib/traceTree/types";
+import type { TraceSpan } from "@/lib/traceTree/types";
 import {
   directAgents,
   overlappingAgents,
@@ -14,7 +14,8 @@ import {
 } from "@/lib/traceTree/tree";
 import { fmtClock, fmtCost, fmtDur, fmtHm, fmtTokens } from "@/lib/traceTree/timeScale";
 import ContentSection from "./ContentSection";
-import { KindChip, SECTION_LABEL, Tag, type ColorOf } from "./shared";
+import TokenUsage from "./TokenUsage";
+import { KindChip, Tag, type ColorOf } from "./shared";
 
 interface Props {
   span: TraceSpan | null;
@@ -87,16 +88,14 @@ export default function SpanDetail(p: Props) {
     const t = span.tokens;
     body = (
       <>
-        {span.label && <Quote>{span.label}</Quote>}
         <Kv
           rows={[
             ...(real ? ([["Response at", fmtClock(span.end)], ["Waited", `${span.approxStart ? "~" : ""}${fmtDur(span.end - span.start)}`]] as Array<[string, ReactNode]>) : []),
-            ...(t ? ([["Input", t.input.toLocaleString()], ["Cache read", t.cacheRead.toLocaleString()], ["Cache write", t.cacheWrite.toLocaleString()], ["Output", t.output.toLocaleString()]] as Array<[string, ReactNode]>) : []),
           ]}
         />
-        {t && <TokenBar t={t} />}
+        {t ? <TokenUsage tokens={t} /> : <p className="text-xs text-[var(--tt-fg-muted)]">Token usage unavailable for this record.</p>}
         <ContentSection key={`${span.id}-re`} label="Reasoning" value={span.content?.reasoning} collapseLong />
-        <ContentSection key={`${span.id}-out`} label="Response" value={span.content?.output} />
+        <ContentSection key={`${span.id}-out`} label="Response" value={span.content?.output} accent="output" />
         {span.children.length > 0 && (
           <Section label="Calls made">
             {span.children.slice(0, 12).map((c) =>
@@ -118,8 +117,8 @@ export default function SpanDetail(p: Props) {
       <>
         {span.label && <p className="text-xs leading-relaxed text-[var(--tt-fg-muted)]">{span.label}</p>}
         <Kv rows={[...when, ...(span.error ? ([["Result", <span key="e" className="text-[var(--tt-danger-fg)]">error</span>]] as Array<[string, ReactNode]>) : [])]} />
-        <ContentSection key={`${span.id}-in`} label="Input" value={span.content?.input} plain />
-        <ContentSection key={`${span.id}-out`} label="Output" value={span.content?.output} error={span.error} plain />
+        <ContentSection key={`${span.id}-in`} label="Input" value={span.content?.input} accent="input" autoFormat />
+        <ContentSection key={`${span.id}-out`} label="Output" value={span.content?.output} accent="output" error={span.error} autoFormat />
         {resumed && (
           <Section label="Resumed">
             <Callout>
@@ -223,7 +222,7 @@ export default function SpanDetail(p: Props) {
         {span.kind === "skill" && span.skill?.via === "command" && <Tag>typed</Tag>}
         {span.error && <Tag color="var(--tt-danger-fg)">error</Tag>}
       </div>
-      <h2 className="break-words text-sm font-semibold text-[var(--tt-fg)]">{span.kind === "skill" ? (span.skill?.name ?? span.title) : span.title}</h2>
+      <h2 className="break-words text-base font-semibold text-[var(--tt-fg)]">{span.kind === "skill" ? (span.skill?.name ?? span.title) : span.title}</h2>
       {body}
       {(real || span.eventIndex != null) && (
         <Section label="View">
@@ -240,7 +239,7 @@ export default function SpanDetail(p: Props) {
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-1">
-      <div className={`${SECTION_LABEL} pt-1`}>{label}</div>
+      <div className="pt-1 text-xs font-medium text-[var(--tt-fg-muted)]">{label}</div>
       <div className="flex flex-col gap-1">{children}</div>
     </div>
   );
@@ -265,7 +264,7 @@ function Callout({ children }: { children: ReactNode }) {
 
 function Kv({ rows }: { rows: Array<[string, ReactNode]> }) {
   return (
-    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px] leading-6">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-[var(--tt-fg-muted)]">{k}</dt>
@@ -281,40 +280,12 @@ function LinkBtn({ text, right, dot, icon, onClick }: { text: string; right?: st
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-md border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-2 py-1.5 text-left text-xs text-[var(--tt-fg-muted)] transition-colors hover:border-[var(--tt-border-strong)] hover:text-[var(--tt-fg)]"
+      className="flex w-full items-center gap-2 rounded-md border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-3 py-2 text-left text-[13px] text-[var(--tt-fg-muted)] transition-colors hover:border-[var(--tt-border-strong)] hover:text-[var(--tt-fg)]"
     >
       {dot && <span className="size-1.5 shrink-0 rounded-full" style={{ background: dot }} />}
       {icon}
       <span className="min-w-0 flex-1 truncate">{text}</span>
       {right && <span className="shrink-0 font-mono text-[11px] text-[var(--tt-fg-muted)]">{right}</span>}
     </button>
-  );
-}
-
-const TOKEN_SEGS: Array<[keyof SpanTokens, string, string]> = [
-  ["cacheRead", "Cache read", "var(--tt-brand)"],
-  ["cacheWrite", "Cache write", "var(--tt-violet-fg)"],
-  ["input", "Input", "var(--tt-fg-muted)"],
-  ["output", "Output", "var(--tt-cyan-fg)"],
-];
-
-function TokenBar({ t }: { t: SpanTokens }) {
-  const total = t.input + t.output + t.cacheRead + t.cacheWrite || 1;
-  return (
-    <div className="space-y-1.5">
-      <div className="flex h-2 overflow-hidden rounded-full bg-[var(--tt-sunken)]">
-        {TOKEN_SEGS.map(([k, label, c]) =>
-          t[k] ? <span key={k} title={`${label}: ${t[k].toLocaleString()}`} style={{ width: `${(t[k] / total) * 100}%`, background: c }} /> : null,
-        )}
-      </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[var(--tt-fg-muted)]">
-        {TOKEN_SEGS.map(([k, label, c]) => (
-          <span key={k} className="inline-flex items-center gap-1">
-            <i className="size-1.5 rounded-full" style={{ background: c }} />
-            {label}
-          </span>
-        ))}
-      </div>
-    </div>
   );
 }
