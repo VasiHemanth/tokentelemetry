@@ -10,7 +10,7 @@
         },
         {
           "title": "Resize panes and read tool evidence",
-          "description": "Drag the divider to adjust pane widths and read aligned input/result panels that open by default. Expand Markdown into a large modal with formatted/raw controls, while token usage keeps labelled, color-coded values."
+          "description": "Drag the divider to adjust pane widths and read aligned input/result panels that open by default. Expand Markdown into a large modal with formatted/raw controls, while token usage pairs a colored stacked bar with labelled category values."
         },
         {
           "title": "One workspace across coding agents",

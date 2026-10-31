@@ -80,7 +80,7 @@ Input and result now open by default for tool, skill, and delegated-agent activi
 
 Text payloads recognize Markdown structure and render headings, lists, tables, links, and code blocks. Formatted / Raw controls allow explicit correction of the presentation hint. JSON remains structured code; diffs, stack traces, and plain terminal output default to literal text. Reasoning still requires explicit expansion.
 
-Input is blue, cache reads violet, cache writes amber, and output/results teal. Errors retain red. The evidence drawer replaces the proportional token strip with four independently labelled metric cards, retaining exact recorded values and visible zero categories. The labels and descriptions make category meaning available without color recognition. Input/result field accents use the same blue/teal roles.
+Input is blue, cache reads violet, cache writes amber, and output/results teal. Errors retain red. The evidence drawer pairs the proportional token strip with four independently labelled metric cards, retaining exact recorded values and visible zero categories. The labels and descriptions make category meaning available without color recognition. Input/result field accents use the same blue/teal roles.
 
 The frontend regression suite has 112 passing tests. Browser checks verified default expansion, persistent collapse after unmount/remount, Markdown/raw switching, literal error logs, and four distinct token colors with exact source-value matches including zero. Both large real recordings retained bounded rendering, linked selection, and narrow-layout behavior during validation.
 
@@ -91,3 +91,9 @@ Input and result use separate, consistently sized label and format-control rows.
 Payloads and assistant responses can open a large centered modal. It formats the original value beyond the inline preview, supports formatted/raw views and copying, and keeps existing content-size limits explicit. Native dialog focus handling restores the trigger after closing. Escape dismisses the top modal; expanding content from the evidence drawer keeps the underlying drawer open. Close handlers ignore descendant dialog events.
 
 Browser checks verified level payload body positions before and after raw/Markdown switches, full expanded content beyond the inline cap, assistant-response expansion, focus restoration, nested dialog dismissal, and modal bounds at 320 px. No recorded session data is modified by changing the view.
+
+## Token composition chart
+
+The evidence drawer shows a 100% stacked token-usage bar above the category cards. Segment colors match the cards: input blue, cache reads violet, cache writes amber, output teal. Exact count shares determine widths; no minimum segment width inflates tiny categories. Hover titles, accessible chart text, and category percentages retain small values. Nonzero shares below 0.01% are labelled accordingly instead of appearing as zero.
+
+Recorded all-zero usage has an empty track and an explicit zero-count note. Invalid or negative counts cannot generate a misleading composition chart. The frontend regression suite has 115 passing tests, including exact proportions, zero totals, and invalid input. Browser shares were compared against an independent decimal calculation and the recorded counts; dark and light themes retain the same encoding.
