@@ -10,6 +10,7 @@ import { AgentFeatureFlags } from "@/components/settings/AgentFeatureFlags";
 import { RetentionSettings } from "@/components/settings/RetentionSettings";
 import UsagePrivacySettings from "@/components/settings/UsagePrivacySettings";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
+import { TextSizeSetting } from "@/components/settings/TextSizeSetting";
 import { ThemeSetting } from "@/components/settings/ThemeSetting";
 import { LanguageSetting } from "@/components/settings/LanguageSetting";
 import { SettingsNav } from "@/components/settings/SettingsNav";
@@ -220,6 +221,13 @@ export default function SettingsPage() {
               <Card>
                 <div className="p-5">
                   <ThemeSetting />
+                </div>
+              </Card>
+            </Section>
+            <Section title="Font size" description="Adjust text across the entire application for your screen.">
+              <Card>
+                <div className="p-5">
+                  <TextSizeSetting />
                 </div>
               </Card>
             </Section>

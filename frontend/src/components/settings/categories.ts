@@ -30,6 +30,11 @@ export const SETTINGS_CATEGORIES: SettingCategory[] = [
         description: "Light, dark, or follow your system.",
       },
       {
+        id: "font-size",
+        label: "Font size",
+        description: "Application-wide text size, saved on this device.",
+      },
+      {
         id: "language",
         label: "Language",
         description: "Interface language, saved on this device.",

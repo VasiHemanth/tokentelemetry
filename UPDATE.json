@@ -6,7 +6,7 @@
       "highlights": [
         {
           "title": "Read conversations beside execution",
-          "description": "Read a structured conversation beside its execution tree, with synchronized selection, clear request blocks, formatted assistant responses, and compact tool activity. Long traces render nearby entries, load child recordings on demand, and keep execution focus, event records, and the legacy view available."
+          "description": "Read a structured conversation beside its execution tree, with synchronized selection, formatted responses, and compact tool activity. Summary, session questions, and delegated work appear up front. Long traces render nearby entries and keep execution focus, event records, and the legacy view available."
         },
         {
           "title": "Resize panes and read tool evidence",
@@ -21,8 +21,9 @@
           "description": "Pi and Prime traces retain recorded usage, and OpenCode and ZCode usage stays attached to its own model step. Prime tool results keep their call identifiers and error flags."
         },
         {
-          "title": "Summary and context up front",
-          "description": "Trace summary, session questions, and delegated work appear before the conversation. The inspector opens by default with clearer text and a responsive layout."
+          "title": "Choose a comfortable font size everywhere",
+          "description": "Settings now adjusts text from 85% to 150% across Dashboard, Projects, Analytics, sessions, inspectors, and the rest of the app. Use presets or fine adjustments, preview changes immediately, and keep your preference in this browser on this device.",
+          "href": "/settings#cat-general"
         }
       ]
     },

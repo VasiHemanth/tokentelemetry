@@ -4,6 +4,8 @@
    TokenTelemetry design tokens
    ========================================================================= */
 :root {
+  /* Text preference scales type only; rem-based layout keeps its dimensions. */
+  --tt-text-scale: 1;
   /* Surface elevation system: sunken < canvas < panel < raised < overlay */
   --tt-canvas:    #101113;   /* app background */
   --tt-sunken:    #0b0c0e;   /* inset surfaces (track, code blocks) */
@@ -146,6 +148,26 @@
   --color-info:      var(--tt-info);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  --text-xs: calc(0.75rem * var(--tt-text-scale));
+  --text-sm: calc(0.875rem * var(--tt-text-scale));
+  --text-base: calc(1rem * var(--tt-text-scale));
+  --text-lg: calc(1.125rem * var(--tt-text-scale));
+  --text-xl: calc(1.25rem * var(--tt-text-scale));
+  --text-2xl: calc(1.5rem * var(--tt-text-scale));
+  --text-3xl: calc(1.875rem * var(--tt-text-scale));
+  --text-4xl: calc(2.25rem * var(--tt-text-scale));
+  --text-5xl: calc(3rem * var(--tt-text-scale));
+  --text-6xl: calc(3.75rem * var(--tt-text-scale));
+  --text-7xl: calc(4.5rem * var(--tt-text-scale));
+  --text-8xl: calc(6rem * var(--tt-text-scale));
+  --text-9xl: calc(8rem * var(--tt-text-scale));
+}
+
+/* Extend Tailwind's arbitrary text lengths too, including responsive and
+   descendant variants. Color utilities do not resolve this length declaration. */
+@utility text-* {
+  font-size: calc(--value([length]) * var(--tt-text-scale));
 }
 
 /* =========================================================================
@@ -156,6 +178,7 @@ body {
   background: var(--tt-canvas);
   color: var(--tt-fg);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(1rem * var(--tt-text-scale));
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -235,9 +258,9 @@ body {
    ========================================================================= */
 .prose { color: var(--tt-fg-muted); }
 .prose h1, .prose h2, .prose h3 { color: var(--tt-fg); font-weight: 700; margin-top: 1.5em; margin-bottom: 0.5em; letter-spacing: -0.01em; }
-.prose h1 { font-size: 1.5rem; }
-.prose h2 { font-size: 1.25rem; }
-.prose h3 { font-size: 1.05rem; }
+.prose h1 { font-size: calc(1.5rem * var(--tt-text-scale)); }
+.prose h2 { font-size: calc(1.25rem * var(--tt-text-scale)); }
+.prose h3 { font-size: calc(1.05rem * var(--tt-text-scale)); }
 .prose p { margin-bottom: 1em; line-height: 1.65; }
 .prose ul, .prose ol { margin-left: 1.5em; margin-bottom: 1em; list-style-type: disc; }
 .prose li { margin-bottom: 0.25em; }
@@ -250,9 +273,9 @@ body {
 .conversation-prose > * + * { margin-top: 0.875rem; }
 .conversation-prose :is(h1,h2,h3,h4) { color: var(--tt-fg); font-weight: 600; line-height: 1.45; margin-top: 1.5rem; margin-bottom: 0.5rem; letter-spacing: -0.015em; }
 .conversation-prose > :first-child { margin-top: 0; }
-.conversation-prose h1 { font-size: 1.25rem; }
-.conversation-prose h2 { font-size: 1.125rem; }
-.conversation-prose :is(h3,h4) { font-size: 1rem; }
+.conversation-prose h1 { font-size: calc(1.25rem * var(--tt-text-scale)); }
+.conversation-prose h2 { font-size: calc(1.125rem * var(--tt-text-scale)); }
+.conversation-prose :is(h3,h4) { font-size: calc(1rem * var(--tt-text-scale)); }
 .conversation-prose :is(ul,ol) { padding-left: 1.25rem; }
 .conversation-prose ul { list-style: disc; }
 .conversation-prose ol { list-style: decimal; }
@@ -265,7 +288,7 @@ body {
 .conversation-prose pre > code { font-size: inherit; white-space: pre; }
 .conversation-prose blockquote { border-left: 2px solid var(--tt-border-focus); background: var(--tt-canvas); padding: 0.75rem 1rem; color: var(--tt-fg-muted); }
 .conversation-prose hr { border: 0; border-top: 1px solid var(--tt-border); margin: 1.5rem 0; }
-.conversation-prose table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; line-height: 1.6; }
+.conversation-prose table { width: 100%; border-collapse: collapse; font-size: calc(0.8125rem * var(--tt-text-scale)); line-height: 1.6; }
 .conversation-prose :is(th,td) { border-bottom: 1px solid var(--tt-border); padding: 0.625rem 0.75rem; text-align: left; vertical-align: top; }
 .conversation-prose th { font-weight: 600; background: var(--tt-canvas); }
 .conversation-prose tr:last-child td { border-bottom: 0; }
