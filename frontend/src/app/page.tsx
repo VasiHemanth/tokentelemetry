@@ -148,6 +148,48 @@ export default function Home() {
         }
       />
 
+      {/* KPI strip */}
+      <Section title="Key metrics">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatTile
+            label="Sessions"
+            value={loading ? <Skeleton className="h-8 w-20" /> : sessions.length.toLocaleString()}
+            hint="All time"
+            icon={<Clock size={16} />}
+            accent="var(--tt-brand)"
+          />
+          <StatTile
+            label="Tokens"
+            value={loading ? <Skeleton className="h-8 w-20" /> : formatTokens(totalTokens)}
+            hint="All time"
+            icon={<TrendingUp size={16} />}
+            accent="var(--tt-success)"
+          />
+          <StatTile
+            label="Active Projects"
+            value={loading ? <Skeleton className="h-8 w-12" /> : projectCount}
+            icon={<Folders size={16} />}
+            accent="var(--tt-info)"
+          />
+          <StatTile
+            label="API equiv. (est.)"
+            value={loading ? <Skeleton className="h-8 w-20" /> : formatCost(totalCost)}
+            hint={framing.hint ? `${framing.hint} · all time` : "All time"}
+            icon={<DollarSign size={16} />}
+            accent="var(--tt-warn)"
+          />
+        </div>
+        <p className="mt-3 text-[12px] leading-relaxed text-[var(--tt-fg-muted)]">
+          <span aria-hidden>💡</span>{" "}
+          {framing.callout}{" "}
+          <Link href="/settings" className="font-medium text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)]">
+            Set your plans
+          </Link>.
+        </p>
+      </Section>
+
+      {showLocalPower && <LocalPowerInsights forceShow={true} />}
+
       {/* Connected agents — split into coding vs autonomous */}
       {availableAgents.length > 0 && (() => {
         const AUTONOMOUS = new Set(["hermes"]);
@@ -250,48 +292,6 @@ export default function Home() {
           </>
         );
       })()}
-
-      {/* KPI strip */}
-      <Section title="Key metrics">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatTile
-            label="Sessions"
-            value={loading ? <Skeleton className="h-8 w-20" /> : sessions.length.toLocaleString()}
-            hint="All time"
-            icon={<Clock size={16} />}
-            accent="var(--tt-brand)"
-          />
-          <StatTile
-            label="Tokens"
-            value={loading ? <Skeleton className="h-8 w-20" /> : formatTokens(totalTokens)}
-            hint="All time"
-            icon={<TrendingUp size={16} />}
-            accent="var(--tt-success)"
-          />
-          <StatTile
-            label="Active Projects"
-            value={loading ? <Skeleton className="h-8 w-12" /> : projectCount}
-            icon={<Folders size={16} />}
-            accent="var(--tt-info)"
-          />
-          <StatTile
-            label="API equiv. (est.)"
-            value={loading ? <Skeleton className="h-8 w-20" /> : formatCost(totalCost)}
-            hint={framing.hint ? `${framing.hint} · all time` : "All time"}
-            icon={<DollarSign size={16} />}
-            accent="var(--tt-warn)"
-          />
-        </div>
-        <p className="mt-3 text-[12px] leading-relaxed text-[var(--tt-fg-muted)]">
-          <span aria-hidden>💡</span>{" "}
-          {framing.callout}{" "}
-          <Link href="/settings" className="font-medium text-[var(--tt-fg)] underline underline-offset-2 hover:text-[var(--tt-brand)]">
-            Set your plans
-          </Link>.
-        </p>
-      </Section>
-
-      {showLocalPower && <LocalPowerInsights forceShow={true} />}
 
       {/* Activity + sidebars */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
