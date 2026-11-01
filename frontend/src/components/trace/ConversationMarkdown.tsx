@@ -1,11 +1,11 @@
 "use client";
 
-import { isValidElement, useState, type ReactNode } from "react";
+import { isValidElement, memo, useState, type ReactNode } from "react";
 import { Check, Code2, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export default function ConversationMarkdown({ text, compact = false }: { text: string; compact?: boolean }) {
+function ConversationMarkdown({ text, compact = false }: { text: string; compact?: boolean }) {
   return <div className={`conversation-prose text-[var(--tt-fg)] ${compact ? "text-sm leading-6" : "text-[15px] leading-7"}`}>
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
       pre: ({ children }) => <CodePanel>{children}</CodePanel>,
@@ -14,6 +14,8 @@ export default function ConversationMarkdown({ text, compact = false }: { text: 
     }}>{text}</ReactMarkdown>
   </div>;
 }
+
+export default memo(ConversationMarkdown);
 
 function CodePanel({ children }: { children: ReactNode }) {
   const [copied, setCopied] = useState(false);

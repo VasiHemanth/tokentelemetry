@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { conversationRows, conversationLayout, conversationRowAt } from "./conversation";
+import { conversationRows, conversationLayout, conversationRowAt, conversationWindow } from "./conversation";
 import type { TraceSpan } from "./types";
 const span = (id: string, kind: TraceSpan["kind"], children: TraceSpan[] = []): TraceSpan => ({ id, kind, title: id, start: 0, end: 1, children });
 
@@ -23,4 +23,17 @@ test("measured conversation offsets retain zero-position and reach the last item
   assert.equal(conversationRowAt(layout.offsets, 500), 1);
   assert.equal(conversationRowAt(layout.offsets, layout.total - 1), 99_999);
   assert.equal(conversationRowAt([], 0), -1);
+});
+
+
+test("pixel overscan covers several viewports even when rows are short", () => {
+  const offsets = Array.from({ length: 100_000 }, (_, i) => i * 80);
+  const window = conversationWindow(offsets, 40_000, 800);
+  assert.ok(offsets[window.first] <= 38_400);
+  assert.ok(offsets[window.last - 1] >= 42_400);
+  assert.ok(window.last - window.first < 70, "DOM window remains bounded");
+  const jumped = conversationWindow(offsets, 7_999_500, 800);
+  assert.equal(jumped.last, offsets.length);
+  assert.ok(offsets[jumped.first] <= 7_999_500);
+  assert.deepEqual(conversationWindow([], 0, 800), { first: 0, last: 0 });
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTENT_CAP, formatContent } from "./content";
+import { CONTENT_CAP, formatContent, formatReasoningContent } from "./content";
 
 test("empty values", () => {
   for (const v of [undefined, null, "", "   ", [], {}]) assert.equal(formatContent(v).kind, "empty");
@@ -72,4 +72,18 @@ test("deeply nested input terminates", () => {
   let o: unknown = "leaf";
   for (let i = 0; i < 5000; i++) o = { n: o };
   assert.doesNotThrow(() => formatContent(o));
+});
+
+
+test("reasoning previews read structured summaries without exposing encrypted fields", () => {
+  const value = { summary: [{ type: "summary_text", text: "**Plan**" }, { thinking: "Verify the result" }], encrypted_content: "private blob" };
+  assert.equal(formatReasoningContent(value).text, "**Plan**\n\nVerify the result");
+  assert.equal(formatReasoningContent({ encrypted_content: "private blob" }).kind, "empty");
+  assert.equal(formatReasoningContent("gAAAAAB" + "x".repeat(60)).kind, "empty");
+  assert.equal(formatReasoningContent({ type: "redacted_thinking", text: "not readable" }).kind, "empty");
+  assert.equal(formatReasoningContent([{ text: "" }, null]).kind, "empty");
+  const bounded = formatReasoningContent(["a".repeat(5000), { text: "later" }], 600);
+  assert.equal(bounded.text.length, 600);
+  assert.equal(bounded.truncated, true);
+  assert.equal(formatContent([{ type: "summary_text", text: "summary" }]).text, "summary");
 });

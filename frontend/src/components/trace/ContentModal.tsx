@@ -2,14 +2,14 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, Copy, X } from "lucide-react";
-import { formatContent } from "@/lib/traceTree/content";
+import { formatContent, formatReasoningContent } from "@/lib/traceTree/content";
 import ConversationMarkdown from "./ConversationMarkdown";
 
 /** The larger reader formats the original value only while this modal is open. */
-export default function ContentModal({ label, value, initialFormatted, onClose }: { label: string; value: unknown; initialFormatted: boolean; onClose: () => void }) {
+export default function ContentModal({ label, value, initialFormatted, onClose, reasoning = false }: { reasoning?: boolean; label: string; value: unknown; initialFormatted: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const content = useMemo(() => formatContent(value, 1_000_000), [value]);
+  const content = useMemo(() => reasoning ? formatReasoningContent(value, 1_000_000) : formatContent(value, 1_000_000), [value, reasoning]);
   const canFormat = content.kind === "text" && content.text.length <= 50_000;
   const [formatted, setFormatted] = useState(initialFormatted && canFormat);
   const [copied, setCopied] = useState(false);

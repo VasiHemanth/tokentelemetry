@@ -91,7 +91,7 @@ function writeBlock(acc: Acc, b: unknown, depth: number): boolean {
     return true;
   }
   const type = typeof b.type === "string" ? b.type : "";
-  if (typeof b.text === "string" && (type === "text" || type === "" || type === "input_text" || type === "output_text")) {
+  if (typeof b.text === "string" && (type === "text" || type === "" || type === "input_text" || type === "output_text" || type === "summary_text" || type === "reasoning_text")) {
     acc.add(b.text);
     return b.text.length > 0;
   }
@@ -182,4 +182,24 @@ export function formatContent(value: unknown, cap = CONTENT_CAP): FormattedConte
     return { kind: "json", text: acc.text, truncated: acc.over, fullLength: acc.total };
   }
   return { kind: "text", text: String(v), truncated: false, fullLength: String(v).length };
+}
+
+
+/** Read only saved reasoning text/summary fields, with the same bounded walk as payloads. */
+export function formatReasoningContent(value: unknown, cap = CONTENT_CAP): FormattedContent {
+  const acc = new Acc(cap);
+  function visit(part: unknown, depth: number) {
+    if (acc.over || depth > MAX_DEPTH || part == null) return;
+    if (typeof part === "string") {
+      if (!part.trim() || /^gAAAAA[\w-]{40,}/.test(part)) return;
+      if (acc.len) acc.add("\n\n");
+      acc.add(part);
+    } else if (Array.isArray(part)) {
+      for (const item of part) { visit(item, depth + 1); if (acc.over) break; }
+    } else if (isObj(part) && part.type !== "redacted_thinking") {
+      visit(part.text ?? part.thinking ?? part.summary ?? part.content ?? part.value, depth + 1);
+    }
+  }
+  visit(value, 0);
+  return acc.len ? { kind: "text", text: acc.text, truncated: acc.over, fullLength: acc.total } : EMPTY;
 }

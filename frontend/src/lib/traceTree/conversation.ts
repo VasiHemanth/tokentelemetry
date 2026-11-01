@@ -35,3 +35,14 @@ export function conversationRowAt(offsets: number[], position: number): number {
   }
   return lo;
 }
+
+
+/** Pixel overscan remains useful even when a recording has many compact rows. */
+export function conversationWindow(offsets: number[], top: number, height: number) {
+  if (!offsets.length) return { first: 0, last: 0 };
+  const overscan = Math.max(1000, height * 2);
+  return {
+    first: Math.max(0, conversationRowAt(offsets, top - overscan) - 1),
+    last: Math.min(offsets.length, conversationRowAt(offsets, top + height + overscan) + 2),
+  };
+}

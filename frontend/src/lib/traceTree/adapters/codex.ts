@@ -157,6 +157,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
   let respMsgs: TraceValue[] = [];
   let itemMsgs: TraceValue[] = [];
   let thoughts: TraceValue[] = [];
+  let responseThoughts: TraceValue[] = [];
   let lastEventTs = 0;
   const nested = new Map<string, Nested[]>(); // exec span id -> items run inside it
   const execSpans: Array<{ span: TraceSpan; callIdx: number; outIdx: number }> = [];
@@ -188,7 +189,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
     };
     if (text) span.label = collapse(text);
     const output = joinBlocks(respMsgs.length ? respMsgs : itemMsgs);
-    const reasoning = joinBlocks(thoughts);
+    const reasoning = joinBlocks(responseThoughts.length ? responseThoughts : thoughts);
     if (output !== undefined || reasoning !== undefined) {
       span.content = {};
       if (reasoning !== undefined) span.content.reasoning = reasoning;
@@ -199,7 +200,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
 
   // Tool calls or text that never got a usage record (aborted turn).
   const flushOrphans = (end: number) => {
-    if (!turn || (!pending.length && !text && !respMsgs.length && !itemMsgs.length && !thoughts.length)) return;
+    if (!turn || (!pending.length && !text && !respMsgs.length && !itemMsgs.length && !thoughts.length && !responseThoughts.length)) return;
     const first = pending[0]?.start ?? end;
     turn.children.push(llmSpan(pending[0]?.eventIndex ?? turn.eventIndex ?? 0, Math.max(first, end), undefined));
     pending = [];
@@ -207,6 +208,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
     respMsgs = [];
     itemMsgs = [];
     thoughts = [];
+    responseThoughts = [];
   };
 
   const closeLlm = (i: number, tokens: SpanTokens | undefined) => {
@@ -219,6 +221,7 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
     respMsgs = [];
     itemMsgs = [];
     thoughts = [];
+    responseThoughts = [];
   };
 
   const toolSpan = (e: Event, i: number): TraceSpan => {
@@ -340,6 +343,8 @@ function build(events: Event[], delegation: TraceValue | null): TraceSpan[] {
       } else if (p.item.type === "Reasoning" && Array.isArray(p.item.summary_text) && p.item.summary_text.length) {
         thoughts.push(p.item.summary_text);
       }
+    } else if (e.type === "response_item" && p?.type === "reasoning" && Array.isArray(p.summary) && p.summary.length) {
+      responseThoughts.push(p.summary);
     } else if (e.type === "response_item" && p?.type === "message" && p.role === "assistant") {
       text = partsText(p.content) || text;
       if (!isCipher(partsText(p.content))) respMsgs.push(p.content);

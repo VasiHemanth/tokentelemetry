@@ -129,3 +129,17 @@ test("content: prompt, reply, readable reasoning, tool args and outputs are the 
   assert.deepEqual(agent.content?.input, { task_name: "scout" }, "ciphertext dropped");
   assert.equal(agent.content?.output, '{"task_name":"/root/scout"}');
 });
+
+
+test("native reasoning summaries are canonical over mirrored desktop items", () => {
+  const summary = [{ type: "summary_text", text: "Recorded plan" }];
+  const events = [started(0), prompt("hello", 1),
+    item({ type: "Reasoning", summary_text: ["Recorded plan"] }, 2),
+    ev("response_item", { type: "reasoning", summary, encrypted_content: "opaque" }, 3),
+    record(5, 0, 1, 4),
+    ev("response_item", { type: "reasoning", summary: [], encrypted_content: "opaque" }, 5),
+    record(5, 0, 1, 6), done(7)];
+  const [turn] = codexAdapter.build(events as never, null);
+  assert.deepEqual(turn.children[0].content?.reasoning, summary);
+  assert.equal(turn.children[1].content?.reasoning, undefined);
+});

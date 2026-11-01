@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowUpRight, Brain, Check, ChevronRight, CircleAlert, FileSearch, GitBranch, MessageSquare, Maximize2, Sparkles, Terminal, User, Wrench } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { ArrowUpRight, Check, ChevronRight, CircleAlert, FileSearch, GitBranch, MessageSquare, Maximize2, Sparkles, Terminal, User, Wrench } from "lucide-react";
 import type { TraceSpan } from "@/lib/traceTree/types";
 import { formatContent } from "@/lib/traceTree/content";
 import { fmtClock, fmtDur } from "@/lib/traceTree/timeScale";
@@ -9,6 +9,7 @@ import type { LoadState } from "./SpanTable";
 import InlineEvidence from "./InlineEvidence";
 import ConversationMarkdown from "./ConversationMarkdown";
 import ContentModal from "./ContentModal";
+import RecordedReasoning from "./RecordedReasoning";
 
 export interface ConversationEntryProps {
   span: TraceSpan;
@@ -25,7 +26,7 @@ export interface ConversationEntryProps {
   onRetry: (id: string) => void;
 }
 
-export default function ConversationEntry({ span, depth, agentColor, selected, real, evidenceOpen, onToggleEvidence, open, load, onInspect, onToggle, onRetry }: ConversationEntryProps) {
+function ConversationEntry({ span, depth, agentColor, selected, real, evidenceOpen, onToggleEvidence, open, load, onInspect, onToggle, onRetry }: ConversationEntryProps) {
   const [expandedResponse, setExpandedResponse] = useState(false);
   const isRequest = span.kind === "turn", isReply = span.kind === "llm", isAgent = span.kind === "agent", isSkill = span.kind === "skill";
   const notification = isRequest && span.turnKind === "notification";
@@ -63,6 +64,7 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
           <button type="button" aria-label={`Inspect ${span.title}`} title="Open full evidence" onClick={() => onInspect(span.id)} className="mt-0.5 shrink-0 rounded-md p-1.5 text-[var(--tt-fg-dim)] transition-colors hover:bg-[var(--tt-raised)] hover:text-[var(--tt-brand)] focus-visible:outline focus-visible:outline-[var(--tt-border-focus)]"><FileSearch size={14} /></button>
           </div>
         </div>
+        {isReply && <RecordedReasoning value={span.content?.reasoning} />}
         {(isRequest || hasResponse) && text.text ? <div className={`${isRequest ? "mt-3" : "mt-2"} min-w-0 break-words`}>
           {hasResponse ? <ConversationMarkdown text={text.text} /> : <p className="whitespace-pre-wrap text-[15px] leading-7 text-[var(--tt-fg)]">{text.text}</p>}
           {text.truncated && <button type="button" onClick={() => onInspect(span.id)} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--tt-brand)]">Read complete record <ArrowUpRight size={12} /></button>}
@@ -70,7 +72,6 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
         <div className={`${hasResponse || isRequest ? "mt-3" : "mt-1.5"} flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--tt-fg-muted)]`}>
           {real && <time className="font-mono tabular-nums">{fmtClock(span.start)}{!isRequest ? ` · ${span.approxStart ? "≈ " : ""}${fmtDur(span.end - span.start)}` : ""}</time>}
           {isReply && <span className="max-w-full truncate rounded border border-[var(--tt-border)] bg-[var(--tt-canvas)] px-1.5 py-0.5 font-mono text-[10px]" title={span.title}>{span.title}</span>}
-          {span.content?.reasoning != null && <button type="button" onClick={() => onInspect(span.id)} className={`${action} border border-[var(--tt-border)] text-[var(--tt-fg-muted)]`}><Brain size={12} />Recorded reasoning</button>}
           {activity && <button type="button" onClick={() => onToggleEvidence(span.id)} aria-expanded={evidenceOpen} className={`${action} ${evidenceOpen ? "bg-[var(--tt-brand-glow)] text-[var(--tt-brand)]" : "text-[var(--tt-brand)]"}`}><ChevronRight size={12} className={evidenceOpen ? "rotate-90" : ""} />Input & result</button>}
           {canExpand && <button type="button" onClick={() => onToggle(span.id)} style={{ color: agentColor }} aria-expanded={open} className={`${action} text-[var(--tt-violet-fg)]`}><GitBranch size={12} />{open ? "Hide child recording" : "Explore child recording"}</button>}
           {isAgent && open && span.agent?.loaded && span.children.length === 0 && <span>No readable child records returned.</span>}
@@ -83,3 +84,5 @@ export default function ConversationEntry({ span, depth, agentColor, selected, r
     </article>
   </div>;
 }
+
+export default memo(ConversationEntry);

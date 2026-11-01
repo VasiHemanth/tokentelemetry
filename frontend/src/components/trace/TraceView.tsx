@@ -174,7 +174,7 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
         if (!matchesFilter(span, filter)) setFilter("all");
         const anc: string[] = [];
         for (let p = index.parent.get(id); p; p = index.parent.get(p.id)) anc.push(p.id);
-        if (anc.length) setExpanded((prev) => new Set([...prev, ...anc]));
+        if (anc.length) setExpanded(prev => anc.every(id => prev.has(id)) ? prev : new Set([...prev, ...anc]));
       }
       if (mode) scrollReq.current = { id, block: mode === "reveal" ? "center" : "nearest" };
     },
@@ -199,10 +199,12 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
     if (restoredSelection.current === key) return;
     const ancestors: string[] = [];
     for (let parent = index.parent.get(selected.id); parent; parent = index.parent.get(parent.id)) ancestors.push(parent.id);
+    // Queue the reveal before the scroll effect below, even when ancestors
+    // are already open and the expansion update correctly returns its old set.
+    scrollReq.current ??= { id: selected.id, block: "center" };
     const task = window.setTimeout(() => {
       restoredSelection.current = key;
-      setExpanded(previous => new Set([...previous, ...ancestors]));
-      scrollReq.current = { id: selected.id, block: "center" };
+      setExpanded(previous => ancestors.every(id => previous.has(id)) ? previous : new Set([...previous, ...ancestors]));
     }, 0);
     return () => window.clearTimeout(task);
   }, [view, selected, index]);
@@ -227,15 +229,16 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
     }
   }, [selectedId, rows, view]);
 
+  const retryChild = useCallback((id: string) => { const span = index.byId.get(id); if (span) startLoad(span); }, [index, startLoad]);
   const onSelectReveal = useCallback((id: string) => { select(id, "reveal"); setOutlineOpen(false); }, [select]);
   const setView = (next: WorkspaceView) => {
     updateLocation({ view: next });
     if (next === "execution" && selectedId) select(selectedId, "reveal");
   };
-  const inspectEvidence = (id: string) => {
+  const inspectEvidence = useCallback((id: string) => {
     select(id, "reveal");
     setEvidenceOpen(true);
-  };
+  }, [select]);
 
   const zoomTo = useCallback(
     (span: TraceSpan) => {
@@ -378,7 +381,7 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
           </>}
         </section>
         {view === "conversation" && <WorkspaceDivider value={splitPercent} onChange={setSplitPercent} container={workspaceRef} />}
-        {view === "conversation" ? <div className={`${card} ${outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 overflow-hidden`}><Conversation colorOf={colorOf} roots={roots} selectedId={selectedId} expanded={expanded} loads={loads} onFollow={onSelectReveal} onInspect={inspectEvidence} onToggle={toggle} onRetry={id => { const span = index.byId.get(id); if (span) startLoad(span); }} real={real} /></div> :
+        {view === "conversation" ? <div className={`${card} ${outlineOpen ? "hidden @min-[800px]:flex" : "flex"} min-h-0 min-w-0 overflow-hidden`}><Conversation colorOf={colorOf} roots={roots} selectedId={selectedId} expanded={expanded} loads={loads} onFollow={onSelectReveal} onInspect={inspectEvidence} onToggle={toggle} onRetry={retryChild} real={real} /></div> :
         <aside className={`${card} min-h-0 min-w-0 overflow-y-auto overscroll-contain p-3 scrollbar-thin`}>
           {view === "events" ? sourceEvent ? <div className="space-y-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">API event record</h2><p className="text-xs leading-6 text-[var(--tt-fg-muted)]">Event returned by the harness reader. Some harnesses normalize their native records on the backend.</p><ContentSection label="Event payload" value={sourceEvent} plain /></div> : <p className="p-3 text-sm text-[var(--tt-fg-muted)]">Select a record to inspect its payload.</p> : <SpanDetail
             span={selected}

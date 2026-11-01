@@ -6,7 +6,7 @@
       "highlights": [
         {
           "title": "Read conversations beside execution",
-          "description": "Read a structured conversation beside its execution tree, with synchronized selection, formatted responses, and compact tool activity. Summary, session questions, and delegated work appear up front. Long traces render nearby entries and keep execution focus, event records, and the legacy view available."
+          "description": "Read requests, responses, and recorded reasoning beside execution, with summary, session questions, and delegated work up front. Long traces prepare nearby content and avoid repeated formatting while keeping synchronized selection, event records, and the legacy view available."
         },
         {
           "title": "Resize panes and read tool evidence",

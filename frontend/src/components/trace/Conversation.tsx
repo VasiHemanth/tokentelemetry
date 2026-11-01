@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { ArrowDownToLine, MessageSquare } from "lucide-react";
 import type { TraceSpan } from "@/lib/traceTree/types";
-import { conversationLayout, conversationRowAt, conversationRows } from "@/lib/traceTree/conversation";
+import { conversationLayout, conversationRowAt, conversationRows, conversationWindow } from "@/lib/traceTree/conversation";
 import ConversationEntry, { type ConversationEntryProps } from "./ConversationEntry";
 import type { LoadState } from "./SpanTable";
 import type { ColorOf } from "./shared";
@@ -36,7 +37,9 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
   const userScrolling = useRef(false);
   const pinBottom = useRef(false);
   const layoutRef = useRef({ rows, layout });
-  useEffect(() => { layoutRef.current = { rows, layout }; }, [rows, layout]);
+  useLayoutEffect(() => { layoutRef.current = { rows, layout }; }, [rows, layout]);
+  const followTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (followTimer.current !== null) window.clearTimeout(followTimer.current); }, []);
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
@@ -91,8 +94,7 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
     });
     return () => cancelAnimationFrame(frame);
   }, [layout, viewport]);
-  const first = Math.max(0, conversationRowAt(layout.offsets, viewport.top) - 3);
-  const last = Math.min(rows.length, conversationRowAt(layout.offsets, viewport.top + viewport.height) + 5);
+  const { first, last } = conversationWindow(layout.offsets, viewport.top, viewport.height);
   const latest = () => {
     const row = rows.at(-1);
     if (!row) return;
@@ -108,12 +110,13 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
     pinBottom.current = false;
     pendingReveal.current = null;
   };
-  const toggleEvidence = (id: string) => {
+  const toggleEvidence = useCallback((id: string) => {
+    userScrolling.current = false;
     pendingReveal.current = null;
     followed.current = id;
     onFollow(id);
     setEvidenceCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  };
+  }, [onFollow]);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Session conversation">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--tt-border)] px-4 py-3">
@@ -124,10 +127,20 @@ export default function Conversation({ roots, selectedId, expanded, loads, onFol
         onWheel={beginScroll} onTouchMove={beginScroll} onPointerDown={beginScroll} onKeyDown={e => { if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(e.key)) beginScroll(); }}
         onScroll={e => {
           const box = e.currentTarget;
-          setViewport({ top: box.scrollTop, height: box.clientHeight });
+          const next = { top: box.scrollTop, height: box.clientHeight };
+          // A scrollbar jump can outrun overscan. Commit its window before the
+          // next paint rather than exposing the empty spacer for a frame.
+          const end = last < rows.length ? layout.offsets[last] : layout.total;
+          if (next.top < layout.offsets[first] || next.top + next.height > end) flushSync(() => setViewport(next));
+          else setViewport(next);
           if (!userScrolling.current) return;
-          const row = rows[conversationRowAt(layout.offsets, box.scrollTop + 32)];
-          if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
+          if (followTimer.current !== null) window.clearTimeout(followTimer.current);
+          followTimer.current = window.setTimeout(() => {
+            if (!userScrolling.current) return;
+            const { rows: currentRows, layout: currentLayout } = layoutRef.current;
+            const row = currentRows[conversationRowAt(currentLayout.offsets, box.scrollTop + 32)];
+            if (row && row.span.id !== followed.current) { followed.current = row.span.id; onFollow(row.span.id); }
+          }, 120);
         }}>
         <div className="relative mx-auto max-w-4xl" style={{ height: layout.total }}>
           {rows.slice(first, last).map((row, offset) => <MeasuredEntry key={row.span.id} top={layout.offsets[first + offset]} onMeasure={measure} span={row.span} depth={row.depth} agentColor={row.span.kind === "agent" ? colorOf(row.span.agent?.agentType) : undefined} selected={selectedId === row.span.id} real={real} evidenceOpen={!evidenceCollapsed.has(row.span.id)} onToggleEvidence={toggleEvidence} open={expanded.has(row.span.id)} load={loads[row.span.id]} onInspect={onInspect} onToggle={onToggle} onRetry={onRetry} />)}
