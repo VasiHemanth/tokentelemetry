@@ -148,6 +148,109 @@ export default function Home() {
         }
       />
 
+      {/* Connected agents — split into coding vs autonomous */}
+      {availableAgents.length > 0 && (() => {
+        const AUTONOMOUS = new Set(["hermes"]);
+        const coding = availableAgents.filter((k) => !AUTONOMOUS.has(k));
+        const autonomous = availableAgents.filter((k) => AUTONOMOUS.has(k));
+        const renderCard = (k: string) => {
+          const meta = AGENTS[k as AgentKey];
+          if (!meta) return null;
+          const count = sessions.filter((s) => s.agent === k).length;
+          // The nearest ceiling this agent reports, so the tile answers "how
+          // much of this plan is left?" without opening its page.
+          const quotaWindow = worstWindowFor(k, quotaData?.providers[k]);
+          // How many harness panels sit behind this tile.
+          const panelCount = panelCounts[k] ?? 0;
+          const inner = (
+            <>
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 -top-px h-px"
+                style={{ background: `linear-gradient(90deg, transparent, ${meta.hex}66, transparent)` }}
+              />
+              <div className="flex items-center justify-between">
+                <div
+                  className="h-7 w-7 grid place-items-center rounded-md"
+                  style={{ backgroundColor: `${meta.hex}14`, color: meta.hex }}
+                >
+                  <AgentLogo agent={k} size={16} color />
+                </div>
+                <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
+              </div>
+              <div className="mt-2 text-[13px] font-medium text-[var(--tt-fg-muted)]">
+                {meta.label}
+              </div>
+              {quotaWindow && (
+                <div className="mt-2" title={`${quotaWindow.label}: ${Math.round(quotaWindow.pct)}% used`}>
+                  <div className="h-1 rounded-full tt-tint-1 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-[width,background-color] duration-500"
+                      style={{ width: `${quotaWindow.pct}%`, backgroundColor: quotaColor(quotaWindow.pct) }}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
+                    <span className="text-[var(--tt-fg-faint)] truncate">{quotaWindow.label}</span>
+                    <span className="tabular whitespace-nowrap" style={{ color: quotaColor(quotaWindow.pct) }}>
+                      {quotaWindow.pct >= 100 ? "Limit reached" : `${Math.round(quotaWindow.pct)}%`}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {panelCount > 0 && (
+                <div className="mt-1 flex items-center gap-1 font-mono text-[10.5px] text-[var(--tt-brand)]">
+                  {panelCount} {panelCount === 1 ? "panel" : "panels"} <ArrowRight size={10} />
+                </div>
+              )}
+            </>
+          );
+          const className =
+            "group relative overflow-hidden rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] p-3 transition-colors hover:border-[var(--tt-border-strong)]";
+          // One rule for every agent: link to /agents/<key> once the backend
+          // reports panels behind it, and stay inert otherwise rather than
+          // leading to an empty page. Hermes used to jump straight to its own
+          // sub-dashboard; it now has a tile like the rest, and its page links
+          // on to /hermes through the panel's `dashboard` field.
+          if (panelCount > 0) {
+            return (
+              <Link
+                key={k}
+                href={`/agents/${k}`}
+                onClick={() => trackEvent("agent.opened", { agent: k })}
+                className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}
+              >
+                {inner}
+              </Link>
+            );
+          }
+          return <div key={k} className={className}>{inner}</div>;
+        };
+        return (
+          <>
+            {coding.length > 0 && (
+              <Section
+                title="Connected coding agents"
+                description="Detected from local agent runtimes — counts reflect sessions captured."
+              >
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
+                  {coding.map(renderCard)}
+                </div>
+              </Section>
+            )}
+            {autonomous.length > 0 && (
+              <Section
+                title="Connected autonomous agents"
+                description="General-purpose agents that run across CLI, messaging, and scheduled jobs."
+              >
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
+                  {autonomous.map(renderCard)}
+                </div>
+              </Section>
+            )}
+          </>
+        );
+      })()}
+
       {/* KPI strip */}
       <Section title="Key metrics">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -383,110 +486,6 @@ export default function Home() {
           )}
         </div>
       </div>
-      {/* Connected agents — split into coding vs autonomous */}
-      {availableAgents.length > 0 && (() => {
-        const AUTONOMOUS = new Set(["hermes"]);
-        const coding = availableAgents.filter((k) => !AUTONOMOUS.has(k));
-        const autonomous = availableAgents.filter((k) => AUTONOMOUS.has(k));
-        const renderCard = (k: string) => {
-          const meta = AGENTS[k as AgentKey];
-          if (!meta) return null;
-          const count = sessions.filter((s) => s.agent === k).length;
-          // The nearest ceiling this agent reports, so the tile answers "how
-          // much of this plan is left?" without opening its page.
-          const quotaWindow = worstWindowFor(k, quotaData?.providers[k]);
-          // How many harness panels sit behind this tile.
-          const panelCount = panelCounts[k] ?? 0;
-          const inner = (
-            <>
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 -top-px h-px"
-                style={{ background: `linear-gradient(90deg, transparent, ${meta.hex}66, transparent)` }}
-              />
-              <div className="flex items-center justify-between">
-                <div
-                  className="h-7 w-7 grid place-items-center rounded-md"
-                  style={{ backgroundColor: `${meta.hex}14`, color: meta.hex }}
-                >
-                  <AgentLogo agent={k} size={16} color />
-                </div>
-                <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
-              </div>
-              <div className="mt-2 text-[13px] font-medium text-[var(--tt-fg-muted)]">
-                {meta.label}
-              </div>
-              {quotaWindow && (
-                <div className="mt-2" title={`${quotaWindow.label}: ${Math.round(quotaWindow.pct)}% used`}>
-                  <div className="h-1 rounded-full tt-tint-1 overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-[width,background-color] duration-500"
-                      style={{ width: `${quotaWindow.pct}%`, backgroundColor: quotaColor(quotaWindow.pct) }}
-                    />
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
-                    <span className="text-[var(--tt-fg-faint)] truncate">{quotaWindow.label}</span>
-                    <span className="tabular whitespace-nowrap" style={{ color: quotaColor(quotaWindow.pct) }}>
-                      {quotaWindow.pct >= 100 ? "Limit reached" : `${Math.round(quotaWindow.pct)}%`}
-                    </span>
-                  </div>
-                </div>
-              )}
-              {panelCount > 0 && (
-                <div className="mt-1 flex items-center gap-1 font-mono text-[10.5px] text-[var(--tt-brand)]">
-                  {panelCount} {panelCount === 1 ? "panel" : "panels"} <ArrowRight size={10} />
-                </div>
-              )}
-            </>
-          );
-          const className =
-            "group relative overflow-hidden rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] p-3 transition-colors hover:border-[var(--tt-border-strong)]";
-          // One rule for every agent: link to /agents/<key> once the backend
-          // reports panels behind it, and stay inert otherwise rather than
-          // leading to an empty page. Hermes used to jump straight to its own
-          // sub-dashboard; it now has a tile like the rest, and its page links
-          // on to /hermes through the panel's `dashboard` field.
-          if (panelCount > 0) {
-            return (
-              <Link
-                key={k}
-                href={`/agents/${k}`}
-                onClick={() => trackEvent("agent.opened", { agent: k })}
-                className={`${className} cursor-pointer hover:bg-[var(--tt-sunken)]`}
-              >
-                {inner}
-              </Link>
-            );
-          }
-          return <div key={k} className={className}>{inner}</div>;
-        };
-        return (
-          <>
-            {coding.length > 0 && (
-              <Section
-                title="Connected coding agents"
-                description="Detected from local agent runtimes — counts reflect sessions captured."
-              >
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-                  {coding.map(renderCard)}
-                </div>
-              </Section>
-            )}
-            {autonomous.length > 0 && (
-              <Section
-                title="Connected autonomous agents"
-                description="General-purpose agents that run across CLI, messaging, and scheduled jobs."
-              >
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-                  {autonomous.map(renderCard)}
-                </div>
-              </Section>
-            )}
-          </>
-        );
-      })()}
-
-
     </div>
   );
 }
