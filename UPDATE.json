@@ -1,6 +1,43 @@
 {
   "releases": [
     {
+      "tag": "2026-10-31",
+      "title": "A clearer workspace for long sessions",
+      "highlights": [
+        {
+          "title": "Read conversations beside execution",
+          "description": "Read requests, responses, and recorded reasoning beside execution, with summary, session questions, and delegated work up front. Long traces prepare nearby content and avoid repeated formatting while keeping synchronized selection, event records, and the legacy view available."
+        },
+        {
+          "title": "Resize panes and read tool evidence",
+          "description": "Drag the divider to adjust pane widths and read aligned input/result panels that open by default. Expand Markdown into a large modal, and hover token-chart segments for matching color cards with counts and shares."
+        },
+        {
+          "title": "One workspace across coding agents",
+          "description": "Grok Build, Cursor, Copilot, Antigravity, Vibe, Cline, Muse, SmallCode, Kimi and Oh My Pi can use the session workspace. Readers without verified timing or model-call boundaries show recording order and explicitly identify missing evidence."
+        },
+        {
+          "title": "More faithful usage and tool evidence",
+          "description": "Pi and Prime traces retain recorded usage, and OpenCode and ZCode usage stays attached to its own model step. Prime tool results keep their call identifiers and error flags."
+        },
+        {
+          "title": "Choose a comfortable font size everywhere",
+          "description": "Settings now adjusts text from 85% to 150% across Dashboard, Projects, Analytics, sessions, inspectors, and the rest of the app. Use presets or fine adjustments, preview changes immediately, and keep your preference in this browser on this device.",
+          "href": "/settings#cat-general"
+        }
+      ]
+    },
+    {
+      "tag": "2026-10-28",
+      "title": "Trace view for sessions and subagents",
+      "highlights": [
+        {
+          "title": "See when each subagent ran",
+          "description": "A session now opens as a trace: each prompt holds its model calls and tool calls on one timeline, and every subagent sits under the call that spawned it, with bars showing when it started, how long it ran, and whether it kept working in the background. Expand a subagent to load its own calls. Available for Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, ZCode, DSH, Pi, Qoder, Hermes Agent and Prime; other agents keep the step view, which every session can still switch to."
+        }
+      ]
+    },
+    {
       "tag": "2026-10-16",
       "title": "Oh My Pi (OMP) support",
       "highlights": [

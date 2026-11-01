@@ -1,0 +1,79 @@
+/** Shared session workspace adapters. Rich adapters use verified call/timing
+ * contracts; recording adapters preserve order and disclose missing evidence. */
+import type { Event, TraceValue } from "../traceEvents";
+import type { TraceSpan, TraceTiming } from "./types";
+import { claudeShapeAdapter } from "./adapters/claudeShape";
+import { codexAdapter } from "./adapters/codex";
+import { geminiAdapter } from "./adapters/gemini";
+import { qwenAdapter } from "./adapters/qwen";
+import { opencodeAdapter } from "./adapters/opencode";
+import { hermesAdapter } from "./adapters/hermes";
+import { primeAdapter } from "./adapters/prime";
+import { recordingAdapter } from "./adapters/recording";
+import { markSkills } from "./skills";
+
+export interface ChildFetch {
+  /** apiFetch path for the child's raw trace, e.g. `/sessions/<child>?agent=opencode`. */
+  path: string;
+  /** Agent name to pass to normalizeTraceEvents for the child payload. */
+  agent: string;
+}
+
+export interface HarnessAdapter {
+  timing: TraceTiming;
+  /** Reader limitations displayed beside the workspace controls. */
+  notice?: string;
+  /**
+   * Build turn -> llm -> tool spans from the page's normalized events (the same
+   * array the step cards render, so `eventIndex` lines up). Calls that spawned a
+   * subagent become kind "agent" spans with `agent.loaded = false`, enriched from
+   * `delegation` (the /sessions/{id}/delegation payload, or null) where it links.
+   */
+  build(events: Event[], delegation: TraceValue | null): TraceSpan[];
+  /** Where to fetch an agent span's child trace, or null when the harness has none. */
+  childFetch?(sessionId: string, agentSpan: TraceSpan): ChildFetch | null;
+  /** Spans for a fetched child, from its normalized events. Defaults to `build(events, null)`. */
+  buildChild?(events: Event[]): TraceSpan[];
+}
+
+const ADAPTERS: Record<string, HarnessAdapter> = {
+  claude: claudeShapeAdapter("claude"),
+  dsh: claudeShapeAdapter("dsh"),
+  pi: claudeShapeAdapter("pi"),
+  qoder: claudeShapeAdapter("qoder"),
+  codex: codexAdapter,
+  gemini: geminiAdapter,
+  qwen: qwenAdapter,
+  opencode: opencodeAdapter("opencode"),
+  zcode: opencodeAdapter("zcode"),
+  hermes: hermesAdapter,
+  prime: primeAdapter,
+  grok: recordingAdapter("grok"),
+  cursor: recordingAdapter("cursor"),
+  copilot: recordingAdapter("copilot"),
+  antigravity: recordingAdapter("antigravity"),
+  vibe: recordingAdapter("vibe"),
+  cline: recordingAdapter("cline"),
+  smallcode: recordingAdapter("smallcode"),
+  muse: recordingAdapter("muse"),
+  kimi: recordingAdapter("kimi"),
+  omp: recordingAdapter("omp"),
+  openai_compat: recordingAdapter("openai_compat"),
+};
+
+// Every adapter's output goes through the shared skill pass. Wrapped once here
+// so each harness keeps one stable adapter object (the page memoizes on it).
+const withSkills = (a: HarnessAdapter): HarnessAdapter => ({
+  ...a,
+  build: (events, delegation) => markSkills(a.build(events, delegation)),
+  buildChild: (events) => markSkills(a.buildChild ? a.buildChild(events) : a.build(events, null)),
+});
+const WRAPPED: Record<string, HarnessAdapter> = Object.fromEntries(
+  Object.entries(ADAPTERS).map(([k, a]) => [k, withSkills(a)]),
+);
+
+export function traceAdapter(agent: string | null | undefined): HarnessAdapter | null {
+  return (agent && WRAPPED[agent]) || null;
+}
+
+export type { TraceSpan, TraceTiming, TraceTree, SpanKind, SpanTokens, AgentInfo, SkillInfo } from "./types";

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSyncExternalStore } from "react";
 import {
   LayoutDashboard, Folder, BarChart3, Activity, Settings2,
-  PanelLeftOpen, PanelLeftClose, Zap,
+  PanelLeftOpen, PanelLeftClose, Zap, ChevronDown,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
@@ -28,15 +29,24 @@ const LINKS = [
   { name: "Local Models", href: "/local-models", icon: Zap },
 ];
 
-export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationProps) {
+const subscribeViewport = (notify: () => void) => {
+  const media = window.matchMedia("(max-width: 767px)");
+  media.addEventListener("change", notify);
+  return () => media.removeEventListener("change", notify);
+};
+const narrowViewport = () => window.matchMedia("(max-width: 767px)").matches;
+
+export default function Navigation({ isCollapsed: preferredCollapsed, setIsCollapsed }: NavigationProps) {
+  const narrow = useSyncExternalStore(subscribeViewport, narrowViewport, () => false);
+  const isCollapsed = preferredCollapsed || narrow;
   const pathname = usePathname();
   const { data: availableAgents = [] } = useResource<string[]>("/agents", { initial: [] });
 
   return (
     <nav
       className={cn(
-        "sticky top-0 z-[100] h-screen flex flex-col p-3 transition-[width] duration-300 ease-out",
-        "bg-[var(--tt-panel)]/80 backdrop-blur-md border-r border-[var(--tt-border)]",
+        "sticky top-0 z-[100] h-screen shrink-0 flex flex-col p-3 transition-[width] duration-300 ease-out",
+        "bg-[var(--tt-panel)] border-r border-[var(--tt-border)]",
         isCollapsed ? "w-[72px]" : "w-64",
       )}
     >
@@ -76,24 +86,24 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
         {/* Connected agents */}
         <div className="mt-auto pt-3">
           {!isCollapsed && availableAgents.length > 0 && (
-            <div className="rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3">
-              <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)] mb-2.5 flex items-center justify-between">
+            <details className="group rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] p-3">
+              <summary className="cursor-pointer text-[12px] font-medium text-[var(--tt-fg-muted)] flex items-center justify-between">
                 <span>Connected</span>
-                <span className="tabular text-[var(--tt-fg-muted)]">{availableAgents.length}</span>
-              </div>
-              <div className="grid grid-cols-1 gap-1.5 max-h-[34vh] overflow-y-auto">
+                <span className="flex items-center gap-2 tabular text-[var(--tt-fg-muted)]">{availableAgents.length}<ChevronDown size={14} className="transition-transform group-open:rotate-180" /></span>
+              </summary>
+              <div className="mt-3 grid grid-cols-1 gap-2 max-h-[34vh] overflow-y-auto">
                 {availableAgents.map((k) => {
                   if (!ALL_AGENT_KEYS.includes(k as never)) return null;
                   const meta = getAgent(k);
                   return (
-                    <div key={k} className="flex items-center gap-2 text-[11px] text-[var(--tt-fg-muted)]">
+                    <div key={k} className="flex items-center gap-2 text-[12px] text-[var(--tt-fg-muted)]">
                       <AgentLogo agent={k} size={13} />
                       <span className="truncate">{meta.label}</span>
                     </div>
                   );
                 })}
               </div>
-            </div>
+            </details>
           )}
         </div>
       </div>
@@ -113,6 +123,7 @@ export default function Navigation({ isCollapsed, setIsCollapsed }: NavigationPr
 
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
+          disabled={narrow}
           aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           className={cn(
             "w-full flex items-center justify-center gap-2 rounded-[var(--tt-radius)] py-2 text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors border border-transparent hover:border-[var(--tt-border)]",

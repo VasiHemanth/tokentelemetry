@@ -95,6 +95,19 @@ def test_codex_detail_keeps_event_only_records(tmp_path, monkeypatch):
     assert len(result) == 2
 
 
+def test_codex_source_records_keep_mirrors_when_requested(tmp_path, monkeypatch):
+    events = [
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done"}]}},
+        {"type": "event_msg", "payload": {"type": "agent_message", "message": "Done"}},
+    ]
+    _write_rollout(tmp_path, "source-records", events)
+    monkeypatch.setattr(main, "CODEX_DIR", tmp_path)
+    original = asyncio.run(main.get_session_detail("source-records", "codex", raw=True))
+    canonical = asyncio.run(main.get_session_detail("source-records", "codex"))
+    assert len(original) == 2
+    assert len(canonical) == 1
+
+
 def test_codex_detail_collapses_empty_and_streaming_reasoning_snapshots():
     events = [
         {

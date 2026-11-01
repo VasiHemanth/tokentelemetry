@@ -254,9 +254,12 @@ def test_helper_rollup_dedups_repeated_message_id(tmp_path):
     one = deleg["subagents"][0]
     assert one["tokens"]["input"] == 10 + 4
     assert one["tokens"]["output"] == 5 + 2
-    assert one["tokens"]["cached"] == max(100, 50)  # high-water-mark, not tripled
+    # Cache reads accumulate across distinct model calls, while the repeated
+    # content blocks of each call must still be counted only once.
+    assert one["tokens"]["cached"] == 100 + 50
     assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
     assert one["tokens"]["cache_creation"] == 20
+    assert one["tokens"]["total"] == 14 + 7 + 150 + 20
 
 
 def test_helper_costs_with_each_files_own_model(tmp_path, monkeypatch):

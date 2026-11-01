@@ -89,8 +89,8 @@ function useChartTheme() {
       padding: "8px 10px",
       boxShadow: isDark ? "0 12px 32px -12px rgba(0,0,0,0.6)" : "0 12px 32px -12px rgba(15,23,42,0.18)",
     },
-    tooltipItem:  { fontSize: "11px", color: "var(--tt-fg)" },
-    tooltipLabel: { fontSize: "10px", color: "var(--tt-fg-dim)", textTransform: "uppercase" as const, letterSpacing: "0.16em" },
+    tooltipItem:  { fontSize: "calc(11px * var(--tt-text-scale))", color: "var(--tt-fg)" },
+    tooltipLabel: { fontSize: "calc(10px * var(--tt-text-scale))", color: "var(--tt-fg-dim)", textTransform: "uppercase" as const, letterSpacing: "0.16em" },
   };
 }
 
@@ -150,7 +150,7 @@ export default function AnalyticsPage() {
   const { data, loading } = useResource<AnalyticsData>(queryPath, { pollMs: 30_000 });
   const agentOptions = useResource<string[]>("/agents").data ?? [];
   const ct = useChartTheme();
-  const AXIS = { stroke: ct.axisStroke, fontSize: 10, tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
+  const AXIS = { stroke: ct.axisStroke, fontSize: "calc(10px * var(--tt-text-scale))", tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
 
   // Human label for the active window — the dashboard KPI strip is all-time,
   // so spelling out the analytics window here keeps the two totals from
@@ -569,7 +569,7 @@ export default function AnalyticsPage() {
                     <XAxis type="number" tickFormatter={(v) => compact(v)} {...AXIS} />
                     <YAxis
                       type="category" dataKey="name" width={210} interval={0}
-                      tick={{ fill: "var(--tt-fg-muted)", fontSize: 11 }}
+                      tick={{ fill: "var(--tt-fg-muted)", fontSize: "calc(11px * var(--tt-text-scale))" }}
                       tickLine={false} axisLine={false}
                     />
                     <Tooltip
