@@ -3383,6 +3383,69 @@ async def get_session_links():
     """
     return await _asyncio.to_thread(session_links.build_graph, CLAUDE_DIR / "projects")
 
+
+# ── Always-on agent evals (see agent_evals.py) ──────────────────────────────
+
+async def _refresh_eval_events() -> None:
+    """Derive eval events from the cached scan + peer graph and upsert them.
+    Record-only safe: this only writes the sidecar table; nothing here notifies."""
+    import agent_evals
+    import history_store
+    sessions = await get_sessions_cached(fresh=False)
+    try:
+        graph = await _asyncio.to_thread(session_links.build_graph, CLAUDE_DIR / "projects")
+    except Exception:
+        graph = None
+    events = agent_evals.derive_all(list(sessions), graph)
+    await _asyncio.to_thread(history_store.upsert_eval_events, events)
+
+
+@app.get("/evals/events")
+async def get_eval_events(kind: Optional[str] = None, session_id: Optional[str] = None,
+                          agent: Optional[str] = None):
+    import history_store
+    await _refresh_eval_events()
+    return history_store.query_eval_events(kind=kind, session_id=session_id, agent=agent)
+
+
+@app.get("/evals/summary")
+async def get_eval_summary():
+    import agent_evals
+    import history_store
+    await _refresh_eval_events()
+    return agent_evals.summarize(history_store.query_eval_events())
+
+
+@app.post("/evals/label")
+async def post_eval_label(payload: dict = Body(...)):
+    """Minimal human label: {agent, session_id, decision, label, trigger?, ts?}."""
+    import agent_evals
+    import history_store
+    try:
+        ev = agent_evals.make_event(
+            "wake_decision", str(payload["agent"]), str(payload["session_id"]),
+            payload.get("ts"), source="human_label",
+            decision=payload.get("decision"), trigger=payload.get("trigger", "cron"),
+            label=payload.get("label"), turn_event_index=payload.get("turn_event_index"))
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if ev.get("label") not in ("should_wake", "should_silence") or ev.get("decision") not in ("wake", "silence"):
+        raise HTTPException(status_code=400, detail="decision must be wake|silence, label should_wake|should_silence")
+    history_store.upsert_eval_events([ev])
+    return ev
+
+
+@app.get("/config/evals")
+async def get_evals_config():
+    import agent_evals
+    return agent_evals.load_config()
+
+
+@app.post("/config/evals")
+async def post_evals_config(payload: dict = Body(...)):
+    import agent_evals
+    return agent_evals.save_config(payload)
+
 # @app.get("/local-runtime")
 # async def get_local_runtime():
 #     import httpx

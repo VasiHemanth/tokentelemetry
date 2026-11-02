@@ -36,7 +36,7 @@ from tt_paths import canonical_project, data_dir
 
 _log = logging.getLogger("tokentelemetry.history")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Sub-dicts folded into ``ecosystem_json`` and expanded back out on read. These
 # are the keys the analytics aggregation + delegation views consume beyond the
@@ -181,6 +181,18 @@ def _migrate(con: sqlite3.Connection) -> None:
                 if "duplicate column" not in str(e).lower():
                     raise
         con.execute("PRAGMA user_version=4")
+        con.commit()
+    if ver < 5:
+        # v5: always-on agent eval events (agent_evals.py). Sidecar table —
+        # ids/timings/labels only, never prompt text. Additive.
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS eval_events ("
+            " agent TEXT NOT NULL, session_id TEXT, id TEXT NOT NULL,"
+            " ts TEXT, kind TEXT NOT NULL, json TEXT NOT NULL,"
+            " PRIMARY KEY (agent, id))"
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS eval_events_kind_ts ON eval_events(kind, ts)")
+        con.execute("PRAGMA user_version=5")
         con.commit()
 
 
@@ -616,3 +628,44 @@ def get_summary(agent: str, id: str) -> Optional[str]:
     except Exception as e:  # noqa: BLE001
         _log.exception("history get_summary failed: %s", e)
         return None
+
+
+# ── eval events (v5) ────────────────────────────────────────────────────────
+
+def upsert_eval_events(events: Iterable[Dict[str, Any]]) -> int:
+    rows = [(e["agent"], e.get("session_id"), e["id"], e.get("ts"), e["kind"], json.dumps(e))
+            for e in events]
+    if not rows:
+        return 0
+    con = _connect()
+    try:
+        con.executemany(
+            "INSERT INTO eval_events(agent, session_id, id, ts, kind, json) VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT(agent, id) DO UPDATE SET ts=excluded.ts, json=excluded.json",
+            rows)
+        con.commit()
+        return len(rows)
+    finally:
+        con.close()
+
+
+def query_eval_events(kind: Optional[str] = None, session_id: Optional[str] = None,
+                      agent: Optional[str] = None, limit: int = 5000) -> List[Dict[str, Any]]:
+    if not _db_path().exists():
+        return []
+    where, args = [], []
+    for col, val in (("kind", kind), ("session_id", session_id), ("agent", agent)):
+        if val:
+            where.append(f"{col}=?")
+            args.append(val)
+    sql = "SELECT json FROM eval_events" + (" WHERE " + " AND ".join(where) if where else "")
+    sql += " ORDER BY ts DESC LIMIT ?"
+    try:
+        con = _connect()
+        try:
+            return [json.loads(r[0]) for r in con.execute(sql, (*args, limit))]
+        finally:
+            con.close()
+    except Exception:
+        _log.exception("eval_events query failed")
+        return []

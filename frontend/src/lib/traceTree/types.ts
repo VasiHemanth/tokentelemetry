@@ -82,7 +82,9 @@ export interface TraceSpan {
   /** The transcript only records when a response arrived; start is the previous event's time. */
   approxStart?: boolean;
   /** turn only: a user prompt, or a harness notification such as a subagent reporting back. */
-  turnKind?: "prompt" | "notification";
+  turnKind?: "prompt" | "notification" | "wake";
+  /** Optional always-on eval annotation (see lib/evals.ts). Additive; adapters may omit. */
+  eval?: { kind: "wake_decision" | "schedule_fire" | "agent_call"; id: string };
   /** turn only: childId of the subagent whose completion started this turn. */
   notifiedBy?: string;
   /** tool only: childId of an existing subagent this call resumed (Claude SendMessage). */
