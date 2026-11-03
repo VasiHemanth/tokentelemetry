@@ -242,9 +242,23 @@ def test_merge_fills_gaps_field_by_field_when_rollup_partial():
     assert tokens["output"] == 50       # from shutdown rollup
     assert tokens["cached"] == 7        # from per-message scan
     assert tokens["cache_creation"] == 3
-    # char-count estimate (200) minus the combined cache traffic (7 + 3 = 10),
-    # netted once against whichever input value was ultimately selected.
-    assert tokens["input"] == 190
+    # Regression for the PR #448 second-review finding: the char-count
+    # estimate only ever counts user-message text, never cached context, so
+    # it's already net — it must NOT be reduced by cache traffic found
+    # elsewhere (that would understate input/cost for a prompt that also used
+    # a lot of cache). Netting only applies to a source that actually
+    # reported a gross input counter, which no source did here.
+    assert tokens["input"] == 200
+
+
+def test_merge_nets_a_reported_input_even_when_cache_comes_from_elsewhere():
+    # Unlike the char-count estimate (see test above), an input counter that
+    # WAS reported (by any of the three sources) is gross by definition and
+    # must still be netted against the combined cache total.
+    shutdown_rollup = {"input": 50, "output": None, "cached": None, "cache_creation": None}
+    msg_tot = {"input": None, "output": None, "cached": 7, "cache_creation": 3}
+    tokens = main._merge_copilot_cli_tokens(shutdown_rollup, None, msg_tot, in_estimate=200)
+    assert tokens["input"] == 40  # 50 - (7 + 3), not the unrelated 200 estimate
 
 
 def test_merge_with_no_rollup_falls_back_entirely_to_per_message():

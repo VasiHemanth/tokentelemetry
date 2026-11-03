@@ -169,7 +169,11 @@ def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Opt
     cached request. The gross-input/cache-traffic netting happens exactly once
     here, against the final combined cached+cache_creation, after merging —
     netting per-source first would under/over-subtract whenever the cache
-    counts and the input count come from different sources."""
+    counts and the input count come from different sources. The netting only
+    applies to a REPORTED input counter (gross by definition — see
+    `_copilot_cli_tokens_from_metrics`); the char-count estimate only ever
+    counts user-message text, never cached context, so it's already net and
+    must not be subtracted from again."""
     def pick(field):
         for src in (shutdown_rollup, usage_rollup, msg_tot):
             if src and src.get(field) is not None:
@@ -182,9 +186,10 @@ def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Opt
     input_val = pick("input")
     if input_val is None:
         input_val = in_estimate
-    cache_total = cached + cache_creation
-    if cache_total and input_val >= cache_total:
-        input_val -= cache_total
+    else:
+        cache_total = cached + cache_creation
+        if cache_total and input_val >= cache_total:
+            input_val -= cache_total
     tokens = {"input": input_val, "output": output, "cached": cached, "cache_creation": cache_creation}
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
     return tokens
