@@ -81,6 +81,50 @@ def _parse_copilot_iso(ts) -> Optional[datetime]:
     except Exception:
         return None
 
+def _grab_token_fields(obj, tot: dict) -> bool:
+    """Recursively scan `obj` for known token-usage field names and
+    accumulate them into `tot` (keys: input/output/cached/cache_creation).
+    Returns True if anything was found. Shared by
+    `_copilot_cli_tokens_from_metrics` (shutdown rollup / live
+    session.usage_record rollup).
+
+    Matches EXACT field names only (case-insensitive) — an earlier version
+    matched any numeric field whose name merely *contained* "token", which
+    over-counts real Copilot CLI payloads: `maxPromptTokens`/`maxOutputTokens`
+    are static per-request context-window limits (constant ~200000/128000 on
+    every single usage record, not actual usage) and `interTokenLatencyMs`/
+    `toolTokenCount` are latency/metadata, yet all of them matched substrings
+    like "in"+"token" or "out"+"token" and got silently summed as real usage
+    — inflating a real 480-call session's output from ~400K to ~18M tokens.
+    Nested `copilotUsage.tokenDetails[].tokenCount` entries are intentionally
+    NOT matched either, since they'd double-count the same totals already
+    captured by the top-level `*Tokens` fields on the same record."""
+    _INPUT_KEYS = ("inputtokens", "prompttokens")
+    _OUTPUT_KEYS = ("outputtokens", "completiontokens")
+    found = False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                if kl == "reasoningtokens":
+                    # Folded into outputTokens already; counting it too double-bills it.
+                    continue
+                elif kl == "cachereadtokens":
+                    tot["cached"] += int(v); found = True
+                elif kl == "cachewritetokens":
+                    tot["cache_creation"] += int(v); found = True
+                elif kl in _OUTPUT_KEYS:
+                    tot["output"] += int(v); found = True
+                elif kl in _INPUT_KEYS:
+                    tot["input"] += int(v); found = True
+            else:
+                found = _grab_token_fields(v, tot) or found
+    elif isinstance(obj, list):
+        for x in obj:
+            found = _grab_token_fields(x, tot) or found
+    return found
+
+
 def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
     """Best-effort precise token totals from a closed session's
     `session.shutdown.modelMetrics`. The exact shape varies by Copilot
@@ -98,40 +142,33 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
     if not isinstance(metrics, (dict, list)):
         return None
     tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
-    found = False
-
-    def grab(obj):
-        nonlocal found
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                kl = str(k).lower()
-                if isinstance(v, (int, float)) and not isinstance(v, bool) and "token" in kl:
-                    if "reasoning" in kl:
-                        # Folded into outputTokens already; counting it (the
-                        # old "in" match caught reasonINg) double-bills it.
-                        continue
-                    if "cache" in kl:
-                        if "write" in kl or "creation" in kl:
-                            tot["cache_creation"] += int(v); found = True
-                        else:
-                            tot["cached"] += int(v); found = True
-                    elif "out" in kl or "completion" in kl or "output" in kl:
-                        tot["output"] += int(v); found = True
-                    elif "in" in kl or "prompt" in kl:
-                        tot["input"] += int(v); found = True
-                else:
-                    grab(v)
-        elif isinstance(obj, list):
-            for x in obj:
-                grab(x)
-
-    grab(metrics)
-    if not found:
+    if not _grab_token_fields(metrics, tot):
         return None
     cache_total = tot["cached"] + tot["cache_creation"]
     if cache_total and tot["input"] >= cache_total:
         tot["input"] -= cache_total
     return tot
+
+
+def _merge_copilot_cli_tokens(rollup: Optional[dict], msg_tot: dict, in_estimate: int) -> dict:
+    """Combine the rollup (shutdown modelMetrics or live session.usage_record
+    totals) with the per-message assistant.message scan field-by-field rather
+    than all-or-nothing: different Copilot CLI versions/event shapes can each
+    populate only some of input/output/cached/cache_creation, so whichever
+    source has a nonzero value for a given field wins for that field alone."""
+    rollup = rollup or {}
+    cache_total = msg_tot["cached"] + msg_tot["cache_creation"]
+    msg_input = msg_tot["input"] if msg_tot["input"] else in_estimate
+    if cache_total and msg_input >= cache_total:
+        msg_input -= cache_total
+    tokens = {
+        "input": rollup.get("input") or msg_input,
+        "output": rollup.get("output") or msg_tot["output"],
+        "cached": rollup.get("cached") or msg_tot["cached"],
+        "cache_creation": rollup.get("cache_creation") or msg_tot["cache_creation"],
+    }
+    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    return tokens
 
 def _antigravity_surface_map() -> Dict[str, str]:
     """Map Antigravity session id → surface (cli / ide / app) from the brain dirs,
@@ -9164,8 +9201,17 @@ def _scan_sessions_sync():
     # 7b. GitHub Copilot CLI / agent — ~/.copilot/session-state/<id>/events.jsonl.
     # A separate store from the VS Code Copilot chat sessions above; the CLI
     # writes an append-only event log per session (#36). Token usage comes from
-    # session.shutdown.modelMetrics when the session has ended, otherwise we sum
-    # per-message outputTokens and estimate input from prompt length.
+    # session.shutdown.modelMetrics when the session has ended. For a still-
+    # running session (no shutdown event — the common case for long foreground
+    # orchestrator/delegation sessions) the live per-turn usage is instead
+    # reported on a SEPARATE `session.usage_record` event (NOT on
+    # assistant.message, which carries no token fields at all — verified
+    # against real ~/.copilot/session-state data): each one's `data.usage` is
+    # the same gross-input/output/cache shape as a shutdown rollup entry, so
+    # every usage_record collected across the session is fed through the same
+    # _copilot_cli_tokens_from_metrics rollup+netting logic. The assistant.
+    # message scan and char-count estimate remain last-resort fallbacks for
+    # any shape that genuinely has neither.
     if COPILOT_CLI_DIR.exists():
         for sess_dir in COPILOT_CLI_DIR.iterdir():
             try:
@@ -9177,7 +9223,18 @@ def _scan_sessions_sync():
                 sid = sess_dir.name
                 project_path = "unknown"; first_msg = ""; model = None
                 models_used: List[str] = []
-                out_tokens = 0; in_estimate = 0
+                in_estimate = 0
+                # Per-message fallback totals (used when the session never emitted
+                # a clean session.shutdown, e.g. a still-running/killed CLI process —
+                # common for long foreground orchestrator sessions, see #CLI
+                # output/cached always-zero bug). Accumulated via _grab_token_fields
+                # instead of a single literal "outputTokens" key, since that key
+                # alone silently misses output/cache tokens reported under a
+                # differently-shaped field (nested usage object, renamed key, etc.)
+                # across Copilot CLI versions — the root cause of output/cached
+                # staying 0 even for sessions that clearly produced heavy output.
+                msg_tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
+                usage_records: List[dict] = []
                 start_ts = None; last_ts = None; shutdown_metrics = None
                 for r in rows:
                     et = r.get("type"); d = r.get("data") or {}
@@ -9196,23 +9253,28 @@ def _scan_sessions_sync():
                         if m:
                             if not model: model = m
                             if m not in models_used: models_used.append(m)
-                        ot = d.get("outputTokens")
-                        if isinstance(ot, (int, float)) and not isinstance(ot, bool):
-                            out_tokens += int(ot)
+                        # Exclude toolRequests/content/reasoningText: these can
+                        # carry arbitrary tool-call arguments or free text that
+                        # might coincidentally contain "token" in a key name,
+                        # which would corrupt the count. Token usage is always
+                        # reported directly on the assistant.message payload
+                        # (top-level or under a nested usage/metrics object),
+                        # never inside a tool call's own arguments.
+                        _grab_token_fields(
+                            {k: v for k, v in d.items() if k not in ("toolRequests", "content", "reasoningText")},
+                            msg_tot,
+                        )
                     elif et == "session.model_change":
                         nm = d.get("newModel")
                         if nm and nm not in models_used: models_used.append(nm)
+                    elif et == "session.usage_record":
+                        u = d.get("usage")
+                        if isinstance(u, dict): usage_records.append(u)
                     elif et == "session.shutdown":
                         shutdown_metrics = d.get("modelMetrics")
                 ts = last_ts or start_ts or _file_mtime_utc(ev_file)
-                tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-                metr = _copilot_cli_tokens_from_metrics(shutdown_metrics)
-                if metr:
-                    tokens.update(metr)
-                else:
-                    tokens["input"] = in_estimate
-                    tokens["output"] = out_tokens
-                tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+                rollup = _copilot_cli_tokens_from_metrics(shutdown_metrics) or _copilot_cli_tokens_from_metrics(usage_records)
+                tokens = _merge_copilot_cli_tokens(rollup, msg_tot, in_estimate)
                 tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
                                                 cache_creation_tokens=tokens.get("cache_creation", 0), at=ts)
                 if model and model not in models_used: models_used.insert(0, model)
