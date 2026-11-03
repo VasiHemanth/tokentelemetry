@@ -84,9 +84,12 @@ def _parse_copilot_iso(ts) -> Optional[datetime]:
 def _grab_token_fields(obj, tot: dict) -> bool:
     """Recursively scan `obj` for known token-usage field names and
     accumulate them into `tot` (keys: input/output/cached/cache_creation).
-    Returns True if anything was found. Shared by
-    `_copilot_cli_tokens_from_metrics` (shutdown rollup / live
-    session.usage_record rollup).
+    A field stays `None` until a matching key is actually seen, then becomes a
+    real int (possibly 0) — this distinguishes "never reported" from "reported
+    as zero" so callers can tell a genuinely absent counter from an explicit
+    zero one (e.g. a fully-cached request correctly reporting 0 net input).
+    Returns True if anything was found. Shared by `_copilot_cli_tokens_from_metrics`
+    (shutdown rollup / live session.usage_record rollup).
 
     Matches EXACT field names only (case-insensitive) — an earlier version
     matched any numeric field whose name merely *contained* "token", which
@@ -110,13 +113,13 @@ def _grab_token_fields(obj, tot: dict) -> bool:
                     # Folded into outputTokens already; counting it too double-bills it.
                     continue
                 elif kl == "cachereadtokens":
-                    tot["cached"] += int(v); found = True
+                    tot["cached"] = (tot["cached"] or 0) + int(v); found = True
                 elif kl == "cachewritetokens":
-                    tot["cache_creation"] += int(v); found = True
+                    tot["cache_creation"] = (tot["cache_creation"] or 0) + int(v); found = True
                 elif kl in _OUTPUT_KEYS:
-                    tot["output"] += int(v); found = True
+                    tot["output"] = (tot["output"] or 0) + int(v); found = True
                 elif kl in _INPUT_KEYS:
-                    tot["input"] += int(v); found = True
+                    tot["input"] = (tot["input"] or 0) + int(v); found = True
             else:
                 found = _grab_token_fields(v, tot) or found
     elif isinstance(obj, list):
@@ -126,49 +129,136 @@ def _grab_token_fields(obj, tot: dict) -> bool:
 
 
 def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
-    """Best-effort precise token totals from a closed session's
-    `session.shutdown.modelMetrics`. The exact shape varies by Copilot
-    version, so we defensively sum any recognizable input/output/cache token
-    counts found anywhere in the structure. Returns None when nothing usable
-    is present (caller then falls back to the per-message estimate).
+    """Best-effort raw token field extraction from a closed session's
+    `session.shutdown.modelMetrics` (or, by the same shape, a live
+    `session.usage_record`). The exact shape varies by Copilot version, so we
+    defensively sum any recognizable input/output/cache token counts found
+    anywhere in the structure. Returns None when nothing usable is present
+    (caller then falls back to other sources).
 
-    Copilot's `usage.inputTokens` is GROSS: it already includes
-    cacheReadTokens + cacheWriteTokens (verified against tokenDetails, whose
-    net input.tokenCount + cache_read + cache_write sums exactly to
-    inputTokens). So after collection, cache traffic is subtracted back out
-    of input — otherwise it's billed twice across the input and cached
-    buckets. The subtraction is guarded (only when input covers it) so an
-    unknown future shape that reports net input can't go negative."""
+    Deliberately returns GROSS, un-netted input (Copilot's `usage.inputTokens`
+    already includes cacheReadTokens + cacheWriteTokens — verified against
+    tokenDetails, whose net input.tokenCount + cache_read + cache_write sums
+    exactly to inputTokens) and leaves any field never encountered as `None`
+    rather than 0. Netting the cache traffic back out of input, and deciding
+    when a missing field should fall back to another source, both require
+    knowing the FINAL combined cache counts across every source — doing either
+    here, before the caller has merged shutdown/live/per-message data, single-
+    counts cache traffic reported by a different source than this one and
+    silently overwrites an explicit zero with a fallback estimate. Both are
+    done exactly once in `_merge_copilot_cli_tokens` instead."""
     if not isinstance(metrics, (dict, list)):
         return None
-    tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
+    tot = {"input": None, "output": None, "cached": None, "cache_creation": None}
     if not _grab_token_fields(metrics, tot):
         return None
-    cache_total = tot["cached"] + tot["cache_creation"]
-    if cache_total and tot["input"] >= cache_total:
-        tot["input"] -= cache_total
     return tot
 
 
-def _merge_copilot_cli_tokens(rollup: Optional[dict], msg_tot: dict, in_estimate: int) -> dict:
-    """Combine the rollup (shutdown modelMetrics or live session.usage_record
-    totals) with the per-message assistant.message scan field-by-field rather
-    than all-or-nothing: different Copilot CLI versions/event shapes can each
-    populate only some of input/output/cached/cache_creation, so whichever
-    source has a nonzero value for a given field wins for that field alone."""
-    rollup = rollup or {}
-    cache_total = msg_tot["cached"] + msg_tot["cache_creation"]
-    msg_input = msg_tot["input"] if msg_tot["input"] else in_estimate
-    if cache_total and msg_input >= cache_total:
-        msg_input -= cache_total
-    tokens = {
-        "input": rollup.get("input") or msg_input,
-        "output": rollup.get("output") or msg_tot["output"],
-        "cached": rollup.get("cached") or msg_tot["cached"],
-        "cache_creation": rollup.get("cache_creation") or msg_tot["cache_creation"],
-    }
+def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Optional[dict],
+                               msg_tot: dict, in_estimate: int) -> dict:
+    """Combine the shutdown rollup, the live session.usage_record rollup, and
+    the per-message assistant.message scan field-by-field, not source-by-source:
+    each of input/output/cached/cache_creation is taken from the first of these
+    three (in that priority order) that actually reported it, so a shutdown
+    rollup covering only some fields (e.g. output) doesn't discard good
+    input/cache data the live usage records have for the others. A field left
+    unreported by all three is assumed 0, EXCEPT input, which falls back to the
+    char-count estimate — an explicit 0 input from any source is kept as-is
+    (not treated as missing), since that's a real possible value for a fully
+    cached request. The gross-input/cache-traffic netting happens exactly once
+    here, against the final combined cached+cache_creation, after merging —
+    netting per-source first would under/over-subtract whenever the cache
+    counts and the input count come from different sources."""
+    def pick(field):
+        for src in (shutdown_rollup, usage_rollup, msg_tot):
+            if src and src.get(field) is not None:
+                return src[field]
+        return None
+
+    output = pick("output") or 0
+    cached = pick("cached") or 0
+    cache_creation = pick("cache_creation") or 0
+    input_val = pick("input")
+    if input_val is None:
+        input_val = in_estimate
+    cache_total = cached + cache_creation
+    if cache_total and input_val >= cache_total:
+        input_val -= cache_total
+    tokens = {"input": input_val, "output": output, "cached": cached, "cache_creation": cache_creation}
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
     return tokens
+
+
+def _parse_copilot_cli_session_events(rows: List[dict], fallback_ts) -> dict:
+    """Turn a Copilot CLI session's raw events.jsonl rows into the fields
+    needed for a session list entry: project path, first message, model(s),
+    and merged token totals (shutdown rollup / live session.usage_record
+    rollup / per-message scan combined field-by-field, see
+    _merge_copilot_cli_tokens). Pure function, no filesystem access, so
+    Copilot CLI version/schema compatibility can be exercised directly against
+    synthetic row lists instead of only the individual helpers it calls."""
+    project_path = "unknown"; first_msg = ""; model = None
+    models_used: List[str] = []
+    in_estimate = 0
+    # Per-message fallback totals (used when the session never emitted
+    # a clean session.shutdown, e.g. a still-running/killed CLI process —
+    # common for long foreground orchestrator sessions, see #CLI
+    # output/cached always-zero bug). Accumulated via _grab_token_fields
+    # instead of a single literal "outputTokens" key, since that key
+    # alone silently misses output/cache tokens reported under a
+    # differently-shaped field (nested usage object, renamed key, etc.)
+    # across Copilot CLI versions — the root cause of output/cached
+    # staying 0 even for sessions that clearly produced heavy output.
+    msg_tot = {"input": None, "output": None, "cached": None, "cache_creation": None}
+    usage_records: List[dict] = []
+    start_ts = None; last_ts = None; shutdown_metrics = None
+    for r in rows:
+        et = r.get("type"); d = r.get("data") or {}
+        rts = _parse_copilot_iso(r.get("timestamp"))
+        if rts and (last_ts is None or rts > last_ts): last_ts = rts
+        if et == "session.start":
+            cwd = (d.get("context") or {}).get("cwd")
+            if cwd: project_path = cwd
+            start_ts = _parse_copilot_iso(d.get("startTime")) or rts
+        elif et == "user.message":
+            c = d.get("content") or ""
+            if c and not first_msg: first_msg = c
+            in_estimate += len(c) // 4
+        elif et == "assistant.message":
+            m = d.get("model")
+            if m:
+                if not model: model = m
+                if m not in models_used: models_used.append(m)
+            # Exclude toolRequests/content/reasoningText: these can
+            # carry arbitrary tool-call arguments or free text that
+            # might coincidentally contain "token" in a key name,
+            # which would corrupt the count. Token usage is always
+            # reported directly on the assistant.message payload
+            # (top-level or under a nested usage/metrics object),
+            # never inside a tool call's own arguments.
+            _grab_token_fields(
+                {k: v for k, v in d.items() if k not in ("toolRequests", "content", "reasoningText")},
+                msg_tot,
+            )
+        elif et == "session.model_change":
+            nm = d.get("newModel")
+            if nm and nm not in models_used: models_used.append(nm)
+        elif et == "session.usage_record":
+            u = d.get("usage")
+            if isinstance(u, dict): usage_records.append(u)
+        elif et == "session.shutdown":
+            shutdown_metrics = d.get("modelMetrics")
+    ts = last_ts or start_ts or fallback_ts
+    shutdown_rollup = _copilot_cli_tokens_from_metrics(shutdown_metrics)
+    usage_rollup = _copilot_cli_tokens_from_metrics(usage_records)
+    tokens = _merge_copilot_cli_tokens(shutdown_rollup, usage_rollup, msg_tot, in_estimate)
+    if model and model not in models_used: models_used.insert(0, model)
+    return {
+        "project_path": project_path, "first_msg": first_msg, "model": model,
+        "models_used": models_used, "tokens": tokens, "timestamp": ts,
+    }
+
 
 def _antigravity_surface_map() -> Dict[str, str]:
     """Map Antigravity session id → surface (cli / ide / app) from the brain dirs,
@@ -1077,14 +1167,14 @@ def _antigravity_infer_project(text: str) -> str:
     home_prefix = str(HOME).replace("\\", "/")
     # Escape any special regex chars in home_prefix
     escaped_home = re.escape(home_prefix)
-    
+
     # Also support common generic paths
     patterns = [
         rf'({escaped_home}/Documents/Developer/[A-Za-z0-9_./@-]+)',
         rf'({escaped_home}/[A-Za-z0-9_./@-]+)',
         r'(/[A-Za-z0-9_./@-]+)', # Generic Unix absolute path
     ]
-    
+
     if sys.platform == "win32":
         patterns.insert(0, r'([A-Za-z]:/[A-Za-z0-9_./@-]+)') # Windows absolute path (text is slash-normalized above)
 
@@ -1109,7 +1199,7 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
         tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
     if not tf.exists():
         return tkns
-        
+
     cache_file = sess_dir / ".system_generated" / "logs" / "tokens_cache.json"
     try:
         if cache_file.exists() and cache_file.stat().st_mtime >= tf.stat().st_mtime:
@@ -1133,14 +1223,14 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
                 except json.JSONDecodeError as e:
                     logging.debug(f"Failed to parse line in {tf}: {e}")
         tkns["total"] = tkns["input"] + tkns["output"]
-        
+
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as cf:
                 json.dump(tkns, cf)
         except OSError as e:
             logging.debug(f"Failed to write token cache for {sess_dir}: {e}")
-            
+
     except OSError as e:
         logging.debug(f"Failed to access transcript for {sess_dir}: {e}")
 
@@ -3305,7 +3395,7 @@ def _list_available_agents() -> list:
     agents = []
     if CLAUDE_DIR.exists(): agents.append("claude")
     if CODEX_DIR.exists(): agents.append("codex")
-    if GEMINI_DIR.exists(): 
+    if GEMINI_DIR.exists():
         agents.append("gemini")
         if (GEMINI_DIR / "antigravity").exists() or list((GEMINI_DIR / "tmp").glob("*")):
             agents.append("antigravity")
@@ -8326,7 +8416,7 @@ def _scan_sessions_sync():
             except Exception:
                 ts = _now()
             codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": None, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": [], "stub": True}
-        
+
         for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True):
             rollout_files = codex_file_map.get(sid, [])
             rollout_files.sort(key=lambda f: f.name)
@@ -8561,7 +8651,7 @@ def _scan_sessions_sync():
             if published_sites:
                 sess["published_artifacts"] = sorted(
                     published_sites.values(), key=lambda a: str(a.get("timestamp") or ""), reverse=True)
-            
+
             if day_acc:
                 tbd = {}
                 # NB: no `or sess.get("_provider")` fallback here. That put a
@@ -8731,7 +8821,7 @@ def _scan_sessions_sync():
                                             plan_text = ""
                                             pp = (tc.get("args") or {}).get("plan_path")
                                             if pp:
-                                                try: 
+                                                try:
                                                     with open(pp, "r", encoding="utf-8", errors="replace") as pf:
                                                         plan_text = pf.read()
                                                 except Exception: plan_text = f"(plan stored at {pp})"
@@ -8876,7 +8966,7 @@ def _scan_sessions_sync():
                                 "agent": "antigravity",
                                 "timestamp": md_updated,
                             })
-                
+
                 # Scan for media artifacts at the brain session root (Antigravity drops
                 # previews/screenshots here) and optionally in an artifacts/ subdir.
                 try:
@@ -9050,11 +9140,11 @@ def _scan_sessions_sync():
                         if p.replace("/", "-").strip("-") == pd.name:
                             project_path = p
                             break
-                
+
                 if not project_path:
                     # Fallback to slug reconstruction
                     project_path = "/" + pd.name.replace("-", "/")
-                
+
                 for trans_dir in (pd / "agent-transcripts").glob("*"):
                     if trans_dir.is_dir():
                         sid = trans_dir.name
@@ -9207,11 +9297,11 @@ def _scan_sessions_sync():
     # reported on a SEPARATE `session.usage_record` event (NOT on
     # assistant.message, which carries no token fields at all — verified
     # against real ~/.copilot/session-state data): each one's `data.usage` is
-    # the same gross-input/output/cache shape as a shutdown rollup entry, so
-    # every usage_record collected across the session is fed through the same
-    # _copilot_cli_tokens_from_metrics rollup+netting logic. The assistant.
-    # message scan and char-count estimate remain last-resort fallbacks for
-    # any shape that genuinely has neither.
+    # the same gross-input/output/cache shape as a shutdown rollup entry. The
+    # shutdown rollup, the live usage_record rollup, and the per-message scan
+    # are merged field-by-field (see _merge_copilot_cli_tokens) rather than one
+    # whole source winning over the others, since a given Copilot CLI
+    # version/session can report only some fields through one of them.
     if COPILOT_CLI_DIR.exists():
         for sess_dir in COPILOT_CLI_DIR.iterdir():
             try:
@@ -9221,68 +9311,16 @@ def _scan_sessions_sync():
                 rows = _load_copilot_cli_events(ev_file)
                 if not rows: continue
                 sid = sess_dir.name
-                project_path = "unknown"; first_msg = ""; model = None
-                models_used: List[str] = []
-                in_estimate = 0
-                # Per-message fallback totals (used when the session never emitted
-                # a clean session.shutdown, e.g. a still-running/killed CLI process —
-                # common for long foreground orchestrator sessions, see #CLI
-                # output/cached always-zero bug). Accumulated via _grab_token_fields
-                # instead of a single literal "outputTokens" key, since that key
-                # alone silently misses output/cache tokens reported under a
-                # differently-shaped field (nested usage object, renamed key, etc.)
-                # across Copilot CLI versions — the root cause of output/cached
-                # staying 0 even for sessions that clearly produced heavy output.
-                msg_tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
-                usage_records: List[dict] = []
-                start_ts = None; last_ts = None; shutdown_metrics = None
-                for r in rows:
-                    et = r.get("type"); d = r.get("data") or {}
-                    rts = _parse_copilot_iso(r.get("timestamp"))
-                    if rts and (last_ts is None or rts > last_ts): last_ts = rts
-                    if et == "session.start":
-                        cwd = (d.get("context") or {}).get("cwd")
-                        if cwd: project_path = cwd
-                        start_ts = _parse_copilot_iso(d.get("startTime")) or rts
-                    elif et == "user.message":
-                        c = d.get("content") or ""
-                        if c and not first_msg: first_msg = c
-                        in_estimate += len(c) // 4
-                    elif et == "assistant.message":
-                        m = d.get("model")
-                        if m:
-                            if not model: model = m
-                            if m not in models_used: models_used.append(m)
-                        # Exclude toolRequests/content/reasoningText: these can
-                        # carry arbitrary tool-call arguments or free text that
-                        # might coincidentally contain "token" in a key name,
-                        # which would corrupt the count. Token usage is always
-                        # reported directly on the assistant.message payload
-                        # (top-level or under a nested usage/metrics object),
-                        # never inside a tool call's own arguments.
-                        _grab_token_fields(
-                            {k: v for k, v in d.items() if k not in ("toolRequests", "content", "reasoningText")},
-                            msg_tot,
-                        )
-                    elif et == "session.model_change":
-                        nm = d.get("newModel")
-                        if nm and nm not in models_used: models_used.append(nm)
-                    elif et == "session.usage_record":
-                        u = d.get("usage")
-                        if isinstance(u, dict): usage_records.append(u)
-                    elif et == "session.shutdown":
-                        shutdown_metrics = d.get("modelMetrics")
-                ts = last_ts or start_ts or _file_mtime_utc(ev_file)
-                rollup = _copilot_cli_tokens_from_metrics(shutdown_metrics) or _copilot_cli_tokens_from_metrics(usage_records)
-                tokens = _merge_copilot_cli_tokens(rollup, msg_tot, in_estimate)
-                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
-                                                cache_creation_tokens=tokens.get("cache_creation", 0), at=ts)
-                if model and model not in models_used: models_used.insert(0, model)
+                parsed = _parse_copilot_cli_session_events(rows, _file_mtime_utc(ev_file))
+                tokens = parsed["tokens"]
+                tokens["cost"] = calculate_cost(parsed["model"], tokens["input"], tokens["output"], tokens["cached"],
+                                                cache_creation_tokens=tokens.get("cache_creation", 0),
+                                                at=parsed["timestamp"])
                 sessions.append({
-                    "id": sid, "agent": "copilot", "project": apply_alias(project_path),
-                    "timestamp": ts, "display": first_msg[:100], "tokens": tokens,
+                    "id": sid, "agent": "copilot", "project": apply_alias(parsed["project_path"]),
+                    "timestamp": parsed["timestamp"], "display": parsed["first_msg"][:100], "tokens": tokens,
                     "mcp_tools": [], "has_plan": False, "plans": [],
-                    "model": model, "models_used": models_used, "artifacts": [],
+                    "model": parsed["model"], "models_used": parsed["models_used"], "artifacts": [],
                     "copilot_source": "cli", "cost": tokens["cost"],
                 })
             except Exception: continue
@@ -13014,10 +13052,10 @@ def _parse_skill_md(p: Path):
     try:
         text = p.read_text(errors="ignore")
     except Exception: return None
-    
+
     name = p.parent.name
     description = ""
-    
+
     if text.startswith("---"):
         end = text.find("---", 3)
         if end > 0:
@@ -13036,7 +13074,7 @@ def _parse_skill_md(p: Path):
                         k = k.strip().lower(); v = v.strip().strip('"').strip("'")
                         if k == "name": name = v
                         elif k == "description": description = v
-                        
+
     return {"name": name, "description": (description or "")[:500]}
 
 def _collect_skills(base: Path, scope: str, agent: str):
@@ -13048,12 +13086,12 @@ def _collect_skills(base: Path, scope: str, agent: str):
         skills_dir = base / "skills"
     elif not base.exists():
         return out
-        
+
     for skill_md in skills_dir.glob("*/SKILL.md"):
         s = _parse_skill_md(skill_md)
         if s:
             out.append({**s, "scope": scope, "agent": agent, "source": str(skill_md)})
-    
+
     # Check for deeper nested skills (common in plugin structures)
     for skill_md in skills_dir.glob("*/skills/*/SKILL.md"):
         s = _parse_skill_md(skill_md)
