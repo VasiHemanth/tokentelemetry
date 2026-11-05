@@ -155,6 +155,20 @@ def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
     return tot
 
 
+def _model_names_from_metrics(metrics) -> List[str]:
+    """Best-effort model name(s) implied by a modelMetrics-shaped dict.
+    `session.shutdown.modelMetrics` is usually keyed BY model name (see
+    REAL_METRICS in the test file), but can also be a flat single-model dict
+    with a top-level "usage" key and no model name anywhere — excluded here
+    (along with other known structural keys) so that shape doesn't get
+    mistaken for a model literally called "usage"."""
+    if not isinstance(metrics, dict):
+        return []
+    non_model_keys = {"usage", "requests", "tokendetails", "totalnanoaiu"}
+    return [k for k, v in metrics.items()
+            if isinstance(v, dict) and str(k).lower() not in non_model_keys]
+
+
 def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Optional[dict],
                                msg_tot: dict, in_estimate: int) -> dict:
     """Combine the shutdown rollup, the live session.usage_record rollup, and
@@ -217,6 +231,7 @@ def _parse_copilot_cli_session_events(rows: List[dict], fallback_ts) -> dict:
     # staying 0 even for sessions that clearly produced heavy output.
     msg_tot = {"input": None, "output": None, "cached": None, "cache_creation": None}
     usage_records: List[dict] = []
+    usage_models: List[str] = []
     start_ts = None; last_ts = None; shutdown_metrics = None
     for r in rows:
         et = r.get("type"); d = r.get("data") or {}
@@ -251,9 +266,25 @@ def _parse_copilot_cli_session_events(rows: List[dict], fallback_ts) -> dict:
             if nm and nm not in models_used: models_used.append(nm)
         elif et == "session.usage_record":
             u = d.get("usage")
-            if isinstance(u, dict): usage_records.append(u)
+            if isinstance(u, dict):
+                usage_records.append(u)
+                um = u.get("model")
+                if isinstance(um, str) and um and um not in usage_models:
+                    usage_models.append(um)
         elif et == "session.shutdown":
             shutdown_metrics = d.get("modelMetrics")
+    # Some Copilot CLI versions/sessions never put a model name on
+    # assistant.message at all, leaving `model` unset even though real,
+    # priced usage was recorded elsewhere — session.usage_record.usage.model
+    # and the modelMetrics dict's own keys (it's keyed BY model name) both
+    # carry it. Without this, calculate_cost(None, ...) silently prices
+    # nonzero token usage at a default/fallback rate instead of the model
+    # that was actually billed.
+    shutdown_models = _model_names_from_metrics(shutdown_metrics)
+    for nm in usage_models + shutdown_models:
+        if nm not in models_used: models_used.append(nm)
+    if not model:
+        model = next(iter(usage_models + shutdown_models), None)
     ts = last_ts or start_ts or fallback_ts
     shutdown_rollup = _copilot_cli_tokens_from_metrics(shutdown_metrics)
     usage_rollup = _copilot_cli_tokens_from_metrics(usage_records)

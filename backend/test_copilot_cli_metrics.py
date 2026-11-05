@@ -389,6 +389,47 @@ def test_end_to_end_model_switch_tracked_in_models_used():
     assert parsed["models_used"] == ["gpt-4o", "claude-sonnet-5"]
 
 
+def test_model_names_from_metrics_excludes_structural_keys():
+    assert main._model_names_from_metrics({"claude-haiku-4.5": {"usage": {}}}) == ["claude-haiku-4.5"]
+    # A flat single-model shape (top-level "usage", no model-name keying) must
+    # NOT be mistaken for a model literally called "usage".
+    assert main._model_names_from_metrics({"usage": {"inputTokens": 1}}) == []
+    assert main._model_names_from_metrics(None) == []
+    assert main._model_names_from_metrics("nope") == []
+
+
+def test_end_to_end_model_recovered_from_usage_record_when_message_omits_it():
+    # Regression for the PR #448 third-review finding: some Copilot CLI
+    # versions/sessions never put a model name on assistant.message at all.
+    # Without falling back to session.usage_record.usage.model, `model` stays
+    # None and calculate_cost(None, ...) silently prices real, nonzero token
+    # usage at a default/fallback rate instead of the model actually billed.
+    rows = [
+        _event("user.message", {"content": "go"}, "2026-01-01T00:00:00Z"),
+        _event("assistant.message", {"content": "done"}, "2026-01-01T00:00:01Z"),  # no "model" field
+        _event("session.usage_record", {"usage": {
+            "model": "claude-sonnet-5.5", "inputTokens": 100, "outputTokens": 20,
+        }}, "2026-01-01T00:00:02Z"),
+    ]
+    parsed = main._parse_copilot_cli_session_events(rows, fallback_ts="2026-01-01T00:00:02Z")
+    assert parsed["model"] == "claude-sonnet-5.5"
+    assert parsed["models_used"] == ["claude-sonnet-5.5"]
+    assert parsed["tokens"]["output"] == 20
+
+
+def test_end_to_end_model_recovered_from_shutdown_metrics_keys_when_message_omits_it():
+    rows = [
+        _event("user.message", {"content": "go"}, "2026-01-01T00:00:00Z"),
+        _event("assistant.message", {"content": "done"}, "2026-01-01T00:00:01Z"),  # no "model" field
+        _event("session.shutdown", {"modelMetrics": {
+            "gpt-4o": {"usage": {"inputTokens": 100, "outputTokens": 20}},
+        }}, "2026-01-01T00:00:02Z"),
+    ]
+    parsed = main._parse_copilot_cli_session_events(rows, fallback_ts="2026-01-01T00:00:02Z")
+    assert parsed["model"] == "gpt-4o"
+    assert parsed["models_used"] == ["gpt-4o"]
+
+
 def test_end_to_end_malformed_rows_do_not_crash():
     # Rows missing "data" or "type" entirely (truncated/corrupted JSONL line
     # recovered as a bare dict by _load_copilot_cli_events) must be skipped
