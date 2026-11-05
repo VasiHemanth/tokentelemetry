@@ -264,7 +264,8 @@ def test_merge_nets_a_reported_input_even_when_cache_comes_from_elsewhere():
 def test_merge_with_no_rollup_falls_back_entirely_to_per_message():
     tokens = main._merge_copilot_cli_tokens(
         None, None, {"input": None, "output": 15, "cached": None, "cache_creation": None}, in_estimate=40)
-    assert tokens == {"input": 40, "output": 15, "cached": 0, "cache_creation": 0, "total": 55}
+    assert tokens == {"input": 40, "output": 15, "cached": 0, "cache_creation": 0,
+                      "total": 55, "total_including_cache_creation": 55}
 
 
 def test_merge_guards_against_negative_input_regardless_of_source():
@@ -441,10 +442,61 @@ def test_end_to_end_malformed_rows_do_not_crash():
     assert parsed["model"] is None
 
 
+def test_end_to_end_non_dict_rows_are_skipped_not_fatal():
+    # A corrupted/partial JSONL line can be recovered as None, a bare string,
+    # or some other non-dict value by the loader — must be skipped rather
+    # than raising on `.get(...)`.
+    rows = [None, "not a dict", 42, [1, 2, 3],
+            _event("user.message", {"content": "hello there"}, "2026-01-01T00:00:00Z"),
+            _event("assistant.message", {"model": "gpt-4o", "outputTokens": 10}, "2026-01-01T00:00:01Z")]
+    parsed = main._parse_copilot_cli_session_events(rows, fallback_ts="2026-01-01T00:00:01Z")
+    assert parsed["model"] == "gpt-4o"
+    assert parsed["tokens"]["output"] == 10
+
+
+def test_merge_total_including_cache_creation_covers_write_cache():
+    # Regression for the PR #448 fourth-review finding: `total` deliberately
+    # excludes cache_creation (write-cache) tokens, so a separate field must
+    # carry the true overall token volume for sessions with cache writes.
+    shutdown_rollup = {"input": 100, "output": 5, "cached": 3, "cache_creation": 7}
+    tokens = main._merge_copilot_cli_tokens(shutdown_rollup, None, {}, in_estimate=0)
+    assert tokens["total"] == tokens["input"] + tokens["output"] + tokens["cached"]
+    assert tokens["total_including_cache_creation"] == tokens["total"] + 7
+
+
+def test_merge_sums_per_message_scan_with_rollup_for_mixed_format_sessions():
+    # Regression for the PR #448 fourth-review finding: a session whose
+    # reporting format changed mid-stream (e.g. a live CLI auto-update) can
+    # have some turns only visible via the per-message scan and others only
+    # via session.usage_record. Picking one source over the other silently
+    # drops the turns only the losing source saw; they must be summed
+    # instead — an earlier message reporting 25 output tokens plus a later
+    # usage_record reporting 15 must total 40, not 15.
+    usage_rollup = {"input": None, "output": 15, "cached": None, "cache_creation": None}
+    msg_tot = {"input": None, "output": 25, "cached": None, "cache_creation": None}
+    tokens = main._merge_copilot_cli_tokens(None, usage_rollup, msg_tot, in_estimate=0)
+    assert tokens["output"] == 40
+
+
+def test_end_to_end_mixed_format_sums_message_and_usage_record_output():
+    # Same scenario as above, exercised through the full event-parsing path:
+    # one turn reports output only via assistant.message, a later turn only
+    # via session.usage_record — both must count.
+    rows = [
+        _event("user.message", {"content": "go"}, "2026-01-01T00:00:00Z"),
+        _event("assistant.message", {"model": "gpt-4o", "outputTokens": 25}, "2026-01-01T00:00:01Z"),
+        _event("session.usage_record", {"usage": {"model": "gpt-4o", "outputTokens": 15}},
+               "2026-01-01T00:00:02Z"),
+    ]
+    parsed = main._parse_copilot_cli_session_events(rows, fallback_ts="2026-01-01T00:00:02Z")
+    assert parsed["tokens"]["output"] == 40
+
+
 def test_end_to_end_no_events_at_all_falls_back_to_zero_and_timestamp():
     parsed = main._parse_copilot_cli_session_events([], fallback_ts="2026-01-01T00:00:00Z")
     assert parsed["timestamp"] == "2026-01-01T00:00:00Z"
-    assert parsed["tokens"] == {"input": 0, "output": 0, "cached": 0, "cache_creation": 0, "total": 0}
+    assert parsed["tokens"] == {"input": 0, "output": 0, "cached": 0, "cache_creation": 0,
+                                "total": 0, "total_including_cache_creation": 0}
     assert parsed["project_path"] == "unknown"
 
 

@@ -81,6 +81,10 @@ def _parse_copilot_iso(ts) -> Optional[datetime]:
     except Exception:
         return None
 
+_GRAB_INPUT_KEYS = ("inputtokens", "prompttokens")
+_GRAB_OUTPUT_KEYS = ("outputtokens", "completiontokens")
+
+
 def _grab_token_fields(obj, tot: dict) -> bool:
     """Recursively scan `obj` for known token-usage field names and
     accumulate them into `tot` (keys: input/output/cached/cache_creation).
@@ -102,8 +106,6 @@ def _grab_token_fields(obj, tot: dict) -> bool:
     Nested `copilotUsage.tokenDetails[].tokenCount` entries are intentionally
     NOT matched either, since they'd double-count the same totals already
     captured by the top-level `*Tokens` fields on the same record."""
-    _INPUT_KEYS = ("inputtokens", "prompttokens")
-    _OUTPUT_KEYS = ("outputtokens", "completiontokens")
     found = False
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -116,9 +118,9 @@ def _grab_token_fields(obj, tot: dict) -> bool:
                     tot["cached"] = (tot["cached"] or 0) + int(v); found = True
                 elif kl == "cachewritetokens":
                     tot["cache_creation"] = (tot["cache_creation"] or 0) + int(v); found = True
-                elif kl in _OUTPUT_KEYS:
+                elif kl in _GRAB_OUTPUT_KEYS:
                     tot["output"] = (tot["output"] or 0) + int(v); found = True
-                elif kl in _INPUT_KEYS:
+                elif kl in _GRAB_INPUT_KEYS:
                     tot["input"] = (tot["input"] or 0) + int(v); found = True
             else:
                 found = _grab_token_fields(v, tot) or found
@@ -172,32 +174,64 @@ def _model_names_from_metrics(metrics) -> List[str]:
 def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Optional[dict],
                                msg_tot: dict, in_estimate: int) -> dict:
     """Combine the shutdown rollup, the live session.usage_record rollup, and
-    the per-message assistant.message scan field-by-field, not source-by-source:
-    each of input/output/cached/cache_creation is taken from the first of these
-    three (in that priority order) that actually reported it, so a shutdown
-    rollup covering only some fields (e.g. output) doesn't discard good
-    input/cache data the live usage records have for the others. A field left
-    unreported by all three is assumed 0, EXCEPT input, which falls back to the
-    char-count estimate — an explicit 0 input from any source is kept as-is
-    (not treated as missing), since that's a real possible value for a fully
-    cached request. The gross-input/cache-traffic netting happens exactly once
-    here, against the final combined cached+cache_creation, after merging —
-    netting per-source first would under/over-subtract whenever the cache
-    counts and the input count come from different sources. The netting only
-    applies to a REPORTED input counter (gross by definition — see
-    `_copilot_cli_tokens_from_metrics`); the char-count estimate only ever
-    counts user-message text, never cached context, so it's already net and
-    must not be subtracted from again."""
-    def pick(field):
-        for src in (shutdown_rollup, usage_rollup, msg_tot):
-            if src and src.get(field) is not None:
-                return src[field]
-        return None
+    the per-message assistant.message scan.
 
-    output = pick("output") or 0
-    cached = pick("cached") or 0
-    cache_creation = pick("cache_creation") or 0
-    input_val = pick("input")
+    `shutdown_rollup`, when it reports a field, wins outright for it — it's
+    the CLI's own final rollup at process exit, generated precisely to
+    summarize every turn regardless of which per-turn mechanism each one used,
+    so adding `usage_rollup`/`msg_tot` on top would double-count turns it
+    already covers. A field it's silent on (unusual, but the shape varies by
+    Copilot version) falls through to the sources below, picked as a single
+    value — not combined with them — since nothing says those turns'
+    equivalent shutdown data was missing rather than just unreported for that
+    one field.
+
+    Without a shutdown (still-running/killed session, the common case), the
+    live `usage_rollup` is also usually complete for the turns that emitted a
+    session.usage_record — but if the CLI's reporting format changed
+    mid-session, some turns may ONLY ever appear via the per-message scan.
+    In that specific situation (no shutdown) `usage_rollup` and `msg_tot` are
+    ADDED together per field rather than one replacing the other, so a turn
+    the live rollup never saw isn't silently dropped just because a later
+    turn was captured a different way. This assumes a single turn is never
+    reported through BOTH `usage_rollup` and `msg_tot` at once, which holds
+    for every real Copilot CLI payload inspected to date (assistant.message
+    carries no token fields whenever session.usage_record is emitted).
+
+    A field left unreported by everything is assumed 0, EXCEPT input, which
+    falls back to the char-count estimate — an explicit 0 input from any
+    source is kept as-is (not treated as missing), since that's a real
+    possible value for a fully cached request. The gross-input/cache-traffic
+    netting happens exactly once here, against the final combined
+    cached+cache_creation, after merging — netting per-source first would
+    under/over-subtract whenever the cache counts and the input count come
+    from different sources. The netting only applies to a REPORTED input
+    counter (gross by definition — see `_copilot_cli_tokens_from_metrics`);
+    the char-count estimate only ever counts user-message text, never cached
+    context, so it's already net and must not be subtracted from again."""
+    def combine(field):
+        if shutdown_rollup and shutdown_rollup.get(field) is not None:
+            return shutdown_rollup[field]
+        if shutdown_rollup is not None:
+            # A shutdown happened but didn't report this specific field —
+            # pick a single fallback source (not a sum of both), since
+            # there's no shutdown-and-message overlap-risk signal for THIS
+            # field specifically; summing is reserved for the no-shutdown
+            # case below, where usage_rollup is known to be incomplete.
+            for src in (usage_rollup, msg_tot):
+                if src and src.get(field) is not None:
+                    return src[field]
+            return None
+        r = usage_rollup.get(field) if usage_rollup else None
+        m = msg_tot.get(field)
+        if r is None and m is None:
+            return None
+        return (r or 0) + (m or 0)
+
+    output = combine("output") or 0
+    cached = combine("cached") or 0
+    cache_creation = combine("cache_creation") or 0
+    input_val = combine("input")
     if input_val is None:
         input_val = in_estimate
     else:
@@ -205,7 +239,11 @@ def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Opt
         if cache_total and input_val >= cache_total:
             input_val -= cache_total
     tokens = {"input": input_val, "output": output, "cached": cached, "cache_creation": cache_creation}
+    # `total` intentionally excludes cache_creation (write-cache) tokens — it
+    # means only input + output + cached(read). total_including_cache_creation
+    # is the true overall token volume for a session with cache writes.
     tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    tokens["total_including_cache_creation"] = tokens["total"] + tokens["cache_creation"]
     return tokens
 
 
@@ -234,6 +272,11 @@ def _parse_copilot_cli_session_events(rows: List[dict], fallback_ts) -> dict:
     usage_models: List[str] = []
     start_ts = None; last_ts = None; shutdown_metrics = None
     for r in rows:
+        # Be tolerant of corrupted/partial JSONL lines or upstream parsing
+        # that yields non-dict entries (None/string/etc.) — skip them instead
+        # of letting one bad row raise and drop the whole session.
+        if not isinstance(r, dict):
+            continue
         et = r.get("type"); d = r.get("data") or {}
         rts = _parse_copilot_iso(r.get("timestamp"))
         if rts and (last_ts is None or rts > last_ts): last_ts = rts
