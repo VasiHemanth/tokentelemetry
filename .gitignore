@@ -19,6 +19,7 @@ out/
 backend/venv/
 # also match a symlinked venv (the dir pattern above doesn't)
 backend/venv
+.venv/
 __pycache__/
 *.pyc
 *.pyo
