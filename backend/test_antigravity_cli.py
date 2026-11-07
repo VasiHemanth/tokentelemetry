@@ -314,33 +314,35 @@ def _call_artifact(path):
 def test_artifacts_rejects_symlink_escape_and_outside_paths():
     # Outside the allow-list -> 403.
     assert _call_artifact("/etc/hosts")[0] == "denied"
-    # Symlink planted inside an allowed dir but pointing out -> 403 (resolved check).
-    evil = main.CLAUDE_DIR / "tt_symlink_escape_test"
-    try:
-        if not evil.exists():
-            os.symlink("/etc", evil)
-        assert _call_artifact(str(evil / "hosts"))[0] == "denied"
-    finally:
+    # Symlink planted inside an allowed dir but pointing out -> 403 (resolved
+    # check). Point CLAUDE_DIR at a tmpdir so the test doesn't depend on the
+    # agent being installed on the machine running it (e.g. a CI runner).
+    with tempfile.TemporaryDirectory() as d:
+        orig = main.CLAUDE_DIR
+        main.CLAUDE_DIR = Path(d)
         try:
-            evil.unlink()
-        except OSError:
-            pass
+            os.symlink("/etc", main.CLAUDE_DIR / "tt_symlink_escape_test")
+            assert _call_artifact(
+                str(main.CLAUDE_DIR / "tt_symlink_escape_test" / "hosts"))[0] == "denied"
+        finally:
+            main.CLAUDE_DIR = orig
 
 
 def test_artifacts_serves_legit_under_allowlist():
     with tempfile.TemporaryDirectory() as d:
-        # GEMINI_DIR is on the allow-list; create a file under it via the real root.
-        f = main.GEMINI_DIR / "tt_artifact_serve_test.txt"
+        # GEMINI_DIR is on the allow-list; point it at a tmpdir so the test
+        # doesn't depend on the agent being installed on the machine running
+        # it (e.g. a CI runner) or write into the user's real ~/.gemini.
+        orig = main.GEMINI_DIR
+        main.GEMINI_DIR = Path(d)
         try:
+            f = main.GEMINI_DIR / "tt_artifact_serve_test.txt"
             f.write_text("hello")
             status, served = _call_artifact(str(f))
             assert status == "ok"
             assert served == str(f.resolve())  # serves the resolved path
         finally:
-            try:
-                f.unlink()
-            except OSError:
-                pass
+            main.GEMINI_DIR = orig
 
 
 def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
@@ -408,6 +410,59 @@ def test_chat_scan_dedups_sids_and_drops_ghost_sessions():
         assert sorted(ids) == ["dup-1", "real-1"], ids
         # 150 tokens each for real-1 and dup-1; a duplicate would read 450.
         assert sum(s["tokens"]["total"] for s in rows) == 300
+
+
+def test_session_detail_uses_transcript_trace_when_there_is_no_sqlite_db():
+    """Newer agy builds write no conversations/<sid>.db at all.
+
+    _antigravity_cli_trace already falls back to transcript*.jsonl, but the
+    endpoint used to gate that call behind cli_db.exists() and so handed back
+    the much thinner brain markdown instead — the trace never rendered for
+    exactly the sessions the fallback was written for. Exercise the endpoint,
+    not the parser, because the parser was never the broken half.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        sid = "sid-transcript-only"
+        logs = root / "brain" / sid / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript.jsonl").write_text(
+            json.dumps({"type": "USER_INPUT", "content": "<USER_REQUEST>only in the transcript</USER_REQUEST>"})
+            + "\n",
+            encoding="utf-8",
+        )
+        # Brain markdown is present too, so this also pins the precedence:
+        # a real trajectory beats the synthesized markdown summary.
+        (root / "brain" / sid / "task.md").write_text("# Task\n\nbrain markdown\n", encoding="utf-8")
+        # conversations/ exists but deliberately holds no <sid>.db.
+        (root / "conversations").mkdir()
+
+        nowhere = root / "nowhere"
+        originals = (
+            main.ANTIGRAVITY_BRAIN_DIR,
+            main.ANTIGRAVITY_BRAIN_DIRS,
+            main.ANTIGRAVITY_CLI_DIR,
+            main.GEMINI_DIR,
+        )
+        main.ANTIGRAVITY_BRAIN_DIR = root / "brain"
+        main.ANTIGRAVITY_BRAIN_DIRS = [root / "brain"]
+        main.ANTIGRAVITY_CLI_DIR = root
+        main.GEMINI_DIR = nowhere
+        try:
+            assert not (root / "conversations" / f"{sid}.db").exists()
+            detail = asyncio.run(main.get_session_detail(sid, "antigravity"))
+        finally:
+            (
+                main.ANTIGRAVITY_BRAIN_DIR,
+                main.ANTIGRAVITY_BRAIN_DIRS,
+                main.ANTIGRAVITY_CLI_DIR,
+                main.GEMINI_DIR,
+            ) = originals
+
+        assert detail["kind"] == "antigravity_cli", f"fell through to {detail.get('kind')!r}"
+        msgs = detail["messages"]
+        assert len(msgs) == 1, msgs
+        assert msgs[0]["message"]["content"][0]["text"] == "only in the transcript"
 
 
 if __name__ == "__main__":

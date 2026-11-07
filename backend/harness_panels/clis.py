@@ -12,6 +12,8 @@ they actually record:
   muse      a rich session index (provider, model, branch, prompt count, status)
   prime     persisted Python kernel state, unique to this agent
   pi        MCP inventory and per-directory trust
+  omp       MCP inventory, scalar config, and per-model timing (a separate
+            agent from pi, with its own on-disk format)
   dsh       sandbox profiles and the workspace registry
   kimi      the work-dir registry and loop-control config
 
@@ -576,6 +578,168 @@ def build_pi(*, with_disk: bool = True) -> Dict[str, Any]:
             "quota can be derived from local files.")],
         last_active=iso(newest_mtime([root / "sessions"])),
         disk=safe(lambda: _simple_disk(root), "pi disk") if with_disk else None,
+    )
+
+
+# --- Oh My Pi (OMP) ---------------------------------------------------------
+
+def _omp_load_yaml(path: Path) -> Optional[Any]:
+    """Parse a YAML file if it exists and `yaml` is importable, else None.
+
+    No new dependency is added for a panel: PyYAML is already a backend
+    dependency (build_dsh imports it the same way), but a venv without it simply
+    yields no section rather than an error.
+    """
+    if not path.exists():
+        return None
+    try:
+        import yaml
+    except Exception:
+        return None
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _omp_scalar_fields(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A few scalar settings from OMP's config.yml, keyed defensively.
+
+    Only scalar values are surfaced; nested mappings/lists are ignored, so a
+    structure we don't model can't leak content into the panel.
+    """
+    wanted = (
+        ("Default model role", ("defaultModelRole", "default_model_role",
+                                "defaultModel", "default_model", "role", "model")),
+        ("Theme", ("theme", "colorTheme", "color_theme")),
+        ("Auto-update", ("autoUpdate", "auto_update", "updateCheck")),
+        ("Telemetry", ("telemetry", "analytics")),
+    )
+    fields: List[Dict[str, Any]] = []
+    for label, keys in wanted:
+        for k in keys:
+            v = cfg.get(k)
+            if isinstance(v, (str, int, float, bool)):
+                fields.append(field(label, v))
+                break
+    return fields
+
+
+def _omp_provider_count(doc: Any) -> Optional[int]:
+    """Number of provider entries in models.yml, never its apiKey values."""
+    if isinstance(doc, dict):
+        for key in ("providers", "provider", "models"):
+            v = doc.get(key)
+            if isinstance(v, (dict, list)):
+                return len(v)
+        return len(doc) or None
+    if isinstance(doc, list):
+        return len(doc)
+    return None
+
+
+def _omp_ms(value: Any) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if n <= 0:
+        return "—"
+    return f"{n:.0f} ms"
+
+
+def _omp_model_perf(db: Path) -> tuple[List[List[Any]], int]:
+    """Model timing rows from agent.db, joining model_perf with model_usage."""
+    conn = ro_sqlite(db)
+    if conn is None:
+        return [], 0
+    try:
+        if not table_exists(conn, "model_perf"):
+            return [], 0
+        if table_exists(conn, "model_usage"):
+            q = ("SELECT p.model_key AS model_key, p.samples AS samples, "
+                 "p.gen_ms AS gen_ms, p.ttft_ms AS ttft_ms, "
+                 "p.output_tokens AS output_tokens, u.last_used_at AS last_used_at "
+                 "FROM model_perf p LEFT JOIN model_usage u "
+                 "ON u.model_key = p.model_key ORDER BY p.samples DESC")
+        else:
+            q = ("SELECT model_key, samples, gen_ms, ttft_ms, output_tokens, "
+                 "NULL AS last_used_at FROM model_perf ORDER BY samples DESC")
+        rows: List[List[Any]] = []
+        for r in conn.execute(q):
+            last = r["last_used_at"]
+            rows.append([
+                str(r["model_key"] or "—"),
+                r["samples"] or 0,
+                _omp_ms(r["ttft_ms"]),
+                _omp_ms(r["gen_ms"]),
+                r["output_tokens"] or 0,
+                last if isinstance(last, str) else iso_ms(last),
+            ])
+        return rows, len(rows)
+    finally:
+        conn.close()
+
+
+def build_omp(*, with_disk: bool = True) -> Dict[str, Any]:
+    root = paths.OMP_DIR
+    if not root.is_dir():
+        return not_installed("omp")
+    sections: List[Dict[str, Any]] = []
+
+    # MCP servers *configured* in mcp.json. Name and command only: the env
+    # blocks may hold secrets and are never read.
+    mcp = safe(lambda: _json(root / "mcp.json"), "omp mcp")
+    servers = (mcp or {}).get("mcpServers") if isinstance(mcp, dict) else None
+    if isinstance(servers, dict) and servers:
+        rows = []
+        for name, cfg in sorted(servers.items()):
+            cmd = cfg.get("command") if isinstance(cfg, dict) else None
+            args = cfg.get("args") if isinstance(cfg, dict) else None
+            rows.append([name, str(cmd or "—"),
+                         " ".join(str(a) for a in args[:3]) if isinstance(args, list) else "—"])
+        sections.append(section(
+            "table", "MCP servers", tilde(root / "mcp.json"),
+            columns=["Name", "Command", "Args"], rows=rows,
+            note="Environment values in this file may hold secrets and are not "
+                 "read. This lists configuration, not per-call usage."))
+
+    cfg = safe(lambda: _omp_load_yaml(root / "config.yml"), "omp config")
+    if isinstance(cfg, dict):
+        fields = _omp_scalar_fields(cfg)
+        if fields:
+            sections.append(section(
+                "fields", "Configuration", tilde(root / "config.yml"), fields=fields))
+
+    models = safe(lambda: _omp_load_yaml(root / "models.yml"), "omp models")
+    count = _omp_provider_count(models)
+    if count is not None:
+        sections.append(section(
+            "fields", "Providers", tilde(root / "models.yml"),
+            fields=[field("Configured providers", count)],
+            note="Provider definitions across every configured model. The apiKey "
+                 "values this file holds are never read."))
+
+    perf = safe(lambda: _omp_model_perf(root / "agent.db"), "omp model perf") or ([], 0)
+    rows, total = perf
+    if rows:
+        sections.append(section(
+            "table", "Model usage", tilde(root / "agent.db") + " → model_perf",
+            columns=["Model", "Samples", "First token", "Generation",
+                     "Output tokens", "Last used"],
+            rows=rows, total=total,
+            note="Aggregate timing OMP computes per model, joined to its own "
+                 "last-used stamps."))
+
+    return panel(
+        "omp", root, sections=sections,
+        not_available=[
+            unavailable("quota",
+                        "Oh My Pi routes to configured model providers, so it has "
+                        "no account quota of its own."),
+            unavailable("mcp usage",
+                        "Oh My Pi records bare tool names with no MCP server "
+                        "attribution, so per-call MCP usage cannot be derived."),
+        ],
+        last_active=iso(newest_mtime([paths.OMP_SESSIONS_DIR])),
+        disk=safe(lambda: _simple_disk(root), "omp disk") if with_disk else None,
     )
 
 

@@ -14,6 +14,9 @@
 #   ./scripts/publish-plugin.sh              # sync HEAD, no tag
 #   ./scripts/publish-plugin.sh 0.2.0        # also bump version and tag v0.2.0
 #
+# CI (.github/workflows/publish-hermes-plugin.yml) runs this on every change to
+# plugin/hermes-dashboard/** or the template, with a deploy key in the agent.
+#
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,6 +43,9 @@ trap 'rm -rf "$TMP"' EXIT
 echo "→ Cloning publishing repo to temp dir…"
 git clone "$PUBLISH_REPO" "$TMP/repo"
 cd "$TMP/repo"
+# CI runners have no git identity configured.
+git config user.name >/dev/null || git config user.name "tokentelemetry-bot"
+git config user.email >/dev/null || git config user.email "noreply@tokentelemetry.com"
 
 # Wipe everything except .git so a removal upstream propagates.
 find . -mindepth 1 -maxdepth 1 -not -name ".git" -exec rm -rf {} +

@@ -487,6 +487,52 @@ def test_lifecycle_endpoint_reports_not_installed(lifecycle_env):
     assert res["correlation"] == "none"
 
 
+def test_lifecycle_summary_totals_are_true_beyond_the_default_page(lifecycle_env):
+    """550 early failures followed by 50 later successes is 600 transitions,
+    550 of them failed. A summary computed only over the newest 500 would
+    drop the oldest 50 failures, undercounting the exact number a user
+    checking plugin health would be looking for."""
+    rows = [{"ts": i, "plugin": "p1", "from": 1, "to": 3, "error": "boom"}
+            for i in range(550)]
+    rows += [{"ts": i, "plugin": "p1", "from": 1, "to": 2}
+             for i in range(550, 600)]
+    _write_lifecycle(lifecycle_env, rows)
+    s = main._dsh_lifecycle_summary(main._dsh_lifecycle_events())
+    assert s["transitions"] == 600
+    assert s["failed"] == 550
+
+
+def test_lifecycle_endpoint_keeps_display_capped_while_totals_stay_true(lifecycle_env):
+    """The response's `events` page must still respect `limit` (payload size
+    matters), but `transitions`/`failed` must reflect the true unclipped
+    totals, not just the displayed page."""
+    import asyncio
+    rows = [{"ts": i, "plugin": "p1", "from": 1, "to": 3, "error": "boom"}
+            for i in range(550)]
+    rows += [{"ts": i, "plugin": "p1", "from": 1, "to": 2}
+             for i in range(550, 600)]
+    _write_lifecycle(lifecycle_env, rows)
+    res = asyncio.run(main.dsh_lifecycle())
+    assert len(res["events"]) == 500
+    assert res["transitions"] == 600
+    assert res["failed"] == 550
+
+
+def test_lifecycle_summary_matches_the_full_page_under_the_cap(lifecycle_env):
+    """Control: when the log is smaller than the default page, the displayed
+    events and the summary totals must agree exactly, same as before this
+    change. The fix must not alter the common (unclipped) case."""
+    import asyncio
+    _write_lifecycle(lifecycle_env, [
+        {"ts": 1, "plugin": "good", "from": 1, "to": 2},
+        {"ts": 2, "plugin": "bad", "from": 1, "to": 3, "error": "boom"},
+    ])
+    res = asyncio.run(main.dsh_lifecycle())
+    assert len(res["events"]) == 2
+    assert res["transitions"] == 2
+    assert res["failed"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Sandbox / approval posture
 # ---------------------------------------------------------------------------

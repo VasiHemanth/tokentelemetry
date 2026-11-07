@@ -57,6 +57,7 @@ def _hermetic(tmp: str):
         "ANTIGRAVITY_CLI_DIR": missing / "ag-cli", "HERMES_DIR": missing / "hermes",
         "PI_SESSIONS_DIR": missing / "pi", "CLAUDE_DIR": Path(tmp) / ".claude",
         "KIMI_DIR": missing / "kimi", "KIMI_SESSIONS_DIR": missing / "kimi-sessions",
+        "OMP_DIR": missing / "omp", "OMP_SESSIONS_DIR": missing / "omp-sessions",
         "CURSOR_DIR": Path(tmp) / ".cursor", "OPENCODE_DB": missing / "opencode.db",
         "ZCODE_DB": missing / "zcode.db",
         "HERMES_DB": missing / "hermes-state.db",
@@ -128,6 +129,25 @@ def test_canonical_project_leaves_posix_backslashes_alone():
     # On POSIX a backslash is a legal filename character — rewriting it into
     # "/" would corrupt a perfectly valid directory into two.
     assert canonical_project("/data/weird\\name") == "/data/weird\\name"
+
+
+def test_canonical_project_strips_vscode_leading_slash():
+    # VS Code on Windows stores file:///c%3A/Users/dev/proj, which unquotes
+    # to /c:/Users/dev/proj. The leading slash and lowercase drive letter must
+    # be normalised to match what Claude Code / Codex emit (C:/Users/dev/proj).
+    f = canonical_project
+    assert f("/c:/Users/dev/proj") == "C:/Users/dev/proj"
+    assert f("/C:/Users/dev/proj") == "C:/Users/dev/proj"   # upcase idempotent
+    assert f("/c:/Users/dev/proj/") == "C:/Users/dev/proj"  # trailing sep stripped
+
+
+def test_canonical_project_preserves_drive_root():
+    # "C:" (no trailing slash) means "current dir on drive C" on Windows —
+    # that is not the same as the drive root "C:/". Stripping the slash corrupts.
+    f = canonical_project
+    assert f("C:/") == "C:/"
+    assert f("c:/") == "c:/"   # POSIX-cased passthrough (not a VS Code path)
+    assert f("C:") == "C:"     # bare drive specifier must not gain a slash
 
 
 def test_canonical_project_passes_sentinels_through():
@@ -256,6 +276,46 @@ def test_budget_filters_match_across_separator_styles():
     assert not main._session_matches_filters(
         {"project": "C:/Users/dev/other", "agent": "claude", "model": "m"},
         {"project": PROJ_FORWARD})
+
+
+def test_projects_rollup_includes_delegated_cost():
+    """U11: /projects cost must include delegated_cost, not just s.get('cost').
+
+    Claude subagent/workflow spend lives in delegated_cost, not cost.
+    A project card built from sessions with delegation showed lower cost than
+    the Analytics page by the full delegated amount.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        restore = _hermetic(d)
+        try:
+            proj = "/home/dev/myproject"
+            sessions = [
+                {"id": "s1", "agent": "claude", "project": proj,
+                 "model": "claude-sonnet-4-6", "timestamp": "2026-01-01T00:00:00+00:00",
+                 "cost": 1.0, "delegated_cost": 2.5,
+                 "tokens": {"input": 100, "output": 50, "cached": 0, "total": 150},
+                 "has_plan": False, "plans": [], "published_artifacts": [],
+                 "mcp_tools": [], "subagents": []},
+            ]
+
+            async def fake_cached(fresh=False):
+                return sessions
+
+            saved_cached, saved_hidden = main.get_sessions_cached, main.load_hidden
+            main.get_sessions_cached = fake_cached
+            main.load_hidden = lambda: set()
+            try:
+                cards = asyncio.run(main.get_projects())
+            finally:
+                main.get_sessions_cached = saved_cached
+                main.load_hidden = saved_hidden
+
+            assert len(cards) == 1
+            card = cards[0]
+            assert card["tokens"]["cost"] == 3.5, (
+                f"expected 1.0 + 2.5 = 3.5, got {card['tokens']['cost']}")
+        finally:
+            restore()
 
 
 if __name__ == "__main__":

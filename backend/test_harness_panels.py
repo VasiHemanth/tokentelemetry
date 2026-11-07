@@ -541,6 +541,28 @@ def test_copilot_tolerates_invalid_config_json(tmp_path, monkeypatch):
 
 # --- grok -------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _isolate_grok_bot(tmp_path, monkeypatch):
+    """Grok tests must never read this machine's desktop-app store.
+
+    Grok Bot keeps real state outside ~/.grok, and the quota service leaves a
+    real last-good snapshot in the data dir. Both would make a panel test pass
+    or fail based on what the developer happens to have installed.
+    """
+    missing = tmp_path / "_no_grok_bot"
+    for attr, value in (
+        ("GROK_BOT_DIR", missing),
+        ("GROK_BOT_APP_DIR", missing / "app"),
+        ("GROK_BOT_SLICES_DIR", missing / "app" / "sand-client-persistence"),
+        ("GROK_BOT_LOG", missing / "local-exec-daemon.log"),
+        ("GROK_BOT_COMPUTER_USE_DIR", missing / "computer-use"),
+    ):
+        monkeypatch.setattr(grok_panel, attr, value)
+    data = tmp_path / "_no_quota_data"
+    data.mkdir()
+    monkeypatch.setattr(base, "data_dir", lambda: data)
+
+
 def test_grok_credits_reads_newest_record(tmp_path, monkeypatch):
     root = tmp_path / ".grok"
     (root / "logs").mkdir(parents=True)

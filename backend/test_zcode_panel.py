@@ -269,6 +269,44 @@ def test_registered_as_a_real_panel_not_a_planned_one(zroot):
     assert doc["installed"] is True and doc["sections"]
 
 
+def test_model_requests_count_is_true_total_not_limit_sum(zroot):
+    """U6: count must reflect all model_usage rows, not just the top-30 groups.
+
+    With >30 distinct (model_id, variant) combos the LIMIT 30 truncates the
+    display but the total header must still show all requests.
+    """
+    db = _store(zroot, rows=False)
+    conn = sqlite3.connect(db)
+    # 35 distinct combos, 1 request each → true total = 35, LIMIT sum = 30
+    conn.executemany(
+        "INSERT INTO model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(f"m{i}", "s1", "p", f"model-{i}", "high", "completed",
+          500, 100, 0, 100, 10)
+         for i in range(35)])
+    conn.commit()
+    conn.close()
+    sec = _sections(zcode_panel.build(with_disk=False))["Model requests"]
+    assert len(sec["rows"]) == 30, "table still shows at most 30 rows"
+    assert sec["count"] == 35, "count must be the true total, not the truncated sum"
+
+
+def test_tool_calls_count_is_true_total_not_limit_sum(zroot):
+    """U6: count must reflect all tool_usage rows, not just the top-40 tools."""
+    db = _store(zroot, rows=False)
+    conn = sqlite3.connect(db)
+    # 45 distinct tool names, 1 call each → true total = 45, LIMIT sum = 40
+    conn.executemany(
+        "INSERT INTO tool_usage VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(f"x{i}", "s1", f"Tool{i}", "none", 1, 0, "none", "completed",
+          10, 100, 0)
+         for i in range(45)])
+    conn.commit()
+    conn.close()
+    sec = _sections(zcode_panel.build(with_disk=False))["Tool calls"]
+    assert len(sec["rows"]) == 40, "table still shows at most 40 rows"
+    assert sec["count"] == 45, "count must be the true total, not the truncated sum"
+
+
 def test_panel_does_not_restate_token_totals(zroot):
     """Tokens belong to the session scan; two sources would drift apart."""
     _store(zroot)
