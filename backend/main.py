@@ -1270,6 +1270,11 @@ def _antigravity_infer_project(text: str) -> str:
 
     return ANTIGRAVITY_UNASSIGNED
 
+# Bump when the token-estimation algorithm changes so finished sessions
+# (whose transcript never grows) get their cached values recomputed.
+_ANTIGRAVITY_TOKENS_CACHE_V = 1
+
+
 def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     import logging
     tkns = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0}
@@ -1283,7 +1288,10 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
     try:
         if cache_file.exists() and cache_file.stat().st_mtime >= tf.stat().st_mtime:
             with open(cache_file, "r", encoding="utf-8") as cf:
-                return json.load(cf)
+                cached = json.load(cf)
+            if isinstance(cached, dict) and cached.get("_v") == _ANTIGRAVITY_TOKENS_CACHE_V:
+                cached.pop("_v")
+                return cached
     except (OSError, json.JSONDecodeError) as e:
         logging.debug(f"Failed to read token cache for {sess_dir}: {e}")
 
@@ -1306,7 +1314,7 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as cf:
-                json.dump(tkns, cf)
+                json.dump({**tkns, "_v": _ANTIGRAVITY_TOKENS_CACHE_V}, cf)
         except OSError as e:
             logging.debug(f"Failed to write token cache for {sess_dir}: {e}")
 
@@ -10018,8 +10026,10 @@ def _persist_history_async(data: List[Dict[str, Any]],
     failures are logged inside the store and never surface to the caller.
 
     ``scan_started_at`` is an ISO timestamp from just before the scan ran.
-    Forwarded to ``mark_absent`` so that rows upserted by a newer concurrent
-    scan are not incorrectly flagged absent by this (older) scan's persist job."""
+    Forwarded to ``upsert_sessions`` (anchors ``last_seen_at`` to the scan's
+    start so the conflict-clause recency guard is accurate) and to
+    ``mark_absent`` (so rows upserted by a newer concurrent scan are not
+    flagged absent by this older scan's persist job)."""
     import history_store
 
     def _work() -> None:
@@ -10111,9 +10121,10 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         _sessions_cache["building"] = True
         try:
             t0 = _time.monotonic()
-            # Capture the scan start time before the scan runs so mark_absent
-            # can skip rows that a concurrent newer scan upserted after this
-            # point (see _persist_history_async / history_store.mark_absent).
+            # Capture scan start before the scan runs: upsert_sessions uses it
+            # as last_seen_at (recency guard in the conflict clause) and
+            # mark_absent uses it to skip rows a newer concurrent scan upserted
+            # after this point (U13 / U14).
             scan_started_at = datetime.now(timezone.utc).isoformat()
             data = await _asyncio.to_thread(_scan_sessions_sync)
             _sessions_cache["data"] = data
@@ -13020,17 +13031,27 @@ async def get_analytics(
         by_agent[agent]["savings_usd"] += savings
         by_agent[agent]["co2_g"] += co2
         by_agent[agent]["session_count"] += 1
-        model_name = s.get("model") or f"{agent} (unknown)"
-        if model_name not in by_model:
-            by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
-                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
-                                    "session_count": 0, "agent": agent}
-        for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
-        by_model[model_name]["cost"] += scost
-        by_model[model_name]["energy_wh"] += energy
-        by_model[model_name]["savings_usd"] += savings
-        by_model[model_name]["co2_g"] += co2
-        by_model[model_name]["session_count"] += 1
+        # Skip by_model for zero-spend sessions with no model. This covers:
+        # (a) live stubs (stub=True, model=None, cost/tokens=0), and
+        # (b) stored stubs rehydrated without the stub flag (model=None,
+        #     cost=0, tokens all-zero) — the DB schema has no stub column so
+        #     _rehydrate cannot restore it. A real session with unknown model
+        #     but actual spend still lands in the "(unknown)" bucket.
+        if not s.get("stub"):
+            model_name = s.get("model") or (
+                f"{agent} (unknown)" if (scost or st.get("total", 0)) else None
+            )
+            if model_name:
+                if model_name not in by_model:
+                    by_model[model_name] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                            "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                            "session_count": 0, "agent": agent}
+                for k in ["input", "output", "cached", "total"]: by_model[model_name][k] += st.get(k, 0)
+                by_model[model_name]["cost"] += scost
+                by_model[model_name]["energy_wh"] += energy
+                by_model[model_name]["savings_usd"] += savings
+                by_model[model_name]["co2_g"] += co2
+                by_model[model_name]["session_count"] += 1
         # Delegated spend attributed to the SUBAGENT's own model (can differ
         # from the parent's, e.g. Explore on Haiku under an Opus session) —
         # not lumped onto model_name above. No session_count bump: a subagent
