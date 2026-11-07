@@ -144,6 +144,39 @@ def test_list_action_and_failed_publish_ignored(scan_env):
     assert "published_artifacts" not in s
 
 
+SHORT_URL = "https://claude.ai/artifact/G5feNV5Zt5cJQsrvUSrJWj"
+
+
+def test_short_artifact_url_extracted_with_html_title(scan_env):
+    """The Artifact tool now returns https://claude.ai/artifact/<id> links, and
+    takes the page title from the HTML <title> rather than a `title` input.
+    Both used to be missed: the publish never reached the Artifacts tab."""
+    page = scan_env / "review.html"
+    page.write_text("<title>Backlog &amp; Triage</title>\n<main>hi</main>", encoding="utf-8")
+    _write_session(scan_env / ".claude", [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path=str(page),
+                       icon="checklist", description="Review page"),
+        _artifact_result("t1", "2026-07-20T10:01:05Z",
+                         f"Published {page} at {SHORT_URL} (Version 1, version id 1-abc) "
+                         "Icon: \"checklist\"."),
+    ])
+    arts = _claude_session(scan_env)["published_artifacts"]
+    assert [a["url"] for a in arts] == [SHORT_URL]
+    assert arts[0]["title"] == "Backlog & Triage"
+    assert arts[0]["description"] == "Review page"
+
+
+def test_asset_upload_is_not_an_artifact(scan_env):
+    """`asset: true` uploads a file into an existing artifact; its result can
+    carry the artifact's link, but no new page was published."""
+    _write_session(scan_env / ".claude", [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path="/tmp/logo.png",
+                       url=SHORT_URL, asset=True),
+        _artifact_result("t1", "2026-07-20T10:01:05Z", f"Uploaded logo.png to {SHORT_URL}"),
+    ])
+    assert "published_artifacts" not in _claude_session(scan_env)
+
+
 def test_list_content_blocks_result(scan_env):
     """tool_result content as a list of text blocks (not a plain string)."""
     _write_session(scan_env / ".claude", [

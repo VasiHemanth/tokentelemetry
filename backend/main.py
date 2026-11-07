@@ -7572,8 +7572,32 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
 _LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
 
 # Hosted artifact URL Claude Code's Artifact tool prints in its tool_result
-# ("Published <path> at https://claude.ai/code/artifact/<uuid>").
-_ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/code/artifact/[0-9a-f-]{36}")
+# ("Published <path> at <url>"). Two shapes exist: the original
+# https://claude.ai/code/artifact/<uuid> and the newer short
+# https://claude.ai/artifact/<id> (base62, ~22 chars). Only publish results are
+# searched (see artifact_calls), so a type link in another result can't match.
+_ARTIFACT_URL_RE = re.compile(
+    r"https://claude\.ai/(?:code/artifact/[0-9a-f-]{36}|artifact/[A-Za-z0-9]{16,40})(?![A-Za-z0-9-])")
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def _html_page_title(file_path: Optional[str]) -> Optional[str]:
+    """The <title> of a published page's local source, when the publish call
+    passed no title (the Artifact tool takes the title from the page itself).
+    Reads only the head of the file; a missing or unreadable file gives None."""
+    if not file_path or not file_path.lower().endswith((".html", ".htm")):
+        return None
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return None
+    m = _HTML_TITLE_RE.search(head)
+    if not m:
+        return None
+    import html as _html
+    title = " ".join(_html.unescape(m.group(1)).split())
+    return title or None
 
 # A Codex Site is only a session artifact when a Codex Sites tool produced its
 # deployed URL. Do not mine arbitrary chatgpt.site strings from user prompts or
@@ -8266,8 +8290,10 @@ def _scan_sessions_sync():
                                             if tool == "Artifact":
                                                 ip = item.get("input") or {}
                                                 # Publishes only — `action: "list"` enumerates existing
-                                                # artifacts rather than creating one.
-                                                if item.get("id") and ip.get("action") in (None, "publish"):
+                                                # artifacts rather than creating one, and `asset: true`
+                                                # uploads a file into an artifact, not a new page.
+                                                if (item.get("id") and ip.get("action") in (None, "publish")
+                                                        and not ip.get("asset")):
                                                     artifact_calls[item["id"]] = {
                                                         "title": ip.get("title"),
                                                         "description": ip.get("description"),
@@ -8366,6 +8392,7 @@ def _scan_sessions_sync():
                                                 "url": url,
                                                 "path": meta.get("file_path") or prev.get("path"),
                                                 "title": meta.get("title") or prev.get("title")
+                                                         or _html_page_title(meta.get("file_path"))
                                                          or (os.path.splitext(fname)[0] or None),
                                                 "description": meta.get("description") or prev.get("description"),
                                                 "favicon": meta.get("favicon") or prev.get("favicon"),
