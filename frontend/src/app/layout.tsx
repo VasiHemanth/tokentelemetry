@@ -4,6 +4,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import LayoutWrapper from "../components/LayoutWrapper";
 import { ThemeProvider, NO_FLASH_SCRIPT } from "../components/ThemeProvider";
+import { TextSizeProvider } from "../components/TextSizeProvider";
+import { TEXT_SIZE_INIT_SCRIPT } from "../lib/textSize";
 import { KeyboardShortcutsProvider } from "../components/settings/KeyboardShortcutsProvider";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -26,10 +28,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Script id="tt-theme-init" strategy="beforeInteractive">
           {NO_FLASH_SCRIPT}
         </Script>
+        <Script id="tt-text-size-init" strategy="beforeInteractive">{TEXT_SIZE_INIT_SCRIPT}</Script>
       </head>
       <ThemeProvider>
-        <KeyboardShortcutsProvider />
-        <LayoutWrapper>{children}</LayoutWrapper>
+        <TextSizeProvider>
+          <KeyboardShortcutsProvider />
+          <LayoutWrapper>{children}</LayoutWrapper>
+        </TextSizeProvider>
       </ThemeProvider>
     </html>
   );

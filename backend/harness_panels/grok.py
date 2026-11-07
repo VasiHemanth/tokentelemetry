@@ -17,18 +17,47 @@ Not read: `sessions/**/prompts/*.txt`, `chat_history.jsonl`, `last-copy.txt` and
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from .base import (
-    HOME, dir_size, field, human_bytes, iso, meter, newest_mtime, not_installed,
-    panel, ro_sqlite, safe, section, table_exists, tilde, unavailable, live_quota,
+    HOME, dir_size, field, human_bytes, iso, iso_ms, meter,
+    newest_mtime, not_installed, panel, ro_sqlite, safe, section, table_exists,
+    tilde, unavailable, live_quota,
 )
 
 GROK_DIR = Path(os.environ.get("GROK_HOME") or (HOME / ".grok")).expanduser()
 UNIFIED_LOG = GROK_DIR / "logs" / "unified.jsonl"
+
+# --- Grok Bot (the desktop app) --------------------------------------------
+# A different product from the `grok` CLI above, with its own stores:
+#   ~/.grokbot/                              local-exec daemon, computer-use gate
+#   <Electron userData>/Grok Bot/            app state + sand-client-persistence
+# The app persists small JSON "slices" under sand-client-persistence/ with
+# base32-encoded names. Two carry data the CLI never sees: the weekly plan
+# meter and the bot roster. Transcript slices live in the same directory and
+# are deliberately never opened — they hold raw conversation text.
+GROK_BOT_DIR = Path(os.environ.get("TT_GROK_BOT_DIR") or (HOME / ".grokbot")).expanduser()
+GROK_BOT_COMPUTER_USE_DIR = HOME / "Library" / "Application Support" / "grok-bot-computer-use"
+
+if sys.platform == "darwin":
+    _GROK_BOT_APP_DEFAULT = HOME / "Library" / "Application Support" / "Grok Bot"
+elif os.name == "nt":
+    _GROK_BOT_APP_DEFAULT = Path(os.environ.get("APPDATA") or (HOME / "AppData" / "Roaming")) / "Grok Bot"
+else:
+    _GROK_BOT_APP_DEFAULT = Path(os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")) / "Grok Bot"
+
+GROK_BOT_APP_DIR = Path(os.environ.get("TT_GROK_BOT_APP_DIR") or _GROK_BOT_APP_DEFAULT).expanduser()
+GROK_BOT_SLICES_DIR = GROK_BOT_APP_DIR / "sand-client-persistence"
+GROK_BOT_USAGE_SUFFIX = ".weekly-usage.cache"
+GROK_BOT_ROSTER_SUFFIX = ".roster.last-roster"
+GROK_BOT_LOG = GROK_BOT_DIR / "local-exec-daemon.log"
 
 BILLING_MSG = "billing: fetched credits config"
 
@@ -64,10 +93,10 @@ def _tail_lines(path: Path, max_bytes: int = TAIL_BYTES) -> Iterator[str]:
             yield line
 
 
-def _credits() -> Optional[Dict[str, Any]]:
+def _billing_record() -> Optional[Dict[str, Any]]:
+    """Newest `billing: fetched credits config` record in the CLI log."""
     if not UNIFIED_LOG.exists():
         return None
-    record = None
     for line in _tail_lines(UNIFIED_LOG):
         # Cheap substring reject before paying for a JSON parse; the vast
         # majority of lines are tool and inference events.
@@ -78,8 +107,12 @@ def _credits() -> Optional[Dict[str, Any]]:
         except ValueError:
             continue
         if doc.get("msg") == BILLING_MSG:
-            record = doc
-            break
+            return doc
+    return None
+
+
+def _credits(record: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    record = record if record is not None else _billing_record()
     if not record:
         return None
 
@@ -117,6 +150,250 @@ def _credits() -> Optional[Dict[str, Any]]:
         meters=meters, fields=fields or None,
         note=f"Recorded by Grok at {record.get('ts')}. Read from the tail of the "
              "log, which TokenTelemetry already parses for token usage.",
+    )
+
+
+# --- Grok Bot desktop app ---------------------------------------------------
+# Everything below reads at most three tiny slices plus the executor's own
+# state files. Transcript slices share the directory but are never opened: they
+# contain raw conversation text, and the roster already carries what the panel
+# needs (agent name + last activity).
+
+def _read_json(path: Optional[Path]) -> Any:
+    if path is None:
+        return None
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _dt(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_newer(a: Optional[str], b: Optional[str]) -> bool:
+    """True when ISO timestamp `a` is strictly newer than `b`."""
+    da, db = _dt(a), _dt(b)
+    if da is None:
+        return False
+    if db is None:
+        return True
+    return da > db
+
+
+def _recent(value: Optional[str], seconds: int) -> bool:
+    parsed = _dt(value)
+    if parsed is None:
+        return False
+    return (datetime.now(timezone.utc) - parsed).total_seconds() <= seconds
+
+
+def _blob_key(name: str) -> Optional[str]:
+    """Decode a sand-client-persistence filename back to its storage key."""
+    if not name.endswith(".blob"):
+        return None
+    raw = name[:-len(".blob")].upper()
+    try:
+        return base64.b32decode(raw + "=" * (-len(raw) % 8)).decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def _bot_slices() -> Dict[str, Path]:
+    """The two readable state slices, matched by decoded key suffix.
+
+    Filenames are base32-encoded storage keys, and the account-scoped prefix
+    differs per login, so the suffix is the stable part. Newest wins if an
+    account switch left two sets behind.
+    """
+    found: Dict[str, Path] = {}
+    if not GROK_BOT_SLICES_DIR.is_dir():
+        return found
+    try:
+        blobs = list(GROK_BOT_SLICES_DIR.glob("*.blob"))
+    except OSError:
+        return found
+    for path in blobs:
+        key = _blob_key(path.name)
+        if not key:
+            continue
+        tag = "usage" if key.endswith(GROK_BOT_USAGE_SUFFIX) else (
+            "roster" if key.endswith(GROK_BOT_ROSTER_SUFFIX) else None)
+        if not tag:
+            continue
+        try:
+            if tag not in found or path.stat().st_mtime > found[tag].stat().st_mtime:
+                found[tag] = path
+        except OSError:
+            continue
+    return found
+
+
+def _bot_usage(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Weekly plan meter cached by the desktop app.
+
+    Worth reading because the CLI only refreshes its own billing record when it
+    runs: on a machine driven through Grok Bot, `unified.jsonl` can describe a
+    week that already ended. This cache is written by the app itself.
+    """
+    path = path or _bot_slices().get("usage")
+    doc = _read_json(path)
+    value = doc.get("value") if isinstance(doc, dict) else None
+    if not isinstance(value, dict):
+        return None
+    reading = value.get("reading") if isinstance(value.get("reading"), dict) else {}
+    usage = reading.get("usage") if isinstance(reading.get("usage"), dict) else {}
+    pct = usage.get("percentUsed")
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+        return None
+
+    reset = iso_ms(usage.get("nextResetMs"))
+    read_at = iso_ms(reading.get("readAtMs"))
+    expires = iso_ms(value.get("expiresAtMs"))
+    plan = usage.get("grokPlanLabel")
+
+    fields = []
+    if isinstance(plan, str) and plan:
+        fields.append(field("Plan", plan))
+    if read_at:
+        fields.append(field("Read at", read_at))
+    if expires:
+        fields.append(field("Cache expires", expires))
+
+    stale = bool(expires and _dt(expires) and _dt(expires) < datetime.now(timezone.utc))
+    note = ("Recorded by the Grok Bot desktop app" +
+            (f" at {read_at}" if read_at else "") +
+            ". This is the app's own weekly window; it can differ from the CLI's "
+            "plan meter because the two clients do not share a billing cycle.")
+    if stale:
+        note += " The app's cache has expired; it refreshes on next launch."
+
+    return section(
+        "meter", "Grok Bot plan usage",
+        tilde(GROK_BOT_SLICES_DIR) + "/…" + GROK_BOT_USAGE_SUFFIX,
+        meters=[meter("Weekly usage", float(pct), resets_at=reset)],
+        fields=fields or None, note=note,
+    )
+
+
+def _bot_roster(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """The desktop app's bot fleet: name, kind, last activity, unread count."""
+    path = path or _bot_slices().get("roster")
+    doc = _read_json(path)
+    value = doc.get("value") if isinstance(doc, dict) else None
+    rows_in = value.get("rows") if isinstance(value, dict) else None
+    if not isinstance(rows_in, list):
+        return None
+
+    rows: List[List[Any]] = []
+    for agent in rows_in:
+        if not isinstance(agent, dict) or not agent.get("name"):
+            continue
+        rows.append([
+            str(agent["name"]),
+            "group" if agent.get("isGroup") else "bot",
+            iso_ms(agent.get("lastActivityAt")) or "—",
+            agent.get("unreadCount") if isinstance(agent.get("unreadCount"), int) else 0,
+        ])
+    if not rows:
+        return None
+    rows.sort(key=lambda row: _dt(row[2]) or datetime.min.replace(tzinfo=timezone.utc),
+              reverse=True)
+
+    return section(
+        "table", "Bot agents", tilde(GROK_BOT_SLICES_DIR) + "/…" + GROK_BOT_ROSTER_SUFFIX,
+        columns=["Agent", "Kind", "Last used", "Unread"], rows=rows,
+        note="The desktop app's own roster. Message text is never read; only "
+             "each bot's name, kind and last activity.",
+    )
+
+
+def _bot_log_health(path: Path, max_bytes: int = 256 * 1024) -> tuple:
+    """(recent outage count, last reconnect timestamp) from the executor log."""
+    outages, last_connect = 0, None
+    try:
+        lines = _tail_lines(path, max_bytes=max_bytes)
+        for line in lines:
+            if "watch_outage" in line:
+                outages += 1
+            if last_connect is None and " connected after " in line:
+                match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", line)
+                if match:
+                    last_connect = match.group(0)
+    except OSError:
+        return 0, None
+    return outages, last_connect
+
+
+def _bot_executor() -> Optional[Dict[str, Any]]:
+    """Is the local executor actually running, and is it healthy?"""
+    fields: List[Dict[str, Any]] = []
+
+    app = _read_json(GROK_BOT_APP_DIR / "desktop-status.json")
+    if isinstance(app, dict):
+        if app.get("appVersion"):
+            fields.append(field("App version", str(app["appVersion"])))
+        if isinstance(app.get("signedIn"), bool):
+            fields.append(field("Signed in", "Yes" if app["signedIn"] else "No",
+                                severity=None if app["signedIn"] else "warn"))
+
+    daemon = _read_json(GROK_BOT_DIR / "local-exec-daemon.json")
+    if isinstance(daemon, dict):
+        serving = iso_ms(daemon.get("servingAt"))
+        started = iso_ms(daemon.get("startedAt"))
+        state = "running" if _recent(serving, 600) else "idle"
+        fields.append(field("Executor", state, severity="ok" if state == "running" else None))
+        if started:
+            fields.append(field("Started", started))
+        if serving:
+            fields.append(field("Last serving", serving))
+        if isinstance(daemon.get("inflightCount"), int):
+            fields.append(field("In flight", daemon["inflightCount"]))
+        if isinstance(daemon.get("pid"), int):
+            fields.append(field("Daemon pid", daemon["pid"]))
+
+    if GROK_BOT_LOG.exists():
+        outages, last_connect = _bot_log_health(GROK_BOT_LOG)
+        fields.append(field("Recent watch outages", outages,
+                            severity="warn" if outages else None))
+        if last_connect:
+            fields.append(field("Last reconnect", last_connect))
+
+    if not fields:
+        return None
+    return section(
+        "fields", "Local executor", tilde(GROK_BOT_DIR),
+        fields=fields,
+        note="Grok Bot runs tools on this Mac through a local executor daemon. "
+             "Read from its own state files; the log tail covers the last 256 KB.",
+    )
+
+
+def _bot_storage() -> Optional[Dict[str, Any]]:
+    entries = []
+    for path in (GROK_BOT_DIR, GROK_BOT_APP_DIR, GROK_BOT_COMPUTER_USE_DIR):
+        if not path.is_dir():
+            continue
+        size, complete = dir_size(path)
+        entries.append((size, tilde(path), complete))
+    if not entries:
+        return None
+    entries.sort(key=lambda e: -e[0])
+    total = sum(size for size, _, _ in entries)
+    rows = [[label, human_bytes(size) + ("" if complete else "+")]
+            for size, label, complete in entries]
+    return section(
+        "table", "Grok Bot storage", tilde(GROK_BOT_DIR),
+        columns=["Location", "Size"], rows=rows,
+        note=f"{human_bytes(total)} across the desktop app and its executor. "
+             "Conversation transcripts are not read.",
     )
 
 
@@ -286,18 +563,46 @@ def _disk() -> Optional[Dict[str, Any]]:
 
 
 def build(*, with_disk: bool = True) -> Dict[str, Any]:
-    if not GROK_DIR.is_dir():
+    has_cli = GROK_DIR.is_dir()
+    has_bot = GROK_BOT_DIR.is_dir() or GROK_BOT_APP_DIR.is_dir()
+    if not has_cli and not has_bot:
         return not_installed("grok")
 
     sections: List[Dict[str, Any]] = []
     not_avail: List[Dict[str, Any]] = []
 
+    # The CLI and the desktop app can sit on different billing windows — the
+    # live quota above resets Oct 30 here while the app's cache resets Nov 1 —
+    # so they are reported separately rather than merged into one number.
+    bot_slices = safe(_bot_slices, "grok bot slices") or {}
+    bot_usage = safe(lambda: _bot_usage(bot_slices.get("usage")), "grok bot usage")
     quota = safe(lambda: live_quota("grok"), "grok quota")
     if quota:
         sections.append(quota)
+    if bot_usage:
+        sections.append(bot_usage)
+    usage_path = bot_slices.get("usage")
+    bot_usage_at = iso(usage_path.stat().st_mtime) if usage_path else None
 
-    for step, what in ((_credits, "credits"), (_plugin_jobs, "jobs"),
-                       (_trust_and_live, "trust"), (_skills, "skills")):
+    # `_credits` describes the same weekly credit window from the CLI log, and
+    # it is only written when the CLI runs. Drop it when the bot meter above is
+    # newer, rather than showing two percentages 10 points apart.
+    billing = safe(_billing_record, "grok billing record")
+    credits = safe(lambda: _credits(billing), "grok credits")
+    billing_ts = billing.get("ts") if isinstance(billing, dict) else None
+    if credits and bot_usage and _is_newer(bot_usage_at, billing_ts):
+        credits = None
+    if credits:
+        sections.append(credits)
+
+    for step, what in (
+        (lambda: _bot_roster(bot_slices.get("roster")), "roster"),
+        (_bot_executor, "executor"),
+        (_bot_storage, "storage"),
+        (_plugin_jobs, "jobs"),
+        (_trust_and_live, "trust"),
+        (_skills, "skills"),
+    ):
         s = safe(step, f"grok {what}")
         if s:
             sections.append(s)
@@ -308,21 +613,28 @@ def build(*, with_disk: bool = True) -> Dict[str, Any]:
     if wt_missing:
         not_avail.append(wt_missing)
 
-    not_avail.append(unavailable(
-        "memory",
-        "Grok's memory store is opt-in (GROK_MEMORY=1) and is not enabled here, "
-        "so there is no memory directory to read."))
+    if has_cli:
+        not_avail.append(unavailable(
+            "memory",
+            "Grok's memory store is opt-in (GROK_MEMORY=1) and is not enabled here, "
+            "so there is no memory directory to read."))
 
     version = None
     v = safe(lambda: json.loads((GROK_DIR / "version.json").read_text(encoding="utf-8")),
              "grok version")
     if isinstance(v, dict):
         version = v.get("version")
+    if not version:
+        app = _read_json(GROK_BOT_APP_DIR / "desktop-status.json")
+        if isinstance(app, dict) and app.get("appVersion"):
+            version = f"bot {app['appVersion']}"
 
-    last = newest_mtime([UNIFIED_LOG, GROK_DIR / "sessions"])
+    last = newest_mtime([UNIFIED_LOG, GROK_DIR / "sessions",
+                         GROK_BOT_DIR, GROK_BOT_APP_DIR])
 
     return panel(
-        "grok", GROK_DIR,
+        "grok", GROK_DIR if has_cli else GROK_BOT_DIR,
         sections=sections, not_available=not_avail,
-        version=version, last_active=iso(last), disk=safe(_disk, "grok disk") if with_disk else None,
+        version=version, last_active=iso(last),
+        disk=safe(_disk, "grok disk") if with_disk and has_cli else None,
     )

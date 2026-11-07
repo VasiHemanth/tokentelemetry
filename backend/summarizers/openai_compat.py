@@ -53,6 +53,16 @@ _DEFAULT_USER_AGENT = os.environ.get(
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
+_OPEN_ENDED_MIN_TOKENS = 1500
+
+
+def _hit_length_limit(raw: str) -> bool:
+    try:
+        return json.loads(raw)["choices"][0].get("finish_reason") == "length"
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return False
+
+
 class _BadRequest(Exception):
     """Internal: the server answered HTTP 400. Used to trigger a one-shot retry
     with a clean OpenAI-only payload (strict gateways reject non-OpenAI extras
@@ -125,13 +135,15 @@ class OpenAICompatSummarizer(BaseSummarizer):
         # actually reachable surfaces at summarize() time as a network error.
         return True
 
-    def _payload(self, prompt: str, *, include_extensions: bool) -> Dict[str, Any]:
+    def _payload(
+        self, prompt: str, *, include_extensions: bool, max_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
         # Standard OpenAI chat-completions fields — accepted by every compliant
         # server, including strict gateways (Groq, OpenAI itself).
         body: Dict[str, Any] = {
             "model": self._model or "default",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "presence_penalty": self.presence_penalty,
@@ -152,21 +164,30 @@ class OpenAICompatSummarizer(BaseSummarizer):
                 body["chat_template_kwargs"] = {"enable_thinking": True}
         return body
 
-    def summarize(self, prompt: str, *, timeout: Optional[int] = None) -> str:
+    def summarize(
+        self, prompt: str, *, timeout: Optional[int] = None, open_ended: bool = False
+    ) -> str:
+        """``open_ended=True`` is for free-form Markdown answers: the output
+        limit is raised to at least ``_OPEN_ENDED_MIN_TOKENS`` and a visible
+        note is appended when the server reports the answer was cut off."""
         tmo = timeout if timeout is not None else _DEFAULT_TIMEOUT
         url = f"{self.endpoint}/chat/completions"
         # Try the full payload (with non-OpenAI extras) first. If a strict server
         # rejects an unknown property with 400, retry once with an OpenAI-only
         # payload so the summary still goes through — the extras it couldn't
         # honour are simply dropped.
+        mt = max(self.max_tokens, _OPEN_ENDED_MIN_TOKENS) if open_ended else None
         try:
-            raw = self._post(url, self._payload(prompt, include_extensions=True), tmo)
+            raw = self._post(url, self._payload(prompt, include_extensions=True, max_tokens=mt), tmo)
         except _BadRequest:
             try:
-                raw = self._post(url, self._payload(prompt, include_extensions=False), tmo)
+                raw = self._post(url, self._payload(prompt, include_extensions=False, max_tokens=mt), tmo)
             except _BadRequest as e:
                 raise SummarizerError(f"HTTP 400 from {url}: {e.detail}") from e
-        return _extract_text(raw, url)
+        text = _extract_text(raw, url)
+        if open_ended and _hit_length_limit(raw):
+            text += "\n\n_(Answer cut off at the output token limit. Raise max_tokens in settings.)_"
+        return text
 
     def _post(self, url: str, payload: Dict[str, Any], tmo: int) -> str:
         """POST one payload. Returns raw body, raises ``_BadRequest`` on HTTP 400

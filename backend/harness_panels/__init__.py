@@ -45,6 +45,7 @@ BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "muse": clis.build_muse,
     "prime": clis.build_prime,
     "pi": clis.build_pi,
+    "omp": clis.build_omp,
     "dsh": clis.build_dsh,
     "kimi": clis.build_kimi,
     "qoder": clis.build_qoder,
