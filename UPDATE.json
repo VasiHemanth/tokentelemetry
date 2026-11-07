@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "tag": "2026-11-07",
+      "title": "Artifacts shared across worktrees",
+      "highlights": [
+        {
+          "title": "Every worktree shows the project's artifacts",
+          "description": "Pages, Codex Sites and agent documents published from any git worktree of a project now appear on the main checkout and on every worktree's Artifacts tab, instead of only where they were made. Each one says which worktree created it, with a link to that worktree.",
+          "href": "/projects"
+        }
+      ]
+    },
+    {
       "tag": "2026-10-31",
       "title": "A clearer workspace for long sessions",
       "highlights": [

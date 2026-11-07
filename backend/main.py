@@ -11903,7 +11903,11 @@ async def get_projects(include_hidden: bool = False):
         # while still rendering individually as "not captured".
         projects[proj]["tokens"]["cost"] += (s.get("cost") or 0.0) + (s.get("delegated_cost") or 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
-        projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
+        # Copy each record and remember which project card it came from, so a
+        # worktree group can share artifacts and still say where each one was
+        # created. Copying keeps the cached session data untouched.
+        projects[proj]["artifacts"].extend(
+            {**a, "_origin_path": proj} for a in (s.get("published_artifacts") or []))
     for p in projects.values():
         p["agents"] = list(p["agents"])
         p["mcp_tools"] = list(p["mcp_tools"])
@@ -12045,25 +12049,37 @@ async def get_projects(include_hidden: bool = False):
         parent["is_repo_root"] = True
         parent["worktrees"] = wt_summaries
         parent["aggregate"] = _aggregate(members)
-        # Surface worktree-published artifacts on the repo-root card too —
-        # publishes usually happen from worktree sessions but belong to the repo.
-        # Identity is the hosted url for "page" artifacts, the file path for
-        # "document" ones.
-        seen_keys = {_artifact_key(a) for a in parent.get("artifacts", [])}
+        # Artifacts belong to the repo, not to the checkout they were published
+        # from: every card in the group (repo root and each worktree) shows the
+        # same set, and each artifact says which worktree created it
+        # (`created_in`). Identity is the hosted url for pages and sites, the
+        # file path for documents; newest record wins a duplicate.
+        origin_names = {parent["path"]: parent["name"]}
         for c in children:
-            for a in c.get("artifacts", []):
-                key = _artifact_key(a)
-                if key and key not in seen_keys:
-                    parent.setdefault("artifacts", []).append(a)
-                    seen_keys.add(key)
-        parent["artifacts"] = _dedupe_artifacts(
-            sorted(parent.get("artifacts", []),
-                   key=lambda x: str(x.get("timestamp") or ""), reverse=True))
+            origin_names[c["path"]] = c.get("worktree_name") or c["name"]
+        shared: List[dict] = []
+        for m in members:
+            for a in m.get("artifacts", []):
+                origin = a.get("_origin_path") or m["path"]
+                shared.append({**a, "created_in": {
+                    "path": origin,
+                    "name": origin_names.get(origin, origin),
+                    "is_worktree": origin != repo,
+                }})
+        shared = _dedupe_artifacts(
+            sorted(shared, key=lambda x: str(x.get("timestamp") or ""), reverse=True))
+        for m in members:
+            m["artifacts"] = list(shared)
         for c in children:
             c["parent_path"] = repo
             c["parent_name"] = parent["name"]
 
     out.extend(synthesized)
+    # `_origin_path` is bookkeeping for the worktree share above; the
+    # public field is `created_in`.
+    for p in out:
+        p["artifacts"] = [{k: v for k, v in a.items() if k != "_origin_path"}
+                          for a in p.get("artifacts", [])]
     return out
 
 
