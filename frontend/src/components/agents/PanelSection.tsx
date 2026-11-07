@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -69,8 +70,17 @@ function Meter({ m }: { m: PanelMeter }) {
   // refreshes `cachedUsageUtilization` only when the CLI next calls the API, so
   // a 74-hour-old cache would otherwise render "resets 3 days ago", which reads
   // as broken. Past the reset point the percentage is history, not status.
+  // `Date.now()` is impure and must not run during render. Snapshot "now" on
+  // mount (lazy initializer, not a render-time call) and refresh it on a
+  // timer, so a quota window that closes while the panel stays open still
+  // flips to stale without needing a parent re-render.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
   const resetAt = m.resets_at ? new Date(m.resets_at) : null;
-  const elapsed = !!resetAt && !Number.isNaN(resetAt.getTime()) && resetAt.getTime() < Date.now();
+  const elapsed = !!resetAt && !Number.isNaN(resetAt.getTime()) && resetAt.getTime() < now;
   return (
     <div className="py-3 first:pt-0 last:pb-0 border-b border-[var(--tt-border)] last:border-b-0">
       <div className="flex items-baseline justify-between gap-3">

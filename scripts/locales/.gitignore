@@ -1,0 +1,4 @@
+# transient translation work files — regenerate with:
+#   node scripts/build-locale.mjs --split
+parts/
+out/

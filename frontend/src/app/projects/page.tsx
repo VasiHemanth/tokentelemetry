@@ -79,7 +79,7 @@ export default function ProjectsPage() {
 
   const [pageState, setPageState] = useSessionState("projects_page", {
     search: "",
-    view: "grid" as ViewMode,
+    view: "list" as ViewMode,
     sortKey: "sessions" as SortKey,
     sortDesc: true,
   });
@@ -113,7 +113,7 @@ export default function ProjectsPage() {
       <PageHeader
         eyebrow="Workspaces"
         title="Projects"
-        description="Activity grouped by workspace path. Each card opens a project workspace with sessions, plans, and config."
+        description="Find a workspace and follow its sessions, plans, and configuration."
         icon={<Folder size={20} strokeWidth={2.25} />}
         actions={
           <Badge variant="neutral" size="sm" className="h-9">
@@ -199,7 +199,11 @@ export default function ProjectsPage() {
         </Section>
       ) : (
         <Card padding="none">
-          <Table>
+          <Table className="min-w-[900px] table-fixed">
+            <colgroup>
+              <col className="w-[35%]" /><col className="w-[20%]" />
+              <col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[9%]" />
+            </colgroup>
             <THead>
               <TR>
                 <TH className="pl-5">Project</TH>
@@ -229,7 +233,7 @@ export default function ProjectsPage() {
                     </Link>
                   </TD>
                   <TD>
-                    <div className="flex items-center gap-1 flex-wrap">
+                    <div className="flex items-center gap-1 whitespace-nowrap">
                       {p.agents.slice(0, 4).map((a) => <AgentBadge key={a} agent={a} withLabel={false} />)}
                       {p.agents.length > 4 && (
                         <span className="text-[10px] text-[var(--tt-fg-dim)]">+{p.agents.length - 4}</span>
@@ -237,12 +241,12 @@ export default function ProjectsPage() {
                     </div>
                   </TD>
                   <TD className="text-right tabular text-[var(--tt-fg)] font-semibold">{p.session_count}</TD>
-                  <TD className="text-right tabular text-purple-300/90">
+                  <TD className="text-right tabular text-[var(--tt-fg)]">
                     {(p.configured_subagent_count ?? 0) + (p.subagent_count ?? 0)}
                   </TD>
-                  <TD className="text-right tabular text-emerald-300/90">{p.plan_count || 0}</TD>
+                  <TD className="text-right tabular text-[var(--tt-fg)]">{p.plan_count || 0}</TD>
                   <TD className="text-right tabular text-[var(--tt-fg-muted)]">{formatTokens(p.tokens?.total ?? 0)}</TD>
-                  <TD className="text-right pr-5 tabular text-amber-300 font-semibold">{formatCost(p.tokens?.cost ?? 0)}</TD>
+                  <TD className="text-right pr-5 tabular text-[var(--tt-fg)] font-semibold">{formatCost(p.tokens?.cost ?? 0)}</TD>
                 </TR>
               ))}
             </TBody>
@@ -291,7 +295,7 @@ function ProjectCard({ project }: { project: Project }) {
               <div className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--tt-fg)] truncate group-hover:text-[var(--tt-brand)] transition-colors" title={project.name}>
                 {project.name}
               </div>
-              <div className="font-mono text-[10px] text-[var(--tt-fg-dim)] truncate mt-0.5" title={project.path}>
+              <div className="font-mono text-[12px] text-[var(--tt-fg-dim)] truncate mt-0.5" title={project.path}>
                 {project.path}
               </div>
             </div>
@@ -385,9 +389,9 @@ function ProjectCard({ project }: { project: Project }) {
 
       <div className="mt-auto grid grid-cols-4 gap-px bg-[var(--tt-border)] border-t border-[var(--tt-border)]">
         <Stat label="Sessions" value={sessionCount} />
-        <Stat label="Subs"     value={subCount}      tone="purple" />
-        <Stat label="Plans"    value={planCount} tone="emerald" />
-        <Stat label="API equiv." value={formatCost(cost)} tone="amber"
+        <Stat label="Subs"     value={subCount}       />
+        <Stat label="Plans"    value={planCount}  />
+        <Stat label="API equiv." value={formatCost(cost)}
               hint={tokens ? formatTokens(tokens) : undefined} />
       </div>
     </Card>
@@ -395,18 +399,12 @@ function ProjectCard({ project }: { project: Project }) {
 }
 
 function Stat({
-  label, value, tone = "default", hint,
-}: { label: string; value: React.ReactNode; tone?: "default" | "purple" | "emerald" | "amber"; hint?: string }) {
-  const TONE: Record<string, string> = {
-    default: "text-[var(--tt-fg)]",
-    purple:  "text-purple-300",
-    emerald: "text-emerald-300",
-    amber:   "text-amber-300",
-  };
+  label, value, hint,
+}: { label: string; value: React.ReactNode; hint?: string }) {
   return (
     <div className="bg-[var(--tt-panel)] py-3 px-2 text-center">
-      <div className={cn("tabular text-[15px] font-semibold leading-none", TONE[tone])}>{value}</div>
-      <div className="mt-1.5 text-[9px] uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+      <div className="tabular text-[15px] font-semibold leading-none text-[var(--tt-fg)]">{value}</div>
+      <div className="mt-1.5 text-[11px] text-[var(--tt-fg-dim)]">
         {hint ? `${hint} · ${label}` : label}
       </div>
     </div>

@@ -160,10 +160,11 @@ def test_workflow_agents_attributed(tmp_path):
     # Tokens fold into the by_type bucket and totals.
     assert "workflow-subagent" in deleg["by_type"]
     assert deleg["by_type"]["workflow-subagent"]["count"] == 3
-    # wfa: in100+out200+cached1000 = 1300; wfb: 10+20+100=130; wfc: 5+5+0=10
-    assert by_id["wfa"]["tokens"]["total"] == 1300
+    # total = input + output + cache reads + cache writes
+    # wfa: 100+200+1000+500 = 1800; wfb: 10+20+100+50 = 180; wfc: 5+5 = 10
+    assert by_id["wfa"]["tokens"]["total"] == 1800
     wf_total = sum(e["tokens"]["total"] for e in wf)
-    assert wf_total == 1440
+    assert wf_total == 1990
     # Count-once: the workflow tokens are additive on top of the flat totals.
     task_total = sum(e["tokens"]["total"] for e in tasks)
     assert deleg["totals"]["total"] == task_total + wf_total
@@ -213,14 +214,14 @@ def test_helper_rollup(tmp_path):
     assert one["description"] == "look around"
     assert one["tool_use_id"] == "toolu_1"
     assert one["model"] == "claude-haiku-4-5-20251001"
-    # input/output cumulative; cached = high-water-mark (NOT 100+300), while
-    # _cached_sum tracks the billed per-turn reads. Cache creation is cumulative.
+    # Every bucket is cumulative: each turn re-reads the cache and is billed
+    # for it, so cached = 100+300 (not the 300 high-water mark).
     assert one["tokens"]["input"] == 30
     assert one["tokens"]["output"] == 10
-    assert one["tokens"]["cached"] == 300
+    assert one["tokens"]["cached"] == 400
     assert one["tokens"]["_cached_sum"] == 400
     assert one["tokens"]["cache_creation"] == 100
-    assert one["tokens"]["total"] == 30 + 10 + 300
+    assert one["tokens"]["total"] == 30 + 10 + 400 + 100
     assert one["cost"] == pytest.approx(main.calculate_cost(
         "claude-haiku-4-5-20251001", 30, 10, 400, cache_creation_tokens=100))
     # meta fallbacks
@@ -229,7 +230,7 @@ def test_helper_rollup(tmp_path):
     # totals sum across entries
     assert deleg["totals"]["input"] == 30 + 7 + 1
     assert deleg["totals"]["output"] == 10 + 3 + 2
-    assert deleg["totals"]["cached"] == 300 + 40 + 0
+    assert deleg["totals"]["cached"] == 400 + 40 + 0
     assert deleg["totals"]["_cached_sum"] == 400 + 40 + 0
     assert deleg["cost"] >= 0
 
@@ -253,9 +254,12 @@ def test_helper_rollup_dedups_repeated_message_id(tmp_path):
     one = deleg["subagents"][0]
     assert one["tokens"]["input"] == 10 + 4
     assert one["tokens"]["output"] == 5 + 2
-    assert one["tokens"]["cached"] == max(100, 50)  # high-water-mark, not tripled
+    # Cache reads accumulate across distinct model calls, while the repeated
+    # content blocks of each call must still be counted only once.
+    assert one["tokens"]["cached"] == 100 + 50
     assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
     assert one["tokens"]["cache_creation"] == 20
+    assert one["tokens"]["total"] == 14 + 7 + 150 + 20
 
 
 def test_helper_costs_with_each_files_own_model(tmp_path, monkeypatch):
@@ -282,7 +286,8 @@ def scan_env(tmp_path, monkeypatch):
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
                  "GROK_SESSIONS_DIR", "GROK_UNIFIED_LOG", "VSCODE_STORAGE", "CURSOR_STORAGE",
                  "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
-                 "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR"):
+                 "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR",
+                 "OMP_DIR", "OMP_SESSIONS_DIR"):
         monkeypatch.setattr(main, attr, missing / attr.lower())
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [])
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_DIRS", [])
@@ -306,22 +311,23 @@ def test_scan_claude_delegation_summary(scan_env):
     d = s["delegation"]
     assert d["supported"] is True and d["tokens_recorded"] is True
     assert d["spawn_count"] == 3
-    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (300 + 40)
-    # Per-type rollup for analytics: Explore file = 30+10+300 tokens (cached
-    # is the high-water-mark across its two turns, 100 vs 300 — not summed).
-    assert d["by_type"]["Explore"] == {"count": 1, "total": 340,
+    # input + output + cache reads + cache writes across the three files
+    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (400 + 40) + 100
+    # Per-type rollup for analytics: Explore file = 30+10+400+100 tokens.
+    assert d["by_type"]["Explore"] == {"count": 1, "total": 540,
+
                                        "cost": d["by_type"]["Explore"]["cost"]}
     assert set(d["by_type"]) == {"Explore", "general-purpose", "unknown"}
     assert s["tokens"]["delegated_input"] == 38
     assert s["tokens"]["delegated_output"] == 15
-    assert s["tokens"]["delegated_cached"] == 340
+    assert s["tokens"]["delegated_cached"] == 440
     assert s["tokens"]["delegated_cache_creation"] == 100
     assert s["delegated_cost"] >= 0
     # Count-once invariant: the parent's own buckets reflect ONLY the parent file.
     assert s["tokens"]["input"] == 100
     assert s["tokens"]["output"] == 50
     assert s["tokens"]["cached"] == 1000
-    assert s["tokens"]["total"] == 100 + 50 + 1000
+    assert s["tokens"]["total"] == 100 + 50 + 1000 + 200
 
 
 def test_scan_claude_without_spawns(scan_env):
@@ -358,7 +364,7 @@ def test_claude_scan_dedupes_usage_and_records_unpriced_background_activity(scan
     first = next(s for s in main._scan_sessions_sync() if s["agent"] == "claude" and s["id"] == sid)
 
     assert first["tokens"] == {
-        "input": 150, "output": 15, "cached": 30, "_cached_sum": 50, "total": 195,
+        "input": 150, "output": 15, "cached": 50, "_cached_sum": 50, "total": 215,
         "cache_creation": 0, "cache_creation_1h": 0,
     }
     assert first["cost"] == pytest.approx(main.calculate_cost("claude-sonnet-4-6", 150, 15, 50))
@@ -1525,6 +1531,101 @@ def test_codex_scan_cache_hit_reapplies_alias(scan_env, monkeypatch):
     assert "_raw_cwd" not in sess2
 
 
+def test_codex_scan_reads_zstd_compressed_rollouts(scan_env, monkeypatch):
+    """Recent Codex writes rollouts zstd-compressed (rollout-*.jsonl.zst);
+    they must be discovered and parsed exactly like plain .jsonl files."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-0000000000aa"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    lines = [
+        _codex_session_meta(),
+        _codex_token_event("2026-07-01T00:00:00Z", 1000, 400, 60),
+        _codex_token_event("2026-07-01T00:01:00Z", 1500, 600, 80),
+    ]
+    text = "".join(json.dumps(l) + "\n" for l in lines)
+    (day / f"rollout-2026-07-01T00-00-00-{sid}.jsonl.zst").write_bytes(
+        zstandard.ZstdCompressor().compress(text.encode("utf-8")))
+
+    session = next(s for s in main._scan_sessions_sync() if s["id"] == sid)
+    assert session["stub"] is False
+    # Last snapshot: gross input 1500 with 600 cached -> net 900;
+    # total = net + cached + output (Codex input is inclusive of cache reads).
+    assert session["tokens"]["input"] == 900
+    assert session["tokens"]["cached"] == 600
+    assert session["tokens"]["output"] == 80
+    assert session["tokens"]["total"] == 1580
+
+
+def test_codex_scan_skips_zstd_rollouts_when_zstandard_missing(scan_env, monkeypatch):
+    """Without the optional zstandard dep, .zst rollouts are skipped
+    (the DSH convention) — never indexed, never an ImportError."""
+    monkeypatch.setattr(main, "_zstd_rollouts_supported", lambda: False)
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    day = scan_env / ".codex" / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    sid = "019eb056-4eae-7280-8617-0000000000bb"
+    # Content doesn't matter — the file must be ignored before it is opened.
+    (day / f"rollout-2026-07-01T00-00-00-{sid}.jsonl.zst").write_bytes(b"\x28\xb5\x2f\xfd")
+
+    codex = [s for s in main._scan_sessions_sync() if s.get("agent") == "codex"]
+    assert all(s["id"] != sid for s in codex)
+
+
+def test_codex_scan_dedups_jsonl_zst_twins(scan_env, monkeypatch):
+    """Codex's background compressor can leave a stale .zst next to the live
+    .jsonl of the SAME rollout — the file must be indexed and counted once."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    sid = "019eb056-4eae-7280-8617-0000000000cc"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    lines = [
+        _codex_session_meta(),
+        {"type": "response_item", "payload": {"type": "function_call",
+                                              "name": "shell", "arguments": "{}"}},
+        _codex_token_event("2026-07-01T00:00:00Z", 1000, 400, 60),
+    ]
+    text = "".join(json.dumps(l) + "\n" for l in lines)
+    base = f"rollout-2026-07-01T00-00-00-{sid}.jsonl"
+    (day / base).write_text(text, encoding="utf-8")
+    (day / (base + ".zst")).write_bytes(
+        zstandard.ZstdCompressor().compress(text.encode("utf-8")))
+
+    session = next(s for s in main._scan_sessions_sync() if s["id"] == sid)
+    # net input 1000-400=600 + cached 400 + output 60 — parsed once, not twice.
+    assert session["tokens"]["total"] == 1060
+    assert session["tool_counts"]["shell"] == 1  # counted once, not twice
+
+
+def test_codex_scan_handles_empty_zst_rollout(scan_env, monkeypatch):
+    """A .zst that compresses empty content (rollout aborted before its first
+    event, then compressed by the worker) must scan like an empty .jsonl —
+    not raise into an unreadable-file path."""
+    zstandard = pytest.importorskip("zstandard")
+    monkeypatch.setattr(main, "CODEX_DIR", scan_env / ".codex")
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(scan_env / "tt_data"))
+    codex_dir = scan_env / ".codex"
+    day = codex_dir / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    sid_plain = "019eb056-4eae-7280-8617-0000000000dd"
+    sid_zst = "019eb056-4eae-7280-8617-0000000000ee"
+    (day / f"rollout-2026-07-01T00-00-00-{sid_plain}.jsonl").write_bytes(b"")
+    (day / f"rollout-2026-07-01T00-01-00-{sid_zst}.jsonl.zst").write_bytes(
+        zstandard.ZstdCompressor().compress(b""))
+
+    result = {s["id"]: s for s in main._scan_sessions_sync() if s.get("agent") == "codex"}
+    # Both surface identically: an empty rollout is a stub either way.
+    assert result[sid_zst]["stub"] == result[sid_plain]["stub"]
+    assert result[sid_zst]["tokens"]["total"] == result[sid_plain]["tokens"]["total"] == 0
+
+
 def test_scan_cache_version_mismatch_is_miss(tmp_path, monkeypatch):
     """An entry written by a different CACHE_VERSION must read as a miss even
     when its _mtime is fresh — parser/pricing changes ship as a version bump,
@@ -1600,7 +1701,7 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     import asyncio
     make_claude_tree(scan_env / ".claude")
     # Keep the fire-and-forget history persist away from the real store.
-    monkeypatch.setattr(main, "_persist_history_async", lambda data: None)
+    monkeypatch.setattr(main, "_persist_history_async", lambda data, **kw: None)
 
     data = asyncio.run(main.get_sessions(fresh=True))
 
@@ -1608,6 +1709,154 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
     assert all("stub" not in s for s in data)
 
 
+def test_codex_partial_read_does_not_cache_when_rollout_file_unreadable(scan_env, monkeypatch):
+    """When any Codex rollout file fails to open, the session must NOT be
+    written to the scan cache, regardless of which file in the sorted order
+    fails.  Covers two orderings:
+
+    - file1 succeeds, file2 (last) fails  — the original bug scenario
+    - file1 (first) fails, file2 succeeds — checks that a later success does
+      NOT reset the error latch and allow a partial cache write
+
+    Uses monkeypatching of builtins.open to simulate PermissionError so the
+    test is reliable even when tests run as root (where chmod 0o000 is ignored).
+    """
+    from unittest.mock import patch, mock_open, MagicMock
+
+    SID = "aabbccdd-1111-2222-3333-000000000099"
+    codex_dir = scan_env / ".codex"
+    day = codex_dir / "sessions" / "2026" / "09" / "21"
+    day.mkdir(parents=True)
+
+    usage_line = json.dumps({
+        "timestamp": "2026-09-21T10:00:00.000Z",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 80, "cached_input_tokens": 0,
+            "output_tokens": 30, "total_tokens": 110,
+        }}},
+    }) + "\n"
+    meta_line = json.dumps({
+        "timestamp": "2026-09-21T10:00:00.000Z",
+        "type": "session_meta",
+        "payload": {"id": SID, "cwd": "/tmp/proj", "model_provider": "openai"},
+    }) + "\n"
+
+    # Sort order is by filename; file1 < file2 < file3.
+    file1 = day / f"rollout-2026-09-21T10-00-00-{SID}.jsonl"
+    file2 = day / f"rollout-2026-09-21T10-01-00-{SID}.jsonl"
+    file3 = day / f"rollout-2026-09-21T10-02-00-{SID}.jsonl"
+    file1.write_text(meta_line + usage_line)
+    file2.write_text(usage_line)
+    file3.write_text(usage_line)
+
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+
+    real_open = open
+
+    def _open_raising_on(bad_path):
+        """Return an open() replacement that raises PermissionError for bad_path."""
+        def _patched(path, *args, **kwargs):
+            if str(path) == str(bad_path):
+                raise PermissionError(f"simulated: {path}")
+            return real_open(path, *args, **kwargs)
+        return _patched
+
+    # Case A: last file (file3) fails — original bug scenario.
+    with patch("builtins.open", side_effect=_open_raising_on(file3)):
+        sessions_a = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_a[SID]["stub"] is True, (
+        "last-file failure must keep stub=True (cache not written)"
+    )
+
+    # Case B: first file (file1) fails, file2 and file3 succeed.
+    # Without the _any_read_error latch, _read_ok would be reset to True by
+    # file2/file3 succeeding, and the cache would be written with partial data.
+    with patch("builtins.open", side_effect=_open_raising_on(file1)):
+        sessions_b = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_b[SID]["stub"] is True, (
+        "first-file failure must also keep stub=True even when later files succeed"
+    )
+
+    # Case C: all files readable — cache should be written and stub cleared.
+    sessions_c = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+    assert sessions_c[SID]["stub"] is False, (
+        "with all files readable the session must be fully parsed and cached"
+    )
+    assert sessions_c[SID]["tokens"]["total"] > 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
+
+def _codex_snapshot(ts, total, last=None):
+    """token_count event: running total (and optionally this turn's usage),
+    each given as (gross_input, cached_input, output)."""
+    def u(t):
+        g, c, o = t
+        return {"input_tokens": g, "cached_input_tokens": c,
+                "output_tokens": o, "total_tokens": g + o}
+    info = {"total_token_usage": u(total)}
+    if last is not None:
+        info["last_token_usage"] = u(last)
+    return json.dumps({"timestamp": ts, "type": "event_msg",
+                       "payload": {"type": "token_count", "info": info}}) + "\n"
+
+
+def test_codex_usage_sums_increases_and_drops_inherited_fork_usage(scan_env, monkeypatch):
+    """A Codex rollout logs a running total. The session's usage is the sum of
+    its increases: a forked thread's opening snapshot of the parent's total is
+    not its own, a repeated snapshot adds nothing, and a drop in the counter
+    doesn't erase what came before or after it."""
+    codex_dir = scan_env / ".codex"
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+    day = codex_dir / "sessions" / "2026" / "08" / "05"
+    day.mkdir(parents=True)
+    parent = "019fd28e-0000-7000-8000-000000000001"
+    child = "019fd31b-0000-7000-8000-000000000002"
+
+    def meta(sid, extra):
+        return json.dumps({"timestamp": "2026-08-05T10:00:00.000Z", "type": "session_meta",
+                           "payload": {"id": sid, "cwd": "/tmp/x", "model_provider": "openai",
+                                       **extra}}) + "\n"
+
+    own_turn = json.dumps({"timestamp": "2026-08-05T10:00:02.000Z", "type": "response_item",
+                           "payload": {"type": "message", "role": "assistant", "content": []}}) + "\n"
+    # Parent: two turns on 5 Aug, the same snapshot logged twice, then the
+    # counter drops to 900 and climbs to 1500 on 6 Aug.
+    (day / f"rollout-2026-08-05T15-30-00-{parent}.jsonl").write_text(
+        meta(parent, {"thread_source": "user"})
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:00:03.000Z", (400, 100, 50), (400, 100, 50))
+        + _codex_snapshot("2026-08-05T10:00:04.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-05T10:00:05.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-06T10:00:00.000Z", (900, 600, 100), (0, 0, 0))
+        + _codex_snapshot("2026-08-06T10:00:01.000Z", (1500, 900, 160), (600, 300, 60)))
+    # Child: forked subagent whose first snapshot carries the parent's total
+    # (1000/600/100) before any turn of its own, then one own turn of 300/200/40.
+    (day / f"rollout-2026-08-05T15-40-00-{child}.jsonl").write_text(
+        meta(child, {"thread_source": "subagent", "forked_from_id": parent,
+                     "source": {"subagent": {"thread_spawn": {
+                         "parent_thread_id": parent, "depth": 1}}}})
+        + json.dumps({"timestamp": "2026-08-05T10:10:00.000Z", "type": "compacted",
+                      "payload": {}}) + "\n"
+        + _codex_snapshot("2026-08-05T10:10:01.000Z", (1000, 600, 100), (600, 500, 50))
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:10:05.000Z", (1300, 800, 140), (300, 200, 40)))
+
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+
+    # Parent increases: (400,100,50) + (600,500,50) + drop + (600,300,60)
+    p = by_id[parent]["tokens"]
+    assert (p["input"], p["cached"], p["output"]) == (1600 - 900, 900, 160)
+    assert p["total"] == 1600 + 160
+    # Child: only its own turn, not the parent's 1100 it opened with.
+    c = by_id[child]["tokens"]
+    assert (c["input"], c["cached"], c["output"]) == (100, 200, 40)
+    assert c["total"] == 340
+    # The per-day split adds up to the session total.
+    for sid in (parent, child):
+        s = by_id[sid]
+        assert sum(d["total"] for d in s["tokens_by_day"].values()) == s["tokens"]["total"]
+    assert by_id[parent]["tokens_by_day"]["2026-08-06"]["total"] == (600 - 300) + 300 + 60

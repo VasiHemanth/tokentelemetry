@@ -19,8 +19,8 @@ Use this pattern when you can reach the machine directly:
 ./start.sh \
   --host 0.0.0.0 \
   --allowed-origins your-laptop.tailnet.ts.net,192.168.1.42 \
-  --port 3000 \
-  --api-port 8000
+  --port 13000 \
+  --api-port 18000
 ```
 
 ### What happens
@@ -37,7 +37,7 @@ Use this pattern when you can reach the machine directly:
    Or skip the typing — open this link (or scan its QR from the
    dashboard's "Connect a device" panel) on the other device:
 
-       http://192.168.1.10:3000/?token=abc123xyz...
+       http://192.168.1.10:13000/?token=abc123xyz...
 
    The token is shown once — re-run to rotate it.
    ──────────────────────────────────────────────────────────
@@ -88,21 +88,21 @@ Use this pattern when:
 **On the remote machine** (where the agent logs live):
 
 ```bash
-NEXT_PUBLIC_API_BASE=http://localhost:8000 ./start.sh
+NEXT_PUBLIC_API_BASE=http://localhost:18000 ./start.sh
 ```
 
-The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at `localhost:8000` regardless of what address the browser opened the dashboard from.
+The `NEXT_PUBLIC_API_BASE` override tells the frontend to always talk to the backend at `localhost:18000` regardless of what address the browser opened the dashboard from.
 
 **On your laptop:**
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@remote-host
+ssh -N -L 13000:127.0.0.1:13000 -L 18000:127.0.0.1:18000 user@remote-host
 ```
 
-Then open **http://localhost:3000** on your laptop.
+Then open **http://localhost:13000** on your laptop.
 
 <Callout type="warn">
-Forward **both** ports (`3000` and `8000`). A single-port forward (`-L 3000:...` only) shows a blank dashboard because the frontend tries to reach the backend at `localhost:8000` on your laptop instead of the remote machine.
+Forward **both** ports (`13000` and `18000`). A single-port forward (`-L 13000:...` only) shows a blank dashboard because the frontend tries to reach the backend at `localhost:18000` on your laptop instead of the remote machine.
 </Callout>
 
 This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because both services stay on loopback.

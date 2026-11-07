@@ -10,7 +10,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "How do I track Claude Code token usage?",
-    a: "Install TokenTelemetry, run Claude Code normally, and open http://localhost:3000. TokenTelemetry auto-detects Claude Code sessions from ~/.claude/ logs — no instrumentation, no SDK, no config.",
+    a: "Install TokenTelemetry, run Claude Code normally, and open http://localhost:13000. TokenTelemetry auto-detects Claude Code sessions from ~/.claude/ logs — no instrumentation, no SDK, no config.",
   },
   {
     q: "How do I monitor Google Antigravity, Codex, and Gemini CLI costs?",
@@ -34,7 +34,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Which agents does it support?",
-    a: "Nineteen coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, ZCode, and Kimi Code) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
+    a: "Twenty coding agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor, GitHub Copilot, Qwen CLI, OpenCode, Vibe, Antigravity, Grok Build, Cline, SmallCode, Pi, Oh My Pi, Meta Muse Code, Prime Agent, DeepSeek Harness, Qoder, ZCode, and Kimi Code) plus Hermes Agent — Nous Research's autonomous agent, which gets its own dedicated dashboard at /hermes with gateway health, scheduled-job monitoring, skills + memory observability, and 38 source platforms (CLI / Telegram / Discord / Feishu / DingTalk / cron / webhook / …).",
   },
   {
     q: "Why does Hermes Agent get its own page?",

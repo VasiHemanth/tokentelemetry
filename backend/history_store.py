@@ -210,7 +210,8 @@ def _ecosystem_blob(row: Dict[str, Any]) -> Optional[str]:
 
 # ── write path ───────────────────────────────────────────────────────────────
 
-def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
+def upsert_sessions(rows: Sequence[Dict[str, Any]],
+                    scan_started_at: Optional[str] = None) -> int:
     """Idempotently persist the core rollup for each live session dict.
 
     Keyed by (agent, id): a session that grows between scans overwrites its row
@@ -218,11 +219,19 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
     upserts; ``last_*`` and the token/cost columns track the freshest scan, and
     ``source_present`` is (re)set to 1 because we just saw the file on disk.
     Returns the number of rows written. Never raises — a store failure must not
-    break the scan that called it."""
+    break the scan that called it.
+
+    ``scan_started_at`` is an ISO timestamp from just before the scan ran.
+    When provided it is used as ``last_seen_at`` instead of ``datetime.now()``,
+    so the upsert timestamp is anchored to the scan's start rather than the
+    executor's wall-clock.  This makes ``mark_absent``'s timestamp comparison
+    accurate: a delayed older scan's upsert will carry an earlier timestamp than
+    the newer scan's ``scan_started_at``, so the guard in ``mark_absent`` fires
+    correctly instead of treating the delayed row as "freshly seen"."""
     valid = [r for r in rows if r.get("id") and r.get("agent")]
     if not valid:
         return 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = scan_started_at or datetime.now(timezone.utc).isoformat()
     written = 0
     try:
         con = _connect()
@@ -321,22 +330,37 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
     return written
 
 
-def mark_absent(seen_keys: Set[Tuple[str, str]]) -> None:
+def mark_absent(seen_keys: Set[Tuple[str, str]],
+                scan_started_at: Optional[str] = None) -> None:
     """Flag rows whose (agent, id) was NOT in the latest scan as no longer on
     disk (``source_present=0``). Never deletes — the rollup is what survives
-    agent pruning, so those rows are exactly the ones we must keep."""
+    agent pruning, so those rows are exactly the ones we must keep.
+
+    ``scan_started_at`` is an ISO timestamp captured before the scan began.
+    When provided, only rows whose ``last_seen_at < scan_started_at`` are marked
+    absent.  The check is pushed into the UPDATE WHERE clause so it remains
+    correct even if a newer concurrent upsert lands between our SELECT and our
+    UPDATE — a purely Python-side filter would not be atomic."""
     try:
         con = _connect()
         try:
             present = con.execute(
                 "SELECT agent, id FROM sessions WHERE source_present=1"
             ).fetchall()
-            gone = [(a, i) for (a, i) in ((r["agent"], r["id"]) for r in present)
-                    if (a, i) not in seen_keys]
+            gone = [(r["agent"], r["id"]) for r in present
+                    if (r["agent"], r["id"]) not in seen_keys]
             if gone:
-                con.executemany(
-                    "UPDATE sessions SET source_present=0 WHERE agent=? AND id=?", gone
-                )
+                if scan_started_at:
+                    con.executemany(
+                        "UPDATE sessions SET source_present=0"
+                        " WHERE agent=? AND id=? AND last_seen_at < ?",
+                        [(a, i, scan_started_at) for a, i in gone],
+                    )
+                else:
+                    con.executemany(
+                        "UPDATE sessions SET source_present=0 WHERE agent=? AND id=?",
+                        gone,
+                    )
                 con.commit()
         finally:
             con.close()

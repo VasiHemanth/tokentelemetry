@@ -9,7 +9,7 @@ const FULL_COMMAND =
 const STEPS: { kicker: string; tagline: string; lines: string[] }[] = [
   {
     kicker: "1 · Run TokenTelemetry",
-    tagline: "the engine — port :3000",
+    tagline: "the engine — port :13000",
     lines: [
       "curl -fsSL https://tokentelemetry.com/install.sh | bash",
     ],
@@ -43,7 +43,7 @@ export default function PluginInstallBlock() {
             Install in two acts
           </span>
           <span className="text-[10px] font-mono text-[var(--tt-fg-dim)]">
-            :9119 → :3000
+            :9119 → :13000
           </span>
         </div>
         <button
@@ -93,7 +93,7 @@ export default function PluginInstallBlock() {
         <p className="text-[11px] text-[var(--tt-fg-muted)] leading-relaxed">
           <strong className="text-[var(--tt-fg)]">The plugin is a launcher, not the engine.</strong>{" "}
           It opens TokenTelemetry pages inside Hermes Dashboard — but only when TT itself is running. Skip step 1 if you already have TT on
-          <code className="font-mono text-[var(--tt-fg-muted)] mx-0.5">:3000</code>.
+          <code className="font-mono text-[var(--tt-fg-muted)] mx-0.5">:13000</code>.
         </p>
       </div>
     </div>

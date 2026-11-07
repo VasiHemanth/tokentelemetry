@@ -9,13 +9,13 @@ const STEPS = [
     n: "2",
     title: "It finds your agents",
     body: "Scans the log files Claude Code, Codex, Cursor & co. already write to your disk. Read-only. Nothing is sent anywhere.",
-    code: <><span className="text-[var(--tt-success-fg,#10b981)]">✓</span> detected 20 agents · 510 sessions</>,
+    code: <><span className="text-[var(--tt-success-fg,#10b981)]">✓</span> detected 21 agents · 510 sessions</>,
   },
   {
     n: "3",
     title: "Open the dashboard",
     body: "Tokens, cost, traces, and reasoning — for every agent, in one local dashboard.",
-    code: <><span className="text-[var(--tt-fg-faint)]">→ </span>http://localhost:3000</>,
+    code: <><span className="text-[var(--tt-fg-faint)]">→ </span>http://localhost:13000</>,
   },
 ];
 

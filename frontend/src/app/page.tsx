@@ -42,6 +42,8 @@ interface Session {
   text?: string;
   tokens?: { input: number; output: number; cached: number; total: number };
   cost?: number;
+  /** Claude subagent/workflow spend folded into the session total (matches analytics). */
+  delegated_cost?: number;
   /** Copilot-only: cli / vscode */
   copilot_source?: string;
   /** Antigravity-only: cli / ide / app */
@@ -80,7 +82,7 @@ export default function Home() {
   const byModel = analyticsRes.data?.by_model ?? {};
 
   const totalTokens = sessions.reduce((a, s) => a + (s.tokens?.total ?? 0), 0);
-  const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0), 0);
+  const totalCost   = sessions.reduce((a, s) => a + (s.cost ?? 0) + (s.delegated_cost ?? 0), 0);
   const projectCount = new Set(sessions.map((s) => s.project)).size;
   const framing = costFraming(billingRes.data?.agents);
 
@@ -123,7 +125,7 @@ export default function Home() {
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
       <PageHeader
         eyebrow="Overview"
-        title="Dashboard"
+        title="Your agent workspace"
         description={
           loading
             ? "Loading telemetry…"
@@ -220,7 +222,7 @@ export default function Home() {
                 </div>
                 <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
               </div>
-              <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[var(--tt-fg-muted)]">
+              <div className="mt-2 text-[13px] font-medium text-[var(--tt-fg-muted)]">
                 {meta.label}
               </div>
               {quotaWindow && (
@@ -300,7 +302,7 @@ export default function Home() {
           <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
             <div className="flex items-center gap-2">
               <Activity size={14} className="text-[var(--tt-brand)]" />
-              <CardTitle className="!text-[13px]">Recent activity</CardTitle>
+              <CardTitle className="!text-[16px]">Recent activity</CardTitle>
               {countLine && (
                 <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">{countLine}</span>
               )}
