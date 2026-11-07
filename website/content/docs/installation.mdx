@@ -9,7 +9,7 @@ import { Callout } from 'fumadocs-ui/components/callout';
 
 Before installing, make sure you have:
 
-- **Node.js 18+** — [nodejs.org](https://nodejs.org)
+- **Node.js 20.9+** — [nodejs.org](https://nodejs.org). The launcher refuses anything older. Node.js 22.22+ is recommended: below it npm prints `EBADENGINE` warnings during the first install (on Windows too), which are harmless.
 - **Python 3.9+** — [python.org](https://www.python.org/downloads/). On Debian/Ubuntu, also `sudo apt install python3-venv`: Python there ships without the venv/pip bootstrap, so the first launch can't install the backend dependencies.
 - **npm** (comes with Node.js)
 - At least one supported AI coding agent already installed (Claude Code, Gemini CLI, Codex, etc.)
@@ -46,7 +46,7 @@ TokenTelemetry binds to `127.0.0.1`, so the dashboard is reachable only from the
 </Callout>
 
 <Callout title="Port already in use?" type="warn">
-If you see `required port(s) already in use: 3000, 8000`, another process is on those ports. Free them (`lsof -iTCP:3000 -sTCP:LISTEN` shows the culprit) or start on different ports: `./start.sh --port 3100 --api-port 8100`.
+If you see `required port(s) already in use: 13000, 18000`, another process is on those ports. Free them (`lsof -iTCP:13000 -sTCP:LISTEN` shows the culprit) or start on different ports: `./start.sh --port 3100 --api-port 8100`.
 </Callout>
 
 ## Option 2: Clone & run
@@ -72,6 +72,8 @@ node bin/cli.js
 The launcher creates a Python virtual environment and installs dependencies on first run. Subsequent starts skip the setup step if nothing has changed.
 
 If [uv](https://docs.astral.sh/uv/) is already on your PATH the launcher uses it for both steps, which is a good deal faster; otherwise it uses `python -m venv` and pip. You don't need to install uv, and either way you get the same interpreter and the same hash-checked packages. Set `TT_NO_UV=1` to force the pip path.
+
+The dashboard's JavaScript dependencies work the same way on macOS and Linux. If [Bun](https://bun.sh) is on your PATH the launcher installs them with `bun install`, which reinstalls in about a second instead of npm's six when dependencies change after an update; otherwise it uses `npm ci`. Bun installs exactly the versions and checksums pinned in `package-lock.json`, and if it fails for any reason the launcher falls back to npm. You don't need Bun, and Node.js is still required either way. Set `TT_NO_BUN=1` to always use npm. On Windows the launcher always uses npm, which installed about twice as fast as Bun there.
 
 ## What gets installed
 

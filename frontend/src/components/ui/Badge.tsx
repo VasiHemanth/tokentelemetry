@@ -51,7 +51,7 @@ export function AgentBadge({
   // in both themes; the tinted background/border stay on the literal hex
   // (they are translucent and fine in either theme).
   const isLightBrand = agent === "grok" || agent === "pi" || agent === "qoder"
-    || agent === "zcode" || agent === "kimi";
+    || agent === "zcode" || agent === "kimi" || agent === "omp";
   const foreground = isLightBrand ? `var(--agent-${agent})` : meta.hex;
   return (
     <span

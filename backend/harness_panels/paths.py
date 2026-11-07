@@ -40,6 +40,10 @@ QWEN_DIR = HOME / ".qwen"
 VIBE_DIR = HOME / ".vibe"
 CURSOR_DIR = HOME / ".cursor"
 PI_DIR = HOME / ".pi" / "agent"
+# Same contract as main.py's OMP_DIR / OMP_SESSIONS_DIR. Oh My Pi (OMP) is a
+# distinct agent from Pi, with its own key and its own on-disk format.
+OMP_DIR = _env_path("TT_OMP_DIR") or (HOME / ".omp" / "agent")
+OMP_SESSIONS_DIR = _env_path("TT_OMP_SESSIONS_DIR") or (OMP_DIR / "sessions")
 DSH_DIR = _env_path("DSH_HOME") or (HOME / ".dsh")
 # Same contract as main.py's KIMI_DIR. ~/.kimi/credentials/ holds OAuth tokens
 # and is never read.

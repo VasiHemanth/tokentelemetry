@@ -8,6 +8,7 @@ import { QuotaProvider } from "./QuotaProvider";
 import NotificationToaster from "./notifications/NotificationToaster";
 import TokenGate from "./TokenGate";
 import TelemetryNotice from "./TelemetryNotice";
+import LocaleOverlay from "./LocaleOverlay";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
@@ -59,11 +60,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       <QuotaProvider>
       <body className="min-h-full flex bg-[var(--tt-canvas)] overflow-hidden">
         <Navigation isCollapsed={isCollapsed} setIsCollapsed={toggle} />
-        <main className="flex-1 h-screen overflow-y-auto relative">
+        <main className="min-w-0 flex-1 h-screen overflow-y-auto relative">
           {/* Ambient canvas — single source of background atmosphere */}
           <div aria-hidden className="pointer-events-none absolute inset-0 tt-canvas-glow" />
           <div aria-hidden className="pointer-events-none absolute inset-0 tt-grid opacity-40" />
-          <div className="relative z-10">
+          {/* Column with a full-height floor, so a page can fill exactly what the
+              banner leaves (flex-1 basis-0) instead of h-screen plus the banner. */}
+          <div className="relative z-10 flex min-h-full flex-col">
             <WhatsNewBanner />
             <NotificationToaster />
             {children}
@@ -72,6 +75,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <FeedbackFloatingButton />
         <TokenGate />
         <TelemetryNotice />
+        {/* Runtime locale overlay. The language itself is picked in
+            Settings → Language; this mount is the only wiring here. */}
+        <LocaleOverlay />
       </body>
       </QuotaProvider>
     </NotificationProvider>

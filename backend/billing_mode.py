@@ -60,6 +60,7 @@ DEFAULT_MODES: Dict[str, str] = {
     "qoder": "subscription",
     "zcode": "subscription",       # Z.ai coding plan (builtin:zai-* providers)
     "kimi": "subscription",        # flat membership (weekly usage allowance)
+    "omp": "api",                  # bring-your-own-key across providers
 }
 
 # Human-readable note on where a detected value came from (shown in Settings so

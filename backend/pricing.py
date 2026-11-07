@@ -147,6 +147,10 @@ PRICING = {
     # List prices are the <200k-prompt band. Requests whose prompt reaches
     # 200k tokens are billed at 2x all three rates for that request — see
     # calculate_xai_turn_cost. https://docs.x.ai/developers/models/grok-4.6
+    # grok-4.7: $2.60/$7.80/$0.65 per MTok (aggregator-listed; verify against
+    # docs.x.ai when it publishes). Used by Grok Build 1.0.41+.
+    "grok-4.7":                     {"in": 2.60,  "out": 7.80,  "cached_read": 0.65},
+    "grok-4.7-latest":              {"in": 2.60,  "out": 7.80,  "cached_read": 0.65},
     "grok-4.6":                     {"in": 2.00,  "out": 6.00,  "cached_read": 0.50},
     "grok-4.6-latest":              {"in": 2.00,  "out": 6.00,  "cached_read": 0.50},
     "grok-4.5":                     {"in": 2.00,  "out": 6.00,  "cached_read": 0.30},

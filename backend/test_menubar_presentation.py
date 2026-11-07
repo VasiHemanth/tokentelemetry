@@ -105,6 +105,26 @@ def test_presentation_counts_not_supported_agents_without_treating_them_as_failu
     assert presentation.failure_message is None
 
 
+def test_presentation_drops_a_stale_snapshot_instead_of_reporting_it_as_live():
+    presentation = build_menu_presentation({
+        "providers": {
+            "claude": {
+                "displayName": "Claude Code",
+                "resources": {
+                    "session": {"kind": "consumption", "unit": "percent", "used": 97, "limit": 100},
+                },
+                "stale": True,
+            },
+        },
+        "capabilities": {"claude": {"displayName": "Claude Code", "state": "notSignedIn"}},
+        "errors": [],
+    })
+
+    assert presentation.state == "no_data"
+    assert presentation.rows == ()
+    assert presentation.worst_window is None
+
+
 def test_presentation_distinguishes_loading_and_collection_failure_states():
     loading = build_menu_presentation(None, loading=True)
     failed = build_menu_presentation(None, failure="Could not refresh quota data.")

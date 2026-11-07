@@ -1,0 +1,54 @@
+name: Publish Hermes plugin
+
+# The standalone plugin repo is a copy of plugin/hermes-dashboard/ plus
+# scripts/publish-plugin-template/. It once fell behind main for months (#419),
+# so any change to either source re-syncs it here instead of by hand.
+#
+# Needs a write deploy key on VasiHemanth/tokentelemetry-hermes-plugin stored
+# as the HERMES_PLUGIN_DEPLOY_KEY secret. Without it the job is skipped.
+# To cut a release, run this manually and pass a version (tags v<version>).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugin/hermes-dashboard/**"
+      - "scripts/publish-plugin-template/**"
+      - "scripts/publish-plugin.sh"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional version to bump and tag, e.g. 0.1.1"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-hermes-plugin
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_KEY: ${{ secrets.HERMES_PLUGIN_DEPLOY_KEY }}
+    steps:
+      - name: Skip when the deploy key is not configured
+        if: env.DEPLOY_KEY == ''
+        run: echo "HERMES_PLUGIN_DEPLOY_KEY not set; skipping publish."
+      - uses: actions/checkout@v7
+        if: env.DEPLOY_KEY != ''
+      - name: Load deploy key
+        if: env.DEPLOY_KEY != ''
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - name: Sync plugin repo
+        if: env.DEPLOY_KEY != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/publish-plugin.sh "$VERSION"

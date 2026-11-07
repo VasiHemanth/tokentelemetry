@@ -51,20 +51,20 @@
    TokenTelemetry website — same token system as the app (dark only).
    ========================================================================= */
 :root {
-  --tt-canvas:    #0a0c10;
-  --tt-sunken:    #07090d;
-  --tt-panel:     #11141a;
-  --tt-raised:    #181c25;
-  --tt-overlay:   #1d2230;
+  --tt-canvas:    #101113;
+  --tt-sunken:    #0b0c0e;
+  --tt-panel:     #181a1d;
+  --tt-raised:    #222428;
+  --tt-overlay:   #2b2e33;
 
-  --tt-border:        rgba(255, 255, 255, 0.06);
-  --tt-border-strong: rgba(255, 255, 255, 0.10);
+  --tt-border:        rgba(255, 255, 255, 0.10);
+  --tt-border-strong: rgba(255, 255, 255, 0.14);
   --tt-border-focus:  rgba(96, 165, 250, 0.45);
 
-  --tt-fg:        #e8eaf0;
-  --tt-fg-muted:  #9aa1ad;
-  --tt-fg-dim:    #5f6675;
-  --tt-fg-faint:  #3d434f;
+  --tt-fg:        #f1f2f4;
+  --tt-fg-muted:  #b2b7c0;
+  --tt-fg-dim:    #9299a3;
+  --tt-fg-faint:  #9299a3;
 
   --tt-brand:        #60a5fa;
   --tt-brand-strong: #3b82f6;
