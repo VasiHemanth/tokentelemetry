@@ -241,11 +241,16 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 # historical /analytics query (i.e. every day but "today")
                 # silently loses it even though the live scanner computes it
                 # correctly.
-                deleg_cost = float(r.get("delegated_cost", 0.0) or 0.0)
-                deleg_input = int(tok.get("delegated_input", 0) or 0)
-                deleg_output = int(tok.get("delegated_output", 0) or 0)
-                deleg_cached = int(tok.get("delegated_cached", 0) or 0)
-                deleg_cache_reads = int(tok.get("delegated_cache_reads", 0) or 0)
+                # Use None (SQL NULL) when delegation data is absent from the
+                # session dict.  The conflict clause then uses COALESCE to keep
+                # the existing stored value rather than overwriting it with 0.
+                # Prevents M8: subagent files deleted + parent re-scanned →
+                # stored delegated_cost zeroed out permanently.
+                deleg_cost = float(r["delegated_cost"]) if "delegated_cost" in r else None
+                deleg_input = int(tok["delegated_input"]) if "delegated_input" in tok else None
+                deleg_output = int(tok["delegated_output"]) if "delegated_output" in tok else None
+                deleg_cached = int(tok["delegated_cached"]) if "delegated_cached" in tok else None
+                deleg_cache_reads = int(tok["delegated_cache_reads"]) if "delegated_cache_reads" in tok else None
                 deleg_by_model = r.get("delegated_by_model")
                 deleg_by_model_json = json.dumps(deleg_by_model) if deleg_by_model else None
                 # A stub row is a session we discovered on disk but did NOT fully
@@ -256,10 +261,23 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                 # identical to the real path, so a genuinely-new stub still lands
                 # as a zero-value row rather than being dropped.
                 if r.get("stub", False):
+                    # Stubs must never overwrite a non-stub's real data with
+                    # zeros, so only liveness columns update unconditionally.
+                    # Token/cost columns update only when the incoming stub has
+                    # MORE total tokens than stored — a better partial parse
+                    # should advance the estimate (M5 fix: stale first-sighting
+                    # partial values were frozen forever under the old clause).
                     conflict_clause = """
                         ON CONFLICT(agent, id) DO UPDATE SET
                             last_seen_at=excluded.last_seen_at,
-                            source_present=1
+                            source_present=1,
+                            input=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.input ELSE sessions.input END,
+                            output=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.output ELSE sessions.output END,
+                            cached=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.cached ELSE sessions.cached END,
+                            cache_reads=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.cache_reads ELSE sessions.cache_reads END,
+                            total=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.total ELSE sessions.total END,
+                            cost=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 THEN excluded.cost ELSE sessions.cost END,
+                            model=CASE WHEN excluded.total > sessions.total AND excluded.total > 0 AND excluded.model IS NOT NULL THEN excluded.model ELSE sessions.model END
                     """
                 else:
                     conflict_clause = """
@@ -281,12 +299,12 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]]) -> int:
                             ecosystem_json=excluded.ecosystem_json,
                             last_seen_at=excluded.last_seen_at,
                             source_present=1,
-                            delegated_cost=excluded.delegated_cost,
-                            delegated_input=excluded.delegated_input,
-                            delegated_output=excluded.delegated_output,
-                            delegated_cached=excluded.delegated_cached,
-                            delegated_cache_reads=excluded.delegated_cache_reads,
-                            delegated_by_model_json=excluded.delegated_by_model_json
+                            delegated_cost=COALESCE(excluded.delegated_cost, sessions.delegated_cost),
+                            delegated_input=COALESCE(excluded.delegated_input, sessions.delegated_input),
+                            delegated_output=COALESCE(excluded.delegated_output, sessions.delegated_output),
+                            delegated_cached=COALESCE(excluded.delegated_cached, sessions.delegated_cached),
+                            delegated_cache_reads=COALESCE(excluded.delegated_cache_reads, sessions.delegated_cache_reads),
+                            delegated_by_model_json=COALESCE(excluded.delegated_by_model_json, sessions.delegated_by_model_json)
                     """
                 con.execute(
                     f"""
