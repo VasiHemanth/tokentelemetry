@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   BarChart3, TrendingUp, ArrowDownToLine, ArrowUpFromLine,
-  Zap, DollarSign, Cpu, GitBranch, Repeat, Info,
+  Zap, DollarSign, Cpu, GitBranch, Repeat, Info, Calendar,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart as RePieChart, Pie, Cell,
@@ -89,8 +89,8 @@ function useChartTheme() {
       padding: "8px 10px",
       boxShadow: isDark ? "0 12px 32px -12px rgba(0,0,0,0.6)" : "0 12px 32px -12px rgba(15,23,42,0.18)",
     },
-    tooltipItem:  { fontSize: "11px", color: "var(--tt-fg)" },
-    tooltipLabel: { fontSize: "10px", color: "var(--tt-fg-dim)", textTransform: "uppercase" as const, letterSpacing: "0.16em" },
+    tooltipItem:  { fontSize: "calc(11px * var(--tt-text-scale))", color: "var(--tt-fg)" },
+    tooltipLabel: { fontSize: "calc(10px * var(--tt-text-scale))", color: "var(--tt-fg-dim)", textTransform: "uppercase" as const, letterSpacing: "0.16em" },
   };
 }
 
@@ -150,7 +150,7 @@ export default function AnalyticsPage() {
   const { data, loading } = useResource<AnalyticsData>(queryPath, { pollMs: 30_000 });
   const agentOptions = useResource<string[]>("/agents").data ?? [];
   const ct = useChartTheme();
-  const AXIS = { stroke: ct.axisStroke, fontSize: 10, tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
+  const AXIS = { stroke: ct.axisStroke, fontSize: "calc(10px * var(--tt-text-scale))", tickLine: false, axisLine: false, tick: { fill: ct.tickFill } } as const;
 
   // Human label for the active window — the dashboard KPI strip is all-time,
   // so spelling out the analytics window here keeps the two totals from
@@ -202,6 +202,12 @@ export default function AnalyticsPage() {
     return Object.entries(data.by_agent)
       .map(([name, s]) => ({ key: name, name: getAgent(name).label, value: s.total, color: getAgent(name).hex }))
       .sort((a, b) => b.value - a.value);
+  }, [data]);
+
+  // Most-recent-first for the breakdown table; the chart above wants ascending order.
+  const dayRows = useMemo(() => {
+    if (!data?.by_day) return [];
+    return [...data.by_day].sort((a, b) => b.date.localeCompare(a.date));
   }, [data]);
 
   if (loading && !data) return <AnalyticsLoading />;
@@ -510,6 +516,40 @@ export default function AnalyticsPage() {
         </div>
       </Card>
 
+      {/* Per-day table */}
+      <Card padding="none">
+        <div className="px-5 py-4 border-b border-[var(--tt-border)] flex items-center justify-between">
+          <CardTitle><Calendar size={14} className="text-[var(--tt-brand)]" /> Cost by {granularity}</CardTitle>
+          <CardEyebrow>{dayRows.length} {granularity === "day" ? "days" : granularity === "week" ? "weeks" : "months"}</CardEyebrow>
+        </div>
+        <div className="overflow-x-auto">
+          <Table>
+            <THead>
+              <TR>
+                <TH className="pl-5">Date</TH>
+                <TH className="text-right">Input</TH>
+                <TH className="text-right">Output</TH>
+                <TH className="text-right">Cached</TH>
+                <TH className="text-right">Total</TH>
+                <TH className="text-right pr-5 text-amber-300">Cost</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {dayRows.map((d) => (
+                <TR key={d.date} interactive>
+                  <TD className="pl-5 tabular text-[var(--tt-fg-muted)]">{d.date}</TD>
+                  <TD className="text-right tabular text-[var(--tt-fg-muted)]">{d.input.toLocaleString()}</TD>
+                  <TD className="text-right tabular text-[var(--tt-fg-muted)]">{d.output.toLocaleString()}</TD>
+                  <TD className="text-right tabular text-cyan-300/80">{d.cached.toLocaleString()}</TD>
+                  <TD className="text-right tabular font-semibold text-[var(--tt-fg)]">{d.total.toLocaleString()}</TD>
+                  <TD className="text-right pr-5 tabular font-semibold text-amber-300">${d.cost.toFixed(2)}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </div>
+      </Card>
+
       {/* Models */}
       {modelData.length > 0 && (
         <Section
@@ -529,7 +569,7 @@ export default function AnalyticsPage() {
                     <XAxis type="number" tickFormatter={(v) => compact(v)} {...AXIS} />
                     <YAxis
                       type="category" dataKey="name" width={210} interval={0}
-                      tick={{ fill: "var(--tt-fg-muted)", fontSize: 11 }}
+                      tick={{ fill: "var(--tt-fg-muted)", fontSize: "calc(11px * var(--tt-text-scale))" }}
                       tickLine={false} axisLine={false}
                     />
                     <Tooltip

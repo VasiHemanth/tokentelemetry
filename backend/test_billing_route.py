@@ -116,7 +116,7 @@ def test_cursor_pool_scales_with_plan():
 # API-only + local + fallbacks.
 # ---------------------------------------------------------------------------
 def test_api_only_agents_are_paygo():
-    for agent in ("grok", "hermes", "opencode"):
+    for agent in ("grok", "hermes", "opencode", "omp"):
         r = br.resolve_billing_route(agent)
         assert r["active"]["id"] == "api_paygo"
         assert r["charges"] == "api_rate"

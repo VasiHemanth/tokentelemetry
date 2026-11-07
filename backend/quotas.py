@@ -1474,6 +1474,7 @@ def default_quota_providers() -> List[QuotaProvider]:
         StaticQuotaProvider("hermes", "Hermes Agent", "Hermes routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("cline", "Cline", "Cline routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("pi", "Pi", "Pi routes to configured model providers, so it has no account quota of its own."),
+        StaticQuotaProvider("omp", "Oh My Pi", "Oh My Pi routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("smallcode", "SmallCode", "SmallCode routes to configured model providers, so it has no account quota of its own."),
         StaticQuotaProvider("muse", "Muse Code", "Muse Code's local session exposes no plan-quota API."),
         StaticQuotaProvider("prime", "Prime Agent", "Prime routes to configured model providers, so it has no account quota of its own."),

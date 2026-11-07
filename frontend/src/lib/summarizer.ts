@@ -184,7 +184,76 @@ export const generateSummary = (sessionId: string, agent: string, force = false)
     { method: "POST" },
   );
 
-export const summarizeRecent = (limit: number) =>
+export interface CustomSummary {
+  prompt_hash: string;
+  prompt: string;
+  content_hash: string;
+  backend: string;
+  model: string | null;
+  answer: string;
+  generated_at: string;
+  /** Set by the list endpoint when asked with an agent: trace changed since. */
+  stale?: boolean;
+}
+
+export const MAX_CUSTOM_PROMPT_CHARS = 2000;
+
+/** Starting points for the custom prompt box; the user can edit them freely. */
+export const CUSTOM_PROMPT_PRESETS: { label: string; prompt: string }[] = [
+  { label: "Decisions", prompt: "List the decisions made in this session and the reason given for each." },
+  { label: "Bugs & fixes", prompt: "List the bugs or errors hit in this session and how each was fixed or worked around." },
+  { label: "Open items", prompt: "What was left unfinished, deferred, or flagged as a follow-up?" },
+  { label: "Files & why", prompt: "For each file touched, say in one line why it was changed." },
+];
+
+export const getCustomSummaries = (sessionId: string, agent?: string) =>
+  api<{ items: CustomSummary[] }>(
+    `/sessions/${sessionId}/summary/custom${agent ? `?agent=${encodeURIComponent(agent)}` : ""}`,
+  ).then((r) => r.items);
+
+export const generateCustomSummary = (sessionId: string, agent: string, prompt: string, force = false) =>
+  api<{
+    item: CustomSummary | null;
+    cached: boolean;
+    error: string | null;
+    error_info?: SummaryErrorInfo | null;
+    /** false when the answer was generated but could not be saved. */
+    persisted?: boolean;
+  }>(`/sessions/${sessionId}/summary/custom?agent=${encodeURIComponent(agent)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, force }),
+  });
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatReply extends ChatMessage {
+  role: "assistant";
+  backend: string;
+  model: string | null;
+  excerpts: number;
+  generated_at: string;
+}
+
+/** Limits enforced server-side; mirrored here so the UI can trim before sending. */
+export const MAX_CHAT_MSG_CHARS = 2000;
+
+/** One chat turn. The client holds the history and sends all of it each time. */
+export const sendSessionChat = (sessionId: string, agent: string, messages: ChatMessage[]) =>
+  api<{
+    reply: ChatReply | null;
+    error: string | null;
+    error_info?: SummaryErrorInfo | null;
+  }>(`/sessions/${sessionId}/chat?agent=${encodeURIComponent(agent)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+
+export const summarizeRecent =(limit: number) =>
   api<RecentTally>(`/summaries/recent?limit=${limit}`, { method: "POST" });
 
 /**

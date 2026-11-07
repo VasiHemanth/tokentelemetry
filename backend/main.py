@@ -8,7 +8,7 @@ import json
 import yaml
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set, Iterable, Tuple
+from typing import Callable, List, Optional, Dict, Any, Set, Iterable, Tuple
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta, time as _dtime
 from urllib.parse import unquote, quote
@@ -26,6 +26,7 @@ from quotas import (
     QuotaService, default_quota_providers,
 )
 import scan_cache
+import antigravity_usage
 import harness_panels
 import codex_goals
 import hermes_telemetry as _ht
@@ -80,57 +81,263 @@ def _parse_copilot_iso(ts) -> Optional[datetime]:
     except Exception:
         return None
 
-def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
-    """Best-effort precise token totals from a closed session's
-    `session.shutdown.modelMetrics`. The exact shape varies by Copilot
-    version, so we defensively sum any recognizable input/output/cache token
-    counts found anywhere in the structure. Returns None when nothing usable
-    is present (caller then falls back to the per-message estimate).
+_GRAB_INPUT_KEYS = ("inputtokens", "prompttokens")
+_GRAB_OUTPUT_KEYS = ("outputtokens", "completiontokens")
 
-    Copilot's `usage.inputTokens` is GROSS: it already includes
-    cacheReadTokens + cacheWriteTokens (verified against tokenDetails, whose
-    net input.tokenCount + cache_read + cache_write sums exactly to
-    inputTokens). So after collection, cache traffic is subtracted back out
-    of input — otherwise it's billed twice across the input and cached
-    buckets. The subtraction is guarded (only when input covers it) so an
-    unknown future shape that reports net input can't go negative."""
+
+def _grab_token_fields(obj, tot: dict) -> bool:
+    """Recursively scan `obj` for known token-usage field names and
+    accumulate them into `tot` (keys: input/output/cached/cache_creation).
+    A field stays `None` until a matching key is actually seen, then becomes a
+    real int (possibly 0) — this distinguishes "never reported" from "reported
+    as zero" so callers can tell a genuinely absent counter from an explicit
+    zero one (e.g. a fully-cached request correctly reporting 0 net input).
+    Returns True if anything was found. Shared by `_copilot_cli_tokens_from_metrics`
+    (shutdown rollup / live session.usage_record rollup).
+
+    Matches EXACT field names only (case-insensitive) — an earlier version
+    matched any numeric field whose name merely *contained* "token", which
+    over-counts real Copilot CLI payloads: `maxPromptTokens`/`maxOutputTokens`
+    are static per-request context-window limits (constant ~200000/128000 on
+    every single usage record, not actual usage) and `interTokenLatencyMs`/
+    `toolTokenCount` are latency/metadata, yet all of them matched substrings
+    like "in"+"token" or "out"+"token" and got silently summed as real usage
+    — inflating a real 480-call session's output from ~400K to ~18M tokens.
+    Nested `copilotUsage.tokenDetails[].tokenCount` entries are intentionally
+    NOT matched either, since they'd double-count the same totals already
+    captured by the top-level `*Tokens` fields on the same record."""
+    found = False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                if kl == "reasoningtokens":
+                    # Folded into outputTokens already; counting it too double-bills it.
+                    continue
+                elif kl == "cachereadtokens":
+                    tot["cached"] = (tot["cached"] or 0) + int(v); found = True
+                elif kl == "cachewritetokens":
+                    tot["cache_creation"] = (tot["cache_creation"] or 0) + int(v); found = True
+                elif kl in _GRAB_OUTPUT_KEYS:
+                    tot["output"] = (tot["output"] or 0) + int(v); found = True
+                elif kl in _GRAB_INPUT_KEYS:
+                    tot["input"] = (tot["input"] or 0) + int(v); found = True
+            else:
+                found = _grab_token_fields(v, tot) or found
+    elif isinstance(obj, list):
+        for x in obj:
+            found = _grab_token_fields(x, tot) or found
+    return found
+
+
+def _copilot_cli_tokens_from_metrics(metrics) -> Optional[dict]:
+    """Best-effort raw token field extraction from a closed session's
+    `session.shutdown.modelMetrics` (or, by the same shape, a live
+    `session.usage_record`). The exact shape varies by Copilot version, so we
+    defensively sum any recognizable input/output/cache token counts found
+    anywhere in the structure. Returns None when nothing usable is present
+    (caller then falls back to other sources).
+
+    Deliberately returns GROSS, un-netted input (Copilot's `usage.inputTokens`
+    already includes cacheReadTokens + cacheWriteTokens — verified against
+    tokenDetails, whose net input.tokenCount + cache_read + cache_write sums
+    exactly to inputTokens) and leaves any field never encountered as `None`
+    rather than 0. Netting the cache traffic back out of input, and deciding
+    when a missing field should fall back to another source, both require
+    knowing the FINAL combined cache counts across every source — doing either
+    here, before the caller has merged shutdown/live/per-message data, single-
+    counts cache traffic reported by a different source than this one and
+    silently overwrites an explicit zero with a fallback estimate. Both are
+    done exactly once in `_merge_copilot_cli_tokens` instead."""
     if not isinstance(metrics, (dict, list)):
         return None
-    tot = {"input": 0, "output": 0, "cached": 0, "cache_creation": 0}
-    found = False
-
-    def grab(obj):
-        nonlocal found
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                kl = str(k).lower()
-                if isinstance(v, (int, float)) and not isinstance(v, bool) and "token" in kl:
-                    if "reasoning" in kl:
-                        # Folded into outputTokens already; counting it (the
-                        # old "in" match caught reasonINg) double-bills it.
-                        continue
-                    if "cache" in kl:
-                        if "write" in kl or "creation" in kl:
-                            tot["cache_creation"] += int(v); found = True
-                        else:
-                            tot["cached"] += int(v); found = True
-                    elif "out" in kl or "completion" in kl or "output" in kl:
-                        tot["output"] += int(v); found = True
-                    elif "in" in kl or "prompt" in kl:
-                        tot["input"] += int(v); found = True
-                else:
-                    grab(v)
-        elif isinstance(obj, list):
-            for x in obj:
-                grab(x)
-
-    grab(metrics)
-    if not found:
+    tot = {"input": None, "output": None, "cached": None, "cache_creation": None}
+    if not _grab_token_fields(metrics, tot):
         return None
-    cache_total = tot["cached"] + tot["cache_creation"]
-    if cache_total and tot["input"] >= cache_total:
-        tot["input"] -= cache_total
     return tot
+
+
+def _model_names_from_metrics(metrics) -> List[str]:
+    """Best-effort model name(s) implied by a modelMetrics-shaped dict.
+    `session.shutdown.modelMetrics` is usually keyed BY model name (see
+    REAL_METRICS in the test file), but can also be a flat single-model dict
+    with a top-level "usage" key and no model name anywhere — excluded here
+    (along with other known structural keys) so that shape doesn't get
+    mistaken for a model literally called "usage"."""
+    if not isinstance(metrics, dict):
+        return []
+    non_model_keys = {"usage", "requests", "tokendetails", "totalnanoaiu"}
+    return [k for k, v in metrics.items()
+            if isinstance(v, dict) and str(k).lower() not in non_model_keys]
+
+
+def _merge_copilot_cli_tokens(shutdown_rollup: Optional[dict], usage_rollup: Optional[dict],
+                               msg_tot: dict, in_estimate: int) -> dict:
+    """Combine the shutdown rollup, the live session.usage_record rollup, and
+    the per-message assistant.message scan.
+
+    `shutdown_rollup`, when it reports a field, wins outright for it — it's
+    the CLI's own final rollup at process exit, generated precisely to
+    summarize every turn regardless of which per-turn mechanism each one used,
+    so adding `usage_rollup`/`msg_tot` on top would double-count turns it
+    already covers. A field it's silent on (unusual, but the shape varies by
+    Copilot version) falls through to the sources below, picked as a single
+    value — not combined with them — since nothing says those turns'
+    equivalent shutdown data was missing rather than just unreported for that
+    one field.
+
+    Without a shutdown (still-running/killed session, the common case), the
+    live `usage_rollup` is also usually complete for the turns that emitted a
+    session.usage_record — but if the CLI's reporting format changed
+    mid-session, some turns may ONLY ever appear via the per-message scan.
+    In that specific situation (no shutdown) `usage_rollup` and `msg_tot` are
+    ADDED together per field rather than one replacing the other, so a turn
+    the live rollup never saw isn't silently dropped just because a later
+    turn was captured a different way. This assumes a single turn is never
+    reported through BOTH `usage_rollup` and `msg_tot` at once, which holds
+    for every real Copilot CLI payload inspected to date (assistant.message
+    carries no token fields whenever session.usage_record is emitted).
+
+    A field left unreported by everything is assumed 0, EXCEPT input, which
+    falls back to the char-count estimate — an explicit 0 input from any
+    source is kept as-is (not treated as missing), since that's a real
+    possible value for a fully cached request. The gross-input/cache-traffic
+    netting happens exactly once here, against the final combined
+    cached+cache_creation, after merging — netting per-source first would
+    under/over-subtract whenever the cache counts and the input count come
+    from different sources. The netting only applies to a REPORTED input
+    counter (gross by definition — see `_copilot_cli_tokens_from_metrics`);
+    the char-count estimate only ever counts user-message text, never cached
+    context, so it's already net and must not be subtracted from again."""
+    def combine(field):
+        if shutdown_rollup and shutdown_rollup.get(field) is not None:
+            return shutdown_rollup[field]
+        if shutdown_rollup is not None:
+            # A shutdown happened but didn't report this specific field —
+            # pick a single fallback source (not a sum of both), since
+            # there's no shutdown-and-message overlap-risk signal for THIS
+            # field specifically; summing is reserved for the no-shutdown
+            # case below, where usage_rollup is known to be incomplete.
+            for src in (usage_rollup, msg_tot):
+                if src and src.get(field) is not None:
+                    return src[field]
+            return None
+        r = usage_rollup.get(field) if usage_rollup else None
+        m = msg_tot.get(field)
+        if r is None and m is None:
+            return None
+        return (r or 0) + (m or 0)
+
+    output = combine("output") or 0
+    cached = combine("cached") or 0
+    cache_creation = combine("cache_creation") or 0
+    input_val = combine("input")
+    if input_val is None:
+        input_val = in_estimate
+    else:
+        cache_total = cached + cache_creation
+        if cache_total and input_val >= cache_total:
+            input_val -= cache_total
+    tokens = {"input": input_val, "output": output, "cached": cached, "cache_creation": cache_creation}
+    # `total` intentionally excludes cache_creation (write-cache) tokens — it
+    # means only input + output + cached(read). total_including_cache_creation
+    # is the true overall token volume for a session with cache writes.
+    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    tokens["total_including_cache_creation"] = tokens["total"] + tokens["cache_creation"]
+    return tokens
+
+
+def _parse_copilot_cli_session_events(rows: List[dict], fallback_ts) -> dict:
+    """Turn a Copilot CLI session's raw events.jsonl rows into the fields
+    needed for a session list entry: project path, first message, model(s),
+    and merged token totals (shutdown rollup / live session.usage_record
+    rollup / per-message scan combined field-by-field, see
+    _merge_copilot_cli_tokens). Pure function, no filesystem access, so
+    Copilot CLI version/schema compatibility can be exercised directly against
+    synthetic row lists instead of only the individual helpers it calls."""
+    project_path = "unknown"; first_msg = ""; model = None
+    models_used: List[str] = []
+    in_estimate = 0
+    # Per-message fallback totals (used when the session never emitted
+    # a clean session.shutdown, e.g. a still-running/killed CLI process —
+    # common for long foreground orchestrator sessions, see #CLI
+    # output/cached always-zero bug). Accumulated via _grab_token_fields
+    # instead of a single literal "outputTokens" key, since that key
+    # alone silently misses output/cache tokens reported under a
+    # differently-shaped field (nested usage object, renamed key, etc.)
+    # across Copilot CLI versions — the root cause of output/cached
+    # staying 0 even for sessions that clearly produced heavy output.
+    msg_tot = {"input": None, "output": None, "cached": None, "cache_creation": None}
+    usage_records: List[dict] = []
+    usage_models: List[str] = []
+    start_ts = None; last_ts = None; shutdown_metrics = None
+    for r in rows:
+        # Be tolerant of corrupted/partial JSONL lines or upstream parsing
+        # that yields non-dict entries (None/string/etc.) — skip them instead
+        # of letting one bad row raise and drop the whole session.
+        if not isinstance(r, dict):
+            continue
+        et = r.get("type"); d = r.get("data") or {}
+        rts = _parse_copilot_iso(r.get("timestamp"))
+        if rts and (last_ts is None or rts > last_ts): last_ts = rts
+        if et == "session.start":
+            cwd = (d.get("context") or {}).get("cwd")
+            if cwd: project_path = cwd
+            start_ts = _parse_copilot_iso(d.get("startTime")) or rts
+        elif et == "user.message":
+            c = d.get("content") or ""
+            if c and not first_msg: first_msg = c
+            in_estimate += len(c) // 4
+        elif et == "assistant.message":
+            m = d.get("model")
+            if m:
+                if not model: model = m
+                if m not in models_used: models_used.append(m)
+            # Exclude toolRequests/content/reasoningText: these can
+            # carry arbitrary tool-call arguments or free text that
+            # might coincidentally contain "token" in a key name,
+            # which would corrupt the count. Token usage is always
+            # reported directly on the assistant.message payload
+            # (top-level or under a nested usage/metrics object),
+            # never inside a tool call's own arguments.
+            _grab_token_fields(
+                {k: v for k, v in d.items() if k not in ("toolRequests", "content", "reasoningText")},
+                msg_tot,
+            )
+        elif et == "session.model_change":
+            nm = d.get("newModel")
+            if nm and nm not in models_used: models_used.append(nm)
+        elif et == "session.usage_record":
+            u = d.get("usage")
+            if isinstance(u, dict):
+                usage_records.append(u)
+                um = u.get("model")
+                if isinstance(um, str) and um and um not in usage_models:
+                    usage_models.append(um)
+        elif et == "session.shutdown":
+            shutdown_metrics = d.get("modelMetrics")
+    # Some Copilot CLI versions/sessions never put a model name on
+    # assistant.message at all, leaving `model` unset even though real,
+    # priced usage was recorded elsewhere — session.usage_record.usage.model
+    # and the modelMetrics dict's own keys (it's keyed BY model name) both
+    # carry it. Without this, calculate_cost(None, ...) silently prices
+    # nonzero token usage at a default/fallback rate instead of the model
+    # that was actually billed.
+    shutdown_models = _model_names_from_metrics(shutdown_metrics)
+    for nm in usage_models + shutdown_models:
+        if nm not in models_used: models_used.append(nm)
+    if not model:
+        model = next(iter(usage_models + shutdown_models), None)
+    ts = last_ts or start_ts or fallback_ts
+    shutdown_rollup = _copilot_cli_tokens_from_metrics(shutdown_metrics)
+    usage_rollup = _copilot_cli_tokens_from_metrics(usage_records)
+    tokens = _merge_copilot_cli_tokens(shutdown_rollup, usage_rollup, msg_tot, in_estimate)
+    if model and model not in models_used: models_used.insert(0, model)
+    return {
+        "project_path": project_path, "first_msg": first_msg, "model": model,
+        "models_used": models_used, "tokens": tokens, "timestamp": ts,
+    }
+
 
 def _antigravity_surface_map() -> Dict[str, str]:
     """Map Antigravity session id → surface (cli / ide / app) from the brain dirs,
@@ -362,6 +569,17 @@ OLLAMA_DIR = HOME / ".ollama"
 # _scan_pi_sessions.
 PI_DIR = HOME / ".pi" / "agent"
 PI_SESSIONS_DIR = PI_DIR / "sessions"
+# Oh My Pi (OMP, binary `omp`) — a separate terminal-first agent forked from Pi.
+# It stores one JSONL per session, bucketed by encoded cwd, under
+# ~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuidv7>.jsonl. Each file opens with a
+# {"type":"session", id, cwd, timestamp} header, then message events whose
+# assistant turns carry per-request usage + cost + provider/model, plus
+# {"type":"custom","customType":"tool_execution_start"} tool events. This is a
+# DIFFERENT on-disk format from Pi, so it gets its own scanner and its own key —
+# see _scan_omp_sessions. Overridable for containers and relocated home dirs,
+# matching the PRIME_SESSIONS_DIR contract.
+OMP_DIR = Path(os.environ.get("TT_OMP_DIR") or (HOME / ".omp" / "agent")).expanduser()
+OMP_SESSIONS_DIR = Path(os.environ.get("TT_OMP_SESSIONS_DIR") or (OMP_DIR / "sessions")).expanduser()
 # DeepSeek Harness (DSH, npm @deepseek-ai/dsh, binary `dsh`) — plugin-based
 # multi-provider coding agent CLI from DeepSeek AI. Sessions live one zstd-
 # compressed JSONL per session under ~/.dsh/sessions/<slugged-cwd>/<id>/
@@ -623,6 +841,10 @@ GROK_SESSIONS_DIR = GROK_DIR / "sessions"
 # Per-turn billed usage (prompt / cached / completion) lives here, not in the
 # session dir. Session files only expose a context-window footprint.
 GROK_UNIFIED_LOG = GROK_DIR / "logs" / "unified.jsonl"
+# The Grok Bot desktop app keeps its own state here (executor + Electron store).
+# A machine can run the bot without ever installing the `grok` CLI, so agent
+# detection must not key off ~/.grok alone or its panel would be unreachable.
+GROK_BOT_DIR = Path(os.environ.get("TT_GROK_BOT_DIR") or (HOME / ".grokbot")).expanduser()
 
 # Grok Build session file names (per <cwd-uuid> directory)
 GROK_SUMMARY = "summary.json"
@@ -1024,14 +1246,14 @@ def _antigravity_infer_project(text: str) -> str:
     home_prefix = str(HOME).replace("\\", "/")
     # Escape any special regex chars in home_prefix
     escaped_home = re.escape(home_prefix)
-    
+
     # Also support common generic paths
     patterns = [
         rf'({escaped_home}/Documents/Developer/[A-Za-z0-9_./@-]+)',
         rf'({escaped_home}/[A-Za-z0-9_./@-]+)',
         r'(/[A-Za-z0-9_./@-]+)', # Generic Unix absolute path
     ]
-    
+
     if sys.platform == "win32":
         patterns.insert(0, r'([A-Za-z]:/[A-Za-z0-9_./@-]+)') # Windows absolute path (text is slash-normalized above)
 
@@ -1056,7 +1278,7 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
         tf = sess_dir / ".system_generated" / "logs" / "transcript.jsonl"
     if not tf.exists():
         return tkns
-        
+
     cache_file = sess_dir / ".system_generated" / "logs" / "tokens_cache.json"
     try:
         if cache_file.exists() and cache_file.stat().st_mtime >= tf.stat().st_mtime:
@@ -1080,14 +1302,14 @@ def _estimate_antigravity_tokens(sess_dir: Path) -> dict:
                 except json.JSONDecodeError as e:
                     logging.debug(f"Failed to parse line in {tf}: {e}")
         tkns["total"] = tkns["input"] + tkns["output"]
-        
+
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as cf:
                 json.dump(tkns, cf)
         except OSError as e:
             logging.debug(f"Failed to write token cache for {sess_dir}: {e}")
-            
+
     except OSError as e:
         logging.debug(f"Failed to access transcript for {sess_dir}: {e}")
 
@@ -1517,6 +1739,213 @@ def _antigravity_cli_meta(cli_dir: Path = ANTIGRAVITY_CLI_DIR) -> Dict[str, Dict
     for cid, ws in hist_project.items():
         meta.setdefault(cid, {}).setdefault("project", ws)
     return meta
+
+
+def _antigravity_store_meta() -> Dict[str, Dict[str, Any]]:
+    """`_antigravity_cli_meta` for every Antigravity store, not just the CLI's.
+
+    The IDE and the 2.0 app keep the same conversations/<id>.db trajectories, so
+    their sessions have the same exact model and project available. Reading only
+    the CLI store left IDE/app sessions to the brain-text heuristic, which is how
+    a screenshot path ended up as one session's project. The CLI's record wins
+    where a session somehow appears in more than one store.
+    """
+    merged: Dict[str, Dict[str, Any]] = {}
+    for brain_dir, _surface in ANTIGRAVITY_BRAIN_SOURCES:
+        for sid, entry in _antigravity_cli_meta(brain_dir.parent).items():
+            slot = merged.setdefault(sid, {})
+            for key, value in entry.items():
+                slot.setdefault(key, value)
+    return merged
+
+
+def _antigravity_price_known(model: str) -> bool:
+    """Whether the pricing table holds this exact model id.
+
+    Deliberately not calculate_cost's fuzzy match: a bare "gemini" key matches
+    every Gemini name, so an id that is really an internal alias would look priced
+    at a generic rate. See antigravity_usage.canonical_model.
+    """
+    import pricing as _pricing
+    norm = _pricing._normalize_model_id(model)
+    return bool(_pricing.rates_for(norm) or _pricing.PRICING.get(norm))
+
+
+def _antigravity_price(model: str, inp: int, out: int, cached: int, day: str) -> float:
+    # `day` prices each bucket at the rate in force when its calls ran.
+    return calculate_cost(model, inp, out, cached, at=day)
+
+
+def _antigravity_real_usage(db: Path) -> Optional[Dict[str, Any]]:
+    """Real token accounting for one conversation, via the scan cache.
+
+    Decoding every generation row of ~100 databases on each scan would be the
+    slowest part of it, and the rows only change while a session runs. The cache
+    is keyed on the newest write to the .db or its WAL, and stores raw token
+    buckets rather than a cost, so a pricing update applies without invalidating
+    it.
+
+    Returns the ``summarize`` result plus ``first_ts``/``last_ts`` (datetimes),
+    or None when the file holds no decodable model calls.
+    """
+    mtime = antigravity_usage.source_mtime(db)
+    cached = scan_cache.read_cache("antigravity", db.stem, mtime)
+    if cached is not None and cached.get("path") == str(db):
+        usage = cached.get("usage")
+    else:
+        usage = antigravity_usage.read_usage(db)
+        scan_cache.write_cache("antigravity", db.stem, mtime, {"path": str(db), "usage": usage})
+    if not usage or not usage.get("calls"):
+        return None
+    result = antigravity_usage.summarize(usage, _antigravity_price, _antigravity_price_known)
+    for key in ("first_ts", "last_ts"):
+        seconds = usage.get(key)
+        result[key] = datetime.fromtimestamp(seconds, tz=timezone.utc) if seconds else None
+    result["calls"] = usage.get("calls", 0)
+    return result
+
+
+def _antigravity_summary_index() -> Dict[str, Dict[str, Any]]:
+    """Antigravity's own session index, from each store's conversation_summaries.db.
+
+    It lists every conversation the app knows about with its title, last activity
+    and workspace, including sessions whose brain/ folder never received a
+    transcript. It is the one record that covers older .pb sessions, whose token
+    usage is not recorded anywhere we can read.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    gemini_home = str(GEMINI_DIR)
+    for brain_dir, surface in ANTIGRAVITY_BRAIN_SOURCES:
+        db = brain_dir.parent / "conversation_summaries.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(_sqlite_ro_uri(db), uri=True)
+            try:
+                rows = con.execute(
+                    "SELECT conversation_id, title, preview, step_count, workspace_uris, "
+                    "last_modified_time FROM conversation_summaries").fetchall()
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            continue
+        for cid, title, preview, steps, uris, modified in rows:
+            if not cid or cid in index:
+                continue
+            workspace = None
+            try:
+                parsed = json.loads(uris) if uris else []
+            except (TypeError, ValueError):
+                parsed = []
+            for uri in parsed if isinstance(parsed, list) else []:
+                path = unquote(str(uri).split("://", 1)[-1]) if "://" in str(uri) else str(uri)
+                # Scratch playgrounds under ~/.gemini are the agent's own space.
+                if path and not path.startswith(gemini_home):
+                    workspace = path.rstrip("/")
+                    break
+            try:
+                when = _aware(datetime.fromisoformat(str(modified).replace("Z", "+00:00"))) if modified else None
+            except ValueError:
+                when = None
+            index[cid] = {"title": (title or preview or "").strip(), "steps": steps or 0,
+                          "workspace": workspace, "timestamp": when, "surface": surface}
+    return index
+
+
+_AG_STORE_SURFACE = {"antigravity-cli": "cli", "antigravity-ide": "ide", "antigravity": "app"}
+
+
+def _antigravity_apply_real_usage(
+    sessions: List[Dict[str, Any]],
+    seen: set,
+    meta: Dict[str, Dict[str, Any]],
+    surfaces: Dict[str, str],
+    alias: Callable[[str], str],
+) -> None:
+    """Replace estimated Antigravity numbers with recorded ones, and add the
+    sessions the brain/ scan cannot see.
+
+    ``alias`` is the scan's own project-alias lookup (a closure over the aliases
+    it loaded), not the module-level ``apply_alias``, which takes them as a
+    second argument.
+
+    1. Every Antigravity session already collected whose conversations/<id>.db
+       records model calls takes its tokens, cost, model and last-activity time
+       from those records. Before this, the brain/ path estimated tokens as
+       characters / 4 and hard-coded the cost to $0.
+    2. A conversation with recorded calls but no usable brain/ folder is added
+       from its database.
+    3. A conversation Antigravity's own index lists with steps, and no database,
+       is added from the index: an older .pb session. Its tokens are unknown and
+       reported as zero rather than guessed.
+    """
+    db_files = antigravity_usage.conversation_files(GEMINI_DIR)
+    by_id = {s["id"]: s for s in sessions if s.get("agent") == "antigravity"}
+    index = _antigravity_summary_index()
+
+    def _project(sid: str, fallback: str = ANTIGRAVITY_UNASSIGNED) -> str:
+        found = (meta.get(sid) or {}).get("project") or (index.get(sid) or {}).get("workspace")
+        return alias(found or fallback)
+
+    for sid, db in db_files.items():
+        try:
+            real = _antigravity_real_usage(db)
+        except Exception as exc:  # one bad database must not cost the whole scan
+            _ag_log_warn("antigravity usage read failed for %s: %s", db.name, exc)
+            continue
+        if real is None:
+            continue
+        existing = by_id.get(sid)
+        if existing is not None:
+            existing["tokens"] = real["tokens"]
+            existing["cost"] = real["cost"]
+            existing["model"] = real["model"] or existing.get("model")
+            if real["last_ts"]:
+                existing["timestamp"] = real["last_ts"]
+            if existing.get("project") in (None, "", ANTIGRAVITY_UNASSIGNED):
+                existing["project"] = _project(sid)
+            continue
+        if sid in seen:
+            continue  # already reported under another agent (e.g. the Gemini CLI path)
+        seen.add(sid)
+        entry = index.get(sid) or {}
+        session = {
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": real["last_ts"] or entry.get("timestamp") or _file_mtime_utc(db),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": real["tokens"],
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": real["model"],
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or _AG_STORE_SURFACE.get(db.parent.parent.name),
+            "cost": real["cost"],
+        }
+        sessions.append(session)
+        by_id[sid] = session
+
+    for sid, entry in index.items():
+        if sid in by_id or sid in seen or sid in db_files or not entry.get("steps"):
+            continue
+        seen.add(sid)
+        sessions.append({
+            "id": sid,
+            "agent": "antigravity",
+            "project": _project(sid),
+            "timestamp": entry.get("timestamp") or _now(),
+            "display": _antigravity_first_prompt(sid, entry.get("title", "")),
+            "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0},
+            "mcp_tools": [],
+            "has_plan": False,
+            "plans": [],
+            "model": None,
+            "artifacts": [],
+            "antigravity_source": surfaces.get(sid) or entry.get("surface"),
+            "cost": 0.0,
+        })
 
 class TokenUsage(BaseModel):
     input: int = 0
@@ -3045,7 +3474,7 @@ def _list_available_agents() -> list:
     agents = []
     if CLAUDE_DIR.exists(): agents.append("claude")
     if CODEX_DIR.exists(): agents.append("codex")
-    if GEMINI_DIR.exists(): 
+    if GEMINI_DIR.exists():
         agents.append("gemini")
         if (GEMINI_DIR / "antigravity").exists() or list((GEMINI_DIR / "tmp").glob("*")):
             agents.append("antigravity")
@@ -3056,8 +3485,9 @@ def _list_available_agents() -> list:
     if OPENCODE_DB.exists(): agents.append("opencode")
     if ZCODE_DB.exists(): agents.append("zcode")
     if _hermes_dbs(): agents.append("hermes")
-    if GROK_SESSIONS_DIR.exists(): agents.append("grok")
+    if GROK_SESSIONS_DIR.exists() or GROK_BOT_DIR.exists(): agents.append("grok")
     if PI_SESSIONS_DIR.exists(): agents.append("pi")
+    if OMP_SESSIONS_DIR.exists(): agents.append("omp")
     if (CLINE_DIR / "data" / "db" / "sessions.db").exists() or (CLINE_VSCODE_DIR / "state" / "taskHistory.json").exists():
         agents.append("cline")
     if MUSE_SESSIONS_DIR.is_dir(): agents.append("muse")
@@ -4450,6 +4880,202 @@ def _scan_pi_sessions() -> List[Dict[str, Any]]:
                     "models_used": models_used,
                     "num_messages": msg_count,
                     "reasoning_tokens": tokens["reasoning"],
+                },
+            }
+            _attach_tool_usage(sess, tool_counts)
+            out.append(sess)
+
+    return out
+
+
+def _scan_omp_sessions() -> List[Dict[str, Any]]:
+    """Scan Oh My Pi (OMP) sessions under ~/.omp/agent/sessions/.
+
+    Layout: one JSONL per session, bucketed by encoded cwd:
+        ~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuidv7>.jsonl
+    (a sibling directory of the same basename holds per-tool artifact logs that
+    v1 does not read — only the depth-1 *.jsonl files are sessions).
+
+    Each file begins with a {"type":"session", id, cwd, timestamp} header, then a
+    stream of events. The ones we read:
+      - {"type":"model_change", model}               -> non-authoritative fallback
+      - {"type":"message", message:{...}}            -> a turn. Assistant turns
+        carry `provider`, `model`, a per-request `usage`
+        {input, output, cacheRead, cacheWrite, cost:{total}} and latency
+        (`duration`, `ttft`, `contextSnapshot`).
+      - {"type":"custom","customType":"tool_execution_start",data:{toolName}}
+                                                     -> one tool call.
+
+    Cost is reported VERBATIM — the sum of message.usage.cost.total — and never
+    recomputed. OMP records no reasoning-token split, so `reasoning` is always 0.
+    It is a separate agent from Pi (different on-disk format), so this scanner
+    deliberately shares no code with _scan_pi_sessions.
+    """
+    if not OMP_SESSIONS_DIR.exists():
+        return []
+
+    aliases = _load_project_aliases()
+    def _apply_alias(p: str) -> str:
+        return aliases.get(p, p)
+
+    out: List[Dict[str, Any]] = []
+
+    for bucket in OMP_SESSIONS_DIR.iterdir():
+        if not bucket.is_dir():
+            continue
+        for sess_file in bucket.glob("*.jsonl"):
+            try:
+                sid = None
+                project = None
+                header_ts = None
+                last_ts = None
+                display = None
+                cur_model = None
+                cur_provider = None
+                sess_model = None
+                sess_provider = None
+                msg_count = 0
+                tokens = {"input": 0, "output": 0, "cached": 0,
+                          "cache_creation": 0, "reasoning": 0, "total": 0}
+                cost = 0.0
+                tool_counts: Dict[str, int] = {}
+                models_used: List[str] = []
+                ttft_sum = 0.0
+                ttft_n = 0
+                dur_sum = 0.0
+                dur_n = 0
+                last_context: Optional[Dict[str, Any]] = None
+
+                with open(sess_file, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                        except Exception:
+                            continue
+                        etype = evt.get("type")
+
+                        if etype == "session":
+                            sid = evt.get("id") or sid
+                            cwd = evt.get("cwd")
+                            if cwd:
+                                project = _apply_alias(cwd)
+                            ts_raw = evt.get("timestamp")
+                            if ts_raw:
+                                try:
+                                    header_ts = _aware(datetime.fromisoformat(
+                                        str(ts_raw).replace("Z", "+00:00")))
+                                except Exception:
+                                    header_ts = None
+                            continue
+
+                        if etype == "model_change":
+                            cur_model = evt.get("model") or cur_model
+                            continue
+
+                        if etype == "custom":
+                            if evt.get("customType") == "tool_execution_start":
+                                data = evt.get("data")
+                                if isinstance(data, dict):
+                                    _count_tool(tool_counts, data.get("toolName"))
+                            continue
+
+                        if etype != "message":
+                            continue
+
+                        m = evt.get("message") or {}
+                        role = m.get("role")
+
+                        ts_raw = evt.get("timestamp")
+                        if ts_raw:
+                            try:
+                                _ts = _aware(datetime.fromisoformat(
+                                    str(ts_raw).replace("Z", "+00:00")))
+                                if last_ts is None or _ts > last_ts:
+                                    last_ts = _ts
+                            except Exception:
+                                pass
+
+                        # Every message record counts, including toolResult.
+                        msg_count += 1
+
+                        if role == "user" and display is None:
+                            for c in (m.get("content") or []):
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    t = (c.get("text") or "").strip()
+                                    preview = _strip_context_tags(t).strip()
+                                    if preview:
+                                        display = preview[:120]
+                                        break
+
+                        if role == "assistant":
+                            msg_model = m.get("model") or cur_model
+                            msg_provider = m.get("provider") or cur_provider
+                            if msg_model:
+                                sess_model = msg_model
+                                sess_provider = msg_provider
+                                if msg_model not in models_used:
+                                    models_used.append(msg_model)
+                            u = m.get("usage")
+                            if isinstance(u, dict):
+                                in_t = u.get("input", 0) or 0
+                                out_t = u.get("output", 0) or 0
+                                cr = u.get("cacheRead", 0) or 0
+                                cw = u.get("cacheWrite", 0) or 0
+                                tokens["input"] += in_t
+                                tokens["output"] += out_t
+                                tokens["cached"] += cr
+                                tokens["cache_creation"] += cw
+                                # Reported verbatim; never recomputed.
+                                _cost = u.get("cost")
+                                if isinstance(_cost, dict):
+                                    cost += _cost.get("total", 0) or 0
+                                elif isinstance(_cost, (int, float)):
+                                    cost += _cost
+                            _ttft = m.get("ttft")
+                            if isinstance(_ttft, (int, float)):
+                                ttft_sum += _ttft
+                                ttft_n += 1
+                            _dur = m.get("duration")
+                            if isinstance(_dur, (int, float)):
+                                dur_sum += _dur
+                                dur_n += 1
+                            _cs = m.get("contextSnapshot")
+                            if isinstance(_cs, dict):
+                                last_context = _cs
+            except Exception:
+                continue
+
+            if sid is None:
+                continue
+
+            ts = last_ts or header_ts or _file_mtime_utc(sess_file)
+            tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+
+            sess = {
+                "id": sid,
+                "agent": "omp",
+                "project": project or "unknown",
+                "timestamp": ts,
+                "display": display or f"OMP session {sid[:8]}",
+                "text": display,
+                "tokens": tokens,
+                "mcp_tools": [],
+                "has_plan": False,
+                "plans": [],
+                "model": sess_model or cur_model,
+                "artifacts": [{"name": sess_file.name, "path": str(sess_file), "type": "document"}],
+                "cost": cost,
+                "cost_source": "reported",
+                "omp": {
+                    "provider": sess_provider or cur_provider,
+                    "models_used": models_used,
+                    "num_messages": msg_count,
+                    "ttft_ms": round(ttft_sum / ttft_n, 2) if ttft_n else 0,
+                    "duration_ms": round(dur_sum / dur_n, 2) if dur_n else 0,
+                    "context_snapshot": last_context or {},
                 },
             }
             _attach_tool_usage(sess, tool_counts)
@@ -6612,9 +7238,10 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
 
     Each transcript runs its own context and often a DIFFERENT model than the
     parent (e.g. Explore on Haiku under an Opus session), so cost is computed
-    per file with that file's model. ``cached`` remains the per-transcript
-    high-water mark for display, while ``_cached_sum`` is the cumulative billed
-    cache-read volume. Cache writes are billed per event and accumulate.
+    per file with that file's model. ``cached`` is the cumulative cache-read
+    volume (``_cached_sum`` holds the same value for older readers). Cache
+    writes are billed per event and accumulate. ``total`` counts every token
+    the model processed: input + output + cache reads + cache writes.
     Returns None if the file can't be read.
 
     Shared by _claude_subagent_usage (flat Task/Agent transcripts) and
@@ -6673,13 +7300,14 @@ def _rollup_agent_transcript(f: Path, agent_type: Optional[str] = None,
                 cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                 tokens["input"] += usage.get("input_tokens", 0) or 0
                 tokens["output"] += usage.get("output_tokens", 0) or 0
-                tokens["cached"] = max(tokens["cached"], cr)
+                tokens["cached"] += cr
                 tokens["_cached_sum"] += cr
                 tokens["cache_creation"] += cc
                 tokens["cache_creation_1h"] += cc_1h
     except Exception:
         return None
-    tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
+    tokens["total"] = (tokens["input"] + tokens["output"] + tokens["cached"]
+                       + tokens["cache_creation"])
     cost = calculate_cost(model, tokens["input"], tokens["output"], tokens["_cached_sum"],
                           cache_creation_tokens=tokens["cache_creation"],
                           cache_creation_1h_tokens=tokens["cache_creation_1h"])
@@ -6836,6 +7464,7 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
     totals = {"input": 0, "output": 0, "cached": 0, "_cached_sum": 0, "cache_creation": 0,
               "cache_creation_1h": 0, "total": 0}
     by_type: Dict[str, Dict[str, Any]] = {}
+    by_model: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         for k in totals:
             totals[k] += e["tokens"][k]
@@ -6848,12 +7477,22 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
             bt["failed"] = bt.get("failed", 0) + 1
         if e.get("tool_errors"):
             bt["tool_errors"] = bt.get("tool_errors", 0) + e["tool_errors"]
+        # Subagents can run a different model than their parent (e.g. Explore on
+        # Haiku under an Opus session) — keyed here so folding delegated cost
+        # into the global by_model breakdown attributes it to the right model
+        # instead of lumping every subagent's spend onto the parent's model.
+        bm = by_model.setdefault(e.get("model") or "unknown", {
+            "input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0})
+        for k in ("input", "output", "cached", "total"):
+            bm[k] += e["tokens"][k]
+        bm["cost"] = round(bm["cost"] + (e["cost"] or 0), 6)
     return {
         "spawn_count": len(entries),
         "workflow_count": sum(1 for e in entries if e.get("kind") == "workflow"),
         "subagents": entries,
         "totals": totals,
         "by_type": by_type,
+        "by_model": by_model,
         "cost": round(sum(e["cost"] or 0 for e in entries), 6),
     }
 
@@ -7197,7 +7836,7 @@ def _claude_build_goals(arms: List[Dict[str, Any]],
 
 _CLAUDE_CACHE_FIELDS = (
     "tokens", "model", "cost", "mcp_tools", "has_plan", "plans",
-    "delegation", "delegated_cost", "tool_counts", "mcp_usage", "skills_used",
+    "delegation", "delegated_cost", "delegated_by_model", "tool_counts", "mcp_usage", "skills_used",
     "tool_errors", "mcp_errors", "loop", "published_artifacts", "goals", "untracked_background",
 )
 
@@ -7243,6 +7882,22 @@ _CODEX_CACHE_FIELDS = (
     "text", "tokens_by_day", "tool_counts", "_skill_counts",
     "parent_session_id", "subagent_info", "_raw_cwd", "published_artifacts",
 )
+
+
+def _codex_usage_parts(u: Dict[str, Any]) -> Tuple[int, int, int]:
+    """(gross_input, cached_input, billable_output) from a Codex usage dict.
+
+    Codex input_tokens is GROSS (it already includes cached_input_tokens), and
+    total_tokens = input + output. Reasoning is usually folded into
+    output_tokens; it is added separately only when total_tokens says it was
+    reported on top.
+    """
+    gross = u.get("input_tokens", 0) or 0
+    cached = u.get("cached_input_tokens", 0) or 0
+    output = u.get("output_tokens", 0) or 0
+    reasoning = u.get("reasoning_output_tokens", 0) or 0
+    total = u.get("total_tokens", 0) or 0
+    return gross, cached, output + (reasoning if total > gross + output else 0)
 
 
 def _codex_cache_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
@@ -7491,7 +8146,11 @@ def _scan_sessions_sync():
                                         cc_1h = (usage.get("cache_creation", {}) or {}).get("ephemeral_1h_input_tokens", 0) or 0
                                         sess["tokens"]["input"]  += usage.get("input_tokens", 0) or 0
                                         sess["tokens"]["output"] += usage.get("output_tokens", 0) or 0
-                                        sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cr)
+                                        # Every turn re-reads the cached prefix and is billed
+                                        # for it, so cache reads add up like input does.
+                                        # `cached` used to keep only the largest single read,
+                                        # which made `total` roughly 100x too small.
+                                        sess["tokens"]["cached"] += cr
                                         sess["tokens"]["_cached_sum"] = sess["tokens"].get("_cached_sum", 0) + cr
                                         sess["tokens"]["cache_creation"] = sess["tokens"].get("cache_creation", 0) + cc
                                         sess["tokens"]["cache_creation_1h"] = sess["tokens"].get("cache_creation_1h", 0) + cc_1h
@@ -7500,7 +8159,7 @@ def _scan_sessions_sync():
                                             # usage is the loop's OWN footprint (not the whole session).
                                             loop_usage["input"] += usage.get("input_tokens", 0) or 0
                                             loop_usage["output"] += usage.get("output_tokens", 0) or 0
-                                            loop_usage["cached"] = max(loop_usage["cached"], cr)
+                                            loop_usage["cached"] += cr
                                             loop_usage["_cached_sum"] += cr
                                             loop_usage["cache_creation"] += cc
                                             loop_usage["cache_creation_1h"] += cc_1h
@@ -7513,11 +8172,13 @@ def _scan_sessions_sync():
                                                 "cache_creation": 0, "cache_creation_1h": 0})
                                             gu["input"] += usage.get("input_tokens", 0) or 0
                                             gu["output"] += usage.get("output_tokens", 0) or 0
-                                            gu["cached"] = max(gu["cached"], cr)
+                                            gu["cached"] += cr
                                             gu["_cached_sum"] += cr
                                             gu["cache_creation"] += cc
                                             gu["cache_creation_1h"] += cc_1h
-                                    sess["tokens"]["total"] = sess["tokens"]["input"] + sess["tokens"]["output"] + sess["tokens"]["cached"]
+                                    sess["tokens"]["total"] = (sess["tokens"]["input"] + sess["tokens"]["output"]
+                                                               + sess["tokens"]["cached"]
+                                                               + sess["tokens"].get("cache_creation", 0))
                                     sess["cost"] = calculate_cost(sess.get("model"), sess["tokens"]["input"], sess["tokens"]["output"], sess["tokens"].get("_cached_sum", sess["tokens"]["cached"]), cache_creation_tokens=sess["tokens"].get("cache_creation", 0), cache_creation_1h_tokens=sess["tokens"].get("cache_creation_1h", 0), at=sess["timestamp"])
                                     for item in msg.get("content", []):
                                         if item.get("type") == "tool_use":
@@ -7720,8 +8381,7 @@ def _scan_sessions_sync():
                         # Loop's OWN footprint: usage from the fire-response turns only, NOT
                         # the whole session (a session may do lots of non-loop work).
                         lu = loop_usage
-                        # Cost uses cumulative cache reads, while the visible cached count
-                        # remains the context high-water mark used by the session header.
+                        # Cost uses cumulative cache reads (`cached` and `_cached_sum` agree).
                         footprint_cost = calculate_cost(sess.get("model"), lu["input"], lu["output"],
                             lu.get("_cached_sum", lu["cached"]), cache_creation_tokens=lu["cache_creation"],
                             cache_creation_1h_tokens=lu["cache_creation_1h"])
@@ -7790,8 +8450,10 @@ def _scan_sessions_sync():
                         sess["tokens"]["delegated_input"] = deleg["totals"]["input"]
                         sess["tokens"]["delegated_output"] = deleg["totals"]["output"]
                         sess["tokens"]["delegated_cached"] = deleg["totals"]["cached"]
+                        sess["tokens"]["delegated_cache_reads"] = deleg["totals"]["_cached_sum"]
                         sess["tokens"]["delegated_cache_creation"] = deleg["totals"]["cache_creation"]
                         sess["delegated_cost"] = deleg["cost"]
+                        sess["delegated_by_model"] = deleg["by_model"]
 
                     if source_mtime is not None:
                         scan_cache.write_cache("claude", sid, source_mtime, _claude_cache_payload(sess))
@@ -7838,7 +8500,7 @@ def _scan_sessions_sync():
             except Exception:
                 ts = _now()
             codex_sessions[sid] = {"id": sid, "agent": "codex", "project": "unknown", "timestamp": ts, "text": None, "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0}, "mcp_tools": [], "has_plan": False, "plans": [], "model": None, "artifacts": [], "stub": True}
-        
+
         for sid, sess in sorted(codex_sessions.items(), key=lambda kv: kv[1]["timestamp"], reverse=True):
             rollout_files = codex_file_map.get(sid, [])
             rollout_files.sort(key=lambda f: f.name)
@@ -7854,7 +8516,15 @@ def _scan_sessions_sync():
                 sess["stub"] = False
                 continue
 
-            day_snap = {}
+            # Codex logs a RUNNING total per thread, so a session's usage is the
+            # sum of the increases between snapshots, not its largest snapshot.
+            # Summing increases also survives the counter occasionally dropping
+            # mid-file, and repeated identical snapshots add nothing.
+            usage_prev: Optional[Tuple[int, int, int]] = None
+            usage_acc = [0, 0, 0]          # gross input, cached input, output
+            day_acc: Dict[str, List[int]] = {}
+            forked = False                 # rollout forked from another thread
+            saw_response_item = False
             codex_site_calls: Dict[str, Dict[str, str]] = {}
             codex_site_meta: Dict[str, str] = {}
             published_sites: Dict[str, Dict[str, Any]] = {}
@@ -7897,7 +8567,11 @@ def _scan_sessions_sync():
                             try:
                                 data = json.loads(line)
                             except Exception: continue
+                            if data.get("type") == "response_item":
+                                saw_response_item = True
                             if data.get("type") == "session_meta":
+                                if data["payload"].get("forked_from_id"):
+                                    forked = True
                                 sess["_raw_cwd"] = data["payload"].get("cwd", "unknown")
                                 sess["project"] = apply_alias(sess["_raw_cwd"])
                                 record_codex_model(data["payload"].get("model"))
@@ -7961,30 +8635,39 @@ def _scan_sessions_sync():
                                     _um = data["payload"].get("message")
                                     if isinstance(_um, str) and _um.strip():
                                         sess["text"] = _um.strip()[:120]
-                                usage = ((data.get("payload") or {}).get("info") or {}).get("total_token_usage") or {}
+                                _info = (data.get("payload") or {}).get("info") or {}
+                                usage = _info.get("total_token_usage") or {}
                                 if usage:
-                                    # OpenAI/Codex semantics differ from Anthropic:
-                                    #   input_tokens is the GROSS input — it already includes cached_input_tokens.
-                                    #   total_tokens = input_tokens + output_tokens (cached is a breakdown, not an
-                                    #   independent bucket). Reasoning is typically already in output_tokens for
-                                    #   Chat-Completions-style APIs; we add reasoning explicitly only if the record's
-                                    #   total_tokens doesn't already account for it.
-                                    gross_input = usage.get("input_tokens", 0) or 0
-                                    cached_tok  = usage.get("cached_input_tokens", 0) or 0
-                                    output      = usage.get("output_tokens", 0) or 0
-                                    reasoning   = usage.get("reasoning_output_tokens", 0) or 0
-                                    total_record = usage.get("total_tokens", 0) or 0
-                                    net_input   = max(0, gross_input - cached_tok)
-                                    # If total_tokens > gross_input + output, the API is reporting reasoning as
-                                    # extra (not folded into output_tokens). Otherwise reasoning is implicit.
-                                    output_billable = output + (reasoning if total_record > gross_input + output else 0)
-
+                                    cur = _codex_usage_parts(usage)
+                                    if usage_prev is None:
+                                        usage_prev = (0, 0, 0)
+                                        _last_raw = _info.get("last_token_usage") or {}
+                                        if forked and _last_raw:
+                                            # A forked thread (subagent spawn or `codex fork`)
+                                            # can open with a snapshot of the PARENT's running
+                                            # total. Counting from zero bills the parent's
+                                            # tokens a second time. Anything above this
+                                            # snapshot's own last turn was carried over; if
+                                            # nothing of this thread ran before the snapshot,
+                                            # the last turn is the parent's too.
+                                            last = _codex_usage_parts(_last_raw)
+                                            inherited = tuple(max(0, c - l) for c, l in zip(cur, last))
+                                            if not saw_response_item and any(inherited):
+                                                usage_prev = cur
+                                            else:
+                                                usage_prev = inherited
+                                    delta = [max(0, c - p) for c, p in zip(cur, usage_prev)]
+                                    usage_prev = cur
+                                    for k in range(3):
+                                        usage_acc[k] += delta[k]
                                     if event_day:
-                                        day_snap[event_day] = (gross_input, cached_tok, output_billable)
+                                        bucket = day_acc.setdefault(event_day, [0, 0, 0])
+                                        for k in range(3):
+                                            bucket[k] += delta[k]
 
-                                    sess["tokens"]["input"]  = max(sess["tokens"]["input"],  net_input)
-                                    sess["tokens"]["cached"] = max(sess["tokens"]["cached"], cached_tok)
-                                    sess["tokens"]["output"] = max(sess["tokens"]["output"], output_billable)
+                                    sess["tokens"]["input"]  = max(0, usage_acc[0] - usage_acc[1])
+                                    sess["tokens"]["cached"] = usage_acc[1]
+                                    sess["tokens"]["output"] = usage_acc[2]
                                     sess["tokens"]["total"]  = sess["tokens"]["input"] + sess["tokens"]["cached"] + sess["tokens"]["output"]
                                     # Codex/OpenAI usage has no cache-write field (only cached read); nothing to pass.
                                     # _provider comes from the rollout's session_meta (model_provider).
@@ -8052,19 +8735,16 @@ def _scan_sessions_sync():
             if published_sites:
                 sess["published_artifacts"] = sorted(
                     published_sites.values(), key=lambda a: str(a.get("timestamp") or ""), reverse=True)
-            
-            if day_snap:
+
+            if day_acc:
                 tbd = {}
-                pg = pc = po = 0
                 # NB: no `or sess.get("_provider")` fallback here. That put a
                 # provider id ("openai", "deepseek") into the MODEL slot, where it
                 # either matched nothing and fell to _default anyway, or fuzzy-hit
                 # an unrelated key. An unknown model should reach _default plainly.
                 model_for_cost = sess.get("model")
-                for day in sorted(day_snap.keys()):
-                    g, c, o = day_snap[day]
-                    dg, dc, do = max(0, g - pg), max(0, c - pc), max(0, o - po)
-                    pg, pc, po = max(pg, g), max(pc, c), max(po, o)
+                for day in sorted(day_acc.keys()):
+                    dg, dc, do = day_acc[day]
                     net_in = max(0, dg - dc)
                     tbd[day] = {
                         "input": net_in,
@@ -8125,6 +8805,15 @@ def _scan_sessions_sync():
         sessions.extend(codex_sessions.values())
 
     # 3 & 7. Gemini & Antigravity
+    # Both are read by the Antigravity passes below, so they are set here rather
+    # than inside the Gemini branch. They used to be assigned only once
+    # ~/.gemini/projects.json was found, and that file belongs to the Gemini CLI,
+    # not Antigravity. On a machine with Antigravity but no Gemini CLI history,
+    # the brain/ loop's first `sid in _seen_antigravity` raised NameError, its
+    # per-session `except Exception: continue` swallowed it, and every Antigravity
+    # session was dropped without a trace.
+    _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
+    _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
     gemini_projects_file = GEMINI_DIR / "projects.json"
     if gemini_projects_file.exists():
         try:
@@ -8161,8 +8850,6 @@ def _scan_sessions_sync():
                             if _d and _d.get("sessionId"):
                                 _all_chat_sids.add(_d["sessionId"])
                         except Exception: pass
-            _ag_surface = _antigravity_surface_map()  # session id → cli/ide/app, for sub-labels
-            _seen_antigravity: set = set()  # global dedup across chat + logs + brain; first discovery wins (ensures real token versions from tmp preferred over brain estimates; kills intra-tmp chat dupes for same sid)
 
             for tmp_dir in (GEMINI_DIR / "tmp").glob("*"):
                 if not tmp_dir.is_dir(): continue
@@ -8218,7 +8905,7 @@ def _scan_sessions_sync():
                                             plan_text = ""
                                             pp = (tc.get("args") or {}).get("plan_path")
                                             if pp:
-                                                try: 
+                                                try:
                                                     with open(pp, "r", encoding="utf-8", errors="replace") as pf:
                                                         plan_text = pf.read()
                                                 except Exception: plan_text = f"(plan stored at {pp})"
@@ -8301,8 +8988,9 @@ def _scan_sessions_sync():
 
     # 3b. Antigravity brain/ folder — richer per-session artifacts (task/plan/walkthrough)
     _seen_brain_sids: set = set()
-    # CLI (`agy`) ground truth: real model + exact project, keyed by session id.
-    _ag_cli_meta = _antigravity_cli_meta()
+    # Ground truth from each store's SQLite trajectories: real model + exact
+    # project, keyed by session id, for the IDE and app as well as the CLI.
+    _ag_cli_meta = _antigravity_store_meta()
     for _brain_dir in ANTIGRAVITY_BRAIN_DIRS:
         if not _brain_dir.exists(): continue
         for sess_dir in _brain_dir.iterdir():
@@ -8362,7 +9050,7 @@ def _scan_sessions_sync():
                                 "agent": "antigravity",
                                 "timestamp": md_updated,
                             })
-                
+
                 # Scan for media artifacts at the brain session root (Antigravity drops
                 # previews/screenshots here) and optionally in an artifacts/ subdir.
                 try:
@@ -8433,6 +9121,13 @@ def _scan_sessions_sync():
                     **({"published_artifacts": doc_arts} if doc_arts else {}),
                 })
             except Exception: continue
+
+    # 3c. Recorded usage from each conversation's own SQLite store, and the
+    # sessions brain/ has no folder for. See _antigravity_apply_real_usage.
+    try:
+        _antigravity_apply_real_usage(sessions, _seen_antigravity, _ag_cli_meta, _ag_surface, apply_alias)
+    except Exception as exc:
+        _ag_log_warn("antigravity real-usage pass failed: %s", exc)
 
     # 4. Qwen
     if QWEN_DIR.exists():
@@ -8529,11 +9224,11 @@ def _scan_sessions_sync():
                         if p.replace("/", "-").strip("-") == pd.name:
                             project_path = p
                             break
-                
+
                 if not project_path:
                     # Fallback to slug reconstruction
                     project_path = "/" + pd.name.replace("-", "/")
-                
+
                 for trans_dir in (pd / "agent-transcripts").glob("*"):
                     if trans_dir.is_dir():
                         sid = trans_dir.name
@@ -8680,8 +9375,17 @@ def _scan_sessions_sync():
     # 7b. GitHub Copilot CLI / agent — ~/.copilot/session-state/<id>/events.jsonl.
     # A separate store from the VS Code Copilot chat sessions above; the CLI
     # writes an append-only event log per session (#36). Token usage comes from
-    # session.shutdown.modelMetrics when the session has ended, otherwise we sum
-    # per-message outputTokens and estimate input from prompt length.
+    # session.shutdown.modelMetrics when the session has ended. For a still-
+    # running session (no shutdown event — the common case for long foreground
+    # orchestrator/delegation sessions) the live per-turn usage is instead
+    # reported on a SEPARATE `session.usage_record` event (NOT on
+    # assistant.message, which carries no token fields at all — verified
+    # against real ~/.copilot/session-state data): each one's `data.usage` is
+    # the same gross-input/output/cache shape as a shutdown rollup entry. The
+    # shutdown rollup, the live usage_record rollup, and the per-message scan
+    # are merged field-by-field (see _merge_copilot_cli_tokens) rather than one
+    # whole source winning over the others, since a given Copilot CLI
+    # version/session can report only some fields through one of them.
     if COPILOT_CLI_DIR.exists():
         for sess_dir in COPILOT_CLI_DIR.iterdir():
             try:
@@ -8691,52 +9395,16 @@ def _scan_sessions_sync():
                 rows = _load_copilot_cli_events(ev_file)
                 if not rows: continue
                 sid = sess_dir.name
-                project_path = "unknown"; first_msg = ""; model = None
-                models_used: List[str] = []
-                out_tokens = 0; in_estimate = 0
-                start_ts = None; last_ts = None; shutdown_metrics = None
-                for r in rows:
-                    et = r.get("type"); d = r.get("data") or {}
-                    rts = _parse_copilot_iso(r.get("timestamp"))
-                    if rts and (last_ts is None or rts > last_ts): last_ts = rts
-                    if et == "session.start":
-                        cwd = (d.get("context") or {}).get("cwd")
-                        if cwd: project_path = cwd
-                        start_ts = _parse_copilot_iso(d.get("startTime")) or rts
-                    elif et == "user.message":
-                        c = d.get("content") or ""
-                        if c and not first_msg: first_msg = c
-                        in_estimate += len(c) // 4
-                    elif et == "assistant.message":
-                        m = d.get("model")
-                        if m:
-                            if not model: model = m
-                            if m not in models_used: models_used.append(m)
-                        ot = d.get("outputTokens")
-                        if isinstance(ot, (int, float)) and not isinstance(ot, bool):
-                            out_tokens += int(ot)
-                    elif et == "session.model_change":
-                        nm = d.get("newModel")
-                        if nm and nm not in models_used: models_used.append(nm)
-                    elif et == "session.shutdown":
-                        shutdown_metrics = d.get("modelMetrics")
-                tokens = {"input": 0, "output": 0, "cached": 0, "total": 0}
-                metr = _copilot_cli_tokens_from_metrics(shutdown_metrics)
-                if metr:
-                    tokens.update(metr)
-                else:
-                    tokens["input"] = in_estimate
-                    tokens["output"] = out_tokens
-                tokens["total"] = tokens["input"] + tokens["output"] + tokens["cached"]
-                tokens["cost"] = calculate_cost(model, tokens["input"], tokens["output"], tokens["cached"],
-                                                cache_creation_tokens=tokens.get("cache_creation", 0), at=ts)
-                if model and model not in models_used: models_used.insert(0, model)
-                ts = last_ts or start_ts or _file_mtime_utc(ev_file)
+                parsed = _parse_copilot_cli_session_events(rows, _file_mtime_utc(ev_file))
+                tokens = parsed["tokens"]
+                tokens["cost"] = calculate_cost(parsed["model"], tokens["input"], tokens["output"], tokens["cached"],
+                                                cache_creation_tokens=tokens.get("cache_creation", 0),
+                                                at=parsed["timestamp"])
                 sessions.append({
-                    "id": sid, "agent": "copilot", "project": apply_alias(project_path),
-                    "timestamp": ts, "display": first_msg[:100], "tokens": tokens,
+                    "id": sid, "agent": "copilot", "project": apply_alias(parsed["project_path"]),
+                    "timestamp": parsed["timestamp"], "display": parsed["first_msg"][:100], "tokens": tokens,
                     "mcp_tools": [], "has_plan": False, "plans": [],
-                    "model": model, "models_used": models_used, "artifacts": [],
+                    "model": parsed["model"], "models_used": parsed["models_used"], "artifacts": [],
                     "copilot_source": "cli", "cost": tokens["cost"],
                 })
             except Exception: continue
@@ -8931,6 +9599,9 @@ def _scan_sessions_sync():
 
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
+
+    # 8b2b. Oh My Pi (OMP) — one JSONL per session under ~/.omp/agent/sessions/
+    sessions.extend(_scan_omp_sessions())
 
     # 8b3. DeepSeek Harness (DSH) — zstd-compressed JSONL under ~/.dsh/sessions/
     sessions.extend(_scan_dsh_sessions())
@@ -9633,7 +10304,7 @@ def _canonicalize_codex_trace(events: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 @app.get("/sessions/{session_id}")
-async def get_session_detail(session_id: str, agent: str):
+async def get_session_detail(session_id: str, agent: str, raw: bool = False):
     if agent == "claude":
         files = list(CLAUDE_DIR.glob(f"projects/**/{session_id}.jsonl")) or list(CLAUDE_DIR.glob(f"sessions/{session_id}.json"))
         if not files: return {"error": "Not found"}
@@ -9641,7 +10312,8 @@ async def get_session_detail(session_id: str, agent: str):
     elif agent == "codex":
         files = list(CODEX_DIR.glob(f"sessions/**/rollout-*{session_id}*.jsonl"))
         if not files: return {"error": "Not found"}
-        return _canonicalize_codex_trace(_parse_session_jsonl_cached(files[0]))
+        parsed = _parse_session_jsonl_cached(files[0])
+        return parsed if raw else _canonicalize_codex_trace(parsed)
     elif agent == "grok":
         # Grok Build dialogue. chat_history.jsonl is the canonical conversation in
         # FILE ORDER and carries NO per-message timestamps, so we normalize each
@@ -9788,6 +10460,115 @@ async def get_session_detail(session_id: str, agent: str):
                 # pi records the thinking-level setting (off/medium/high) as
                 # dedicated events; pass them through so the context panel can
                 # show the reasoning effort the session ran at.
+                if evt.get("type") == "thinking_level_change":
+                    _tl = evt.get("thinkingLevel")
+                    if isinstance(_tl, str) and _tl:
+                        _tle = {"type": "thinking_level_change", "thinkingLevel": _tl}
+                        _tlts = evt.get("timestamp")
+                        if _tlts:
+                            try:
+                                _tle["normalized_timestamp"] = _aware(datetime.fromisoformat(str(_tlts).replace("Z", "+00:00"))).timestamp() * 1000
+                            except Exception:
+                                pass
+                        _tle.setdefault("normalized_timestamp", len(events) * 1000)
+                        events.append(_tle)
+                    continue
+                if evt.get("type") != "message":
+                    continue
+                m = evt.get("message") or {}
+                role = m.get("role")
+                norm = None
+
+                if role == "user":
+                    text = "".join(
+                        c.get("text", "") for c in (m.get("content") or [])
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                    norm = {"type": "user", "message": {"role": "user",
+                            "content": [{"type": "text", "text": text}]}}
+
+                elif role == "assistant":
+                    blocks: List[Dict[str, Any]] = []
+                    for c in (m.get("content") or []):
+                        if not isinstance(c, dict):
+                            continue
+                        ctype = c.get("type")
+                        if ctype == "thinking":
+                            think = c.get("thinking") or ""
+                            if think.strip():
+                                blocks.append({"type": "thinking", "thinking": think})
+                        elif ctype == "text":
+                            txt = c.get("text") or ""
+                            if txt.strip():
+                                blocks.append({"type": "text", "text": txt})
+                        elif ctype == "toolCall":
+                            blocks.append({
+                                "type": "tool_use",
+                                "id": c.get("id"),
+                                "name": c.get("name"),
+                                "input": c.get("arguments") or {},
+                            })
+                    if blocks:
+                        norm = {"type": "assistant", "message":
+                                {"role": "assistant", "content": blocks,
+                                 **({"model": m["model"]} if m.get("model") else {}),
+                                 **({"usage": m["usage"]} if isinstance(m.get("usage"), dict) else {})}}
+
+                elif role == "toolResult":
+                    content = m.get("content")
+                    if isinstance(content, list):
+                        content = "".join(
+                            c.get("text", "") for c in content
+                            if isinstance(c, dict) and c.get("type") == "text"
+                        )
+                    norm = {"type": "user", "message": {"role": "user", "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": m.get("toolCallId"),
+                        "content": content or "",
+                        **({"is_error": m["isError"]} if isinstance(m.get("isError"), bool) else {}),
+                    }]}}
+
+                if norm is None:
+                    continue
+                ts_raw = evt.get("timestamp")
+                if ts_raw:
+                    try:
+                        _ts = _aware(datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")))
+                        norm["normalized_timestamp"] = _ts.timestamp() * 1000
+                    except Exception:
+                        pass
+                norm.setdefault("normalized_timestamp", len(events) * 1000)
+                events.append(norm)
+        return events
+
+    elif agent == "omp":
+        # Oh My Pi JSONL — a different on-disk format from Pi, but its message
+        # records carry the same content-block shapes (text / thinking /
+        # toolCall / toolResult), so we normalize them into the same
+        # Claude-shaped events the pi branch above produces and the existing
+        # EventCard renderer handles unchanged.
+        sess_file = None
+        if OMP_SESSIONS_DIR.exists():
+            for bucket in OMP_SESSIONS_DIR.iterdir():
+                if not bucket.is_dir():
+                    continue
+                match = list(bucket.glob(f"*{session_id}*.jsonl"))
+                if match:
+                    sess_file = match[0]
+                    break
+        if not sess_file:
+            return {"error": "Not found"}
+
+        events: List[Dict[str, Any]] = []
+        with open(sess_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    continue
                 if evt.get("type") == "thinking_level_change":
                     _tl = evt.get("thinkingLevel")
                     if isinstance(_tl, str) and _tl:
@@ -10041,12 +10822,13 @@ async def get_session_detail(session_id: str, agent: str):
             ts = row.get("timestamp")
             try: ts_ms = _aware(datetime.fromisoformat(ts.replace("Z", "+00:00"))).timestamp() * 1000 if isinstance(ts, str) else None
             except ValueError: ts_ms = None
-            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
+            base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms, "messageID": row.get("id")}
             role = message.get("role")
             if role == "user":
                 text = _prime_text(message.get("content"))
                 if text: events.append({"type": "user", "payload": {"content": text}, **base})
             elif role == "assistant":
+                first_event = len(events)
                 for part in message.get("content") or []:
                     if not isinstance(part, dict): continue
                     if part.get("type") == "text" and isinstance(part.get("text"), str):
@@ -10054,10 +10836,15 @@ async def get_session_detail(session_id: str, agent: str):
                     elif part.get("type") == "thinking" and isinstance(part.get("thinking"), str):
                         events.append({"type": "assistant_thinking", "payload": {"text": part["thinking"]}, **base})
                     elif part.get("type") == "toolCall":
-                        events.append({"type": "tool_call", "payload": {"tool": part.get("name"), "args": part.get("arguments")}, **base})
+                        events.append({"type": "tool_call", "payload": {"tool": part.get("name"), "args": part.get("arguments"), "callID": part.get("id")}, **base})
+                if len(events) > first_event:
+                    if isinstance(message.get("usage"), dict): events[-1]["usage"] = message["usage"]
+                    if message.get("model"): events[-1]["model"] = message["model"]
+                elif isinstance(message.get("usage"), dict):
+                    events.append({"type": "assistant", "payload": {}, "usage": message["usage"], "model": message.get("model"), **base})
             elif role == "toolResult":
                 text = _prime_text(message.get("content"))
-                events.append({"type": "tool_result", "payload": {"tool": message.get("toolName"), "content": text}, **base})
+                events.append({"type": "tool_result", "payload": {"tool": message.get("toolName"), "content": text, "callID": message.get("toolCallId"), "is_error": message.get("isError")}, **base})
         return events
     elif agent == "qwen":
         files = list(QWEN_DIR.glob(f"projects/**/chats/{session_id}.jsonl"))
@@ -10191,6 +10978,7 @@ async def get_session_detail(session_id: str, agent: str):
                 except Exception: md = {}
                 role_by_msg[mrow["id"]] = md.get("role") or "assistant"
             events: List[Dict[str, Any]] = []
+            step_event: Dict[str, int] = {}
             for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
                 try:
                     p = json.loads(prow["data"] or "{}")
@@ -10199,7 +10987,11 @@ async def get_session_detail(session_id: str, agent: str):
                 ts_ms = prow["time_created"]
                 base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
                 ptype = p.get("type")
-                if ptype == "text":
+                mid = prow["message_id"]
+                before = len(events)
+                if ptype == "step-start":
+                    step_event.pop(mid, None)
+                elif ptype == "text":
                     if role == "user":
                         events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
                     else:
@@ -10217,9 +11009,14 @@ async def get_session_detail(session_id: str, agent: str):
                     # the step's token usage, so attach it to the step's last
                     # emitted event for the per-step usage UI (#128).
                     tk = p.get("tokens")
-                    if isinstance(tk, dict) and events:
-                        events[-1]["tokens"] = tk
-                # step-start is a lifecycle marker; skip in trace
+                    index = step_event.pop(mid, None)
+                    if isinstance(tk, dict):
+                        if index is not None:
+                            events[index]["tokens"] = tk
+                        else:
+                            events.append({"type": "step_usage", "tokens": tk, **base})
+                if ptype in ("text", "reasoning", "tool") and len(events) > before:
+                    step_event[mid] = len(events) - 1
             return events
         finally:
             conn.close()
@@ -10244,6 +11041,7 @@ async def get_session_detail(session_id: str, agent: str):
                     md = {}
                 role_by_msg[mrow["id"]] = md.get("role") or "assistant"
             events: List[Dict[str, Any]] = []
+            step_event: Dict[str, int] = {}
             for prow in conn.execute("SELECT message_id, time_created, data FROM part WHERE session_id=? ORDER BY time_created", (session_id,)):
                 try:
                     p = json.loads(prow["data"] or "{}")
@@ -10253,7 +11051,11 @@ async def get_session_detail(session_id: str, agent: str):
                 ts_ms = prow["time_created"]
                 base = {"timestamp": ts_ms, "normalized_timestamp": ts_ms}
                 ptype = p.get("type")
-                if ptype == "text":
+                mid = prow["message_id"]
+                before = len(events)
+                if ptype == "step-start":
+                    step_event.pop(mid, None)
+                elif ptype == "text":
                     if role == "user":
                         events.append({"type": "user", "payload": {"content": p.get("text", "")}, **base})
                     else:
@@ -10271,9 +11073,14 @@ async def get_session_detail(session_id: str, agent: str):
                     # the step's token usage, so attach it to the step's last
                     # emitted event for the per-step usage UI (#128).
                     tk = p.get("tokens")
-                    if isinstance(tk, dict) and events:
-                        events[-1]["tokens"] = tk
-                # step-start is a lifecycle marker; skip in trace
+                    index = step_event.pop(mid, None)
+                    if isinstance(tk, dict):
+                        if index is not None:
+                            events[index]["tokens"] = tk
+                        else:
+                            events.append({"type": "step_usage", "tokens": tk, **base})
+                if ptype in ("text", "reasoning", "tool") and len(events) > before:
+                    step_event[mid] = len(events) - 1
             return events
         finally:
             conn.close()
@@ -11287,6 +12094,12 @@ async def post_telemetry_event(payload: dict = Body(...)):
         return {"ok": False}
     props = payload.get("props")
     _telemetry.emit(event, props if isinstance(props, dict) else None)
+    # Recurring-user signal, WITHOUT any install id: a real UI event reached
+    # this bridge, so mark today active. Deliberately not on app.launched/
+    # startup -- that would also count headless/bot launches. mark_active()
+    # emits "app.active" itself, at most once per local calendar day; it is
+    # a no-op unless telemetry is enabled and never raises.
+    _telemetry.mark_active()
     return {"ok": True}
 
 
@@ -12050,6 +12863,18 @@ async def get_analytics(
         # None for an unpriced session; feeds three aggregates plus
         # savings_vs_cloud() below, all of which need a number.
         scost = s.get("cost") or 0.0
+        # Delegated (Claude subagent/workflow) spend exists NOWHERE else — those
+        # transcripts aren't sessions themselves, so folding it in here is
+        # additive, never a double count (unlike linked_child_* below, which
+        # covers hermes/opencode children that already ARE sessions in `sessions`
+        # and must stay attribution-only). `delegation_totals` below still
+        # surfaces the same figure as a per-parent breakdown view.
+        dcost = s.get("delegated_cost") or 0.0
+        d_input = st.get("delegated_input", 0) or 0
+        d_output = st.get("delegated_output", 0) or 0
+        d_cached = st.get("delegated_cached", 0) or 0
+        d_cache_reads = st.get("delegated_cache_reads", 0) or 0
+        d_total = d_input + d_output + d_cached
         # Local insights — energy, cloud savings, CO2 — only for local sessions.
         energy = savings = co2 = 0.0
         if is_local_session(model_name=s.get("model"), endpoint=s.get("endpoint"),
@@ -12062,13 +12887,16 @@ async def get_analytics(
             savings = savings_vs_cloud(scost, cloud_cost)
             co2 = co2_for_session(st.get("output", 0), config=pc, tok_per_sec=tps)
         for k in ["input", "output", "cached", "total"]: by_agent[agent][k] += st.get(k, 0)
-        # Cumulative cache reads for the hit-rate metric. Claude-style scanners
-        # keep `cached` as a per-session high-water mark (unique prefix size) and
-        # the per-turn read sum in `_cached_sum`; mixing the HWM with cumulative
-        # `input` badly understates the hit rate on long sessions. Agents without
-        # `_cached_sum` fall back to `cached` (prior behavior).
-        by_agent[agent]["cache_reads"] += st.get("_cached_sum") or st.get("cached", 0) or 0
-        by_agent[agent]["cost"] += scost
+        # Cumulative cache reads for the hit-rate metric. Some scanners (Qwen,
+        # Cursor, ZCode) still keep `cached` as a per-session high-water mark and
+        # the per-turn read sum in `_cached_sum`; prefer the sum. Claude's
+        # `cached` is already the sum.
+        by_agent[agent]["cache_reads"] += (st.get("_cached_sum") or st.get("cached", 0) or 0) + d_cache_reads
+        by_agent[agent]["input"] += d_input
+        by_agent[agent]["output"] += d_output
+        by_agent[agent]["cached"] += d_cached
+        by_agent[agent]["total"] += d_total
+        by_agent[agent]["cost"] += scost + dcost
         by_agent[agent]["energy_wh"] += energy
         by_agent[agent]["savings_usd"] += savings
         by_agent[agent]["co2_g"] += co2
@@ -12084,13 +12912,29 @@ async def get_analytics(
         by_model[model_name]["savings_usd"] += savings
         by_model[model_name]["co2_g"] += co2
         by_model[model_name]["session_count"] += 1
+        # Delegated spend attributed to the SUBAGENT's own model (can differ
+        # from the parent's, e.g. Explore on Haiku under an Opus session) —
+        # not lumped onto model_name above. No session_count bump: a subagent
+        # transcript isn't a session.
+        for dmodel, dm in (s.get("delegated_by_model") or {}).items():
+            if dmodel not in by_model:
+                by_model[dmodel] = {"input": 0, "output": 0, "cached": 0, "total": 0, "cost": 0.0,
+                                    "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0,
+                                    "session_count": 0, "agent": agent}
+            for k in ("input", "output", "cached", "total"):
+                by_model[dmodel][k] += dm.get(k, 0)
+            by_model[dmodel]["cost"] += dm.get("cost", 0) or 0
         # Bucket by LOCAL day, not UTC.
         day = _bucket_key(s["timestamp"], granularity)
         if day not in by_day:
             by_day[day] = {"total": 0, "input": 0, "output": 0, "cached": 0, "cost": 0.0,
                            "energy_wh": 0.0, "savings_usd": 0.0, "co2_g": 0.0}
         for k in ["input", "output", "cached", "total"]: by_day[day][k] += st.get(k, 0)
-        by_day[day]["cost"] += scost
+        by_day[day]["input"] += d_input
+        by_day[day]["output"] += d_output
+        by_day[day]["cached"] += d_cached
+        by_day[day]["total"] += d_total
+        by_day[day]["cost"] += scost + dcost
         by_day[day]["energy_wh"] += energy
         by_day[day]["savings_usd"] += savings
         by_day[day]["co2_g"] += co2
@@ -12107,19 +12951,19 @@ async def get_analytics(
     total_cached = sum(a["cached"] for a in by_agent.values())
     total_cache_reads = sum(a["cache_reads"] for a in by_agent.values())
 
-    # Ecosystem usage: skills, MCP servers, subagent types. New keys only — the
-    # existing by_agent/by_day/by_model/total stay byte-identical (no silent
-    # historical changes). Delegated usage is exposed as its OWN bucket, never
-    # folded into the per-agent sums: claude subagent transcripts aren't
-    # sessions (counted nowhere else), while opencode/hermes children already
-    # appear as sessions above — adding parent-side sums would double-count.
+    # Ecosystem usage: skills, MCP servers, subagent types.
     by_skill: Dict[str, Dict[str, Any]] = {}
     by_mcp_server: Dict[str, Dict[str, Any]] = {}
     by_subagent_type: Dict[str, Dict[str, Any]] = {}
-    # delegated_*: usage that exists NOWHERE else (claude subagent transcripts).
-    # linked_child_*: child sessions spawned by a parent — their tokens are
-    # already in by_agent/by_day/total above; surfaced here as an attribution
-    # view, never added on top.
+    # delegated_*: claude subagent/workflow transcript usage — exists NOWHERE
+    # else, so it IS folded into by_agent/by_day/by_model/total above (see the
+    # `dcost`/`d_input` etc. additions in the loop above); delegation_totals here
+    # is an ADDITIONAL per-parent attribution view of that same already-counted
+    # spend, not a separate pool.
+    # linked_child_*: child sessions spawned by a parent (opencode/hermes) —
+    # those children already appear as ordinary sessions in `sessions` and are
+    # already in by_agent/by_day/total; surfaced here as an attribution view,
+    # never added on top (that WOULD double-count, unlike delegated_*).
     delegation_totals: Dict[str, Any] = {
         "delegated_tokens": 0, "delegated_cost": 0.0,
         "sessions_with_spawns": 0,
@@ -12292,10 +13136,10 @@ def _parse_skill_md(p: Path):
     try:
         text = p.read_text(errors="ignore")
     except Exception: return None
-    
+
     name = p.parent.name
     description = ""
-    
+
     if text.startswith("---"):
         end = text.find("---", 3)
         if end > 0:
@@ -12314,7 +13158,7 @@ def _parse_skill_md(p: Path):
                         k = k.strip().lower(); v = v.strip().strip('"').strip("'")
                         if k == "name": name = v
                         elif k == "description": description = v
-                        
+
     return {"name": name, "description": (description or "")[:500]}
 
 def _collect_skills(base: Path, scope: str, agent: str):
@@ -12326,12 +13170,12 @@ def _collect_skills(base: Path, scope: str, agent: str):
         skills_dir = base / "skills"
     elif not base.exists():
         return out
-        
+
     for skill_md in skills_dir.glob("*/SKILL.md"):
         s = _parse_skill_md(skill_md)
         if s:
             out.append({**s, "scope": scope, "agent": agent, "source": str(skill_md)})
-    
+
     # Check for deeper nested skills (common in plugin structures)
     for skill_md in skills_dir.glob("*/skills/*/SKILL.md"):
         s = _parse_skill_md(skill_md)
@@ -13092,7 +13936,7 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
         if sm and sm.is_available():
             try:
-                raw = sm.summarize(_summaries.build_prompt(brief))
+                raw = await _asyncio.to_thread(sm.summarize, _summaries.build_prompt(brief))
                 narrative = _summaries.parse_narrative(raw)
             except SummarizerError as e:
                 gen_error = str(e)
@@ -13140,6 +13984,143 @@ async def make_summary(session_id: str, agent: str, force: bool = False):
         "error": gen_error,
         "error_info": error_info,
     }
+
+@app.get("/sessions/{session_id}/summary/custom")
+async def list_custom_summaries(session_id: str, agent: str = ""):
+    """Stored custom answers. With ``agent`` given, each item also carries
+    ``stale``: whether the trace has changed since the answer was made."""
+    items = _summaries.list_custom(session_id)
+    if agent:
+        try:
+            detail = await get_session_detail(session_id, agent)
+            events = [] if (isinstance(detail, dict) and detail.get("error")) else _summaries.normalize_detail(detail)
+        except Exception:
+            events = []
+        if events:
+            chash = _summaries.content_hash(session_id, events)
+            items = [{**it, "stale": it["content_hash"] != chash} for it in items]
+    return {"items": items}
+
+@app.post("/sessions/{session_id}/summary/custom")
+async def make_custom_summary(session_id: str, agent: str, body: dict = Body(...)):
+    """Run a user-written prompt over the session brief with the configured
+    summarizer backend. Answers are cached per (session, prompt) and replaced
+    when the trace has grown or the backend or model changed."""
+    prompt = _summaries.clean_custom_prompt(body.get("prompt"))
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt is required")
+    cfg = _summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    detail = await get_session_detail(session_id, agent)
+    if isinstance(detail, dict) and detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail.get("error", "session not found"))
+    events = _summaries.normalize_detail(detail)
+    if not events:
+        raise HTTPException(status_code=422, detail="no trace content to summarize")
+
+    chash = _summaries.content_hash(session_id, events)
+    phash = _summaries.prompt_hash(prompt)
+    if not body.get("force"):
+        hit = _summaries.get_custom(session_id, phash)
+        if (
+            hit and hit["content_hash"] == chash
+            and hit["backend"] == backend_name and hit["model"] == cfg.get("model")
+        ):
+            return {"item": hit, "cached": True, "error": None, "error_info": None}
+
+    meta = await _session_meta(session_id, agent) or {"agent": agent}
+    brief = _summaries.condense_for_focus(events, meta)
+    gen_error = None
+    answer = None
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    if sm and sm.is_available():
+        try:
+            # Blocking subprocess or HTTP call: keep it off the event loop.
+            answer = await _asyncio.to_thread(
+                _summaries.ask_untrusted, sm, _summaries.build_custom_prompt(brief, prompt)
+            )
+        except SummarizerError as e:
+            gen_error = str(e)
+    else:
+        gen_error = f"summarizer '{backend_name}' is not available"
+
+    if not answer and not gen_error:
+        gen_error = f"{backend_name} produced no output"
+    item = None
+    error_info = None
+    persisted = True
+    if answer:
+        try:
+            item = _summaries.store_custom(session_id, prompt, chash, backend_name, cfg.get("model"), answer)
+        except sqlite3.Error:
+            # The model call already ran (and may have spent quota), so hand
+            # the answer back even though it could not be saved.
+            persisted = False
+            item = {
+                "prompt_hash": phash, "prompt": prompt, "content_hash": chash,
+                "backend": backend_name, "model": cfg.get("model"), "answer": answer,
+                "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            }
+    elif gen_error:
+        from summarizers.errors import classify as _classify_err
+        error_info = _classify_err(gen_error, backend_name=backend_name or "")
+    return {"item": item, "cached": False, "error": gen_error, "error_info": error_info, "persisted": persisted}
+
+@app.post("/sessions/{session_id}/chat")
+async def chat_about_session(session_id: str, agent: str, body: dict = Body(...)):
+    """One turn of a chat about a single session. The client sends the whole
+    conversation each time and nothing is stored here. The transcript is
+    searched for the excerpts that match the latest question and those are sent
+    with the standard brief and the conversation."""
+    try:
+        messages = _summaries.clean_chat_messages(body.get("messages"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    cfg = _summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    detail = await get_session_detail(session_id, agent)
+    if isinstance(detail, dict) and detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail.get("error", "session not found"))
+    events = _summaries.normalize_detail(detail)
+    if not events:
+        raise HTTPException(status_code=422, detail="no trace content to chat about")
+
+    meta = await _session_meta(session_id, agent) or {"agent": agent}
+    brief = _summaries.condense_trace(events, meta)
+    snippets = _summaries.retrieve_snippets(_summaries.build_chunks(events), messages[-1]["content"])
+    prompt = _summaries.build_chat_prompt(brief, snippets, messages)
+
+    gen_error = None
+    answer = None
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    if sm and sm.is_available():
+        try:
+            answer = await _asyncio.to_thread(_summaries.ask_untrusted, sm, prompt)
+        except SummarizerError as e:
+            gen_error = str(e)
+    else:
+        gen_error = f"summarizer '{backend_name}' is not available"
+    if not answer and not gen_error:
+        gen_error = f"{backend_name} produced no output"
+
+    reply = None
+    error_info = None
+    if answer:
+        reply = {
+            "role": "assistant", "content": answer, "backend": backend_name,
+            "model": cfg.get("model"), "excerpts": len(snippets),
+            "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+    else:
+        from summarizers.errors import classify as _classify_err
+        error_info = _classify_err(gen_error, backend_name=backend_name or "")
+    return {"reply": reply, "error": gen_error, "error_info": error_info}
 
 @app.post("/summaries/recent")
 async def summarize_recent(limit: int = 20):
@@ -13189,7 +14170,7 @@ if __name__ == "__main__":
 
     logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
-    # Port resolution order: --port CLI arg → TT_API_PORT env var → 8000.
+    # Port resolution order: --port CLI arg → TT_API_PORT env var → 18000.
     # bin/cli.js passes --port; running the file directly (uvicorn / python)
     # honors the env var so devs can override without editing args.
     def _resolve_port() -> int:
@@ -13205,7 +14186,7 @@ if __name__ == "__main__":
         if env_port:
             try: return int(env_port)
             except ValueError: pass
-        return 8000
+        return 18000
 
     # Host resolution order: --host CLI arg → TT_HOST env var → 127.0.0.1.
     # Default stays loopback; set 0.0.0.0 (or a specific interface IP) to expose
