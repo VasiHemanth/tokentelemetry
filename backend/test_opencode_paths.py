@@ -219,3 +219,32 @@ def test_detail_lookup_finds_session_in_channel_db(scan_env):
     assert main._opencode_db_for_session("ses_stable") == scan_env / "opencode-stable.db"
     assert main._opencode_db_for_session("ses_latest") == scan_env / "opencode.db"
     assert main._opencode_db_for_session("ses_nope") is None
+
+
+def test_scan_opencode_null_timestamps_not_epoch(scan_env):
+    """U7: a session with NULL time_created and time_updated must not produce a
+    1970-01-01 timestamp — it must use a modern fallback so it sorts correctly."""
+    import sqlite3 as _sqlite3
+    from datetime import timezone as _tz
+    db = scan_env / "opencode.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = _sqlite3.connect(str(db))
+    con.execute("CREATE TABLE session (id TEXT, project_id TEXT, parent_id TEXT, "
+                "directory TEXT, title TEXT, time_created INT, time_updated INT)")
+    con.execute("CREATE TABLE message (session_id TEXT, time_created INT, data TEXT)")
+    con.execute("CREATE TABLE part (session_id TEXT, time_created INT, data TEXT)")
+    # NULL for both timestamp columns
+    con.execute("INSERT INTO session VALUES ('ses_null', 'p', NULL, '/tmp/x', 'T', NULL, NULL)")
+    con.execute("INSERT INTO message VALUES ('ses_null', NULL, ?)", (json.dumps(
+        {"role": "assistant", "modelID": "gpt-5.2-codex", "providerID": "openai"}),))
+    con.execute("INSERT INTO part VALUES ('ses_null', NULL, ?)", (json.dumps(
+        {"type": "step-finish",
+         "tokens": {"input": 10, "output": 5, "cache": {"read": 0, "write": 0}}}),))
+    con.commit()
+    con.close()
+    sessions = [s for s in main._scan_sessions_sync()
+                if s["agent"] == "opencode" and s["id"] == "ses_null"]
+    assert len(sessions) == 1
+    ts = sessions[0]["timestamp"]
+    epoch = ts.replace(tzinfo=_tz.utc) if ts.tzinfo is None else ts
+    assert epoch.year >= 2020, f"timestamp must not be epoch; got {ts}"
