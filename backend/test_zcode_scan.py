@@ -226,6 +226,37 @@ def test_scan_nets_cache_read_before_cost(scan_env, monkeypatch, tmp_path):
     assert out[0]["tokens"]["input"] == net_input
 
 
+def test_scan_uses_cumulative_sum_not_hwm_for_multi_step_cache_cost(scan_env, monkeypatch, tmp_path):
+    """M1: when multiple step-finish events each have non-zero cache_read,
+    calculate_cost must receive the cumulative sum (100+200=300), not the
+    high-water-mark (200). tokens["cached"] keeps the HWM for display."""
+    db = tmp_path / "db.sqlite"
+    _mk_zcode_db(db, sessions=[{
+        "id": "sess_multi", "directory": r"D:\proj", "title": "T",
+        "messages": [({"role": "assistant", "modelID": "GLM-5.3-Flash",
+                       "providerID": "builtin:zai-start-plan"}, 1100)],
+        "parts": [
+            (_step_finish(110, 10, 100), 1100),
+            (_step_finish(210, 20, 200), 1200),
+        ],
+        "todos": [],
+    }])
+    monkeypatch.setattr(main, "ZCODE_DB", db)
+    calls = []
+
+    def spy(model, inp, out, cached, **kw):
+        calls.append(cached)
+        return 0.0
+
+    monkeypatch.setattr(main, "calculate_cost", spy)
+    out = main._scan_zcode_sessions()
+    assert len(out) == 1
+    # Cost billing must use cumulative sum.
+    assert calls[0] == 300, f"expected 300 (cumulative), got {calls[0]}"
+    # Display field keeps high-water-mark.
+    assert out[0]["tokens"]["cached"] == 200
+
+
 def test_scan_zcode_dedupes_shared_session_ids(scan_env, monkeypatch, tmp_path):
     db1 = tmp_path / "a" / "db.sqlite"
     db2 = tmp_path / "b" / "db.sqlite"

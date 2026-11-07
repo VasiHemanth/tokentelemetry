@@ -83,6 +83,9 @@ def test_scan_muse_uses_cwd_and_keeps_child_tokens_out_of_parent_totals(tmp_path
     }
     assert rec["delegation"]["spawn_count"] == 1
     assert rec["delegation"]["delegated_total"] == 75
+    # M4: delegated_cost must be surfaced at the top level so analytics can read it.
+    assert "delegated_cost" in rec
+    assert rec["delegated_cost"] == rec["delegation"]["delegated_cost"]
 
 
 def test_scan_muse_uses_workspace_root_when_cwd_is_not_logged(tmp_path, monkeypatch):

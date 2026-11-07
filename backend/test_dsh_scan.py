@@ -155,6 +155,9 @@ def test_subagent_children_fold_into_parent_delegation(scan_env):
     assert deleg["subagents"][0]["agent_id"] == "child-uuid-1"
     assert deleg["subagents"][0]["tokens"]["input"] == 50
     assert deleg["delegated_total"] == 50 + 10
+    # M4: delegated_cost must be surfaced at the top level so analytics can read it.
+    assert "delegated_cost" in parent
+    assert parent["delegated_cost"] == deleg["delegated_cost"]
 
 
 def test_fork_without_origin_stays_standalone(scan_env):
