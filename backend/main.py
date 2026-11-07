@@ -10026,8 +10026,10 @@ def _persist_history_async(data: List[Dict[str, Any]],
     failures are logged inside the store and never surface to the caller.
 
     ``scan_started_at`` is an ISO timestamp from just before the scan ran.
-    Forwarded to ``mark_absent`` so that rows upserted by a newer concurrent
-    scan are not incorrectly flagged absent by this (older) scan's persist job."""
+    Forwarded to ``upsert_sessions`` (anchors ``last_seen_at`` to the scan's
+    start so the conflict-clause recency guard is accurate) and to
+    ``mark_absent`` (so rows upserted by a newer concurrent scan are not
+    flagged absent by this older scan's persist job)."""
     import history_store
 
     def _work() -> None:
@@ -10119,9 +10121,10 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
         _sessions_cache["building"] = True
         try:
             t0 = _time.monotonic()
-            # Capture the scan start time before the scan runs so mark_absent
-            # can skip rows that a concurrent newer scan upserted after this
-            # point (see _persist_history_async / history_store.mark_absent).
+            # Capture scan start before the scan runs: upsert_sessions uses it
+            # as last_seen_at (recency guard in the conflict clause) and
+            # mark_absent uses it to skip rows a newer concurrent scan upserted
+            # after this point (U13 / U14).
             scan_started_at = datetime.now(timezone.utc).isoformat()
             data = await _asyncio.to_thread(_scan_sessions_sync)
             _sessions_cache["data"] = data

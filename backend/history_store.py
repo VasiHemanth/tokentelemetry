@@ -221,13 +221,12 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]],
     Returns the number of rows written. Never raises — a store failure must not
     break the scan that called it.
 
-    ``scan_started_at`` is an ISO timestamp from just before the scan ran.
-    When provided it is used as ``last_seen_at`` instead of ``datetime.now()``,
-    so the upsert timestamp is anchored to the scan's start rather than the
-    executor's wall-clock.  This makes ``mark_absent``'s timestamp comparison
-    accurate: a delayed older scan's upsert will carry an earlier timestamp than
-    the newer scan's ``scan_started_at``, so the guard in ``mark_absent`` fires
-    correctly instead of treating the delayed row as "freshly seen"."""
+    ``scan_started_at`` is an ISO timestamp captured before the scan ran.
+    When provided it is used as ``last_seen_at`` instead of ``datetime.now()``
+    at executor time, anchoring the upsert to when the scan actually ran. That
+    keeps both recency guards accurate under late-firing persist threads: the
+    conflict clause here rejects a delayed older scan's stale data, and
+    ``mark_absent`` skips rows a newer concurrent scan already upserted."""
     valid = [r for r in rows if r.get("id") and r.get("agent")]
     if not valid:
         return 0
@@ -271,6 +270,13 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]],
                             source_present=1
                     """
                 else:
+                    # The WHERE guard rejects an upsert whose scan timestamp is
+                    # older than what's already stored.  Without it a delayed
+                    # persist thread from an earlier scan can overwrite a newer
+                    # scan's token counts, cost, and model — silently rolling
+                    # back an actively-growing session.  NULL last_seen_at means
+                    # the row was written before this guard existed; always allow
+                    # the first real write to populate it.
                     conflict_clause = """
                         ON CONFLICT(agent, id) DO UPDATE SET
                             project=excluded.project,
@@ -296,6 +302,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]],
                             delegated_cached=excluded.delegated_cached,
                             delegated_cache_reads=excluded.delegated_cache_reads,
                             delegated_by_model_json=excluded.delegated_by_model_json
+                        WHERE (sessions.last_seen_at IS NULL
+                               OR excluded.last_seen_at >= sessions.last_seen_at)
                     """
                 con.execute(
                     f"""
