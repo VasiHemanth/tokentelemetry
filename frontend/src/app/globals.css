@@ -4,23 +4,25 @@
    TokenTelemetry design tokens
    ========================================================================= */
 :root {
+  /* Text preference scales type only; rem-based layout keeps its dimensions. */
+  --tt-text-scale: 1;
   /* Surface elevation system: sunken < canvas < panel < raised < overlay */
-  --tt-canvas:    #0a0c10;   /* app background */
-  --tt-sunken:    #07090d;   /* inset surfaces (track, code blocks) */
-  --tt-panel:     #11141a;   /* primary card surface */
-  --tt-raised:    #181c25;   /* hover / popovers / nested cards */
-  --tt-overlay:   #1d2230;   /* modals, menus */
+  --tt-canvas:    #101113;   /* app background */
+  --tt-sunken:    #0b0c0e;   /* inset surfaces (track, code blocks) */
+  --tt-panel:     #181a1d;   /* primary card surface */
+  --tt-raised:    #222428;   /* hover / popovers / nested cards */
+  --tt-overlay:   #2b2e33;   /* modals, menus */
 
   /* Hairline borders */
-  --tt-border:        rgba(255, 255, 255, 0.06);
-  --tt-border-strong: rgba(255, 255, 255, 0.10);
+  --tt-border:        rgba(255, 255, 255, 0.10);
+  --tt-border-strong: rgba(255, 255, 255, 0.14);
   --tt-border-focus:  rgba(96, 165, 250, 0.45);
 
   /* Text */
-  --tt-fg:        #e8eaf0;
-  --tt-fg-muted:  #9aa1ad;
-  --tt-fg-dim:    #5f6675;
-  --tt-fg-faint:  #3d434f;
+  --tt-fg:        #f1f2f4;
+  --tt-fg-muted:  #b2b7c0;
+  --tt-fg-dim:    #9299a3;
+  --tt-fg-faint:  #9299a3;
 
   /* Brand + signal */
   --tt-brand:        #60a5fa;
@@ -55,6 +57,7 @@
   --agent-dsh:         #4D6BFE;
   --agent-qoder:       #e4e4e7;
   --agent-zcode:       #e4e4e7;
+  --agent-omp:         #e4e4e7;
   /* Kimi's mark is black-on-white, so the var holds the dark-theme tint (a
      light zinc) rather than the literal brand hex; flipped back in light mode. */
   --agent-kimi:        #e4e4e7;
@@ -109,6 +112,7 @@
   --agent-pi:   #111827;
   --agent-qoder: #52525b;
   --agent-zcode: #52525b;
+  --agent-omp:   #52525b;
   --agent-kimi:  #18181b;
 
   --tt-shadow-soft:  0 1px 0 rgba(15,23,42,0.02) inset, 0 4px 12px -6px rgba(15,23,42,0.10);
@@ -144,6 +148,26 @@
   --color-info:      var(--tt-info);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  --text-xs: calc(0.75rem * var(--tt-text-scale));
+  --text-sm: calc(0.875rem * var(--tt-text-scale));
+  --text-base: calc(1rem * var(--tt-text-scale));
+  --text-lg: calc(1.125rem * var(--tt-text-scale));
+  --text-xl: calc(1.25rem * var(--tt-text-scale));
+  --text-2xl: calc(1.5rem * var(--tt-text-scale));
+  --text-3xl: calc(1.875rem * var(--tt-text-scale));
+  --text-4xl: calc(2.25rem * var(--tt-text-scale));
+  --text-5xl: calc(3rem * var(--tt-text-scale));
+  --text-6xl: calc(3.75rem * var(--tt-text-scale));
+  --text-7xl: calc(4.5rem * var(--tt-text-scale));
+  --text-8xl: calc(6rem * var(--tt-text-scale));
+  --text-9xl: calc(8rem * var(--tt-text-scale));
+}
+
+/* Extend Tailwind's arbitrary text lengths too, including responsive and
+   descendant variants. Color utilities do not resolve this length declaration. */
+@utility text-* {
+  font-size: calc(--value([length]) * var(--tt-text-scale));
 }
 
 /* =========================================================================
@@ -154,6 +178,7 @@ body {
   background: var(--tt-canvas);
   color: var(--tt-fg);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(1rem * var(--tt-text-scale));
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -233,12 +258,37 @@ body {
    ========================================================================= */
 .prose { color: var(--tt-fg-muted); }
 .prose h1, .prose h2, .prose h3 { color: var(--tt-fg); font-weight: 700; margin-top: 1.5em; margin-bottom: 0.5em; letter-spacing: -0.01em; }
-.prose h1 { font-size: 1.5rem; }
-.prose h2 { font-size: 1.25rem; }
-.prose h3 { font-size: 1.05rem; }
+.prose h1 { font-size: calc(1.5rem * var(--tt-text-scale)); }
+.prose h2 { font-size: calc(1.25rem * var(--tt-text-scale)); }
+.prose h3 { font-size: calc(1.05rem * var(--tt-text-scale)); }
 .prose p { margin-bottom: 1em; line-height: 1.65; }
 .prose ul, .prose ol { margin-left: 1.5em; margin-bottom: 1em; list-style-type: disc; }
 .prose li { margin-bottom: 0.25em; }
 .prose code { background: var(--tt-sunken); padding: 0.15em 0.4em; border-radius: 4px; font-family: var(--font-mono); font-size: 0.88em; border: 1px solid var(--tt-border); }
 .prose pre { background: var(--tt-sunken); padding: 1em; border-radius: var(--tt-radius); overflow-x: auto; border: 1px solid var(--tt-border); margin-bottom: 1.5em; }
 .prose blockquote { border-left: 3px solid var(--tt-success); padding-left: 1em; color: var(--tt-fg-dim); font-style: italic; }
+
+/* Conversation documents have a reading hierarchy separate from activity rows. */
+.conversation-prose { overflow-wrap: anywhere; }
+.conversation-prose > * + * { margin-top: 0.875rem; }
+.conversation-prose :is(h1,h2,h3,h4) { color: var(--tt-fg); font-weight: 600; line-height: 1.45; margin-top: 1.5rem; margin-bottom: 0.5rem; letter-spacing: -0.015em; }
+.conversation-prose > :first-child { margin-top: 0; }
+.conversation-prose h1 { font-size: calc(1.25rem * var(--tt-text-scale)); }
+.conversation-prose h2 { font-size: calc(1.125rem * var(--tt-text-scale)); }
+.conversation-prose :is(h3,h4) { font-size: calc(1rem * var(--tt-text-scale)); }
+.conversation-prose :is(ul,ol) { padding-left: 1.25rem; }
+.conversation-prose ul { list-style: disc; }
+.conversation-prose ol { list-style: decimal; }
+.conversation-prose li + li { margin-top: 0.375rem; }
+.conversation-prose li > p { margin: 0.375rem 0; }
+.conversation-prose a { color: var(--tt-brand); text-decoration: underline; text-underline-offset: 3px; }
+.conversation-prose a:hover { text-decoration-thickness: 2px; }
+.conversation-prose strong { color: var(--tt-fg); font-weight: 600; }
+.conversation-prose :not(pre) > code { border: 1px solid var(--tt-border); border-radius: 4px; background: var(--tt-canvas); padding: 0.125rem 0.3rem; font-size: 0.8em; font-family: var(--font-geist-mono), monospace; }
+.conversation-prose pre > code { font-size: inherit; white-space: pre; }
+.conversation-prose blockquote { border-left: 2px solid var(--tt-border-focus); background: var(--tt-canvas); padding: 0.75rem 1rem; color: var(--tt-fg-muted); }
+.conversation-prose hr { border: 0; border-top: 1px solid var(--tt-border); margin: 1.5rem 0; }
+.conversation-prose table { width: 100%; border-collapse: collapse; font-size: calc(0.8125rem * var(--tt-text-scale)); line-height: 1.6; }
+.conversation-prose :is(th,td) { border-bottom: 1px solid var(--tt-border); padding: 0.625rem 0.75rem; text-align: left; vertical-align: top; }
+.conversation-prose th { font-weight: 600; background: var(--tt-canvas); }
+.conversation-prose tr:last-child td { border-bottom: 0; }

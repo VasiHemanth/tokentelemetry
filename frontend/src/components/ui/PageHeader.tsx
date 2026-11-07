@@ -34,7 +34,7 @@ export function PageHeader({ backHref, eyebrow, title, description, icon, action
         )}
         <div className="min-w-0">
           {eyebrow && (
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)] mb-1.5">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--tt-fg-dim)] mb-1.5">
               {eyebrow}
             </div>
           )}

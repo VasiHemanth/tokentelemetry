@@ -123,7 +123,7 @@ export default function Home() {
     <div className="px-8 py-8 max-w-[1600px] mx-auto space-y-10 pb-20">
       <PageHeader
         eyebrow="Overview"
-        title="Dashboard"
+        title="Your agent workspace"
         description={
           loading
             ? "Loading telemetry…"
@@ -220,7 +220,7 @@ export default function Home() {
                 </div>
                 <span className="tabular text-[13px] font-semibold text-[var(--tt-fg)]">{count}</span>
               </div>
-              <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[var(--tt-fg-muted)]">
+              <div className="mt-2 text-[13px] font-medium text-[var(--tt-fg-muted)]">
                 {meta.label}
               </div>
               {quotaWindow && (
@@ -300,7 +300,7 @@ export default function Home() {
           <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
             <div className="flex items-center gap-2">
               <Activity size={14} className="text-[var(--tt-brand)]" />
-              <CardTitle className="!text-[13px]">Recent activity</CardTitle>
+              <CardTitle className="!text-[16px]">Recent activity</CardTitle>
               {countLine && (
                 <span className="text-[10px] text-[var(--tt-fg-dim)] tabular-nums">{countLine}</span>
               )}

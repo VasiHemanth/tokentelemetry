@@ -5,11 +5,12 @@ import { createPortal } from "react-dom";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown } from "lucide-react";
+import { ArrowLeft, Brain, Code, MessageSquare, Terminal, User, Users, FileText, Activity, Zap, Info, Sparkles, GitBranch, LayoutPanelLeft, ListMusic, ChevronRight, ChevronLeft, Play, Pause, Wrench, Cpu, AlertTriangle, Hash, Clock, FileCode, Settings2, ChevronDown, ChevronUp, Copy, Check, Maximize2, X, Repeat, Globe, ExternalLink, Target, DollarSign, Filter, ListChevronsDownUp, ListChevronsUpDown, PanelRight } from "lucide-react";
 import Link from "next/link";
 import { AgentBadge, Badge, Button, Skeleton } from "@/components/ui";
 import AgentSigil from "@/components/icons/AgentSigil";
 import SourceBadge from "@/components/SourceBadge";
+import { pluginUsage, sessionUsage, type SessionUsage, type SessionUsageFields, type UsageRow } from "@/lib/sessionUsage";
 import CopilotSourceBadge from "@/components/CopilotSourceBadge";
 import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 import SummaryPanel from "@/components/summarizer/SummaryPanel";
@@ -19,6 +20,9 @@ import { formatTokens, formatCost } from "@/lib/format";
 import { timeAgo } from "@/lib/notifications";
 import { resolveSessionBackTarget } from "@/lib/navigation";
 import { CostStatus, COST_STATUS_LABELS, COST_STATUS_HINTS, outcomeLabel } from "@/lib/hermesTelemetry";
+import { normalizeTraceEvents, type Event } from "@/lib/traceEvents";
+import { traceAdapter, type TraceSpan } from "@/lib/traceTree";
+import TraceView from "@/components/trace/TraceView";
 
 // Harnesses emit different event schemas. Keep that compatibility boundary
 // explicit while the normalized Event shape remains intentionally permissive.
@@ -47,7 +51,7 @@ interface PublishedArtifact {
   timestamp?: string | null;
 }
 
-interface Session {
+interface Session extends SessionUsageFields {
   id: string;
   agent: string;
   project: string;
@@ -135,21 +139,6 @@ interface Session {
   untracked_background?: { recaps: number; titles: number; compactions: number; total: number };
 }
 
-interface Event {
-  id?: string;
-  type: string;
-  role?: string;
-  timestamp?: string;
-  normalized_timestamp?: number;
-  payload?: TraceValue;
-  message?: TraceValue;
-  attachment?: TraceValue;
-  toolUseResult?: TraceValue;
-  uuid?: string;
-  content?: TraceValue;
-  thoughts?: TraceValue[];
-  toolCalls?: TraceValue[];
-}
 
 type StepKind = "user" | "assistant" | "reasoning" | "tool" | "tool_result" | "meta" | "other";
 
@@ -222,160 +211,6 @@ function eventKind(evt: Event): StepKind {
   if (type === "user" || role === "user" || (type === "response_item" && evt.payload?.role === "user") || type === "request_item") return "user";
   if (type === "assistant" || role === "assistant" || role === "model" || role === "gemini" || type === "model" || type === "gemini" || (type === "response_item" && evt.payload?.role === "assistant" && evt.payload?.type === "message")) return "assistant";
   return "other";
-}
-
-function codexVisibleSignatures(event: TraceValue): string[] {
-  const payload = event?.payload;
-  if (!payload || typeof payload !== "object") return [];
-
-  const textSignature = (kind: string, value: unknown) => {
-    const text = String(value ?? "").trim();
-    return text ? `${kind}:${text}` : null;
-  };
-
-  if (event.type === "event_msg") {
-    if (payload.type === "user_message") return [textSignature("user", payload.message)].filter(Boolean) as string[];
-    if (payload.type === "agent_message") return [textSignature("assistant", payload.message)].filter(Boolean) as string[];
-    if (payload.type === "agent_reasoning") return [textSignature("reasoning", payload.text)].filter(Boolean) as string[];
-    return [];
-  }
-
-  if (event.type !== "response_item") return [];
-  if (payload.type === "reasoning") {
-    return (payload.summary || [])
-      .filter((item: TraceValue) => item && typeof item === "object")
-      .map((item: TraceValue) => textSignature("reasoning", item.text))
-      .filter(Boolean) as string[];
-  }
-  if (payload.type !== "message" || !["user", "assistant"].includes(payload.role)) return [];
-
-  const text = (payload.content || [])
-    .filter((item: TraceValue) => item && ["input_text", "output_text"].includes(item.type))
-    .map((item: TraceValue) => item.text || "")
-    .join("");
-  const signature = textSignature(payload.role, text);
-  return signature ? [signature] : [];
-}
-
-function codexEventTimestamp(event: TraceValue): number | undefined {
-  if (typeof event?.normalized_timestamp === "number") return event.normalized_timestamp;
-  if (event?.timestamp) {
-    const timestamp = Date.parse(event.timestamp);
-    return Number.isNaN(timestamp) ? undefined : timestamp;
-  }
-  return undefined;
-}
-
-function dedupeCodexMirrors(events: TraceValue[]): TraceValue[] {
-  const canonical = new Map<string, Array<{ index: number; timestamp?: number }>>();
-  events.forEach((event, index) => {
-    if (event.type !== "response_item") return;
-    for (const signature of codexVisibleSignatures(event)) {
-      const matches = canonical.get(signature) || [];
-      matches.push({ index, timestamp: codexEventTimestamp(event) });
-      canonical.set(signature, matches);
-    }
-  });
-
-  return events.filter((event, index) => {
-    if (event.type !== "event_msg") return true;
-    const timestamp = codexEventTimestamp(event);
-    const mirrored = codexVisibleSignatures(event).some((signature) =>
-      (canonical.get(signature) || []).some((match) =>
-        Math.abs(index - match.index) <= 4 &&
-        (timestamp === undefined || match.timestamp === undefined || Math.abs(timestamp - match.timestamp) <= 100)
-      )
-    );
-    return !mirrored;
-  });
-}
-
-function collapseCodexReasoningSnapshots(events: TraceValue[]): TraceValue[] {
-  const collapsed: TraceValue[] = [];
-  for (const event of events) {
-    const isReasoning = event?.type === "response_item" && event?.payload?.type === "reasoning";
-    if (!isReasoning) {
-      collapsed.push(event);
-      continue;
-    }
-
-    const currentText = codexVisibleSignatures(event)
-      .filter((signature) => signature.startsWith("reasoning:"))
-      .map((signature) => signature.slice("reasoning:".length))
-      .join("\n\n");
-    if (!currentText) continue;
-
-    let previousIndex = collapsed.length - 1;
-    while (previousIndex >= 0 && collapsed[previousIndex]?.type === "event_msg" && collapsed[previousIndex]?.payload?.type === "token_count") {
-      previousIndex -= 1;
-    }
-
-    const previous = previousIndex >= 0 ? collapsed[previousIndex] : null;
-    if (previous?.type === "response_item" && previous?.payload?.type === "reasoning") {
-      const previousText = codexVisibleSignatures(previous)
-        .filter((signature) => signature.startsWith("reasoning:"))
-        .map((signature) => signature.slice("reasoning:".length))
-        .join("\n\n");
-      if (previousText === currentText || previousText.startsWith(currentText) || currentText.startsWith(previousText)) {
-        if (currentText.length >= previousText.length) collapsed[previousIndex] = event;
-        continue;
-      }
-    }
-
-    collapsed.push(event);
-  }
-  return collapsed;
-}
-
-/* Normalize a raw trace payload (session detail or subagent transcript) into
-   renderable events — shared by the main trace fetch and the subagent
-   drill-in viewer so both filter the same noise. */
-function normalizeTraceEvents(agent: string | null, data: TraceValue): Event[] {
-  let evts: TraceValue[] = [];
-  if (agent === "gemini" || agent === "antigravity") {
-    evts = (data?.messages || []).map((m: TraceValue) => ({
-      ...m,
-      type: m.type === "gemini" ? "assistant" : m.type,
-    }));
-  } else {
-    evts = Array.isArray(data) ? data : [];
-  }
-  if (data && typeof data === "object" && !Array.isArray(data) && data.error) {
-    evts = [];
-  }
-  if (agent === "codex") {
-    // token_count events are filtered as noise, but they carry the turn's
-    // usage — hand it to the preceding kept event for the per-step chip (#128).
-    let lastKept: TraceValue = null;
-    evts = evts.filter((e: TraceValue) => {
-      if (e.type === "turn_context") return false;
-      if (e.type === "event_msg" && e.payload?.type === "token_count") {
-        const u = e.payload?.info?.last_token_usage;
-        if (u && lastKept) lastKept._tt_tokens = u;
-        return false;
-      }
-      lastKept = e;
-      return true;
-    });
-    // Codex writes a canonical response_item and an event_msg projection for
-    // the same visible turn. Keep the canonical event so the Step Index and
-    // conversation cards are driven by one shared timeline.
-    evts = collapseCodexReasoningSnapshots(dedupeCodexMirrors(evts));
-  }
-  if (agent === "claude" || agent === "cursor") {
-    const NOISE_TYPES = new Set([
-      "last-prompt", "permission-mode", "ai-title", "file-history-snapshot",
-      "queue-operation", "attachment", "system",
-    ]);
-    evts = evts.filter((e: TraceValue) => {
-      if (NOISE_TYPES.has(e.type)) return false;
-      if (e.type === "user" && e.isMeta) return false;
-      const c = e.message?.content;
-      if (e.type === "user" && typeof c === "string" && c.startsWith("<local-command-")) return false;
-      return true;
-    });
-  }
-  return evts;
 }
 
 /* Extract the model reasoning-effort setting an agent ran at, as ordered-distinct
@@ -500,6 +335,13 @@ export default function SessionDetailPage() {
   // slide-over viewer. Parent trace state (scrubber, tabs) stays untouched.
   const [subagentView, setSubagentView] = useState<TraceValue | null>(null);
 
+  // The workspace uses rich trace adapters where verified, and recording-order
+  // adapters elsewhere. Every harness can still open its legacy step view.
+  const [stepView, setStepView] = useState(false);
+  // Child spans fetched on demand, keyed by the agent span they belong under.
+  // Tagged with the session id so navigating to another session drops them.
+  const [fetchedChildren, setFetchedChildren] = useState<{ sid?: string; byAgent: Record<string, TraceSpan[]> }>({ byAgent: {} });
+
   // Trace View States
   const [splitView, setSplitView] = useState(false);
   const [splitCompact, setSplitCompact] = useState(true);
@@ -514,7 +356,9 @@ export default function SessionDetailPage() {
   const [sidebarTab, setSidebarTab] = useState<"context" | "tools" | "artifacts" | "agents" | "raw">(initialTab);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Session context is available immediately in both reading modes.
+  const [stepSidebarOpen, setStepSidebarOpen] = useState(true);
+  const [traceSidebarOpen, setTraceSidebarOpen] = useState(true);
   const [copiedId, setCopiedId] = useState(false);
   const [projectConfig, setProjectConfig] = useState<TraceValue>(null);
   const stepRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -574,7 +418,7 @@ export default function SessionDetailPage() {
         .catch(() => {});
 
       // 2. Fetch Detailed Trace
-      apiFetch(`/sessions/${id}?agent=${agent}`)
+      apiFetch(`/sessions/${id}?agent=${agent}${agent === "codex" ? "&raw=true" : ""}`)
         .then((res) => res.json())
         .then((data) => {
           const evts = normalizeTraceEvents(agent, data);
@@ -814,6 +658,9 @@ export default function SessionDetailPage() {
       env: meta?.env,
       systemPrompt: typeof firstSystem === "string" ? firstSystem : undefined,
       projectConfig,
+      // What THIS run used, from the scanner. projectConfig above is only what
+      // is installed on disk for the project.
+      usage: sessionUsage(sessionInfo),
       // DSH's runtime-resolved capability set for THIS session (see backend).
       dsh: agent === "dsh" ? sessionInfo?.dsh : undefined,
       // Same for Qoder: its session log records the skills and MCP servers the
@@ -1044,27 +891,91 @@ export default function SessionDetailPage() {
      return tools;
   }, [events, toolResultByUseId]);
 
+  const adapter = traceAdapter(agent);
+  const baseSpans = useMemo(
+    () => (adapter ? adapter.build(events, delegation) : []),
+    [adapter, events, delegation],
+  );
+  // Splice fetched children under their agent span. An agent span the harness
+  // has no child trace for is marked loaded so it shows no expand control.
+  const traceRoots = useMemo(() => {
+    if (!adapter || !id) return baseSpans;
+    const childSpans = fetchedChildren.sid === id ? fetchedChildren.byAgent : {};
+    const splice = (s: TraceSpan): TraceSpan => {
+      if (s.kind === "agent" && s.agent && !s.agent.loaded) {
+        const kids = childSpans[s.id];
+        if (kids) return { ...s, children: kids.map(splice), agent: { ...s.agent, loaded: true } };
+        if (!adapter.childFetch?.(id, s)) return { ...s, agent: { ...s.agent, loaded: true } };
+      }
+      return s.children.length ? { ...s, children: s.children.map(splice) } : s;
+    };
+    return baseSpans.map(splice);
+  }, [adapter, baseSpans, fetchedChildren, id]);
+  const showTrace = !!adapter && !stepView;
+  const sidebarOpen = showTrace ? traceSidebarOpen : stepSidebarOpen;
+  const setSidebarOpen = showTrace ? setTraceSidebarOpen : setStepSidebarOpen;
+
+  const loadChildSpans = async (span: TraceSpan) => {
+    const target = adapter && id ? adapter.childFetch?.(id, span) : null;
+    if (!adapter || !target) throw new Error("No child trace for this subagent");
+    const res = await apiFetch(target.path);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const evts = normalizeTraceEvents(target.agent, await res.json());
+    const built = adapter.buildChild ? adapter.buildChild(evts) : adapter.build(evts, null);
+    // Child ids are only unique within the child, and its event indices point
+    // into the child's events, not this page's step cards.
+    const scope = (s: TraceSpan): TraceSpan => ({
+      ...s,
+      id: `${span.id}/${s.id}`,
+      eventIndex: undefined,
+      children: s.children.map(scope),
+    });
+    // A forked child (Codex) opens with a replay of its parent's history. Those
+    // turns predate the spawn or, when re-stamped at fork time, carry no model
+    // calls of their own; either way they are the parent's, not the child's.
+    const spawnedAt = (span.agent?.callStart ?? span.start) - 2000;
+    const own = target.agent === "codex" ? built.filter((s) => s.start >= spawnedAt) : built;
+    const usedTokens = (s: TraceSpan): boolean =>
+      (s.kind === "llm" && !!s.tokens && s.tokens.input + s.tokens.output > 0) || s.children.some(usedTokens);
+    const calledTools = (s: TraceSpan): boolean => s.kind === "tool" || s.kind === "agent" || s.children.some(calledTools);
+    const recordsTokens = own.some(usedTokens);
+    const isReplay = (s: TraceSpan) =>
+      s.kind === "turn" && !calledTools(s) && (recordsTokens ? !usedTokens(s) : s.children.length === 0);
+    if (target.agent === "codex") while (own.length > 1 && isReplay(own[0])) own.shift();
+    // A child's opening prompt is the task its parent handed it, not a user turn.
+    const scoped = (own.length ? own : built).map(scope).map((s, i) =>
+      i === 0 && s.kind === "turn" && s.turnKind === "prompt" ? { ...s, title: "Task" } : s,
+    );
+    setFetchedChildren((prev) => ({
+      sid: id,
+      byAgent: { ...(prev.sid === id ? prev.byAgent : {}), [span.id]: scoped },
+    }));
+  };
+
+  const openStep = (idx: number) => {
+    setStepView(true);
+    // The step list mounts on the next render; wait for its refs.
+    setTimeout(() => jumpTo(idx), 60);
+  };
+
   const untrackedBackground = agent === "claude" ? sessionInfo?.untracked_background : undefined;
 
   return (
-    <div className="h-screen bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col overflow-hidden">
-      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-4 shrink-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
-        <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="flex items-start gap-3 min-w-0">
+    <div className="flex-1 basis-0 min-h-0 bg-[var(--tt-canvas)] text-[var(--tt-fg)] font-sans flex flex-col overflow-hidden">
+      <header className="bg-[var(--tt-canvas)]/85 border-b border-[var(--tt-border)] px-6 py-2.5 shrink-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-canvas)]/65">
+        <div className={`${showTrace ? "" : "max-w-[1600px]"} mx-auto flex flex-col gap-2`}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
               <button
                 onClick={() => router.push(resolveSessionBackTarget(searchParams.get("from"), agent))}
                 title="Back"
                 aria-label="Back"
-                className="h-9 w-9 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0 mt-0.5"
+                className="h-8 w-8 grid place-items-center rounded-[var(--tt-radius)] border border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1 transition-colors shrink-0"
               >
                 <ArrowLeft size={16} />
               </button>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)] mb-1">
-                  <Activity size={11} className="text-[var(--tt-brand)]" />
-                  Session trace
-                </div>
+                <h1 className="mb-1.5 max-w-[min(55vw,900px)] truncate text-lg font-semibold tracking-tight text-[var(--tt-fg)]" title={sessionInfo?.display || sessionInfo?.text || "Session workspace"}>{sessionInfo?.display || sessionInfo?.text || "Session workspace"}</h1>
                 <div className="flex items-center gap-2 flex-wrap">
                   {agent && <AgentBadge agent={agent} />}
                   {agent === "copilot" && <CopilotSourceBadge source={sessionInfo?.copilot_source} size="sm" />}
@@ -1102,50 +1013,6 @@ export default function SessionDetailPage() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <div className="flex items-center gap-1 flex-wrap">
-                <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
-                <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
-                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
-                <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
-                <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
-                <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
-                <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
-                {sessionInfo?.loop?.is_loop && (() => {
-                  const lp = sessionInfo.loop;
-                  const state: string = lp.state ?? "unknown";
-                  const variant =
-                    state === "active"    ? "success" :
-                    state === "expired"   ? "neutral" :
-                    state === "cancelled" ? "warn" :
-                    "outline";
-                  const tip = `${lp.mode} · ${lp.cadence} · ≥${lp.iterations} fires${lp.expired_reason ? " · " + lp.expired_reason : ""}`;
-                  return (
-                    <Badge variant={variant} size="sm" className="normal-case" title={tip}>
-                      <Repeat size={11} /> Loop · {state}
-                    </Badge>
-                  );
-                })()}
-                {/* Hermes: how the session ended, and how its cost was arrived at.
-                    Lives in this always-visible row rather than the chain banner,
-                    which only mounts for chained (compression) sessions. */}
-                {agent === "hermes" && sessionInfo && (
-                  <HermesOutcomeBadge outcome={sessionInfo.outcome} raw={sessionInfo.outcome_raw} />
-                )}
-                {agent === "hermes" && sessionInfo && (
-                  <HermesCostPill
-                    cost={sessionInfo.tokens?.cost ?? sessionInfo.cost}
-                    status={sessionInfo.cost_status}
-                  />
-                )}
-                {agent !== "hermes" && sessionInfo?.cost != null && (
-                   <StatPill
-                     icon={<DollarSign size={11} />}
-                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
-                     value={formatCost(sessionInfo.cost)}
-                     tone="amber"
-                   />
-                 )}
-              </div>
               {sessionInfo?.tokens && (
                 <div className="hidden lg:flex items-center gap-3 bg-[var(--tt-sunken)] px-3 h-9 rounded-[var(--tt-radius)] border border-[var(--tt-border)]">
                   {agent === "qoder" ? (
@@ -1204,15 +1071,89 @@ export default function SessionDetailPage() {
                   )}
                 </div>
               )}
-              <Button
-                variant={splitView ? "primary" : "secondary"}
-                size="md"
-                onClick={() => setSplitView(!splitView)}
-              >
-                <LayoutPanelLeft size={14} />
-                {splitView ? "Unified view" : "Split brain"}
-              </Button>
+              {adapter && (
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setStepView((v) => !v)}
+                  title={stepView ? "Turns, model calls, tools and subagents on one timeline" : "Every event as a card, in order"}
+                >
+                  <GitBranch size={14} />
+                  {stepView ? "Session workspace" : "Legacy step view"}
+                </Button>
+              )}
+              {showTrace && (
+                <Button
+                  variant={sidebarOpen ? "primary" : "secondary"}
+                  size="md"
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  title="Context, tools, artifacts and raw events for this session"
+                  aria-expanded={sidebarOpen}
+                  aria-controls="session-inspector"
+                >
+                  <PanelRight size={14} />
+                  Inspector
+                </Button>
+              )}
+              {!showTrace && (
+                <Button
+                  variant={splitView ? "primary" : "secondary"}
+                  size="md"
+                  onClick={() => setSplitView(!splitView)}
+                >
+                  <LayoutPanelLeft size={14} />
+                  {splitView ? "Unified view" : "Split brain"}
+                </Button>
+              )}
             </div>
+          </div>
+
+          {/* Session counters on their own row, so the controls above never wrap under them */}
+          <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 flex-wrap">
+                <StatPill icon={<Hash size={11} />}     label="Steps"  value={stats.total} />
+                <StatPill icon={<Wrench size={11} />}   label="Tools"  value={stats.toolCalls} tone="blue" />
+                {((sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)) > 0 && <StatPill icon={<LayoutPanelLeft size={11} />} label="Arts" value={(sessionInfo?.artifacts?.length ?? 0) + (sessionInfo?.published_artifacts?.filter((p) => p.url).length ?? 0)} tone="emerald" />}
+                <StatPill icon={<Brain size={11} />}    label="Reason" value={stats.reasoning} tone="amber" />
+                <StatPill icon={<User size={11} />}     label="Turns"  value={stats.userTurns} />
+                <StatPill icon={<Clock size={11} />}    label="Dur"    value={stats.duration} />
+                <StatPill icon={<AlertTriangle size={11} />} label="Err" value={stats.errors} tone={stats.errors > 0 ? "red" : undefined} />
+                {sessionInfo?.loop?.is_loop && (() => {
+                  const lp = sessionInfo.loop;
+                  const state: string = lp.state ?? "unknown";
+                  const variant =
+                    state === "active"    ? "success" :
+                    state === "expired"   ? "neutral" :
+                    state === "cancelled" ? "warn" :
+                    "outline";
+                  const tip = `${lp.mode} · ${lp.cadence} · ≥${lp.iterations} fires${lp.expired_reason ? " · " + lp.expired_reason : ""}`;
+                  return (
+                    <Badge variant={variant} size="sm" className="normal-case" title={tip}>
+                      <Repeat size={11} /> Loop · {state}
+                    </Badge>
+                  );
+                })()}
+                {/* Hermes: how the session ended, and how its cost was arrived at.
+                    Lives in this always-visible row rather than the chain banner,
+                    which only mounts for chained (compression) sessions. */}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesOutcomeBadge outcome={sessionInfo.outcome} raw={sessionInfo.outcome_raw} />
+                )}
+                {agent === "hermes" && sessionInfo && (
+                  <HermesCostPill
+                    cost={sessionInfo.tokens?.cost ?? sessionInfo.cost}
+                    status={sessionInfo.cost_status}
+                  />
+                )}
+                {agent !== "hermes" && sessionInfo?.cost != null && (
+                   <StatPill
+                     icon={<DollarSign size={11} />}
+                     label={sessionInfo.cost_source === "reported" ? "Cost" : "API equiv."}
+                     value={formatCost(sessionInfo.cost)}
+                     tone="amber"
+                   />
+                 )}
+              </div>
           </div>
 
           {untrackedBackground && untrackedBackground.total > 0 && (
@@ -1228,8 +1169,8 @@ export default function SessionDetailPage() {
             </div>
           )}
 
-          {/* Timeline scrubber */}
-          {!loading && events.length > 0 && (
+          {/* Timeline scrubber (drives the step cards, so the trace view has no use for it) */}
+          {!loading && !showTrace && events.length > 0 && (
             <div className="bg-[var(--tt-sunken)] px-4 py-3 rounded-[var(--tt-radius)] border border-[var(--tt-border)] flex items-center gap-4">
               <div className="flex items-center gap-1">
                 <button
@@ -1285,7 +1226,7 @@ export default function SessionDetailPage() {
           </div>
           <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Loading session trace…</span>
         </div>
-      ) : events.length === 0 ? (
+      ) : events.length === 0 && !showTrace ? (
         <div className="flex-1 flex items-center justify-center p-12">
           <div className="max-w-md text-center space-y-4">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-[var(--tt-radius-lg)] bg-[var(--tt-panel)] border border-[var(--tt-border)] text-[var(--tt-fg-dim)]">
@@ -1302,8 +1243,9 @@ export default function SessionDetailPage() {
           </div>
         </div>
       ) : (
-        <main className={`flex-1 w-full max-w-[1800px] mx-auto grid min-h-0 ${sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]"}`}>
-          {/* LEFT: Step Index */}
+        <main className={`flex-1 w-full ${showTrace ? "" : "max-w-[1800px]"} mx-auto grid min-h-0 ${showTrace ? (sidebarOpen ? "grid-cols-[minmax(0,1fr)] grid-rows-[minmax(680px,1fr)_480px] overflow-y-auto min-[1440px]:grid-cols-[minmax(0,1fr)_320px] min-[1440px]:grid-rows-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]") : (sidebarOpen ? "grid-cols-[240px_1fr_380px]" : "grid-cols-[240px_1fr_40px]")}`}>
+          {/* LEFT: Step Index (step view only) */}
+          {!showTrace && (
           <aside className="border-r border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full scroll-pt-10">
              <div className="sticky top-0 z-30 px-3 py-2 border-b border-[var(--tt-border)] flex items-center justify-between bg-[var(--tt-sunken)] backdrop-blur supports-[backdrop-filter]:bg-[var(--tt-sunken)]/85">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
@@ -1379,15 +1321,43 @@ export default function SessionDetailPage() {
                 })}
              </div>
           </aside>
+          )}
 
           {/* CENTER: Conversation */}
           <section className="overflow-y-auto h-full p-4">
+             <div data-session-overview>
+               <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-base font-medium text-[var(--tt-fg)]">Session overview</h2>{showTrace && <a href="#session-workspace" className="text-sm text-[var(--tt-brand)] hover:underline">Read session ↓</a>}</div>
              {/* Trace summary — narrative + deterministic brief, near the top of the trace */}
              {agent && (
-                <div className="mb-8">
+                <div className="mb-4">
                   <SummaryPanel key={id} sessionId={id} agent={agent} />
                 </div>
               )}
+             {/* Delegated work — subagent spawns and what they actually cost */}
+             {(delegation || context.usage) && agent && (
+               <DelegationCard
+                 delegation={delegation ?? {}}
+                 usage={context.usage}
+                 agent={agent}
+                 sessionId={id}
+                 onOpenSubagent={setSubagentView}
+                 onShowDetails={() => { setSidebarOpen(true); setSidebarTab("context"); }}
+               />
+             )}
+             </div>
+             {/* Reading follows the summary and delegated work. */}
+             {showTrace && (
+               <div id="session-workspace" className="h-full min-h-[600px] scroll-mt-4"><TraceView
+                 key={`${agent}:${id}`}
+                 roots={traceRoots}
+                 sourceEvents={rawEvents}
+                 timing={adapter?.timing ?? "real"}
+                 notice={adapter?.notice}
+                 onLoadChild={loadChildSpans}
+                 onJumpToEvent={openStep}
+                 className="mb-8 h-full min-h-[600px]"
+               /></div>
+             )}
              {/* Messages exchanged with other local sessions. Self-hides when this
                  session has no peer traffic, which is the usual case. Gated on
                  claude because only Claude transcripts record peer envelopes, so
@@ -1411,8 +1381,8 @@ export default function SessionDetailPage() {
              {Array.isArray(sessionInfo?.goals) && sessionInfo.goals.map((g: TraceValue, i: number) => (
                <GoalCard key={g.goal_id || i} goal={g} sessionTokens={sessionInfo?.tokens?.total} />
              ))}
-             {/* Delegated work — subagent spawns and what they actually cost */}
-             {delegation && agent && <DelegationCard delegation={delegation} agent={agent} sessionId={id} onOpenSubagent={setSubagentView} />}
+             {!showTrace && (
+             <>
              {/* Split View Header & Boundary Gap Mode Controller */}
              {splitView && (
                <div className="relative grid grid-cols-2 gap-8 items-center mb-6 pb-2 border-b border-[var(--tt-border)]">
@@ -1496,10 +1466,14 @@ export default function SessionDetailPage() {
                     })}
                  </div>
               )}
+             </>
+             )}
            </section>
 
-          {/* RIGHT: Sidebar */}
-          <aside className="border-l border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 overflow-y-auto h-full">
+          {/* RIGHT: Sidebar. In trace view the closed rail is dropped (the header
+              has an Inspector button instead) so the trace gets the width. */}
+          {!(showTrace && !sidebarOpen) && (
+          <aside id="session-inspector" aria-label="Session inspector" className={`min-w-0 border-l border-[var(--tt-border)] bg-[var(--tt-panel)] overflow-y-auto scrollbar-thin ${showTrace ? "h-[480px] min-[1440px]:h-full" : "h-full"}`}>
              {!sidebarOpen ? (
                 <button
                    onClick={() => setSidebarOpen(true)}
@@ -1511,7 +1485,7 @@ export default function SessionDetailPage() {
                 </button>
              ) : (
              <>
-             <div className="flex items-stretch gap-1 px-1.5 border-b border-[var(--tt-border)] text-[10px] font-semibold uppercase tracking-[0.08em]">
+             <div className="sticky top-0 z-10 flex items-stretch gap-1 overflow-x-auto bg-[var(--tt-panel)] px-1.5 border-b border-[var(--tt-border)] text-xs font-medium [&>button]:shrink-0">
                 <TabBtn active={sidebarTab === "context"} onClick={() => setSidebarTab("context")} icon={<Settings2 size={12} />}>Context</TabBtn>
                 {subagentCount > 0 && <TabBtn active={sidebarTab === "agents"} onClick={() => setSidebarTab("agents")} icon={<GitBranch size={12} />}>Agents</TabBtn>}
                 <TabBtn active={sidebarTab === "tools"} onClick={() => setSidebarTab("tools")} icon={<Wrench size={12} />}>Tools</TabBtn>
@@ -1520,12 +1494,13 @@ export default function SessionDetailPage() {
                 <button
                    onClick={() => setSidebarOpen(false)}
                    title="Close inspector"
+                   aria-label="Close inspector"
                    className="px-3 border-l border-[var(--tt-border)] text-[var(--tt-fg-dim)] hover:text-[var(--tt-fg)] hover:bg-[var(--tt-panel)] transition-colors"
                 >
                    <ChevronRight size={14} />
                 </button>
              </div>
-             <div className="p-4 text-[11px]">
+             <div className="p-5 text-sm leading-6">
                 {sidebarTab === "context" && <ContextPanel ctx={context} />}
                 {sidebarTab === "agents" && (
                   <SubagentsSidebar
@@ -1544,7 +1519,7 @@ export default function SessionDetailPage() {
                 }} />}
                 {sidebarTab === "artifacts" && <ArtifactsPanel artifacts={sessionInfo?.artifacts || []} published={sessionInfo?.published_artifacts || []} />}
                 {sidebarTab === "raw" && (
-                   <pre className="text-[9px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
+                   <pre className="text-xs leading-6 font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap break-all max-h-[calc(100vh-260px)] overflow-y-auto">
                       {JSON.stringify(activeStep !== null ? events[activeStep] : events[0], null, 2)}
                    </pre>
                 )}
@@ -1552,11 +1527,12 @@ export default function SessionDetailPage() {
              </>
              )}
           </aside>
+          )}
         </main>
       )}
 
       {/* RESTORED: Waterfall Footer */}
-      {!loading && waterfallData.length > 0 && (
+      {!loading && !showTrace && waterfallData.length > 0 && (
          <footer className="bg-[var(--tt-panel)] border-t border-[var(--tt-border)] shrink-0 z-40 backdrop-blur-xl bg-opacity-80">
             <div className={`max-w-[1600px] mx-auto ${timelineOpen ? "p-6" : "px-6 py-2"}`}>
                <div className={`flex items-center justify-between ${timelineOpen ? "mb-6" : ""}`}>
@@ -1651,7 +1627,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
 
   if (entries.length === 0) {
     return (
-      <div className="px-1 py-8 text-center text-[11px] text-[var(--tt-fg-dim)]">
+      <div className="px-1 py-8 text-center text-sm text-[var(--tt-fg-dim)]">
         This session spawned no subagents.
       </div>
     );
@@ -1678,7 +1654,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
 
   const group = (label: string, rows: TraceValue[]) => (
     <div>
-      <div className="flex items-center gap-2 px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+      <div className="flex items-center gap-2 px-1 pb-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
         <span>{label}</span>
         <span className="tabular text-[var(--tt-fg-faint)]">{rows.length}</span>
       </div>
@@ -1703,7 +1679,7 @@ function SubagentsSidebar({ delegation, onOpen, isRunning }: {
       {/* Delegated spend is a separate bucket from the parent's own tokens
           (count-once), so it is worth stating rather than leaving the reader
           to add up the rows. */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--tt-border)] pt-3 px-1 text-[10px] tabular text-[var(--tt-fg-dim)]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--tt-border)] pt-3 px-1 text-xs tabular text-[var(--tt-fg-dim)]">
         <span>{entries.length} spawned</span>
         {failed > 0 && <span className="text-[var(--tt-warn-fg)]">· {failed} failed</span>}
         {delegation?.workflow_count > 0 && <span>· {delegation.workflow_count} in workflows</span>}
@@ -1752,17 +1728,17 @@ function SubagentRow({ sa, running, onOpen }: { sa: TraceValue; running: boolean
           <span className="flex items-baseline gap-1.5 min-w-0">
             <span className="text-[12px] text-[var(--tt-fg)] truncate" title={title}>{title}</span>
             {sa.status && !["completed", "success", "done", "running", "in_progress"].includes(sa.status) && (
-              <span className="text-[9px] uppercase tracking-[0.12em] shrink-0 text-[var(--tt-warn-fg)]">
+              <span className="text-xs uppercase tracking-[0.12em] shrink-0 text-[var(--tt-warn-fg)]">
                 {sa.status}
               </span>
             )}
           </span>
-          <span className="text-[10px] tabular shrink-0 text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg-dim)]">
+          <span className="text-xs tabular shrink-0 text-[var(--tt-fg-faint)] group-hover:text-[var(--tt-fg-dim)]">
             {running ? "running" : when ? relativeStamp(when) : ""}
           </span>
         </span>
         {meta.length > 0 && (
-          <span className="block text-[10px] tabular text-[var(--tt-fg-dim)] truncate mt-0.5">
+          <span className="block text-xs tabular text-[var(--tt-fg-dim)] truncate mt-0.5">
             {meta.join(" · ")}
           </span>
         )}
@@ -1772,7 +1748,7 @@ function SubagentRow({ sa, running, onOpen }: { sa: TraceValue; running: boolean
             no page of its own, so surface it here. */}
         {sa.sandbox?.approval && (
           <span
-            className="block text-[10px] tabular text-[var(--tt-fg-dim)] mt-0.5"
+            className="block text-xs tabular text-[var(--tt-fg-dim)] mt-0.5"
             title="File-sandbox mode and approval policy this subagent ran under"
           >
             sandbox {sa.sandbox.mode || "?"} · approval{" "}
@@ -2012,12 +1988,12 @@ function StepRow({ step, active, beyond, onClick }: { step: Step; active: boolea
   );
 }
 
-function ContextRow({ k, v, mono = true }: { k: string; v?: TraceValue; mono?: boolean }) {
+function ContextRow({ k, v, mono = false }: { k: string; v?: TraceValue; mono?: boolean }) {
   if (!v) return null;
   return (
-    <div className="space-y-0.5">
-      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">{k}</div>
-      <div className={`text-[var(--tt-fg)] break-all ${mono ? "font-mono text-[10px]" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
+    <div className="space-y-1">
+      <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">{k}</div>
+      <div className={`text-sm leading-6 text-[var(--tt-fg)] break-words ${mono ? "font-mono text-xs" : ""}`}>{typeof v === "string" ? v : JSON.stringify(v)}</div>
     </div>
   );
 }
@@ -2034,7 +2010,7 @@ const byScopeThenName = (a: TraceValue, b: TraceValue) =>
 function ScopeLegend({ tone }: { tone: "cyan" | "blue" }) {
   const project = tone === "cyan" ? "bg-cyan-500/10 border-cyan-500/20" : "bg-blue-500/10 border-blue-500/20";
   return (
-    <div className="flex items-center gap-3 mt-1.5 text-[9px] font-mono text-[var(--tt-fg-faint)]">
+    <div className="flex items-center gap-3 mt-1.5 text-xs font-mono text-[var(--tt-fg-faint)]">
       <span className="flex items-center gap-1">
         <span className={`inline-block w-2 h-2 rounded-sm border ${project}`} /> project
       </span>
@@ -2054,23 +2030,142 @@ function DetailRow({ k, v, accent }: { k: string; v: React.ReactNode; accent?: s
   );
 }
 
+function UsageErrorPill({ n, label = "failed" }: { n: number; label?: string }) {
+  if (!n) return null;
+  return (
+    <span className="text-xs font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+      {n} {label}
+    </span>
+  );
+}
+
+function UsageName({ row }: { row: UsageRow }) {
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      {row.plugin && (
+        <span
+          title={`From the ${row.plugin} plugin`}
+          className="text-[8px] font-black uppercase px-1 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 shrink-0"
+        >
+          {row.plugin}
+        </span>
+      )}
+      <span className="truncate text-[var(--tt-fg)]" title={row.name}>{row.name}</span>
+    </span>
+  );
+}
+
+function SessionUsageSection({ usage }: { usage: SessionUsage }) {
+  const heading = (label: string, count: number) => (
+    <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">
+      {label} ({count})
+    </div>
+  );
+  const rowCls = (errors: number) =>
+    `flex items-center justify-between gap-2 text-xs font-mono rounded px-2 py-1 border ${
+      errors ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]/40" : "border-[var(--tt-border)] bg-[var(--tt-panel)]/70"
+    }`;
+  return (
+    <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
+        <Activity size={12} /> Used This Session
+        {usage.totalErrors > 0 && (
+          <span className="ml-auto flex items-center gap-1 normal-case tracking-normal text-[var(--tt-danger-fg)]">
+            <AlertTriangle size={11} /> {usage.totalErrors} failed call{usage.totalErrors === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+
+      {usage.skills.length > 0 && (
+        <div className="space-y-1">
+          {heading("Skills", usage.skills.length)}
+          {usage.skills.map((r) => (
+            <div key={r.name} className={rowCls(r.errors)}>
+              <UsageName row={r} />
+              <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                <UsageErrorPill n={r.errors} />×{r.calls}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.mcp.length > 0 && (
+        <div className="space-y-1">
+          {heading("MCP Servers", usage.mcp.length)}
+          {usage.mcp.map((r) => (
+            <div key={r.name} className={`${rowCls(r.errors)} flex-col items-stretch`}>
+              <div className="flex items-center justify-between gap-2">
+                <UsageName row={r} />
+                <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                  <UsageErrorPill n={r.errors} />×{r.calls}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-2 gap-y-0.5 pl-1 text-xs text-[var(--tt-fg-dim)]">
+                {r.tools.map((t) => (
+                  <span key={t.name} className={t.errors ? "text-[var(--tt-danger-fg)]" : undefined}>
+                    {t.name} ×{t.calls}{t.errors ? ` (${t.errors === t.calls ? "all" : t.errors} failed)` : ""}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.subagents.length > 0 && (
+        <div className="space-y-1">
+          {heading("Subagents", usage.subagents.length)}
+          {usage.subagents.map((r) => (
+            <div
+              key={r.name}
+              className={rowCls(r.failed)}
+              title={r.errors ? `${r.errors} tool call${r.errors === 1 ? "" : "s"} failed inside these runs` : undefined}
+            >
+              <UsageName row={r} />
+              <span className="flex items-center gap-1.5 shrink-0 tabular text-[var(--tt-fg-muted)]">
+                <UsageErrorPill n={r.failed} />
+                {!r.failed && r.errors > 0 && <UsageErrorPill n={r.errors} label="tool errors" />}
+                ×{r.calls}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usage.otherToolErrors.length > 0 && (
+        <div className="space-y-1">
+          {heading("Other failed tool calls", usage.otherToolErrors.length)}
+          <div className="flex flex-wrap gap-1.5">
+            {usage.otherToolErrors.map((t) => (
+              <span key={t.name} className="text-xs font-mono px-2 py-0.5 rounded border bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]">
+                {t.name} ×{t.errors}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ContextPanel({ ctx }: { ctx: TraceValue }) {
   const [copiedId, setCopiedId] = useState(false);
   const hasAny = ctx.model || ctx.cwd || ctx.systemPrompt || ctx.instructions || ctx.sandbox;
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
-        <Cpu size={12} /> Session Context
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
+        <Cpu size={15} /> Session context
       </div>
       {ctx.sessionId && (
         <div className="space-y-1">
-          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Session ID</div>
+          <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">Session ID</div>
           <div className={`flex items-center gap-1.5 bg-[var(--tt-sunken)] border rounded px-2 py-1.5 transition-colors ${
             copiedId
               ? "text-[var(--tt-success-fg)] border-[color:var(--tt-success)]/50"
               : "border-[var(--tt-border)]"
           }`}>
-            <span className={`text-[10px] font-mono break-all flex-1 ${copiedId ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sessionId}>
+            <span className={`text-xs font-mono break-all flex-1 ${copiedId ? "text-[var(--tt-success-fg)]" : "text-[var(--tt-fg)]"}`} title={ctx.sessionId}>
               {copiedId ? "Copied" : ctx.sessionId}
             </span>
             <button
@@ -2088,17 +2183,17 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
               {copiedId ? (<Check size={11} strokeWidth={3} className="text-[var(--tt-success-fg)]" />) : (<Copy size={11} className="opacity-60" />)}
             </button>
           </div>
-          {ctx.agent && <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
+          {ctx.agent && <div className="text-xs font-mono text-[var(--tt-fg-faint)] uppercase">agent: {ctx.agent}</div>}
         </div>
       )}
       <ContextRow k="Model" v={ctx.model} />
       <ContextRow k="Provider" v={ctx.provider} />
       {ctx.modelsUsed && ctx.modelsUsed.length > 0 && (
         <div className="space-y-1">
-          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">Models Used ({ctx.modelsUsed.length})</div>
+          <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">Models Used ({ctx.modelsUsed.length})</div>
           <div className="flex flex-wrap gap-1.5">
             {ctx.modelsUsed.map((m: string) => (
-              <span key={m} className="flex items-center gap-1 text-[10px] font-mono text-[var(--tt-success-fg)] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              <span key={m} className="flex items-center gap-1 text-xs font-mono text-[var(--tt-success-fg)] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                 <Cpu size={10} /> {m}
               </span>
             ))}
@@ -2108,16 +2203,21 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       <ContextRow k="Sandbox" v={ctx.sandbox} />
       <ContextRow k="Approval Policy" v={ctx.approvalPolicy} />
       <ContextRow k={ctx.reasoningEffortLabel ?? "Reasoning Effort"} v={ctx.reasoningEffort} />
-      <ContextRow k="CWD" v={ctx.cwd} />
+      <ContextRow k="Working directory" v={ctx.cwd} mono />
+
+      {ctx.usage && <SessionUsageSection usage={ctx.usage} />}
 
       {ctx.projectConfig && (ctx.projectConfig.counts?.skills > 0 || ctx.projectConfig.counts?.mcps > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
-            <Settings2 size={12} /> Project Configuration
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
+            <Settings2 size={12} /> Installed in Project
+          </div>
+          <div className="text-xs text-[var(--tt-fg-faint)] -mt-2">
+            Everything on disk for this project, not what this session used.
           </div>
           {ctx.projectConfig.counts.skills > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills ({ctx.projectConfig.counts.skills}) ▸
               </summary>
               <ScopeLegend tone="cyan" />
@@ -2126,7 +2226,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                   <span
                     key={`${s?.scope}-${s?.agent}-${s?.name}`}
                     title={`${s?.scope} · ${s?.agent}${s?.description ? "\n" + s?.description : ""}`}
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded border ${s?.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
+                    className={`text-xs font-mono px-2 py-0.5 rounded border ${s?.scope === "project" ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
                   >
                     {s?.name}
                   </span>
@@ -2136,13 +2236,13 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {ctx.projectConfig.counts.mcps > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 MCP Servers ({ctx.projectConfig.counts.mcps}) ▸
               </summary>
               <ScopeLegend tone="blue" />
               <div className="mt-2 space-y-1">
                 {[...(ctx.projectConfig.mcps ?? [])].sort(byScopeThenName).map((m: TraceValue) => (
-                  <div key={`${m?.scope}-${m?.agent}-${m?.name}`} className="flex items-center justify-between gap-2 text-[10px] font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
+                  <div key={`${m?.scope}-${m?.agent}-${m?.name}`} className="flex items-center justify-between gap-2 text-xs font-mono bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded px-2 py-1">
                     <span className="text-[var(--tt-fg)] truncate" title={m?.command || m?.url || ""}>{m?.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${m?.scope === "project" ? "bg-blue-500/10 text-[var(--tt-brand)] border border-blue-500/20" : "tt-tint-2 text-[var(--tt-fg-muted)] border border-[var(--tt-border-strong)]"}`}>{m?.agent}</span>
                   </div>
@@ -2155,16 +2255,16 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.qoder && ((ctx.qoder.skills_available?.length ?? 0) > 0 || (ctx.qoder.mcp_servers?.length ?? 0) > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Settings2 size={12} /> Runtime Capabilities
           </div>
-          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+          <div className="text-xs text-[var(--tt-fg-dim)] leading-relaxed">
             What Qoder offered this run, from its own session log — not a scan of
             what is installed now. Plugin-scoped entries carry their plugin prefix.
           </div>
           {(ctx.qoder.skills_available?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills ({ctx.qoder.skills_available.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2174,7 +2274,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                     <span
                       key={s}
                       title={plugin ? `provided by the ${plugin} plugin` : "user-level skill"}
-                      className={`text-[10px] font-mono px-2 py-0.5 rounded border ${plugin
+                      className={`text-xs font-mono px-2 py-0.5 rounded border ${plugin
                         ? "bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
                         : "tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]"}`}
                     >
@@ -2187,12 +2287,12 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {(ctx.qoder.mcp_servers?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 MCP Servers ({ctx.qoder.mcp_servers.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {ctx.qoder.mcp_servers.map((m: string) => (
-                  <span key={m} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                  <span key={m} className="text-xs font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
                     {m}
                   </span>
                 ))}
@@ -2204,15 +2304,15 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.dsh && ((ctx.dsh.skills_catalog?.length ?? 0) > 0 || (ctx.dsh.tools_available?.length ?? 0) > 0) && (
         <div className="space-y-3 pt-2 border-t border-[var(--tt-border)]">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Settings2 size={12} /> Runtime Capabilities
           </div>
-          <div className="text-[9px] text-[var(--tt-fg-dim)] leading-relaxed">
+          <div className="text-xs text-[var(--tt-fg-dim)] leading-relaxed">
             Resolved by DSH at run time and read back from this session&apos;s log — not a scan of what is installed now.
           </div>
           {(ctx.dsh.skills_catalog?.length ?? 0) > 0 && (
             <details open>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Skills Loaded ({ctx.dsh.skills_catalog.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2220,7 +2320,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
                   <span
                     key={i}
                     title={s.description || ""}
-                    className="text-[10px] font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
+                    className="text-xs font-mono px-2 py-0.5 rounded border bg-cyan-500/10 text-[var(--tt-cyan-fg)] border-cyan-500/20"
                   >
                     {s.name}
                   </span>
@@ -2230,12 +2330,12 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {(ctx.dsh.tools_available?.length ?? 0) > 0 && (
             <details>
-              <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
+              <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">
                 Tools Available ({ctx.dsh.tools_available.length}) ▸
               </summary>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {ctx.dsh.tools_available.map((t: string, i: number) => (
-                  <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
+                  <span key={i} className="text-xs font-mono px-2 py-0.5 rounded border tt-tint-2 text-[var(--tt-fg-muted)] border-[var(--tt-border-strong)]">
                     {t}
                   </span>
                 ))}
@@ -2244,7 +2344,7 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
           )}
           {ctx.dsh.metrics && (ctx.dsh.metrics.llm_ms || ctx.dsh.metrics.tool_ms) && (
             <div className="space-y-1.5 pt-1">
-              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+              <div className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)]">
                 Latency Breakdown
               </div>
               {/* Wall-clock split. Tool time routinely dwarfs model time, which
@@ -2294,14 +2394,14 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
 
       {ctx.instructions && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">{ctx.instructions}</pre>
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Instructions ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">{ctx.instructions}</pre>
         </details>
       )}
       {ctx.systemPrompt && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">System Prompt ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">System Prompt ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-64 overflow-y-auto">
             {ctx.systemPrompt.slice(0, 4000)}
             {ctx.systemPrompt.length > 4000 ? "\n…(truncated)" : ""}
           </pre>
@@ -2309,33 +2409,33 @@ function ContextPanel({ ctx }: { ctx: TraceValue }) {
       )}
       {ctx.env && (
         <details>
-          <summary className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Environment ▸</summary>
-          <pre className="mt-2 text-[10px] font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-48 overflow-y-auto">{JSON.stringify(ctx.env, null, 2)}</pre>
+          <summary className="text-xs font-medium tracking-normal text-[var(--tt-fg-dim)] cursor-pointer hover:text-[var(--tt-fg)]">Environment ▸</summary>
+          <pre className="mt-2 text-xs font-mono text-[var(--tt-fg-muted)] whitespace-pre-wrap bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-lg p-3 max-h-48 overflow-y-auto">{JSON.stringify(ctx.env, null, 2)}</pre>
         </details>
       )}
-      {!hasAny && <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No context metadata found for this session.</div>}
+      {!hasAny && <div className="text-[var(--tt-fg-faint)] text-xs italic">No context metadata found for this session.</div>}
     </div>
   );
 }
 
 function ToolsPanel({ summary, onJump }: { summary: { name: string; count: number; avg: number }[]; onJump: (name: string) => void }) {
-  if (!summary.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No tool calls in this session.</div>;
+  if (!summary.length) return <div className="text-[var(--tt-fg-faint)] text-xs italic">No tool calls in this session.</div>;
   const maxCount = summary[0]?.count || 1;
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
         <Wrench size={12} /> Tool Summary
       </div>
       {summary.map((t) => (
         <button key={t.name} onClick={() => onJump(t.name)} className="w-full text-left bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] hover:border-[var(--tt-border-strong)] rounded-lg px-3 py-2 transition-colors">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-mono text-[var(--tt-fg)] truncate">{t.name}</span>
-            <span className="text-[9px] font-black text-[var(--tt-brand)] tabular-nums">×{t.count}</span>
+            <span className="text-sm font-mono text-[var(--tt-fg)] truncate">{t.name}</span>
+            <span className="text-xs font-black text-[var(--tt-brand)] tabular-nums">×{t.count}</span>
           </div>
           <div className="h-1 tt-tint-2 rounded overflow-hidden">
             <div className="h-full bg-blue-500/60" style={{ width: `${(t.count / maxCount) * 100}%` }} />
           </div>
-          <div className="text-[9px] font-mono text-[var(--tt-fg-faint)] mt-1">avg {t.avg >= 1000 ? `${(t.avg / 1000).toFixed(2)}s` : `${t.avg.toFixed(0)}ms`}</div>
+          <div className="text-xs font-mono text-[var(--tt-fg-faint)] mt-1">avg {t.avg >= 1000 ? `${(t.avg / 1000).toFixed(2)}s` : `${t.avg.toFixed(0)}ms`}</div>
         </button>
       ))}
     </div>
@@ -2349,13 +2449,13 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
   // are local files already shown in the Session Artifacts list below.
   const published = publishedAll.filter((p) => p.url);
 
-  if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-[10px] italic">No artifacts for this session.</div>;
+  if (!artifacts.length && !published.length) return <div className="text-[var(--tt-fg-faint)] text-xs italic">No artifacts for this session.</div>;
 
   return (
     <div className="space-y-6">
       {published.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
             <Globe size={12} /> Published Deliverables
           </div>
           {published.map((p) => (
@@ -2367,7 +2467,7 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
               className="block bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl px-3 py-2.5 hover:border-[var(--tt-brand)] transition-colors group"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[11px] font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
+                <span className="text-sm font-medium text-[var(--tt-fg)] truncate" title={p.title || p.url || undefined}>
                   {p.title || p.file_name || "Untitled artifact"}
                 </span>
                 {p.kind === "site" && (
@@ -2378,27 +2478,27 @@ function ArtifactsPanel({ artifacts, published: publishedAll = [] }: { artifacts
                 <ExternalLink size={10} className="shrink-0 text-[var(--tt-fg-dim)] group-hover:text-[var(--tt-brand)] transition-colors" />
               </div>
               {p.description && (
-                <div className="mt-1 text-[10px] text-[var(--tt-fg-muted)] line-clamp-2">{p.description}</div>
+                <div className="mt-1 text-xs text-[var(--tt-fg-muted)] line-clamp-2">{p.description}</div>
               )}
             </a>
           ))}
         </div>
       )}
       {artifacts.length === 0 ? null : (
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-muted)]">
+      <div className="flex items-center gap-2 text-xs font-medium tracking-normal text-[var(--tt-fg-muted)]">
         <LayoutPanelLeft size={12} /> Session Artifacts
       </div>
       )}
       <div className="space-y-4">
         {artifacts.map((a, i) => (
-          <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-[11px]">
+          <div key={i} className="bg-[var(--tt-panel)]/70 border border-[var(--tt-border)] rounded-xl overflow-hidden group text-sm">
             <div className="px-3 py-2 border-b border-[var(--tt-border)] bg-[var(--tt-sunken)]/60 flex items-center justify-between">
                <div className="flex items-center gap-2 min-w-0">
                   {a.type === 'video' ? <Play size={10} className="text-[var(--tt-brand)]" /> :
                    a.type === 'image' ? <LayoutPanelLeft size={10} className="text-[var(--tt-success-fg)]" /> :
                    a.type === 'terminal' ? <Terminal size={10} className="text-[var(--tt-violet-fg)]" /> :
                    <FileText size={10} className="text-[var(--tt-fg-muted)]" />}
-                  <span className="text-[10px] font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
+                  <span className="text-xs font-mono text-[var(--tt-fg)] truncate" title={a.name}>{a.name}</span>
                </div>
                <div className="flex items-center gap-2 shrink-0">
                  <button
@@ -3271,6 +3371,10 @@ function EventCard({ event, mode = "all", agent, tokens, reasoningEffort }: { ev
     );
   }
 
+  if (type === "step_usage") {
+    parts.push(<div key="usage-only" className="rounded-lg border border-[var(--tt-border)] bg-[var(--tt-panel)] p-4 text-sm text-[var(--tt-fg-muted)]">Usage-only model step. The harness recorded usage without readable response content.</div>);
+  }
+
   // 11. SYSTEM METADATA
   if (type === "session_meta") {
     parts.push(
@@ -3595,19 +3699,23 @@ function GoalCard({ goal, sessionTokens }: { goal: TraceValue; sessionTokens?: n
 }
 
 
-function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { delegation: TraceValue; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void }) {
+function DelegationCard({ delegation, usage, agent, sessionId, onOpenSubagent, onShowDetails }: { delegation: TraceValue; usage?: SessionUsage | null; agent: string; sessionId: string; onOpenSubagent?: (entry: TraceValue) => void; onShowDetails?: () => void }) {
   const subagents: TraceValue[] = delegation?.subagents || [];
   const spawnCount: number = delegation?.spawn_count ?? 0;
   const children: string[] = delegation?.child_session_ids || [];
   const parentId: string | null = delegation?.parent_session_id || null;
-  // Nothing delegated and not itself a child → no card, no fake zeros.
-  if (spawnCount === 0 && children.length === 0 && !parentId) return null;
+  // Plugins are work handed to another tool (a Grok search, a Codex rescue),
+  // so their pass/fail belongs here, visible when the session opens, even for
+  // a session that spawned no subagents.
+  const plugins = pluginUsage(usage ?? null);
+  // Nothing delegated, no plugin used and not itself a child → no card, no fake zeros.
+  if (spawnCount === 0 && children.length === 0 && !parentId && plugins.length === 0) return null;
   const totals = delegation?.totals;
   // Children listed in subagent entries don't need a duplicate "Child session" row.
   const inlineChildIds = new Set(subagents.map((s: TraceValue) => s.child_session_id).filter(Boolean));
   const backTo = encodeURIComponent(`/sessions/${sessionId}?agent=${agent}`);
   return (
-    <div className="mb-8 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
+    <div className="mb-4 bg-[var(--tt-panel)]/60 border border-[var(--tt-brand)]/30 rounded-[var(--tt-radius-lg)] p-5">
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--tt-brand)] flex items-center gap-2">
           <GitBranch size={12} strokeWidth={3} /> Delegated work
@@ -3626,8 +3734,9 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
           <Stat label="Delegated cost" value={formatCost(delegation.cost)} />
         </div>
       )}
+      {plugins.length > 0 && <PluginPassFail plugins={plugins} onShowDetails={onShowDetails} />}
       {subagents.length > 0 && (
-        <div className="space-y-1">
+        <div className="max-h-64 space-y-1 overflow-y-auto overscroll-contain scrollbar-thin">
           {subagents.map((s: TraceValue, i: number) => (
             <div
               key={s.agent_id ?? s.child_session_id ?? i}
@@ -3649,6 +3758,14 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
                 )}
                 <Badge>{s.agent_type || s.agent_role || "subagent"}</Badge>
                 <span className="truncate text-[var(--tt-fg)]">{s.description || s.phase || s.nickname || s.agent_id}</span>
+                {s.status === "failed" ? (
+                  <span
+                    title={`All ${s.tool_calls ?? ""} tool calls in this run failed`}
+                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 bg-[var(--tt-danger-bg)] text-[var(--tt-danger-fg)] border-[var(--tt-danger-bd)]"
+                  >failed</span>
+                ) : s.tool_errors > 0 ? (
+                  <span title={`${s.tool_errors} of ${s.tool_calls} tool calls failed`}><UsageErrorPill n={s.tool_errors} label="tool errors" /></span>
+                ) : null}
               </span>
               <span className="flex items-center gap-3 shrink-0">
                 {s.model && <span className="text-[var(--tt-fg-dim)]">{s.model.replace(/-\d{8}$/, "")}</span>}
@@ -3714,6 +3831,52 @@ function DelegationCard({ delegation, agent, sessionId, onOpenSubagent }: { dele
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PluginPassFail({ plugins, onShowDetails }: { plugins: ReturnType<typeof pluginUsage>; onShowDetails?: () => void }) {
+  const kindLabel = { mcp: "MCP", skill: "skill", subagent: "subagent" } as const;
+  return (
+    <div className="mb-3 space-y-1.5">
+      <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)]">
+        <span>Plugins ({plugins.length})</span>
+        {onShowDetails && (
+          <button onClick={onShowDetails} className="normal-case tracking-normal text-[var(--tt-brand)] hover:underline">
+            all tools used ▸
+          </button>
+        )}
+      </div>
+      {plugins.map((g) => {
+        const passed = g.calls - g.failed;
+        return (
+          <div
+            key={g.plugin}
+            className={`rounded border px-2.5 py-1.5 text-[11px] font-mono ${
+              g.failed ? "border-[var(--tt-danger-bd)] bg-[var(--tt-danger-bg)]/40" : "border-[var(--tt-border)] bg-[var(--tt-sunken)]/40"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 min-w-0">
+                {g.failed ? <AlertTriangle size={12} className="text-[var(--tt-danger-fg)] shrink-0" /> : <Check size={12} className="text-[var(--tt-success-fg)] shrink-0" />}
+                <span className="text-[var(--tt-fg)] font-semibold">{g.plugin}</span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0 tabular">
+                {passed > 0 && <span className="text-[var(--tt-success-fg)]">{passed} passed</span>}
+                {g.failed > 0 && <span className="text-[var(--tt-danger-fg)]">{g.failed} failed</span>}
+              </span>
+            </div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 pl-5 text-[10px] text-[var(--tt-fg-dim)]">
+              {g.items.map((i) => (
+                <span key={`${i.kind}:${i.name}`} className={i.failed ? "text-[var(--tt-danger-fg)]" : undefined}>
+                  {kindLabel[i.kind]} {i.name} ×{i.calls}
+                  {i.failed ? ` · ${i.failed === i.calls ? "all" : i.failed} failed` : ""}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -14,12 +14,12 @@ export function Section({ title, description, actions, className, children, ...r
         <div className="flex items-end justify-between gap-3 px-0.5">
           <div>
             {title && (
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--tt-fg-dim)]">
+              <h2 className="text-[16px] font-semibold text-[var(--tt-fg)]">
                 {title}
               </h2>
             )}
             {description && (
-              <p className="text-[12px] text-[var(--tt-fg-dim)] mt-1">{description}</p>
+              <p className="text-[13px] text-[var(--tt-fg-muted)] mt-1">{description}</p>
             )}
           </div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}

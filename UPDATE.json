@@ -1,6 +1,142 @@
 {
   "releases": [
     {
+      "tag": "2026-10-31",
+      "title": "A clearer workspace for long sessions",
+      "highlights": [
+        {
+          "title": "Read conversations beside execution",
+          "description": "Read requests, responses, and recorded reasoning beside execution, with summary, session questions, and delegated work up front. Long traces prepare nearby content and avoid repeated formatting while keeping synchronized selection, event records, and the legacy view available."
+        },
+        {
+          "title": "Resize panes and read tool evidence",
+          "description": "Drag the divider to adjust pane widths and read aligned input/result panels that open by default. Expand Markdown into a large modal, and hover token-chart segments for matching color cards with counts and shares."
+        },
+        {
+          "title": "One workspace across coding agents",
+          "description": "Grok Build, Cursor, Copilot, Antigravity, Vibe, Cline, Muse, SmallCode, Kimi and Oh My Pi can use the session workspace. Readers without verified timing or model-call boundaries show recording order and explicitly identify missing evidence."
+        },
+        {
+          "title": "More faithful usage and tool evidence",
+          "description": "Pi and Prime traces retain recorded usage, and OpenCode and ZCode usage stays attached to its own model step. Prime tool results keep their call identifiers and error flags."
+        },
+        {
+          "title": "Choose a comfortable font size everywhere",
+          "description": "Settings now adjusts text from 85% to 150% across Dashboard, Projects, Analytics, sessions, inspectors, and the rest of the app. Use presets or fine adjustments, preview changes immediately, and keep your preference in this browser on this device.",
+          "href": "/settings#cat-general"
+        }
+      ]
+    },
+    {
+      "tag": "2026-10-28",
+      "title": "Trace view for sessions and subagents",
+      "highlights": [
+        {
+          "title": "See when each subagent ran",
+          "description": "A session now opens as a trace: each prompt holds its model calls and tool calls on one timeline, and every subagent sits under the call that spawned it, with bars showing when it started, how long it ran, and whether it kept working in the background. Expand a subagent to load its own calls. Available for Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, ZCode, DSH, Pi, Qoder, Hermes Agent and Prime; other agents keep the step view, which every session can still switch to."
+        }
+      ]
+    },
+    {
+      "tag": "2026-10-16",
+      "title": "Oh My Pi (OMP) support",
+      "highlights": [
+        {
+          "title": "Oh My Pi (OMP) joins the roster",
+          "description": "TokenTelemetry now auto-detects Oh My Pi (OMP) from ~/.omp/agent/sessions/. For each session it reads per-message input, output and cache tokens, the model and provider it routed through, its tool calls, and the conversation trace, and it uses the cost OMP reports rather than estimating one. Session latency and the latest context snapshot are shown too. OMP is a separate agent from Pi, with its own log format.",
+          "href": "/agents/omp"
+        }
+      ]
+    },
+    {
+      "tag": "2026-10-01",
+      "title": "Ask your own question about a session",
+      "highlights": [
+        {
+          "title": "Custom prompt on session summaries",
+          "description": "Under a session's summary, write your own question (decisions made, bugs hit, what is still open) and your summarizer backend answers it from that session. Answers are saved, so reopening the page does not call the model again."
+        },
+        {
+          "title": "Chat with a session",
+          "description": "A new Chat tab under a session's summary lets you ask follow-up questions about that session. Each question pulls the matching parts of the transcript and cites the turns it used, so you can check the answer. It uses your own summarizer backend, and the conversation is not saved."
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-28",
+      "title": "New default ports, faster setup",
+      "highlights": [
+        {
+          "title": "Dashboard moved to localhost:13000",
+          "description": "The dashboard now opens on port 13000 and its API on 18000, so it no longer fights your own projects for 3000 and 8000. Update any bookmark to http://localhost:13000, and the base URL in the Hermes Dashboard plugin if you set it. To keep the old ports, start with --port 3000 --api-port 8000. Suggested by nxtrohith (#406)."
+        },
+        {
+          "title": "Faster installs and updates on macOS and Linux",
+          "description": "With Bun installed (bun.sh), TokenTelemetry sets up and updates the dashboard several times faster; uv does the same for the Python side on every platform."
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-24",
+      "title": "The dashboard in your language",
+      "highlights": [
+        {
+          "title": "Interface language",
+          "description": "Choose Simplified Chinese, Traditional Chinese, Japanese, Korean or French in Settings, General. The choice is saved on this device and applies instantly without a reload; numbers, names and dates stay as they are. Thanks to SkyblueeeLabs for building this (PR #403).",
+          "href": "/settings"
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-23",
+      "title": "Antigravity sessions get real numbers",
+      "highlights": [
+        {
+          "title": "Antigravity usage is read, not estimated",
+          "description": "Antigravity sessions used to show a rough token guess and $0 cost, so they barely registered in totals or charts. TokenTelemetry now reads the tokens and model recorded for every call in each conversation's own database, and prices them like any other agent. Expect your Antigravity cost to rise sharply: on a real machine, 95 sessions went from $0 to $116 at API list prices.",
+          "href": "/agents/antigravity"
+        },
+        {
+          "title": "Antigravity sessions no longer go missing",
+          "description": "If the Gemini CLI had never run on your machine, every Antigravity session was silently skipped. Sessions without a transcript folder, and older ones Antigravity still lists in its own index, now show up too, and IDE sessions are filed under the project they actually ran in."
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-20",
+      "title": "Subagent spend counts toward your totals",
+      "highlights": [
+        {
+          "title": "Delegated cost is in the totals, not beside them",
+          "description": "Cost run up by Claude subagents and workflows was shown in its own box but left out of the headline total, the cost-by-day chart and the per-model table, so a day of heavy delegation read low. It is now folded in, for past days as well as today, and attributed to the model the subagent actually ran rather than the parent's. Analytics also gains a cost-by-day table. Thanks to slmingol for reporting and fixing this (PR #338).",
+          "href": "/analytics"
+        }
+      ]
+    },
+    {
+      "tag": "2026-09-19",
+      "title": "See what a session used, and what failed",
+      "highlights": [
+        {
+          "title": "Used this session",
+          "description": "A session's Context panel now lists the skills, MCP servers and subagents that run actually called, with counts. It works for every agent whose logs record skill or MCP calls. The old list is renamed Installed in Project, because it shows what is on disk for the project, not what the session used."
+        },
+        {
+          "title": "Failed calls are counted",
+          "description": "For Claude Code sessions, tool calls that returned an error are now counted per MCP server, skill and subagent, and shown in red. A plugin that fails every time, such as a broken sandbox killing each Grok search, used to look like normal usage. A subagent whose every call failed is marked failed, even when it ran in the background.",
+          "href": "/analytics"
+        },
+        {
+          "title": "Plugin names on skills, MCP servers and subagents",
+          "description": "Calls that come from a Claude Code plugin are tagged with that plugin's name, so plugin_grok_grok, grok:search and grok:grok-rescue all show up as the grok plugin. The Delegated work card at the top of a session now gives each plugin a passed/failed row, so a plugin that stopped working is visible as soon as you open the session."
+        },
+        {
+          "title": "Every agent's memory files for a project",
+          "description": "A project's Config tab now finds the memory and instruction file of each coding agent: CLAUDE.md (including .claude/, nested folders and Claude Code's auto memory), shared AGENTS.md with the agents that read it, GEMINI.md, QWEN.md, Cursor rules, Copilot instructions, and the user-level OpenCode and Hermes files. Filter chips show one agent's files at a time."
+        }
+      ]
+    },
+    {
       "tag": "2026-09-16",
       "title": "Kimi Code support",
       "highlights": [

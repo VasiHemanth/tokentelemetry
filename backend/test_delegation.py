@@ -72,7 +72,9 @@ def make_claude_tree(claude_dir: Path, sid: str = SID, with_subagents: bool = Tr
         + _jl(type="user", message={"role": "user", "content":
               "<command-name>/code-review</command-name><command-args>high</command-args>"})
         + _jl(type="user", message={"role": "user", "content":
-              "<command-name>/model</command-name>"}),
+              "<command-name>/model</command-name>"})
+        + _jl(type="user", message={"role": "user", "content":
+              "<command-name>/remote-control</command-name>"}),
         encoding="utf-8",
     )
     if not with_subagents:
@@ -158,10 +160,11 @@ def test_workflow_agents_attributed(tmp_path):
     # Tokens fold into the by_type bucket and totals.
     assert "workflow-subagent" in deleg["by_type"]
     assert deleg["by_type"]["workflow-subagent"]["count"] == 3
-    # wfa: in100+out200+cached1000 = 1300; wfb: 10+20+100=130; wfc: 5+5+0=10
-    assert by_id["wfa"]["tokens"]["total"] == 1300
+    # total = input + output + cache reads + cache writes
+    # wfa: 100+200+1000+500 = 1800; wfb: 10+20+100+50 = 180; wfc: 5+5 = 10
+    assert by_id["wfa"]["tokens"]["total"] == 1800
     wf_total = sum(e["tokens"]["total"] for e in wf)
-    assert wf_total == 1440
+    assert wf_total == 1990
     # Count-once: the workflow tokens are additive on top of the flat totals.
     task_total = sum(e["tokens"]["total"] for e in tasks)
     assert deleg["totals"]["total"] == task_total + wf_total
@@ -211,14 +214,14 @@ def test_helper_rollup(tmp_path):
     assert one["description"] == "look around"
     assert one["tool_use_id"] == "toolu_1"
     assert one["model"] == "claude-haiku-4-5-20251001"
-    # input/output cumulative; cached = high-water-mark (NOT 100+300), while
-    # _cached_sum tracks the billed per-turn reads. Cache creation is cumulative.
+    # Every bucket is cumulative: each turn re-reads the cache and is billed
+    # for it, so cached = 100+300 (not the 300 high-water mark).
     assert one["tokens"]["input"] == 30
     assert one["tokens"]["output"] == 10
-    assert one["tokens"]["cached"] == 300
+    assert one["tokens"]["cached"] == 400
     assert one["tokens"]["_cached_sum"] == 400
     assert one["tokens"]["cache_creation"] == 100
-    assert one["tokens"]["total"] == 30 + 10 + 300
+    assert one["tokens"]["total"] == 30 + 10 + 400 + 100
     assert one["cost"] == pytest.approx(main.calculate_cost(
         "claude-haiku-4-5-20251001", 30, 10, 400, cache_creation_tokens=100))
     # meta fallbacks
@@ -227,9 +230,36 @@ def test_helper_rollup(tmp_path):
     # totals sum across entries
     assert deleg["totals"]["input"] == 30 + 7 + 1
     assert deleg["totals"]["output"] == 10 + 3 + 2
-    assert deleg["totals"]["cached"] == 300 + 40 + 0
+    assert deleg["totals"]["cached"] == 400 + 40 + 0
     assert deleg["totals"]["_cached_sum"] == 400 + 40 + 0
     assert deleg["cost"] >= 0
+
+
+def test_helper_rollup_dedups_repeated_message_id(tmp_path):
+    """Claude Code writes one JSONL line per content block of a single turn
+    (thinking/text/tool_use), repeating the full message.usage on every line
+    with the SAME message.id. Without dedup, a 3-block turn triples its usage."""
+    sub = tmp_path / ".claude" / "projects" / PROJ / SID / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-one.jsonl").write_text(
+        # Turn 1: 3 content blocks, same message.id, same usage repeated 3x.
+        _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        + _assistant_line(inp=10, out=5, cache_read=100, cache_creation=20, message_id="msg_A")
+        # Turn 2: a genuinely distinct request — must still be counted.
+        + _assistant_line(inp=4, out=2, cache_read=50, cache_creation=0, message_id="msg_B"),
+        encoding="utf-8",
+    )
+    deleg = main._claude_subagent_usage(tmp_path / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    one = deleg["subagents"][0]
+    assert one["tokens"]["input"] == 10 + 4
+    assert one["tokens"]["output"] == 5 + 2
+    # Cache reads accumulate across distinct model calls, while the repeated
+    # content blocks of each call must still be counted only once.
+    assert one["tokens"]["cached"] == 100 + 50
+    assert one["tokens"]["_cached_sum"] == 100 + 50  # billed sum, not tripled
+    assert one["tokens"]["cache_creation"] == 20
+    assert one["tokens"]["total"] == 14 + 7 + 150 + 20
 
 
 def test_helper_costs_with_each_files_own_model(tmp_path, monkeypatch):
@@ -256,7 +286,8 @@ def scan_env(tmp_path, monkeypatch):
     for attr in ("CODEX_DIR", "GEMINI_DIR", "QWEN_DIR", "VIBE_DIR", "OLLAMA_DIR",
                  "GROK_SESSIONS_DIR", "GROK_UNIFIED_LOG", "VSCODE_STORAGE", "CURSOR_STORAGE",
                  "COPILOT_CLI_DIR", "ANTIGRAVITY_BRAIN_DIR", "ANTIGRAVITY_CLI_DIR",
-                 "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR"):
+                 "HERMES_DIR", "PI_SESSIONS_DIR", "KIMI_DIR", "KIMI_SESSIONS_DIR",
+                 "OMP_DIR", "OMP_SESSIONS_DIR"):
         monkeypatch.setattr(main, attr, missing / attr.lower())
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_SOURCES", [])
     monkeypatch.setattr(main, "ANTIGRAVITY_BRAIN_DIRS", [])
@@ -280,21 +311,23 @@ def test_scan_claude_delegation_summary(scan_env):
     d = s["delegation"]
     assert d["supported"] is True and d["tokens_recorded"] is True
     assert d["spawn_count"] == 3
-    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (300 + 40)
-    # Per-type rollup for analytics: Explore file = 30+10+300 tokens.
-    assert d["by_type"]["Explore"] == {"count": 1, "total": 340,
+    # input + output + cache reads + cache writes across the three files
+    assert d["delegated_total"] == (30 + 7 + 1) + (10 + 3 + 2) + (400 + 40) + 100
+    # Per-type rollup for analytics: Explore file = 30+10+400+100 tokens.
+    assert d["by_type"]["Explore"] == {"count": 1, "total": 540,
+
                                        "cost": d["by_type"]["Explore"]["cost"]}
     assert set(d["by_type"]) == {"Explore", "general-purpose", "unknown"}
     assert s["tokens"]["delegated_input"] == 38
     assert s["tokens"]["delegated_output"] == 15
-    assert s["tokens"]["delegated_cached"] == 340
+    assert s["tokens"]["delegated_cached"] == 440
     assert s["tokens"]["delegated_cache_creation"] == 100
     assert s["delegated_cost"] >= 0
     # Count-once invariant: the parent's own buckets reflect ONLY the parent file.
     assert s["tokens"]["input"] == 100
     assert s["tokens"]["output"] == 50
     assert s["tokens"]["cached"] == 1000
-    assert s["tokens"]["total"] == 100 + 50 + 1000
+    assert s["tokens"]["total"] == 100 + 50 + 1000 + 200
 
 
 def test_scan_claude_without_spawns(scan_env):
@@ -331,7 +364,7 @@ def test_claude_scan_dedupes_usage_and_records_unpriced_background_activity(scan
     first = next(s for s in main._scan_sessions_sync() if s["agent"] == "claude" and s["id"] == sid)
 
     assert first["tokens"] == {
-        "input": 150, "output": 15, "cached": 30, "_cached_sum": 50, "total": 195,
+        "input": 150, "output": 15, "cached": 50, "_cached_sum": 50, "total": 215,
         "cache_creation": 0, "cache_creation_1h": 0,
     }
     assert first["cost"] == pytest.approx(main.calculate_cost("claude-sonnet-4-6", 150, 15, 50))
@@ -518,6 +551,107 @@ def test_scan_claude_skills_and_mcp(scan_env):
     assert s["tool_counts"]["mcp__chrome__navigate"] == 3
     assert s["tool_counts"]["Skill"] == 2
     assert s["mcp_usage"] == {"chrome": {"navigate": 3}}
+    # Nothing failed → no error keys invented.
+    assert "tool_errors" not in s and "mcp_errors" not in s
+    assert all("errors" not in sk for sk in s["skills_used"])
+
+
+def _tool_result(tool_use_id, text, is_error=False):
+    blk = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
+    if is_error:
+        blk["is_error"] = True
+    return blk
+
+
+def make_failing_plugin_tree(claude_dir: Path, sid: str = SID) -> Path:
+    """Mirrors a real session: the grok plugin's MCP search and a grok skill
+    both fail on a broken sandbox, and a background grok:grok-rescue subagent
+    dies on its only call while the parent's Agent result reads "launched"."""
+    proj = claude_dir / "projects" / PROJ
+    proj.mkdir(parents=True, exist_ok=True)
+    session_file = proj / f"{sid}.jsonl"
+    use = lambda name, tid, **kw: {"type": "tool_use", "name": name, "id": tid, "input": kw}
+    session_file.write_text(
+        _jl(type="user", cwd="/tmp/proj", message={"role": "user", "content": "search x"})
+        + _assistant_line(inp=10, out=5, message_id="m1", content=[
+            use("mcp__plugin_grok_grok__grok_search", "t1", query="a"),
+            use("mcp__plugin_grok_grok__grok_search", "t2", query="b"),
+            use("Bash", "t3", command="ls"),
+            use("Skill", "t4", skill="grok:search"),
+            use("Skill", "t5", skill="graphify"),
+            use("Agent", "t6", subagent_type="grok:grok-rescue")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t1", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t2", "Grok search failed: sandbox could not be applied", True),
+            _tool_result("t3", "file.txt"),
+            _tool_result("t4", "skill failed to load", True),
+            _tool_result("t5", "ok"),
+            _tool_result("t6", "Async agent launched successfully."),
+        ]})
+        # A tool result quoting a transcript must not count as a slash command.
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("t3", "grep hit: <command-name>/leaked</command-name>")]}),
+        encoding="utf-8",
+    )
+    sub = proj / sid / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-rescue.meta.json").write_text(json.dumps(
+        {"agentType": "grok:grok-rescue", "description": "rescue", "toolUseId": "t6"}))
+    (sub / "agent-rescue.jsonl").write_text(
+        _jl(type="user", message={"role": "user", "content": "investigate"})
+        + _assistant_line(inp=5, out=5, message_id="r1",
+                          content=[use("Bash", "r-t1", command="node grok-companion.mjs")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("r-t1", "Exit code 1\nGrok run failed", True)]}),
+        encoding="utf-8",
+    )
+    # Partial failure: one of two calls errored → counted, but the run isn't "failed".
+    (sub / "agent-explore.meta.json").write_text(json.dumps(
+        {"agentType": "Explore", "description": "look", "toolUseId": "t7"}))
+    (sub / "agent-explore.jsonl").write_text(
+        _assistant_line(inp=5, out=5, message_id="e1",
+                        content=[use("Read", "e-t1"), use("Grep", "e-t2")])
+        + _jl(type="user", message={"role": "user", "content": [
+            _tool_result("e-t1", "File does not exist.", True),
+            _tool_result("e-t2", "3 matches")]}),
+        encoding="utf-8",
+    )
+    return session_file
+
+
+def test_scan_claude_records_tool_failures(scan_env):
+    make_failing_plugin_tree(scan_env / ".claude")
+    s = [s for s in main._scan_sessions_sync() if s["agent"] == "claude"][0]
+    # Failed calls still count as calls.
+    assert s["mcp_usage"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["tool_errors"] == {"mcp__plugin_grok_grok__grok_search": 2, "Skill": 1}
+    assert s["mcp_errors"] == {"plugin_grok_grok": {"grok_search": 2}}
+    assert s["skills_used"] == [{"name": "graphify", "count": 1},
+                                {"name": "grok:search", "count": 1, "errors": 1}]
+    by_type = s["delegation"]["by_type"]
+    assert by_type["grok:grok-rescue"]["failed"] == 1
+    assert by_type["grok:grok-rescue"]["tool_errors"] == 1
+    assert "failed" not in by_type["Explore"]
+    assert by_type["Explore"]["tool_errors"] == 1
+
+    deleg = main._claude_subagent_usage(
+        scan_env / ".claude" / "projects" / PROJ / f"{SID}.jsonl", SID)
+    subs = {e["agent_type"]: e for e in deleg["subagents"]}
+    assert subs["grok:grok-rescue"]["status"] == "failed"
+    assert subs["grok:grok-rescue"]["tool_calls"] == 1
+    assert "status" not in subs["Explore"]
+    assert (subs["Explore"]["tool_calls"], subs["Explore"]["tool_errors"]) == (2, 1)
+
+
+def test_plugin_of():
+    assert main._plugin_of("plugin_grok_grok") == "grok"
+    assert main._plugin_of("plugin_gemini_gemini") == "gemini"
+    assert main._plugin_of("plugin_my_tool_my_tool") == "my_tool"   # symmetric wins
+    assert main._plugin_of("plugin_acme_search") == "acme"
+    assert main._plugin_of("grok:grok-rescue") == "grok"
+    assert main._plugin_of("codex:rescue") == "codex"
+    for plain in ("chrome", "graphify", "Explore", "", None, "plugin_"):
+        assert main._plugin_of(plain) is None
 
 
 def test_scan_agents_without_signal_lack_keys(scan_env):
@@ -531,8 +665,10 @@ def test_scan_agents_without_signal_lack_keys(scan_env):
 
 # --- /analytics ecosystem aggregates -----------------------------------------
 
-def test_analytics_ecosystem_aggregates(monkeypatch):
+def test_analytics_ecosystem_aggregates(tmp_path, monkeypatch):
     from datetime import datetime, timezone
+    # /analytics merges the persisted history store; keep the real one out.
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(tmp_path / "tt_data"))
     base = {"project": "/tmp/x", "timestamp": datetime.now(timezone.utc),
             "tokens": {"input": 10, "output": 5, "cached": 0, "total": 15},
             "cost": 0.01, "model": "claude-opus-4-8", "mcp_tools": []}
@@ -544,6 +680,15 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
                         "delegated_total": 500,
                         "by_type": {"Explore": {"count": 2, "total": 500, "cost": 0.2}}},
          "delegated_cost": 0.2},
+        # A plugin-backed session where everything the plugin did failed.
+        {**base, "id": "p", "agent": "claude",
+         "skills_used": [{"name": "grok:search", "count": 2, "errors": 1}],
+         "mcp_usage": {"plugin_grok_grok": {"grok_search": 2}},
+         "mcp_errors": {"plugin_grok_grok": {"grok_search": 2}},
+         "delegation": {"supported": True, "tokens_recorded": True, "spawn_count": 1,
+                        "delegated_total": 0,
+                        "by_type": {"grok:grok-rescue": {"count": 1, "total": 0, "cost": 0.0,
+                                                         "failed": 1, "tool_errors": 1}}}},
         {**base, "id": "b", "agent": "claude",
          "skills_used": [{"name": "graphify", "count": 1}],
          "mcp_usage": {"chrome": {"navigate": 1, "find": 2}},
@@ -569,15 +714,26 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
         return sessions
 
     monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
-    a = _run(main.get_analytics())
-    assert a["by_skill"] == {"graphify": {"invocations": 3, "session_count": 2,
-                                          "agents": ["claude"]}}
-    assert a["by_mcp_server"] == {"chrome": {"calls": 6, "session_count": 2,
-                                             "tools": {"navigate": 4, "find": 2},
-                                             "agents": ["claude"]}}
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+    assert a["by_skill"]["graphify"] == {"invocations": 3, "session_count": 2,
+                                         "agents": ["claude"], "errors": 0, "plugin": None}
+    assert a["by_skill"]["grok:search"] == {"invocations": 2, "session_count": 1,
+                                            "agents": ["claude"], "errors": 1, "plugin": "grok"}
+    assert a["by_mcp_server"]["chrome"] == {"calls": 6, "session_count": 2,
+                                            "tools": {"navigate": 4, "find": 2},
+                                            "agents": ["claude"], "errors": 0,
+                                            "tool_errors": {}, "plugin": None}
+    assert a["by_mcp_server"]["plugin_grok_grok"] == {
+        "calls": 2, "session_count": 1, "tools": {"grok_search": 2}, "agents": ["claude"],
+        "errors": 2, "tool_errors": {"grok_search": 2}, "plugin": "grok"}
     assert a["by_subagent_type"]["Explore"] == {
         "spawns": 2, "tokens": 500, "cost": 0.2, "session_count": 1,
-        "tokens_recorded": True, "agents": ["claude"]}
+        "tokens_recorded": True, "agents": ["claude"], "failed": 0, "tool_errors": 0,
+        "plugin": None}
+    assert a["by_subagent_type"]["grok:grok-rescue"]["failed"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["tool_errors"] == 1
+    assert a["by_subagent_type"]["grok:grok-rescue"]["plugin"] == "grok"
     # grok type rows attribute the child session's tokens.
     assert a["by_subagent_type"]["general-purpose"]["tokens"] == 100
     assert a["by_subagent_type"]["general-purpose"]["agents"] == ["grok"]
@@ -586,15 +742,15 @@ def test_analytics_ecosystem_aggregates(monkeypatch):
     assert a["by_subagent_type"]["explorer"]["tokens"] == 70
     d = a["delegation"]
     assert d["delegated_tokens"] == 500 and d["delegated_cost"] == 0.2
-    assert d["sessions_with_spawns"] == 3          # claude a + grok gp + codex cp
+    assert d["sessions_with_spawns"] == 4          # claude a + p + grok gp + codex cp
     assert d["linked_children"] == 2 and d["linked_child_tokens"] == 170
     assert d["by_agent"]["grok"] == {"parents": 1, "spawns": 1, "children": 1,
                                      "child_tokens": 100, "child_cost": 0.05,
                                      "delegated_tokens": 0, "delegated_cost": 0.0}
     # Existing aggregates unchanged in shape: delegated usage NOT folded in,
     # children counted once as their own sessions.
-    assert a["by_agent"]["claude"]["total"] == 30
-    assert a["total"]["total"] == 30 + 15 + 100 + 15 + 70
+    assert a["by_agent"]["claude"]["total"] == 45
+    assert a["total"]["total"] == 45 + 15 + 100 + 15 + 70
 
 
 def test_analytics_stub_does_not_clobber_stored_real_row(tmp_path, monkeypatch):
@@ -654,6 +810,51 @@ def test_analytics_fresh_live_session_still_overwrites_stored(tmp_path, monkeypa
                                 agents=[], models=[], projects=[]))
     assert a["by_agent"]["claude"]["cost"] == 9.9
     assert a["by_agent"]["claude"]["total"] == 1000
+
+
+def test_analytics_folds_delegated_into_by_day_and_by_model(tmp_path, monkeypatch):
+    """get_analytics() must fold delegated_* spend into by_day and attribute a
+    subagent-only model (Haiku under an Opus parent) in by_model — the core
+    fold-in this change adds.
+
+    Stubs get_sessions_cached like its siblings above: the un-stubbed scan
+    reaches the real ~/.claude and history.db, so bucket-count assertions
+    against a tmp fixture tree are not hermetic.
+    """
+    from datetime import timezone
+    _hist_env(tmp_path, monkeypatch)
+    parent = {
+        "id": "s1", "agent": "claude", "project": "/p", "model": "claude-opus-4-8",
+        "timestamp": datetime.now(timezone.utc), "cost": 4.2, "stub": False,
+        "tokens": {"input": 100, "output": 50, "cached": 1000, "total": 1150,
+                   "delegated_input": 38, "delegated_output": 15, "delegated_cached": 340},
+        "delegated_cost": 0.5,
+        # Haiku appears ONLY here — the parent session never ran it.
+        "delegated_by_model": {"claude-haiku-4-5-20251001": {
+            "input": 30, "output": 10, "cached": 400, "total": 440, "cost": 0.3}},
+    }
+
+    async def fake_sessions(fresh: bool = False):
+        return [parent]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    a = _run(main.get_analytics(from_=None, to=None, granularity="day",
+                                agents=[], models=[], projects=[]))
+
+    assert len(a["by_day"]) == 1
+    day = a["by_day"][0]
+    assert day["total"] == 1150 + (38 + 15 + 340)
+    assert day["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["cost"] == pytest.approx(4.2 + 0.5)
+    assert a["by_agent"]["claude"]["total"] == 1150 + 393
+
+    haiku = a["by_model"]["claude-haiku-4-5-20251001"]
+    assert haiku["total"] == 440
+    assert haiku["cost"] == pytest.approx(0.3)
+    # A subagent transcript is not a session, so it must not inflate the count.
+    assert haiku["session_count"] == 0
+    # The parent's own model keeps only its own spend.
+    assert a["by_model"]["claude-opus-4-8"]["cost"] == pytest.approx(4.2)
 
 
 # --- grok / codex / antigravity (probe-verified shapes) ----------------------
@@ -1415,3 +1616,75 @@ def test_sessions_endpoint_strips_stub_flag(scan_env, monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def _codex_snapshot(ts, total, last=None):
+    """token_count event: running total (and optionally this turn's usage),
+    each given as (gross_input, cached_input, output)."""
+    def u(t):
+        g, c, o = t
+        return {"input_tokens": g, "cached_input_tokens": c,
+                "output_tokens": o, "total_tokens": g + o}
+    info = {"total_token_usage": u(total)}
+    if last is not None:
+        info["last_token_usage"] = u(last)
+    return json.dumps({"timestamp": ts, "type": "event_msg",
+                       "payload": {"type": "token_count", "info": info}}) + "\n"
+
+
+def test_codex_usage_sums_increases_and_drops_inherited_fork_usage(scan_env, monkeypatch):
+    """A Codex rollout logs a running total. The session's usage is the sum of
+    its increases: a forked thread's opening snapshot of the parent's total is
+    not its own, a repeated snapshot adds nothing, and a drop in the counter
+    doesn't erase what came before or after it."""
+    codex_dir = scan_env / ".codex"
+    monkeypatch.setattr(main, "CODEX_DIR", codex_dir)
+    day = codex_dir / "sessions" / "2026" / "08" / "05"
+    day.mkdir(parents=True)
+    parent = "019fd28e-0000-7000-8000-000000000001"
+    child = "019fd31b-0000-7000-8000-000000000002"
+
+    def meta(sid, extra):
+        return json.dumps({"timestamp": "2026-08-05T10:00:00.000Z", "type": "session_meta",
+                           "payload": {"id": sid, "cwd": "/tmp/x", "model_provider": "openai",
+                                       **extra}}) + "\n"
+
+    own_turn = json.dumps({"timestamp": "2026-08-05T10:00:02.000Z", "type": "response_item",
+                           "payload": {"type": "message", "role": "assistant", "content": []}}) + "\n"
+    # Parent: two turns on 5 Aug, the same snapshot logged twice, then the
+    # counter drops to 900 and climbs to 1500 on 6 Aug.
+    (day / f"rollout-2026-08-05T15-30-00-{parent}.jsonl").write_text(
+        meta(parent, {"thread_source": "user"})
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:00:03.000Z", (400, 100, 50), (400, 100, 50))
+        + _codex_snapshot("2026-08-05T10:00:04.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-05T10:00:05.000Z", (1000, 600, 100), (600, 500, 50))
+        + _codex_snapshot("2026-08-06T10:00:00.000Z", (900, 600, 100), (0, 0, 0))
+        + _codex_snapshot("2026-08-06T10:00:01.000Z", (1500, 900, 160), (600, 300, 60)))
+    # Child: forked subagent whose first snapshot carries the parent's total
+    # (1000/600/100) before any turn of its own, then one own turn of 300/200/40.
+    (day / f"rollout-2026-08-05T15-40-00-{child}.jsonl").write_text(
+        meta(child, {"thread_source": "subagent", "forked_from_id": parent,
+                     "source": {"subagent": {"thread_spawn": {
+                         "parent_thread_id": parent, "depth": 1}}}})
+        + json.dumps({"timestamp": "2026-08-05T10:10:00.000Z", "type": "compacted",
+                      "payload": {}}) + "\n"
+        + _codex_snapshot("2026-08-05T10:10:01.000Z", (1000, 600, 100), (600, 500, 50))
+        + own_turn
+        + _codex_snapshot("2026-08-05T10:10:05.000Z", (1300, 800, 140), (300, 200, 40)))
+
+    by_id = {s["id"]: s for s in main._scan_sessions_sync() if s["agent"] == "codex"}
+
+    # Parent increases: (400,100,50) + (600,500,50) + drop + (600,300,60)
+    p = by_id[parent]["tokens"]
+    assert (p["input"], p["cached"], p["output"]) == (1600 - 900, 900, 160)
+    assert p["total"] == 1600 + 160
+    # Child: only its own turn, not the parent's 1100 it opened with.
+    c = by_id[child]["tokens"]
+    assert (c["input"], c["cached"], c["output"]) == (100, 200, 40)
+    assert c["total"] == 340
+    # The per-day split adds up to the session total.
+    for sid in (parent, child):
+        s = by_id[sid]
+        assert sum(d["total"] for d in s["tokens_by_day"].values()) == s["tokens"]["total"]
+    assert by_id[parent]["tokens_by_day"]["2026-08-06"]["total"] == (600 - 300) + 300 + 60

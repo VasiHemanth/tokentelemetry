@@ -50,7 +50,11 @@ class CodexSummarizer(BaseSummarizer):
     def __init__(self, model: Optional[str] = None) -> None:
         self._model = model
 
-    def summarize(self, prompt: str, *, timeout: Optional[int] = None) -> str:
+    def summarize(
+        self, prompt: str, *, timeout: Optional[int] = None, untrusted: bool = False
+    ) -> str:
+        """``untrusted=True`` is for prompts that embed transcript text: codex
+        runs in its read-only sandbox instead of with the sandbox bypassed."""
         with tempfile.NamedTemporaryFile(
             "r", suffix=".txt", prefix="tt-codex-", delete=False
         ) as f:
@@ -59,11 +63,12 @@ class CodexSummarizer(BaseSummarizer):
             args = [
                 self.binary,
                 "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--skip-git-repo-check",
-                "-o",
-                last_message,
             ]
+            if untrusted:
+                args += ["-s", "read-only"]
+            else:
+                args += ["--dangerously-bypass-approvals-and-sandbox"]
+            args += ["--skip-git-repo-check", "-o", last_message]
             # Only override the model when the user explicitly picked one.
             # Otherwise let codex honor ~/.codex/config.toml.
             if self._model:
