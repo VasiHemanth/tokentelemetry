@@ -7572,8 +7572,32 @@ def _claude_subagent_usage(session_file: Path, sid: str) -> Optional[Dict[str, A
 _LOOP_JOB_RE = re.compile(r"\bjob\s+([0-9a-fA-F]{6,})\b")
 
 # Hosted artifact URL Claude Code's Artifact tool prints in its tool_result
-# ("Published <path> at https://claude.ai/code/artifact/<uuid>").
-_ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/code/artifact/[0-9a-f-]{36}")
+# ("Published <path> at <url>"). Two shapes exist: the original
+# https://claude.ai/code/artifact/<uuid> and the newer short
+# https://claude.ai/artifact/<id> (base62, ~22 chars). Only publish results are
+# searched (see artifact_calls), so a type link in another result can't match.
+_ARTIFACT_URL_RE = re.compile(
+    r"https://claude\.ai/(?:code/artifact/[0-9a-f-]{36}|artifact/[A-Za-z0-9]{16,40})(?![A-Za-z0-9-])")
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def _html_page_title(file_path: Optional[str]) -> Optional[str]:
+    """The <title> of a published page's local source, when the publish call
+    passed no title (the Artifact tool takes the title from the page itself).
+    Reads only the head of the file; a missing or unreadable file gives None."""
+    if not file_path or not file_path.lower().endswith((".html", ".htm")):
+        return None
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return None
+    m = _HTML_TITLE_RE.search(head)
+    if not m:
+        return None
+    import html as _html
+    title = " ".join(_html.unescape(m.group(1)).split())
+    return title or None
 
 # A Codex Site is only a session artifact when a Codex Sites tool produced its
 # deployed URL. Do not mine arbitrary chatgpt.site strings from user prompts or
@@ -8266,8 +8290,10 @@ def _scan_sessions_sync():
                                             if tool == "Artifact":
                                                 ip = item.get("input") or {}
                                                 # Publishes only — `action: "list"` enumerates existing
-                                                # artifacts rather than creating one.
-                                                if item.get("id") and ip.get("action") in (None, "publish"):
+                                                # artifacts rather than creating one, and `asset: true`
+                                                # uploads a file into an artifact, not a new page.
+                                                if (item.get("id") and ip.get("action") in (None, "publish")
+                                                        and not ip.get("asset")):
                                                     artifact_calls[item["id"]] = {
                                                         "title": ip.get("title"),
                                                         "description": ip.get("description"),
@@ -8366,6 +8392,7 @@ def _scan_sessions_sync():
                                                 "url": url,
                                                 "path": meta.get("file_path") or prev.get("path"),
                                                 "title": meta.get("title") or prev.get("title")
+                                                         or _html_page_title(meta.get("file_path"))
                                                          or (os.path.splitext(fname)[0] or None),
                                                 "description": meta.get("description") or prev.get("description"),
                                                 "favicon": meta.get("favicon") or prev.get("favicon"),
@@ -11903,7 +11930,11 @@ async def get_projects(include_hidden: bool = False):
         # while still rendering individually as "not captured".
         projects[proj]["tokens"]["cost"] += (s.get("cost") or 0.0) + (s.get("delegated_cost") or 0.0)
         projects[proj]["plans"].extend(s.get("plans", []))
-        projects[proj]["artifacts"].extend(s.get("published_artifacts", []))
+        # Copy each record and remember which project card it came from, so a
+        # worktree group can share artifacts and still say where each one was
+        # created. Copying keeps the cached session data untouched.
+        projects[proj]["artifacts"].extend(
+            {**a, "_origin_path": proj} for a in (s.get("published_artifacts") or []))
     for p in projects.values():
         p["agents"] = list(p["agents"])
         p["mcp_tools"] = list(p["mcp_tools"])
@@ -12045,25 +12076,37 @@ async def get_projects(include_hidden: bool = False):
         parent["is_repo_root"] = True
         parent["worktrees"] = wt_summaries
         parent["aggregate"] = _aggregate(members)
-        # Surface worktree-published artifacts on the repo-root card too —
-        # publishes usually happen from worktree sessions but belong to the repo.
-        # Identity is the hosted url for "page" artifacts, the file path for
-        # "document" ones.
-        seen_keys = {_artifact_key(a) for a in parent.get("artifacts", [])}
+        # Artifacts belong to the repo, not to the checkout they were published
+        # from: every card in the group (repo root and each worktree) shows the
+        # same set, and each artifact says which worktree created it
+        # (`created_in`). Identity is the hosted url for pages and sites, the
+        # file path for documents; newest record wins a duplicate.
+        origin_names = {parent["path"]: parent["name"]}
         for c in children:
-            for a in c.get("artifacts", []):
-                key = _artifact_key(a)
-                if key and key not in seen_keys:
-                    parent.setdefault("artifacts", []).append(a)
-                    seen_keys.add(key)
-        parent["artifacts"] = _dedupe_artifacts(
-            sorted(parent.get("artifacts", []),
-                   key=lambda x: str(x.get("timestamp") or ""), reverse=True))
+            origin_names[c["path"]] = c.get("worktree_name") or c["name"]
+        shared: List[dict] = []
+        for m in members:
+            for a in m.get("artifacts", []):
+                origin = a.get("_origin_path") or m["path"]
+                shared.append({**a, "created_in": {
+                    "path": origin,
+                    "name": origin_names.get(origin, origin),
+                    "is_worktree": origin != repo,
+                }})
+        shared = _dedupe_artifacts(
+            sorted(shared, key=lambda x: str(x.get("timestamp") or ""), reverse=True))
+        for m in members:
+            m["artifacts"] = list(shared)
         for c in children:
             c["parent_path"] = repo
             c["parent_name"] = parent["name"]
 
     out.extend(synthesized)
+    # `_origin_path` is bookkeeping for the worktree share above; the
+    # public field is `created_in`.
+    for p in out:
+        p["artifacts"] = [{k: v for k, v in a.items() if k != "_origin_path"}
+                          for a in p.get("artifacts", [])]
     return out
 
 
