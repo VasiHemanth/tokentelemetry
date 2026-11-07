@@ -34,7 +34,7 @@ logger = logging.getLogger("tokentelemetry.scan_cache")
 # update that affects cached costs. `_mtime` only detects source-transcript
 # changes; this detects code changes. A mismatch is a miss, so stale entries
 # are transparently reparsed and rewritten — never migrated in place.
-CACHE_VERSION = 15  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250); v11: assistant usage-dedupe fix restores continuation tool blocks; v12: Codex Sites are published artifacts; v13: Claude tool_errors/mcp_errors, skill + subagent failure counts; v14: delegated_by_model added to Claude cache payload for by_model analytics attribution (#338); v15: Codex partial-parse guard — any rollout-file read failure now prevents caching, so existing v14 partial Codex entries must be invalidated
+CACHE_VERSION = 16  # v2: added "loop" field; v3: added loop footprint_tokens/footprint_cost; v4: added published_artifacts; v5: page artifacts carry source path; v6: added "goals" (/goal); v7: Claude cached-read costs use cumulative usage and record untracked background activity; v8: Muse/Prime/Codex model metadata; v9: DeepSeek V4 repricing (#303) — cached sessions store a computed cost, so a rate change must invalidate them; v10: claude-sonnet-5 repriced to its real $2/$10 (#250); v11: assistant usage-dedupe fix restores continuation tool blocks; v12: Codex Sites are published artifacts; v13: Claude tool_errors/mcp_errors, skill + subagent failure counts, Claude cache reads summed and cache writes counted in total, Codex usage summed from running-total increases with forked threads inherited usage removed; v14: delegated_by_model added to Claude cache payload for by_model analytics attribution (#338); v15: merged Claude cache reads sum and delegated tokens; v16: Codex partial-parse guard: any rollout-file read failure (open or mid-parse) now prevents caching, so existing partial Codex entries must be invalidated
 
 
 def _require_safe_component(candidate: str) -> str:
@@ -64,7 +64,7 @@ def cache_path(agent: str, session_id: str) -> Path:
 
 
 def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dict[str, Any]]:
-    """Return the cached payload if fresh (stored _mtime >= source_mtime AND
+    """Return the cached payload if fresh (stored _mtime == source_mtime AND
     written by this CACHE_VERSION), else None.
 
     Never raises — any OSError/JSONDecodeError/missing-key/unsafe-id is
@@ -78,7 +78,10 @@ def read_cache(agent: str, session_id: str, source_mtime: float) -> Optional[Dic
         if data.get("_version") != CACHE_VERSION:
             return None
         cached_mtime = data["_mtime"]
-        if cached_mtime >= source_mtime:
+        # Only equality means "unchanged since write"; a smaller source_mtime
+        # is a clock regression (NTP step, NAS/SMB skew), not evidence the
+        # cached payload is still valid, so `>=` pinned it forever.
+        if cached_mtime == source_mtime:
             return data
         return None
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:

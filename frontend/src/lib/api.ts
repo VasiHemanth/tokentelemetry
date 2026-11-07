@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 export const API_BASE = (() => {
   const explicit = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "");
   if (explicit) return explicit;
-  const port = process.env.NEXT_PUBLIC_API_PORT || "8000";
+  const port = process.env.NEXT_PUBLIC_API_PORT || "18000";
   if (typeof window !== "undefined") {
     return `${window.location.protocol}//${window.location.hostname}:${port}`;
   }

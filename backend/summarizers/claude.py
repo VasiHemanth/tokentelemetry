@@ -16,20 +16,25 @@ class ClaudeSummarizer(BaseSummarizer):
     display_name = "Claude Code"
     binary = "claude"
 
-    def summarize(self, prompt: str, *, timeout: int = 120) -> str:
+    def summarize(self, prompt: str, *, timeout: int = 120, untrusted: bool = False) -> str:
+        """``untrusted=True`` is for prompts that embed transcript text: all of
+        claude's tools are disabled so injected instructions cannot act."""
         # Feed the prompt via stdin, not as a `-p <prompt>` argv. Trace briefs
         # are routinely tens-to-hundreds of KB, which blows past the OS command
         # line limit — most acutely on Windows, where the npm `claude.cmd` shim
         # runs under cmd.exe and caps the line at ~8 KB ("The command line is too
         # long."). `claude -p` with no positional reads the prompt from stdin.
+        args = [
+            self.binary,
+            "-p",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+        ]
+        if untrusted:
+            args += ["--tools", ""]
         out = run_cli(
-            [
-                self.binary,
-                "-p",
-                "--output-format",
-                "json",
-                "--no-session-persistence",
-            ],
+            args,
             stdin=prompt,
             timeout=timeout,
         )

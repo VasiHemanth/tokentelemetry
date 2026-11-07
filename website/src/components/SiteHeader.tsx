@@ -50,9 +50,9 @@ export default function SiteHeader() {
             <span className="text-[var(--tt-fg)] font-semibold">{stars}</span> stars
           </a>
           <a
-            href="#install"
+            href="/#install"
             onClick={() => track("click_install", { location: "header" })}
-            className="hidden sm:inline-flex items-center h-[34px] px-3.5 rounded-[var(--tt-radius)] bg-[var(--tt-brand-strong)] hover:bg-[var(--tt-brand)] text-white text-[12.5px] font-semibold shadow-[0_8px_22px_-12px_var(--tt-brand-glow)] transition-colors"
+            className="hidden sm:inline-flex items-center h-[34px] px-3.5 rounded-[var(--tt-radius)] bg-[var(--tt-brand)] hover:bg-[#93c5fd] text-[#101113] text-[12.5px] font-semibold shadow-[0_8px_22px_-12px_var(--tt-brand-glow)] transition-colors"
           >
             Install
           </a>
@@ -90,9 +90,9 @@ export default function SiteHeader() {
               Resources
             </Link>
             <a
-              href="#install"
+              href="/#install"
               onClick={() => { track("click_install", { location: "mobile_menu" }); closeMenu(); }}
-              className="inline-flex items-center justify-center h-[40px] px-3 mt-1 rounded-[var(--tt-radius)] bg-[var(--tt-brand-strong)] hover:bg-[var(--tt-brand)] text-white text-[14px] font-semibold transition-colors"
+              className="inline-flex items-center justify-center h-[40px] px-3 mt-1 rounded-[var(--tt-radius)] bg-[var(--tt-brand)] hover:bg-[#93c5fd] text-[#101113] text-[14px] font-semibold transition-colors"
             >
               Install
             </a>

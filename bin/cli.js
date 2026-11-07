@@ -66,7 +66,7 @@ function parseInvocation(argv) {
 // { help, options }: help is true when -h/--help was seen (the caller prints
 // help and exits 0).
 function parseArgs(argv) {
-  const out = { frontPort: 3000, apiPort: 8000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false, dev: false };
+  const out = { frontPort: 13000, apiPort: 18000, host: '127.0.0.1', allowedOrigins: '', authToken: '', insecureNoAuth: false, dataDir: null, noOpen: false, dev: false };
   const fail = (msg) => { throw new UsageError(msg); };
   const take = (i) => {
     if (i + 1 >= argv.length) fail(`expected a value after ${argv[i]}`);
@@ -154,8 +154,8 @@ function printHelp() {
     '  stop                       Stop the dashboard (not available yet).',
     '',
     'Options:',
-    '  -p, --port <N>            Frontend (Next.js) port. Default 3000.',
-    '  -a, --api-port <N>        Backend (FastAPI) port. Default 8000.',
+    '  -p, --port <N>            Frontend (Next.js) port. Default 13000.',
+    '  -a, --api-port <N>        Backend (FastAPI) port. Default 18000.',
     '  -d, --data-dir <P>        Where TokenTelemetry stores its config + state.',
     '                            Default ~/.tokentelemetry (sets TOKENTELEMETRY_DATA_DIR).',
     '      --host <ADDR>         Backend bind address. Default 127.0.0.1 (loopback).',
@@ -175,9 +175,9 @@ function printHelp() {
     '  -h, --help               Show this help.',
     '',
     'Examples:',
-    '  start.sh                                 # 3000 / 8000, localhost only',
+    '  start.sh                                 # 13000 / 18000, localhost only',
     '  start.sh --port 4000 --api-port 9000     # custom both',
-    '  start.sh -p 4000                         # frontend on 4000, backend stays 8000',
+    '  start.sh -p 4000                         # frontend on 4000, backend stays 18000',
     '  start.sh --host 0.0.0.0 \\               # expose on a tailnet/LAN (token auto-gen)',
     '    --allowed-origins box.tailnet.ts.net,100.64.0.1',
     '  start.sh --data-dir /mnt/d/tt-data       # store config + state on D:',
@@ -292,18 +292,49 @@ function which(cmd) {
   return probe.status === 0 ? probe.stdout.trim().split(/\r?\n/)[0] : null;
 }
 
+// True when `version` ("22.14.0", "v22.14.0", "23.0.0-nightly…") is at or
+// above `floor` ("22.22.0"). Missing parts count as 0.
+function nodeAtLeast(version, floor) {
+  const parts = (v) => String(v).replace(/^v/, '').split('-')[0].split('.').map((n) => Number(n) || 0);
+  const a = parts(version);
+  const b = parts(floor);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return true;
+}
+
+const NODE_MIN = '20.9.0';
+// The newest Node any frontend dependency declares: @lobehub/ui (a peer of
+// @lobehub/icons) asks for >=22.22.0. The dashboard installs, builds and runs
+// on 22.14 regardless (checked for issue #396), so below this we explain npm's
+// EBADENGINE warning instead of refusing to start.
+const NODE_RECOMMENDED = '22.22.0';
+
 function checkNode() {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major < 20 || (major === 20 && minor < 9)) {
-    die(`Node.js 20.9+ required (detected ${process.versions.node}).`);
+  if (!nodeAtLeast(process.versions.node, NODE_MIN)) {
+    die(
+      `TokenTelemetry requires Node.js >= ${NODE_MIN}.\n` +
+      `Detected: Node.js ${process.versions.node}.\n\n` +
+      'Please upgrade Node.js (https://nodejs.org/) and run this again.',
+    );
   }
 }
 
+function nodeEngineNote(version) {
+  if (nodeAtLeast(version, NODE_RECOMMENDED)) return null;
+  return [
+    `  Note: Node.js ${version} is older than ${NODE_RECOMMENDED}, which some dashboard`,
+    '  dependencies declare. npm will print "EBADENGINE Unsupported engine" warnings',
+    '  during this install; they are safe to ignore and TokenTelemetry still works.',
+    `  Upgrading to Node.js ${NODE_RECOMMENDED}+ (https://nodejs.org/) silences them.`,
+  ].join('\n');
+}
+
 function checkDesktopNode() {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  // Electron's current installer requires this newer Node line. Keep the
-  // ordinary dashboard's existing Node 20.9 floor unchanged.
-  if (major < 22 || (major === 22 && minor < 12)) {
+  // Electron's current installer requires this newer Node line. The ordinary
+  // dashboard keeps its lower NODE_MIN floor.
+  if (!nodeAtLeast(process.versions.node, '22.12.0')) {
     die(`TokenTelemetry Desktop requires Node.js 22.12+ (detected ${process.versions.node}).`);
   }
 }
@@ -360,6 +391,38 @@ function findUv() {
   if (process.env.TT_NO_UV === '1') return null;
   if (!which('uv')) return null;
   return runSoft('uv', ['--version'], { stdio: 'ignore' }) === 0 ? 'uv' : null;
+}
+
+// How to install frontend deps. Bun is used the way uv is on the backend:
+// only when already on PATH, never installed for the user, and TT_NO_BUN=1
+// forces npm. It also needs the committed package-lock.json, because Bun
+// migrates that lock (versions and sha512 integrity) into its own; without
+// one it would resolve versions itself, so that case stays on `npm install`.
+// Not on Windows: in CI a cold bun install there took ~95s against npm ci's
+// ~51s (on Linux bun was ~5s against ~23s).
+function frontendInstallPlan({ hasBun, hasLock, env = process.env, platform = process.platform }) {
+  if (!hasLock) return 'npm-install';
+  if (env.TT_NO_BUN === '1' || !hasBun || platform === 'win32') return 'npm-ci';
+  return 'bun';
+}
+
+// A one-line nudge, printed only while an install is actually running, when
+// the faster tool is missing. Never for someone who opted out with TT_NO_*,
+// and no Bun tip on Windows, where the launcher doesn't use it.
+function speedupTip(tool, { present, env = process.env, platform = process.platform }) {
+  if (present) return null;
+  if (tool === 'uv' && env.TT_NO_UV !== '1') {
+    return '  Tip: install uv (https://docs.astral.sh/uv/) and TokenTelemetry sets up and updates its Python side several times faster.';
+  }
+  if (tool === 'bun' && env.TT_NO_BUN !== '1' && platform !== 'win32') {
+    return '  Tip: install Bun (https://bun.sh) and TokenTelemetry installs and updates the dashboard several times faster.';
+  }
+  return null;
+}
+
+function findBun() {
+  if (isWindows || process.env.TT_NO_BUN === '1' || !which('bun')) return false;
+  return runSoft('bun', ['--version'], { stdio: 'ignore' }) === 0;
 }
 
 function venvPipWorks() {
@@ -445,6 +508,8 @@ function ensureBackend() {
     // pip — no need to pay a Python startup on every launch.
     ensureVenvPip();
     console.log('→ installing backend dependencies…');
+    const tip = speedupTip('uv', { present: false });
+    if (tip) console.log(tip);
     run(venvPython, ['-m', 'pip', 'install', '--quiet', ...hashFlags, '-r', reqFile], { cwd: backendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
@@ -481,15 +546,38 @@ function ensureFrontend() {
   console.log(fs.existsSync(nmDir)
     ? '→ frontend dependencies changed; updating…'
     : '→ installing frontend dependencies (first run can take a minute)…');
+  const engineNote = nodeEngineNote(process.versions.node);
+  if (engineNote) console.log(engineNote);
   // Prefer `npm ci` — it installs exactly what package-lock.json pins (supply-chain
   // hardening: a compromised registry can't slip a newer, malicious version past a
   // committed lockfile) and is faster since it skips dependency resolution. Older
   // checkouts predating the committed lockfile (or a repo where it was deleted)
   // fall back to `npm install` so those users aren't broken.
-  if (fs.existsSync(lockPath)) {
-    run('npm', ['ci'], { cwd: frontendDir });
-  } else {
-    run('npm', ['install'], { cwd: frontendDir });
+  const hasBun = findBun();
+  const plan = frontendInstallPlan({ hasBun, hasLock: fs.existsSync(lockPath) });
+  const bunTip = speedupTip('bun', { present: hasBun });
+  if (bunTip) console.log(bunTip);
+  let installed = false;
+  if (plan === 'bun') {
+    // Bun writes a bun.lock migrated from package-lock.json. Remove it before
+    // and after: a leftover one would win over a later package-lock.json bump
+    // (a transitive security fix) and quietly reinstall the old versions.
+    const bunLock = path.join(frontendDir, 'bun.lock');
+    const dropBunLock = () => { try { fs.rmSync(bunLock, { force: true }); } catch {} };
+    console.log('→ using bun (set TT_NO_BUN=1 to use npm instead)');
+    dropBunLock();
+    try {
+      // At bun's default of 48 parallel downloads, cold installs occasionally
+      // stalled for minutes; 16 measured a steady ~14s (npm ci: ~15s cold).
+      installed = runSoft('bun', ['install', '--frozen-lockfile', '--network-concurrency=16'], { cwd: frontendDir }) === 0;
+    } finally {
+      dropBunLock();
+    }
+    if (!installed) console.log('→ bun install failed, falling back to npm ci…');
+  }
+  if (!installed) {
+    // `npm ci` clears node_modules first, so a half-finished bun install is harmless.
+    run('npm', [plan === 'npm-install' ? 'install' : 'ci'], { cwd: frontendDir });
   }
   try { fs.writeFileSync(stampPath, currentSha); } catch {}
 }
@@ -909,6 +997,10 @@ module.exports = {
   shouldOpenBrowser,
   openBrowser,
   checkDesktopNode,
+  nodeAtLeast,
+  nodeEngineNote,
+  frontendInstallPlan,
+  speedupTip,
   start,
   main,
   cmdMenubar,

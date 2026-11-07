@@ -48,7 +48,7 @@ export function TH({ className, ...rest }: React.ThHTMLAttributes<HTMLTableCellE
   return (
     <th
       className={cn(
-        "px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--tt-fg-dim)] border-b border-[var(--tt-border)] whitespace-nowrap",
+        "px-4 py-2.5 text-[12px] font-medium text-[var(--tt-fg-dim)] border-b border-[var(--tt-border)] whitespace-nowrap",
         className,
       )}
       {...rest}

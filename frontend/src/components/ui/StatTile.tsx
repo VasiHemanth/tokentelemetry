@@ -19,15 +19,9 @@ export function StatTile({ label, value, hint, icon, delta, accent, className }:
         className,
       )}
     >
-      {accent && (
-        <span
-          aria-hidden
-          className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full"
-          style={{ backgroundColor: accent, boxShadow: `0 0 12px ${accent}55` }}
-        />
-      )}
+      {accent && <span aria-hidden className="absolute left-0 top-4 bottom-4 w-[2px] rounded-r-full" style={{ backgroundColor: accent }} />}
       <div className="flex items-start justify-between gap-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+        <div className="text-[13px] font-medium text-[var(--tt-fg-muted)]">
           {label}
         </div>
         {icon && (
@@ -48,7 +42,7 @@ export function StatTile({ label, value, hint, icon, delta, accent, className }:
       </div>
       {hint && (
         <div
-          className="mt-2 text-[11px] leading-snug text-[var(--tt-fg-dim)] tabular"
+          className="mt-2 text-[12px] leading-snug text-[var(--tt-fg-dim)] tabular"
           title={typeof hint === "string" ? hint : undefined}
         >
           {hint}

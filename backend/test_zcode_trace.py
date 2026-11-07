@@ -22,7 +22,7 @@ def _seed_trace_db(db: Path):
             ({"type": "reasoning", "text": "thinking...", "_mid": "sess_t-m1"}, 1050),
             ({"type": "tool", "tool": "Read", "callID": "c9", "state": {},
               "_mid": "sess_t-m1"}, 1100),
-            (_step_finish(10, 5, 0), 1150),
+            ({**_step_finish(10, 5, 0), "_mid": "sess_t-m1"}, 1150),
             ({"type": "text", "text": "hi!", "_mid": "sess_t-m1"}, 1200),
         ],
     }])
@@ -35,7 +35,7 @@ def test_zcode_detail_events_match_opencode_contract(tmp_path, monkeypatch):
     result = asyncio.run(main.get_session_detail("sess_t", "zcode"))
     kinds = [e["type"] for e in result]
     assert kinds == ["user", "assistant_thinking", "tool_call", "assistant"]
-    # step-finish is not an event; its tokens attach to the last prior event.
+    # A step with visible output attaches usage to its own last event.
     assert result[2]["payload"]["tool"] == "Read"
     assert result[2]["tokens"]["input"] == 10
     assert result[3]["payload"]["content"] == "hi!"
