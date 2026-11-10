@@ -5,7 +5,7 @@ description: Expose the TokenTelemetry dashboard to other devices — tailnet, L
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-TokenTelemetry is **local-first** and binds to `127.0.0.1` by default. Remote access is opt-in and token-gated. Loopback requests (your browser on the same machine) are always exempt from the token requirement — the default local experience is unchanged.
+TokenTelemetry is **local-first** and binds to `127.0.0.1` by default. Remote access is opt-in and token-gated. Direct loopback requests (your browser on the same machine) are always exempt from the token requirement — the default local experience is unchanged. A request that reaches the backend through a reverse proxy is not a direct loopback request, even when the proxy runs on the same machine; see [Behind a reverse proxy](#behind-a-reverse-proxy).
 
 <Callout type="warn">
 **The token is the security boundary, not CORS.** CORS only restrains browsers; it doesn't stop direct HTTP clients (`curl`, scripts, other machines). Always use the token on any non-loopback bind. Only use `--insecure-no-auth` on a fully trusted private network.
@@ -48,10 +48,12 @@ Use this pattern when you can reach the machine directly:
 
 Remote clients can authenticate in two ways:
 
-- **Authorization header:** `Authorization: Bearer <token>` (for API clients)
-- **URL parameter:** `?token=<token>` (for the initial browser load and for image/artifact links)
+- **Authorization header:** `Authorization: Bearer <token>` (for API clients). Works for every request.
+- **URL parameter:** `?token=<token>` (for the initial browser load and for image/artifact links). The API accepts this form on `GET` and `HEAD` requests only; anything that changes state must send the header.
 
 The frontend stores the token after the first load and strips it from the URL bar. Subsequent navigations within the same browser session are transparent.
+
+A token in a URL is easier to leak than one in a header, so prefer the header in scripts. To limit the exposure of the URL form, the backend redacts `token=` values in its access log and, while a token is configured, sends `Referrer-Policy: no-referrer` on its responses so the URL is not passed on to other sites. Neither covers logs written by something in front of the backend: if you run a reverse proxy, redact the `token` query parameter in its access log too. If a token may have leaked, restart to rotate it (or pass a new `--auth-token`).
 
 ### Supplying a fixed token
 
@@ -77,6 +79,29 @@ If you use a specific IP rather than `0.0.0.0`, you don't need to repeat it in `
 ```
 
 With `0.0.0.0` (wildcard), Next.js can't derive a single hostname, so you still need `--allowed-origins`.
+
+## Behind a reverse proxy
+
+A reverse proxy on the same machine as the backend (`tailscale serve`, Caddy, nginx, …) connects to it from `127.0.0.1` on behalf of every remote user. To keep those users from inheriting the loopback exemption, the backend treats a loopback request as remote, and requires the token, whenever a token is configured and the request carries any of these headers:
+
+`Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `Via`
+
+These headers are only ever used to withdraw the exemption. They never grant access, so sending them from a remote client achieves nothing.
+
+What this means for you:
+
+- **Your proxy must add at least one of those headers.** `tailscale serve` and Caddy's `reverse_proxy` send `X-Forwarded-For` by default. A bare nginx `proxy_pass` does **not**; add it explicitly:
+  ```nginx
+  location / {
+      proxy_pass http://127.0.0.1:18000;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  ```
+  A proxy that forwards without any of these headers is indistinguishable from a local browser, and its users will not be asked for the token.
+- **Set a token even if the backend stays on loopback.** The launcher only generates a token for a non-loopback `--host`. If you keep the default bind and publish it through a proxy, export `TT_AUTH_TOKEN` yourself; without one the gate is off and the proxy is your only access control.
+- **Through the proxy, everyone needs the token**, including a browser on the server itself, and the "Connect a device" panel is only available when the dashboard is opened directly on `localhost`.
+
+Containers: with the provided `compose.yml` the backend sees the container network's gateway as the client address, not loopback, so once `TT_AUTH_TOKEN` is set every browser is prompted, local or not.
 
 ## SSH tunnel access (no port changes, VPS)
 
@@ -105,7 +130,7 @@ Then open **http://localhost:13000** on your laptop.
 Forward **both** ports (`13000` and `18000`). A single-port forward (`-L 13000:...` only) shows a blank dashboard because the frontend tries to reach the backend at `localhost:18000` on your laptop instead of the remote machine.
 </Callout>
 
-This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because both services stay on loopback.
+This pattern requires no firewall changes and reuses your existing SSH authentication. No token is required because both services stay on loopback and the tunnel adds no forwarding headers.
 
 ## Disabling the token (trusted tailnet only)
 
