@@ -4458,9 +4458,14 @@ def _cline_loop_specs(db_path: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _scan_cline_sessions() -> List[Dict[str, Any]]:
+def _scan_cline_sessions(incomplete_agents: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
     """Scan Cline sessions from BOTH stores it writes to, deduping by session id
     (the CLI row wins when a session id appears in both).
+
+    ``incomplete_agents`` is an optional out-param: "cline" is added when a
+    store exists but could not be read, so the caller can tell "read failed"
+    from "read fine, zero sessions" and keep ``mark_absent`` off Cline's
+    durable rows for that scan.
 
     (a) CLI: SQLite ``sessions.db`` under ``CLINE_DIR/data/db/`` — verified schema
     has a ``sessions`` table with session_id/started_at/.../metadata_json/messages_path.
@@ -4504,6 +4509,8 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
             logging.getLogger("tokentelemetry.cline").warning(
                 "Cline SQLite scan failed (%s): %s", db_path.name, _exc, exc_info=True
             )
+            if incomplete_agents is not None:
+                incomplete_agents.add("cline")
 
         # Cline spawns subagents/teams: each subagent is its OWN row with
         # is_subagent=1 and parent_session_id set, while the parent's
@@ -4650,7 +4657,13 @@ def _scan_cline_sessions() -> List[Dict[str, Any]]:
         try:
             with open(history_path, "r", encoding="utf-8", errors="replace") as f:
                 history = json.load(f)
-        except Exception:
+        except Exception as _exc:
+            import logging
+            logging.getLogger("tokentelemetry.cline").warning(
+                "Cline VS Code history scan failed (%s): %s", history_path.name, _exc, exc_info=True
+            )
+            if incomplete_agents is not None:
+                incomplete_agents.add("cline")
             history = []
 
         if isinstance(history, list):
@@ -8000,7 +8013,10 @@ def _apply_codex_cache_hit(sess: Dict[str, Any], cached: Dict[str, Any]) -> None
     ]
 
 
-def _scan_sessions_sync():
+def _scan_sessions_sync(incomplete_agents: Optional[Set[str]] = None):
+    # incomplete_agents (optional out-param): agents whose source existed but
+    # could not be fully read this scan. Their missing sessions are "unknown",
+    # not "gone", so the persist path must not mark them absent.
     sessions = []
     aliases = _load_project_aliases()
 
@@ -9685,7 +9701,7 @@ def _scan_sessions_sync():
     sessions.extend(_scan_grok_sessions())
 
     # 8b. Cline — CLI SQLite store + VS Code extension JSON store
-    sessions.extend(_scan_cline_sessions())
+    sessions.extend(_scan_cline_sessions(incomplete_agents))
 
     # 8b2. Pi Coding Agent — one JSONL per session under ~/.pi/agent/sessions/
     sessions.extend(_scan_pi_sessions())
@@ -9910,6 +9926,8 @@ def _scan_sessions_sync():
                 "Hermes SQLite scan failed (%s, profile=%s): %s",
                 db_path.name, h_profile, _exc, exc_info=True,
             )
+            if incomplete_agents is not None:
+                incomplete_agents.add("hermes")
     # Hermes hierarchy: children carry parent_session_id (pre-aggregated tokens
     # of their own, already in totals) — annotate parents, never re-sum.
     for h_sess in hermes_by_id.values():
@@ -10021,7 +10039,8 @@ def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:
 
 
 def _persist_history_async(data: List[Dict[str, Any]],
-                           scan_started_at: Optional[str] = None) -> None:
+                           scan_started_at: Optional[str] = None,
+                           incomplete_agents: Optional[Set[str]] = None) -> None:
     """Schedule the durable-history write off the request path. Fire-and-forget:
     failures are logged inside the store and never surface to the caller.
 
@@ -10029,7 +10048,11 @@ def _persist_history_async(data: List[Dict[str, Any]],
     Forwarded to ``upsert_sessions`` (anchors ``last_seen_at`` to the scan's
     start so the conflict-clause recency guard is accurate) and to
     ``mark_absent`` (so rows upserted by a newer concurrent scan are not
-    flagged absent by this older scan's persist job)."""
+    flagged absent by this older scan's persist job).
+
+    ``incomplete_agents`` names agents whose source failed to read this scan;
+    ``mark_absent`` leaves their rows alone, because a session missing from a
+    failed read is not evidence that it left the disk."""
     import history_store
 
     def _work() -> None:
@@ -10039,6 +10062,7 @@ def _persist_history_async(data: List[Dict[str, Any]],
                 {(s.get("agent"), s.get("id")) for s in data
                  if s.get("agent") and s.get("id")},
                 scan_started_at=scan_started_at,
+                skip_agents=incomplete_agents,
             )
             _archive_opted_in_transcripts(data)
         except Exception as e:  # noqa: BLE001
@@ -10126,7 +10150,8 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             # mark_absent uses it to skip rows a newer concurrent scan upserted
             # after this point (U13 / U14).
             scan_started_at = datetime.now(timezone.utc).isoformat()
-            data = await _asyncio.to_thread(_scan_sessions_sync)
+            incomplete_agents: Set[str] = set()
+            data = await _asyncio.to_thread(_scan_sessions_sync, incomplete_agents)
             _sessions_cache["data"] = data
             _sessions_cache["at"] = _time.monotonic()
             _log.info("sessions scan: %d entries in %.0fms", len(data), (_time.monotonic() - t0) * 1000)
@@ -10135,7 +10160,8 @@ async def get_sessions_cached(fresh: bool = False) -> List[Dict[str, Any]]:
             # outlives the agents' own transcript pruning. Fire-and-forget on a
             # worker thread — a store failure must never break a request, and the
             # write must not add latency to this scan.
-            _persist_history_async(data, scan_started_at=scan_started_at)
+            _persist_history_async(data, scan_started_at=scan_started_at,
+                                   incomplete_agents=incomplete_agents)
         except Exception as e:
             _log.exception("sessions scan failed: %s", e)
             # If we have a previous value, keep serving it rather than 500-ing.
