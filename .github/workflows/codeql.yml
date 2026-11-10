@@ -1,0 +1,57 @@
+name: CodeQL
+
+# Static analysis for the two languages that handle untrusted input here: the
+# Python backend parses agent logs (prompts, code, paths written by other
+# tools) and serves them over HTTP, and the JS/TS side covers the dashboard,
+# the launcher (bin/), the desktop shell and the docs site. Results show up
+# under Security > Code scanning; they do not fail the PR check by themselves
+# unless a ruleset is configured to require them.
+#
+# If the repository's "CodeQL default setup" is switched on in Settings, switch
+# it off before merging this: GitHub rejects uploads from an advanced workflow
+# while default setup is active.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Mondays 04:30 UTC: picks up new queries even in a week with no pushes.
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+# Nothing by default; the job below asks for the three scopes CodeQL needs.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write  # upload results to code scanning
+      contents: read          # check out the code
+      actions: read           # read the run's own metadata for the upload
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both are interpreted languages, so there is no build step.
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
