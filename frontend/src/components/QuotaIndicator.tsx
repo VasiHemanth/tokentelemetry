@@ -48,7 +48,10 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
 
   const providers = Object.entries(data?.providers ?? {});
   const unavailable = Object.values(data?.capabilities ?? {}).filter((c) => c.state !== "available");
-  if (providers.length === 0 && unavailable.length === 0) return null;
+  // A response that carries an error is "could not read", not "nothing
+  // configured": keep the control and let the panel say why it is empty.
+  const failure = data?.errors?.find((e) => e.message)?.message;
+  if (providers.length === 0 && unavailable.length === 0 && !failure) return null;
 
   const tone = worst && worst.pct >= QUOTA_WARN_AT ? quotaColor(worst.pct) : undefined;
   const reading = worst ? `${Math.round(worst.pct)}%` : null;
@@ -113,17 +116,18 @@ export default function QuotaIndicator({ collapsed }: { collapsed: boolean }) {
         </div>
       )}
 
-      {open && <Panel collapsed={collapsed} providers={providers} unavailable={unavailable} />}
+      {open && <Panel collapsed={collapsed} providers={providers} unavailable={unavailable} failure={failure} />}
     </div>
   );
 }
 
 function Panel({
-  collapsed, providers, unavailable,
+  collapsed, providers, unavailable, failure,
 }: {
   collapsed: boolean;
   providers: [string, QuotaSnapshot][];
   unavailable: QuotaCapability[];
+  failure?: string;
 }) {
   const [refreshing, setRefreshing] = useState(false);
   const { refresh } = useQuotas();
@@ -162,7 +166,7 @@ function Panel({
       </div>
 
       <div className="overflow-y-auto divide-y divide-[var(--tt-border)]">
-        <PlanLimitsList providers={providers} />
+        <PlanLimitsList providers={providers} failure={failure} />
       </div>
 
       <UnavailableFooter unavailable={unavailable} />

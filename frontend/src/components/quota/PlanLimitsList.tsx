@@ -85,15 +85,24 @@ export function ProviderRows({ providerId, snapshot }: { providerId: string; sna
  *
  * The provider about to cut you off is the one worth reading. A provider with
  * only balances has no window to rank and sorts last rather than dropping out.
+ *
+ * `failure` is the response's own error message. With no provider to list it
+ * replaces the empty-state line, so "could not read" is not shown as "nothing
+ * is configured".
  */
-export function PlanLimitsList({ providers }: { providers: [string, QuotaSnapshot][] }) {
+export function PlanLimitsList({
+  providers, failure,
+}: {
+  providers: [string, QuotaSnapshot][];
+  failure?: string;
+}) {
   const ordered = [...providers].sort(
     ([a, sa], [b, sb]) => (worstWindowFor(b, sb)?.pct ?? -1) - (worstWindowFor(a, sa)?.pct ?? -1));
 
   if (ordered.length === 0) {
     return (
       <div className="px-4 py-8 text-center text-[12px] text-[var(--tt-fg-dim)]">
-        No agent is reporting a plan limit yet.
+        {failure ?? "No agent is reporting a plan limit yet."}
       </div>
     );
   }

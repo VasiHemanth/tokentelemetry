@@ -23,6 +23,7 @@ from quotas import (
     GeminiQuotaProvider,
     GrokQuotaProvider,
     OpenCodeQuotaProvider,
+    QuotaResource,
     QuotaService,
     QuotaSnapshot,
     StaticQuotaProvider,
@@ -606,10 +607,11 @@ def test_a_poll_that_loses_the_lock_serves_the_cache_without_waiting(tmp_path):
 
     assert elapsed < 1.0, "a poll must not queue behind another process's refresh"
     assert result["providers"]["opencode"]["plan"] == "cached"
-    # Nothing is reported: the snapshot carries its own fetchedAt/stale, so the
-    # caller can already see how old these numbers are.
-    assert result["errors"] == []
     assert result["providers"]["opencode"]["stale"] is True
+    # The lost lock is still reported. A surface that hides stale snapshots
+    # (the menu bar) would otherwise have nothing to show and no reason why.
+    assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
+    assert result["errors"][0]["message"]
 
 
 def test_losing_the_lock_with_no_cache_reports_an_error_rather_than_looking_empty(tmp_path):
@@ -625,6 +627,72 @@ def test_losing_the_lock_with_no_cache_reports_an_error_rather_than_looking_empt
     assert result["providers"] == {}
     assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
     assert "no snapshot has been stored yet" in result["errors"][0]["message"]
+
+
+def test_an_explicit_refresh_that_times_out_on_the_lock_reports_it(tmp_path, monkeypatch):
+    """Issue #346: a lock timeout is an error, not an empty result."""
+    monkeypatch.setattr(quotas_module, "CACHE_LOCK_TIMEOUT_SECONDS", 0.1)
+    cache_path = tmp_path / "quotas.json"
+    written_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    _seed_cache(cache_path, written_at)
+    service = QuotaService([_LockLoser()], cache_path=cache_path,
+                           now=lambda: written_at + timedelta(seconds=30))
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        started = time.monotonic()
+        result = service.collect(force=True)
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, "the wait is bounded by the configured lock timeout"
+    assert result["providers"]["opencode"]["plan"] == "cached"
+    assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
+    assert result["errors"][0]["message"]
+
+
+def test_losing_the_lock_tolerates_a_half_written_cache_file(tmp_path):
+    cache_path = tmp_path / "quotas.json"
+    # Cut off inside a multi-byte character: neither valid JSON nor valid UTF-8.
+    cache_path.write_bytes(b'{"providers": {"opencode": {"displayName": "\xe2\x97')
+    service = QuotaService([_LockLoser()], cache_path=cache_path,
+                           now=lambda: datetime(2026, 9, 10, tzinfo=timezone.utc))
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        result = service.collect()
+
+    assert result["providers"] == {}
+    assert [error["providerId"] for error in result["errors"]] == ["quotaCache"]
+
+
+def test_menubar_does_not_render_no_data_for_a_lost_lock(tmp_path):
+    """Issue #346: "couldn't read" must not look like "nothing configured"."""
+    from menubar.presentation import build_menu_presentation
+
+    class Writer(_LockLoser):
+        def refresh(self, now):
+            return QuotaSnapshot(self.provider_id, self.display_name, now, {
+                "weekly": QuotaResource("consumption", "percent", used=95, limit=100),
+            })
+
+    written_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    for name, seeded in (("cached", True), ("empty", False)):
+        cache_path = tmp_path / name / "quotas.json"
+        if seeded:
+            QuotaService([Writer()], cache_path=cache_path, now=lambda: written_at).collect(force=True)
+        # Past the freshness window, so the menu bar hides the cached rows.
+        later = written_at + FRESHNESS + timedelta(seconds=1)
+        service = QuotaService([_LockLoser()], cache_path=cache_path, now=lambda: later)
+
+        with _CacheFileLock(cache_path) as held:
+            assert held
+            result = service.collect()
+
+        assert ("opencode" in result["providers"]) is seeded
+        presentation = build_menu_presentation(result, now=later)
+        assert presentation.state == "failure", name
+        assert presentation.title != "◔ No quota data"
+        assert presentation.failure_message == result["errors"][0]["message"]
 
 
 def test_a_poll_waits_not_at_all_but_an_explicit_refresh_still_waits(tmp_path, monkeypatch):
