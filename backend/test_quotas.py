@@ -614,6 +614,22 @@ def test_a_poll_that_loses_the_lock_serves_the_cache_without_waiting(tmp_path):
     assert result["errors"][0]["message"]
 
 
+def test_a_poll_that_loses_the_lock_with_a_fresh_cache_stays_quiet(tmp_path):
+    """The ordinary case: current numbers are served, so nothing is wrong."""
+    cache_path = tmp_path / "quotas.json"
+    written_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    _seed_cache(cache_path, written_at)
+    service = QuotaService([_LockLoser()], cache_path=cache_path,
+                           now=lambda: written_at + timedelta(seconds=30))
+
+    with _CacheFileLock(cache_path) as held:
+        assert held
+        result = service.collect()
+
+    assert result["providers"]["opencode"]["stale"] is False
+    assert result["errors"] == []
+
+
 def test_losing_the_lock_with_no_cache_reports_an_error_rather_than_looking_empty(tmp_path):
     """Without this, the response is identical to "no agents configured"."""
     cache_path = tmp_path / "quotas.json"

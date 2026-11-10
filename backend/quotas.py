@@ -1332,8 +1332,9 @@ class QuotaService:
             #
             # Each snapshot already carries fetchedAt / expiresAt / stale, so the
             # caller can see for itself how old the numbers are. The lost lock
-            # is reported as well, because a response with no capabilities and
-            # no errors reads as "no agents configured".
+            # is reported only when there is no fresh snapshot to serve, or
+            # when an explicit refresh timed out: a response with nothing
+            # current and no errors reads as "no agents configured".
             with _CacheFileLock(
                 self.cache_path,
                 timeout=CACHE_LOCK_TIMEOUT_SECONDS if force else 0,
@@ -1348,17 +1349,29 @@ class QuotaService:
                     # snapshot the response is otherwise indistinguishable from
                     # "no agents configured"; with only stale ones the menu
                     # bar, which hides stale rows, would say "No quota data".
-                    errors: List[Dict[str, str]] = [{
-                        "providerId": "quotaCache",
-                        "message": (
-                            "Another process is refreshing the quota cache, so "
-                            "the last stored snapshot was not refreshed."
-                            if self._snapshots else
-                            "Another process is refreshing the quota "
-                            "cache and no snapshot has been stored yet."
-                        ),
-                    }]
-                    return self._wire(self.now(), errors)
+                    #
+                    # A background poll that still has a fresh snapshot to
+                    # serve stays quiet (the ordinary case: nothing is wrong
+                    # and the numbers are current). An explicit refresh that
+                    # timed out always says so, because someone asked for it.
+                    lost_at = self.now()
+                    has_fresh = any(
+                        lost_at < snapshot.fetched_at + FRESHNESS
+                        for snapshot in self._snapshots.values()
+                    )
+                    errors: List[Dict[str, str]] = []
+                    if force or not has_fresh:
+                        errors.append({
+                            "providerId": "quotaCache",
+                            "message": (
+                                "Another process is refreshing the quota cache, so "
+                                "the last stored snapshot was not refreshed."
+                                if self._snapshots else
+                                "Another process is refreshing the quota "
+                                "cache and no snapshot has been stored yet."
+                            ),
+                        })
+                    return self._wire(lost_at, errors)
 
                 # Reload *inside* the process lock. A long-lived dashboard or
                 # menubar instance may have loaded a stale cache before another
