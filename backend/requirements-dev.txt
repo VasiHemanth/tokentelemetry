@@ -1,0 +1,16 @@
+# Test-only dependencies. Never installed on a user machine: bin/cli.js and
+# backend/Dockerfile read requirements.lock only. CI (.github/workflows/test.yml)
+# installs requirements.lock and then requirements-dev.lock, both with
+# --require-hashes.
+#
+# pytest: 50 of the backend test files have no __main__ runner, and
+#   conftest.py is a pytest fixture.
+# packaging: imported by test_requirements_lock.py.
+#
+# Regenerate the lock (constrained by the runtime lock so the two never pin a
+# shared package at different versions):
+#   uv pip compile --universal --generate-hashes --python-version 3.9 \
+#       backend/requirements-dev.txt -c backend/requirements.lock \
+#       -o backend/requirements-dev.lock
+pytest>=8.0,<9.0
+packaging>=24.0

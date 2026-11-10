@@ -14,6 +14,8 @@ node_modules/
 frontend/bun.lock
 out/
 *.tsbuildinfo
+# compiled *.test.ts output from the Tests workflow's tsc step
+frontend/.test-out/
 
 # --- Python / backend ---
 backend/venv/
