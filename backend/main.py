@@ -474,6 +474,17 @@ def _cors_origin_regex() -> str:
 # server — and the default loopback-only setup — is unaffected. With no token
 # set the gate is a no-op: default behavior is byte-for-byte unchanged.
 #
+# The loopback exemption is about the *user* being on this machine, and the
+# peer address only proves that when nothing sits in between. A reverse proxy
+# on the same host (tailscale serve, Caddy, nginx, ...) connects from 127.0.0.1
+# on behalf of remote users, so a loopback peer that carries forwarding headers
+# is treated as remote and must present the token. Those headers are only ever
+# used to WITHDRAW the exemption, never to grant it: a client can spoof them,
+# and all that buys is being asked for the token.
+#
+# The `?token=` form exists for <img>/<a> loads, which are always GET, so it is
+# honoured on GET/HEAD only; a state-changing request must use the header.
+#
 # IMPORTANT: this is registered BEFORE CORSMiddleware so CORS stays the
 # *outermost* layer (Starlette wraps the most-recently-added middleware on the
 # outside). That lets CORS answer OPTIONS preflight directly — browsers send no
@@ -499,14 +510,53 @@ def _is_loopback(host: Optional[str]) -> bool:
     return False
 
 
+# Headers a proxy adds when it relays a request for someone else. Presence of
+# any of them means the TCP peer is not the end user.
+_FORWARDING_HEADERS = (
+    "forwarded", "x-forwarded-for", "x-real-ip",
+    "x-forwarded-host", "x-forwarded-proto", "via",
+)
+
+
+def _is_forwarded(request: Request) -> bool:
+    """True when the request says it was relayed by a proxy."""
+    return any(h in request.headers for h in _FORWARDING_HEADERS)
+
+
+def _is_local_request(request: Request) -> bool:
+    """True only for a direct (un-proxied) request from a loopback peer. This,
+    not _is_loopback() alone, is what earns the auth exemption."""
+    client = request.client.host if request.client else None
+    return _is_loopback(client) and not _is_forwarded(request)
+
+
 def _presented_token(request: Request) -> str:
     """Pull the caller's token from the Authorization header, falling back to a
     `?token=` query param so browser-native resource loads (artifact <img>/<a>,
-    which can't set headers) can authenticate too."""
+    which can't set headers) can authenticate too. The query form is accepted
+    on GET/HEAD only, which is all those loads ever send."""
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[len("Bearer "):].strip()
+    scheme, _, value = auth.partition(" ")
+    if scheme.lower() == "bearer":  # auth scheme is case-insensitive (RFC 7235)
+        return value.strip()
+    if request.method not in ("GET", "HEAD"):
+        return ""
     return (request.query_params.get("token") or "").strip()
+
+
+def _token_matches(presented: str, expected: str) -> bool:
+    """Constant-time comparison. Compares bytes: hmac.compare_digest() raises
+    TypeError on a non-ASCII str, which turned a junk token into a 500."""
+    if not presented:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _no_referrer(response):
+    """Remote mode only: keep a `?token=` URL out of Referer headers sent by
+    whatever the response loads or links to (an HTML artifact, for one)."""
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
 
 
 class RemoteAuthMiddleware(BaseHTTPMiddleware):
@@ -514,17 +564,15 @@ class RemoteAuthMiddleware(BaseHTTPMiddleware):
         token = os.environ.get("TT_AUTH_TOKEN", "").strip()
         if not token:
             return await call_next(request)  # gate disabled (local default)
-        client = request.client.host if request.client else None
-        if _is_loopback(client):
-            return await call_next(request)  # local is always exempt
-        presented = _presented_token(request)
-        if presented and hmac.compare_digest(presented, token):
-            return await call_next(request)
+        if _is_local_request(request):
+            return _no_referrer(await call_next(request))  # local is exempt
+        if _token_matches(_presented_token(request), token):
+            return _no_referrer(await call_next(request))
         # Never echo the expected token; just say what's needed.
-        return JSONResponse(
+        return _no_referrer(JSONResponse(
             status_code=401,
             content={"detail": "Remote access requires an access token.", "auth": "token"},
-        )
+        ))
 
 
 app.add_middleware(RemoteAuthMiddleware)
@@ -10189,6 +10237,8 @@ async def get_remote_access(request: Request):
     token = os.environ.get("TT_AUTH_TOKEN", "").strip()
     if not url or not token:
         return {"enabled": False}
+    if _is_forwarded(request):  # relayed by a local proxy: not actually local
+        raise HTTPException(status_code=403, detail="Not available remotely.")
     return {"enabled": True, "url": url, "token": token}
 
 
