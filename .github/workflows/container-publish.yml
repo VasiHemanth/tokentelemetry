@@ -67,6 +67,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Attach BuildKit attestations to the pushed image index: SLSA
+          # provenance (which commit and workflow built it) and an SPDX SBOM.
+          # Both are built into this action and need no extra secrets or
+          # permissions. Inspect with:
+          #   docker buildx imagetools inspect <image>:<tag> --format '{{ json .Provenance }}'
+          #   docker buildx imagetools inspect <image>:<tag> --format '{{ json .SBOM }}'
+          provenance: mode=max
+          sbom: true
 
   publish-frontend:
     runs-on: ubuntu-latest
@@ -108,3 +116,11 @@ jobs:
             NEXT_PUBLIC_API_PORT=18000
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Attach BuildKit attestations to the pushed image index: SLSA
+          # provenance (which commit and workflow built it) and an SPDX SBOM.
+          # Both are built into this action and need no extra secrets or
+          # permissions. Inspect with:
+          #   docker buildx imagetools inspect <image>:<tag> --format '{{ json .Provenance }}'
+          #   docker buildx imagetools inspect <image>:<tag> --format '{{ json .SBOM }}'
+          provenance: mode=max
+          sbom: true
