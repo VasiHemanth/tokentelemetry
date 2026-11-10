@@ -1330,9 +1330,11 @@ class QuotaService:
             # the Plan-limits UI for no reason. Poll with no wait; an explicit
             # refresh still waits, because someone is watching that one.
             #
-            # Nothing is reported for the ordinary case: each snapshot already
-            # carries fetchedAt / expiresAt / stale, so the caller can see for
-            # itself how old the numbers are.
+            # Each snapshot already carries fetchedAt / expiresAt / stale, so the
+            # caller can see for itself how old the numbers are. The lost lock
+            # is reported only when there is no fresh snapshot to serve, or
+            # when an explicit refresh timed out: a response with nothing
+            # current and no errors reads as "no agents configured".
             with _CacheFileLock(
                 self.cache_path,
                 timeout=CACHE_LOCK_TIMEOUT_SECONDS if force else 0,
@@ -1342,17 +1344,34 @@ class QuotaService:
                     # means this read is either the prior complete cache or the
                     # next complete cache; never write a competing snapshot.
                     self._load(reload=True)
+                    #
+                    # Not refreshing is an error, not an empty result. With no
+                    # snapshot the response is otherwise indistinguishable from
+                    # "no agents configured"; with only stale ones the menu
+                    # bar, which hides stale rows, would say "No quota data".
+                    #
+                    # A background poll that still has a fresh snapshot to
+                    # serve stays quiet (the ordinary case: nothing is wrong
+                    # and the numbers are current). An explicit refresh that
+                    # timed out always says so, because someone asked for it.
+                    lost_at = self.now()
+                    has_fresh = any(
+                        lost_at < snapshot.fetched_at + FRESHNESS
+                        for snapshot in self._snapshots.values()
+                    )
                     errors: List[Dict[str, str]] = []
-                    if not self._snapshots:
-                        # No cached snapshot exists yet, so the response would
-                        # otherwise be indistinguishable from "no agents
-                        # configured" and every surface would render empty.
+                    if force or not has_fresh:
                         errors.append({
                             "providerId": "quotaCache",
-                            "message": "Another process is refreshing the quota "
-                                       "cache and no snapshot has been stored yet.",
+                            "message": (
+                                "Another process is refreshing the quota cache, so "
+                                "the last stored snapshot was not refreshed."
+                                if self._snapshots else
+                                "Another process is refreshing the quota "
+                                "cache and no snapshot has been stored yet."
+                            ),
                         })
-                    return self._wire(self.now(), errors)
+                    return self._wire(lost_at, errors)
 
                 # Reload *inside* the process lock. A long-lived dashboard or
                 # menubar instance may have loaded a stale cache before another
@@ -1426,7 +1445,9 @@ class QuotaService:
                 for provider_id, raw in providers.items()
                 if isinstance(raw, dict) and (snapshot := QuotaSnapshot.from_wire(provider_id, raw, loaded_at))
             }
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError covers both invalid JSON and a file cut off inside a
+            # multi-byte character (UnicodeDecodeError).
             return
         self._snapshots = snapshots
 
