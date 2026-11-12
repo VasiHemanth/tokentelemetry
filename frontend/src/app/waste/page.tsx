@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { format } from "date-fns";
 import {
-  ShieldAlert, Info, Loader2, SearchCheck,
+  ShieldAlert, Info, Loader2, SearchCheck, ChevronRight, ChevronDown,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -18,6 +18,7 @@ import { AgentLogo } from "@/components/icons/AgentLogo";
 import { useTheme } from "@/components/ThemeProvider";
 import { formatCost } from "@/lib/format";
 import { projectBasename } from "@/lib/paths";
+import { WasteWhy } from "@/components/insights/WasteWhy";
 import {
   FLAG_INFO, WASTE_FLAGS, COLUMN_CAPABILITY, thresholdLines,
   type WasteResponse, type WasteFlag, type WasteAgentRow,
@@ -108,6 +109,7 @@ export default function WastePage() {
   const [customTo, setCustomTo] = useState("");
   const [selAgents, setSelAgents] = useState<string[]>([]);
   const [flagFilter, setFlagFilter] = useState<WasteFlag | "all">("all");
+  const [openRow, setOpenRow] = useState<string | null>(null);
 
   const queryPath = useMemo(() => {
     const p = new URLSearchParams();
@@ -386,7 +388,8 @@ export default function WastePage() {
                 <Table>
                   <THead>
                     <TR>
-                      <TH className="pl-5">Session</TH>
+                      <TH className="w-8 pl-3" />
+                      <TH>Session</TH>
                       <TH>Agent</TH>
                       <TH>Project</TH>
                       <TH>When</TH>
@@ -399,9 +402,24 @@ export default function WastePage() {
                   <TBody>
                     {shownSessions.map(s => {
                       const href = `/sessions/${s.id}?agent=${s.agent}&from=${encodeURIComponent(pathname)}`;
+                      const rowKey = `${s.agent}-${s.id}`;
+                      const open = openRow === rowKey;
                       return (
-                        <TR key={`${s.agent}-${s.id}`} interactive>
-                          <TD className="pl-5 max-w-[420px] truncate text-[var(--tt-fg)]">
+                        <Fragment key={rowKey}>
+                        <TR interactive>
+                          <TD className="w-8 pl-3">
+                            <button
+                              type="button"
+                              aria-expanded={open}
+                              aria-label={open ? "Hide where this was flagged" : "Show where this was flagged"}
+                              title="Show where in the session this happened"
+                              onClick={() => setOpenRow(open ? null : rowKey)}
+                              className="flex h-6 w-6 items-center justify-center rounded text-[var(--tt-fg-muted)] hover:bg-[var(--tt-sunken)] hover:text-[var(--tt-fg)]"
+                            >
+                              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                          </TD>
+                          <TD className="max-w-[420px] truncate text-[var(--tt-fg)]">
                             <Link href={href} className="block truncate">
                               {s.display || <span className="italic text-[var(--tt-fg-faint)]">No message content</span>}
                             </Link>
@@ -428,6 +446,14 @@ export default function WastePage() {
                             </div>
                           </TD>
                         </TR>
+                        {open && (
+                          <TR>
+                            <TD colSpan={9} className="bg-[var(--tt-sunken)]/40 px-5">
+                              <WasteWhy id={s.id} agent={s.agent} toolCalls={s.tool_calls} sessionHref={href} />
+                            </TD>
+                          </TR>
+                        )}
+                        </Fragment>
                       );
                     })}
                   </TBody>

@@ -148,3 +148,12 @@ export function thresholdLines(t: WasteThresholds): { flag: WasteFlag; text: str
     { flag: "no_artifact", text: `At least ${n(t.no_artifact_min_calls)} tool calls, no edits, no artifacts, and cost at or above the median session in range.` },
   ];
 }
+
+export interface WasteOccurrence { call: number | null; turn: number | null; repeat: boolean }
+
+/** GET /waste/session/{id}: computed on demand, never cached. */
+export interface WasteExplain {
+  rereads: Array<{ path: string; name: string; reads: number; repeats: number; edits: number; occurrences: WasteOccurrence[] }>;
+  retries: Array<{ tool: string; path: string | null; call: number | null; turn: number | null; count: number }>;
+  errors: { total: number; by_tool: Array<{ tool: string; count: number }>; turns: number[] };
+}

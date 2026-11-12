@@ -14419,6 +14419,24 @@ async def get_waste(
     return _waste.aggregate(items, cache_agents=cache_agents)
 
 
+@app.get("/waste/session/{session_id}")
+async def get_waste_session(session_id: str, agent: str):
+    """Where the repeats happened in one session. Re-parses that transcript on
+    demand: the answer names files, so it is never written to the cache."""
+    sessions = await get_sessions_cached()
+    s = next((x for x in sessions if x.get("id") == session_id and x.get("agent") == agent), None)
+    if s is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    def _build():
+        return _waste.explain(_waste_events(s, _waste_path_index([s])), s)
+
+    try:
+        return await _asyncio.to_thread(_build)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="transcript not found")
+
+
 if __name__ == "__main__":
     import uvicorn
     import logging

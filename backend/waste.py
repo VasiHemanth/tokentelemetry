@@ -314,6 +314,12 @@ class _Acc:
         self.turn_sizes: List[int] = []
         self._ag_last: Optional[Tuple[str, Optional[str]]] = None
         self._ag_last_dup = False
+        # Set only by explain(): where each repeat happened. Never cached.
+        self.detail: Optional[Dict[str, Any]] = None
+        self.live_turn: Optional[int] = None
+        self._run_meta: Optional[Dict[str, Any]] = None
+        self._call_meta: Dict[str, Dict[str, Any]] = {}
+        self._last_meta: Optional[Dict[str, Any]] = None
 
     def call(self, name: Any, args: Any, call_id: Any = None) -> None:
         if call_id:
@@ -330,6 +336,12 @@ class _Acc:
             except ValueError:
                 pass
         self.calls += 1
+        path = _path_of(args)
+        meta = {"tool": str(name or ""), "path": path, "call": self.calls,
+                "turn": self.live_turn if self.live_turn is not None else self.user_turns}
+        self._last_meta = meta
+        if self.detail is not None and call_id:
+            self._call_meta[str(call_id)] = meta
         h = arg_hash(args)
         if h is not None:
             self.args_seen = True
@@ -341,27 +353,35 @@ class _Acc:
         else:
             self._close_run()
             self._run_key, self._run_len = key, (1 if key is not None else 0)
+            self._run_meta = meta
 
         kind = _classify(name, args)
-        path = _path_of(args)
         if kind == "edit":
             self.edits += 1
             if path is None:
                 self._reads.clear()  # patch with unknown targets: forget all reads
             else:
                 self._reads.pop(path, None)
+                if self.detail is not None:
+                    self.detail["edits"][path] = self.detail["edits"].get(path, 0) + 1
         elif kind == "read" and path is not None:
             self.read_paths_seen = True
             rng = _range_of(args) if isinstance(args, dict) else ()
             seen = self._reads.setdefault(path, set())
-            if rng in seen:
+            repeat = rng in seen
+            if repeat:
                 self.rereads += 1
             else:
                 seen.add(rng)
+            if self.detail is not None:
+                self.detail["reads"].setdefault(path, []).append(
+                    {"call": meta["call"], "turn": meta["turn"], "repeat": repeat})
 
     def _close_run(self) -> None:
         if self._run_key is not None and self._run_len >= THRESHOLDS["retry_run_min"]:
             self.retries += self._run_len - 1
+            if self.detail is not None and self._run_meta:
+                self.detail["retries"].append({**self._run_meta, "count": self._run_len})
         self._run_key, self._run_len = None, 0
 
     def result(self, call_id: Any, is_error: Any) -> None:
@@ -374,6 +394,9 @@ class _Acc:
             self.error_flag_seen = True
             if is_error:
                 self.errors += 1
+                if self.detail is not None:
+                    m = self._call_meta.get(str(call_id)) if call_id else None
+                    self.detail["errors"].append(dict(m or self._last_meta or {"tool": "", "path": None, "call": None, "turn": None}))
 
     def usage(self, u: Any, usage_id: Any = None) -> None:
         if usage_id:
@@ -538,18 +561,21 @@ def _codex(ev: Dict[str, Any], acc: _Acc, cx: _CodexState) -> None:
             cx.record_sizes.append(n)
 
 
-def extract_signals(events: Iterable[Any], session: Dict[str, Any]) -> Dict[str, Any]:
+def extract_signals(events: Iterable[Any], session: Dict[str, Any],
+                    detail: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Per-session signal dict. A signal the trace cannot support is None.
 
     `events` may be a generator; it is consumed once."""
     agent = str(session.get("agent") or "")
     acc = _Acc(agent)
+    acc.detail = detail
     cx = _CodexState() if agent == "codex" else None
     for ev in events:
         if not isinstance(ev, dict):
             continue
         if cx is not None:
             _codex(ev, acc, cx)
+            acc.live_turn = max(cx.user_message, cx.user_item, cx.user_response)
             continue
         msg = ev.get("message")
         if isinstance(msg, dict) and ("content" in msg or "usage" in msg):
@@ -885,3 +911,32 @@ class SignalStore:
                     os.unlink(tmp)
                 except OSError:
                     pass
+
+
+def explain(events: Iterable[Any], session: Dict[str, Any]) -> Dict[str, Any]:
+    """Where the repeats happened in one session, for display only.
+
+    Computed on demand and never cached: unlike the signal store this carries
+    file paths, so it must not be persisted."""
+    detail: Dict[str, Any] = {"reads": {}, "edits": {}, "retries": [], "errors": []}
+    signals = extract_signals(events, session, detail)
+    rereads = []
+    for path, hits in detail["reads"].items():
+        n = sum(1 for h in hits if h["repeat"])
+        if n:
+            rereads.append({"path": path, "name": path.replace("\\", "/").rstrip("/").split("/")[-1],
+                            "reads": len(hits), "repeats": n,
+                            "edits": detail["edits"].get(path, 0), "occurrences": hits[:200]})
+    rereads.sort(key=lambda r: (-r["repeats"], r["path"]))
+    by_tool: Dict[str, int] = {}
+    for e in detail["errors"]:
+        by_tool[e.get("tool") or "unknown"] = by_tool.get(e.get("tool") or "unknown", 0) + 1
+    return {
+        "signals": signals,
+        "rereads": rereads[:50],
+        "retries": sorted(detail["retries"], key=lambda r: -r["count"])[:50],
+        "errors": {"total": len(detail["errors"]),
+                   "by_tool": sorted(({"tool": t, "count": c} for t, c in by_tool.items()),
+                                     key=lambda x: -x["count"])[:20],
+                   "turns": sorted({e["turn"] for e in detail["errors"] if e.get("turn") is not None})[:100]},
+    }
