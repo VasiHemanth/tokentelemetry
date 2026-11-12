@@ -16,3 +16,4 @@ it in the feature's PR.
 | `/goal` telemetry (plan) | [goal-telemetry.md](goal-telemetry.md) | — |
 | Chat with sessions and projects | [session-chat.md](session-chat.md) | — |
 | Oh My Pi (OMP) session telemetry | [omp-integration.md](omp-integration.md) | [ADR-0005](../adr/0005-omp-reported-cost-as-native-unit.md) |
+| Waste detection (evaluation Tier 1) | [waste-detection.md](waste-detection.md) | [ADR-0006](../adr/0006-waste-signals-from-transcript-extraction.md) |

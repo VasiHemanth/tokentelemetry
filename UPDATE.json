@@ -1,6 +1,25 @@
 {
   "releases": [
     {
+      "tag": "2026-11-12",
+      "title": "See where agent spend is wasted",
+      "highlights": [
+        {
+          "title": "Waste view across every agent",
+          "description": "A new Waste page flags sessions with retry loops, repeated reads of the same file, high tool failure rates, low cache reuse, or heavy tool use that produced no edit, and shows what those sessions cost. Each flag lists the rule that raised it.",
+          "href": "/waste"
+        },
+        {
+          "title": "Honest per-agent coverage",
+          "description": "Agents log different things. Where an agent's logs do not record tool errors or per-turn usage, the page says \"not recorded\" instead of showing zero, so a blank never reads as a clean result."
+        },
+        {
+          "title": "Computed locally, counts only",
+          "description": "Sessions are analysed in the background on your machine. Only counts and flag labels are cached. Prompts, commands and code are never stored."
+        }
+      ]
+    },
+    {
       "tag": "2026-10-31",
       "title": "A clearer workspace for long sessions",
       "highlights": [

@@ -14280,6 +14280,222 @@ async def summarize_recent(limit: int = 20):
             failed += 1
     return {"requested": len(sessions), "summarized": done, "skipped": skipped, "failed": failed}
 
+
+# --- Waste detection, Tier 1 (docs/design/waste-detection.md) -----------------
+# Logic lives in waste.py. This block only finds transcripts and runs one
+# background worker that extracts signals for uncached sessions, newest first.
+import threading as _threading
+import waste as _waste
+
+_WASTE: Dict[str, Any] = {"thread": None, "queue": [], "lock": _threading.Lock(),
+                          "wake": _threading.Event(), "store": None}
+
+
+def _waste_store() -> "_waste.SignalStore":
+    # Resolved per call so TOKENTELEMETRY_DATA_DIR (tests) redirects it.
+    path = str(data_dir() / "cache" / "waste" / "signals.json")
+    st = _WASTE["store"]
+    if st is None or st.path != path:
+        st = _WASTE["store"] = _waste.SignalStore(path)
+    return st
+
+
+def _waste_jsonl(path: Path):
+    """Stream records so a large transcript never sits in memory, and so the
+    UI's 16-entry detail cache is left alone."""
+    with _open_maybe_zst(path) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
+def _waste_path_index(batch: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Path]:
+    """One directory walk per pass instead of a recursive glob per session."""
+    idx: Dict[Tuple[str, str], Path] = {}
+    agents = {s.get("agent") for s in batch}
+    if "claude" in agents:
+        for p in CLAUDE_DIR.glob("projects/**/*.jsonl"):
+            idx.setdefault(("claude", p.stem), p)
+    if "codex" in agents:
+        pats = ["sessions/**/rollout-*.jsonl"] + (["sessions/**/rollout-*.jsonl.zst"] if _zstd_rollouts_supported() else [])
+        for pat in pats:
+            for p in CODEX_DIR.glob(pat):
+                stem = p.name.split(".jsonl")[0]
+                idx.setdefault(("codex", stem[-36:]), p)
+    return idx
+
+
+def _waste_events(s: Dict[str, Any], idx: Dict[Tuple[str, str], Path]):
+    agent, sid = s["agent"], s["id"]
+    if agent in ("claude", "codex"):
+        path = idx.get((agent, sid))
+        if path is None and agent == "codex":
+            # Ids that are not bare UUIDs miss the suffix index; use the detail glob.
+            hits = list(CODEX_DIR.glob(f"sessions/**/rollout-*{sid}*.jsonl"))
+            if not hits and _zstd_rollouts_supported():
+                hits = list(CODEX_DIR.glob(f"sessions/**/rollout-*{sid}*.jsonl.zst"))
+            path = hits[0] if hits else None
+        if path is None:
+            raise LookupError("transcript not found")
+        return _waste_jsonl(path)
+    # get_session_detail has no awaits, so a private loop in this thread is safe.
+    detail = _asyncio.run(get_session_detail(sid, agent))
+    if isinstance(detail, dict) and detail.get("error"):
+        raise LookupError(str(detail["error"]))
+    return _waste.events_from_detail(detail)
+
+
+def _waste_worker() -> None:
+    while True:
+        _WASTE["wake"].wait()
+        _WASTE["wake"].clear()
+        with _WASTE["lock"]:
+            batch, _WASTE["queue"] = _WASTE["queue"], []
+        store = _waste_store()
+        try:
+            idx = _waste_path_index(batch)
+        except Exception as e:
+            _log.debug("waste: path index failed: %s", e)
+            idx = {}
+        for s in batch:
+            if _WASTE["wake"].is_set():
+                break  # a newer request re-queued; restart newest-first
+            key = _waste.cache_key(s)
+            if store.lookup(s["agent"], s["id"], key) is not None:
+                continue
+            try:
+                sig = _waste.extract_signals(_waste_events(s, idx), s)
+                store.put(s["agent"], s["id"], key, signals=sig)
+            except Exception as e:
+                _log.debug("waste: extraction failed for %s/%s: %s", s.get("agent"), s.get("id"), e)
+                store.put(s["agent"], s["id"], key, failed=type(e).__name__)
+            _time.sleep(0.01)  # yield the GIL to the event loop between sessions
+        store.flush()
+
+
+def _waste_kick(pending: List[Dict[str, Any]]) -> None:
+    """Queue uncached sessions (newest first) and start the worker once."""
+    def _ts(s):
+        t = s.get("timestamp")
+        return t.timestamp() if isinstance(t, datetime) else 0.0
+    with _WASTE["lock"]:
+        _WASTE["queue"] = sorted(pending, key=_ts, reverse=True)
+        th = _WASTE["thread"]
+        if th is None or not th.is_alive():
+            th = _WASTE["thread"] = _threading.Thread(target=_waste_worker, name="waste-signals", daemon=True)
+            th.start()
+    _WASTE["wake"].set()
+
+
+@app.get("/waste")
+async def get_waste(
+    from_: Optional[str] = Query(None, alias="from"),
+    from_alt: Optional[str] = Query(None, alias="from_"),
+    to: Optional[str] = Query(None),
+    agents: List[str] = Query(default=[]),
+    projects: List[str] = Query(default=[]),
+):
+    """Flagged sessions over the cached signals. Never parses transcripts
+    itself: uncached sessions are counted as pending and queued."""
+    sessions = await get_sessions_cached()
+    from_b = _date_bound(from_ or from_alt, end=False)
+    to_b = _date_bound(to, end=True)
+
+    def _build():
+        store = _waste_store()
+        in_range = [s for s in sessions
+                    if _waste.eligible(s) and _session_in_filters(s, from_b, to_b, agents, [], projects)]
+        items = [(s, store.lookup(s["agent"], s["id"], _waste.cache_key(s))) for s in in_range]
+        return items, _waste.cache_agents(sessions)
+
+    items, cache_agents = await _asyncio.to_thread(_build)
+    pending = [s for s, e in items if e is None]
+    if pending:
+        _waste_kick(pending)
+    return _waste.aggregate(items, cache_agents=cache_agents)
+
+
+@app.get("/waste/session/{session_id}")
+async def get_waste_session(session_id: str, agent: str):
+    """Where the repeats happened in one session. Re-parses that transcript on
+    demand: the answer names files, so it is never written to the cache."""
+    sessions = await get_sessions_cached()
+    s = next((x for x in sessions if x.get("id") == session_id and x.get("agent") == agent), None)
+    if s is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    def _build():
+        return _waste.explain(_waste_events(s, _waste_path_index([s])), s)
+
+    try:
+        return await _asyncio.to_thread(_build)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="transcript not found")
+
+
+_WASTE_READ_PATHS: Dict[Tuple[str, str, str], Set[str]] = {}
+_WASTE_IMAGE_MAX_BYTES = 15 * 1024 * 1024
+
+
+@app.get("/sessions/{session_id}/read-image")
+async def get_session_read_image(session_id: str, agent: str, path: str):
+    """Serve an image the session itself read, so the trace can show it.
+
+    The allow-list is the session's own transcript: `path` must be exactly a
+    path a read tool was given there, must be an image type, and must still
+    exist. Nothing else on disk is reachable through this endpoint."""
+    from fastapi.responses import FileResponse
+    suffix = Path(path).suffix.lower()
+    media = _waste.IMAGE_SUFFIXES.get(suffix)
+    if media is None:
+        raise HTTPException(status_code=404, detail="not an image")
+    sessions = await get_sessions_cached()
+    s = next((x for x in sessions if x.get("id") == session_id and x.get("agent") == agent), None)
+    if s is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    def _check() -> Optional[Path]:
+        key = (agent, session_id, json.dumps(_waste.cache_key(s), default=str))
+        known = _WASTE_READ_PATHS.get(key)
+        if known is None:
+            try:
+                known = _waste.read_paths(_waste_events(s, _waste_path_index([s])), s)
+            except Exception:
+                known = set()
+            if len(_WASTE_READ_PATHS) >= 8:  # a handful of open sessions is enough
+                _WASTE_READ_PATHS.pop(next(iter(_WASTE_READ_PATHS)))
+            _WASTE_READ_PATHS[key] = known
+        if path not in known:
+            return None
+        cand = Path(path).expanduser()
+        if not cand.is_absolute():
+            proj = s.get("project")
+            if not isinstance(proj, str) or not proj:
+                return None
+            cand = Path(proj) / cand
+        try:
+            resolved = cand.resolve()
+            # Re-check after resolving: a symlink must not turn an image name
+            # into some other kind of file.
+            if resolved.suffix.lower() not in _waste.IMAGE_SUFFIXES or not resolved.is_file():
+                return None
+            if resolved.stat().st_size > _WASTE_IMAGE_MAX_BYTES:
+                return None
+        except OSError:
+            return None
+        return resolved
+
+    resolved = await _asyncio.to_thread(_check)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="image not available")
+    return FileResponse(str(resolved), media_type=media,
+                        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
 if __name__ == "__main__":
     import uvicorn
     import logging

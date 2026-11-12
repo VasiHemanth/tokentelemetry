@@ -2,10 +2,19 @@
 
 import type { TraceSpan } from "@/lib/traceTree/types";
 import ContentSection from "./ContentSection";
+import ReadImage, { imagePathOf, embeddedImages, EmbeddedImages } from "./ReadImage";
 
 /** Mounted only in nearby conversation entries; full payloads stay out of the scrolling hot path. */
 export default function InlineEvidence({ span }: { span: TraceSpan }) {
+  // Only nearby entries mount this, so at most a few images are decoded at once.
+  const imagePath = imagePathOf(span.content?.input);
+  const embedded = embeddedImages(span.content?.output);
   return <div className="@container mt-3 border-t border-[var(--tt-border)] pt-3" aria-label="Inline tool evidence">
+    {(embedded.length > 0 || imagePath) && <div className="mb-4">
+      {embedded.length > 0
+        ? <EmbeddedImages images={embedded} name={imagePath?.replace(/\\/g, "/").split("/").pop()} />
+        : imagePath && <ReadImage path={imagePath} />}
+    </div>}
     <div className="grid min-w-0 grid-cols-1 gap-4 @min-[720px]:grid-cols-2 [&_pre]:text-xs [&_pre]:leading-6"><RecordedField label="Input" value={span.content?.input} />
     <RecordedField label="Result" value={span.content?.output} error={span.error} /></div>
   </div>;

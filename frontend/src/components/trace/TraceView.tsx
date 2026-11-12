@@ -65,10 +65,11 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
   const lazyIds = useMemo(() => new Set(index.all.filter((s) => isLazyAgent(s, canLoad)).map((s) => s.id)), [index, canLoad]);
 
   const [expanded, setExpanded] = useState<Set<string>>(() => defaultExpanded(roots));
-  const [filter, setFilter] = useState<TraceFilter>("all");
+  // tfilter / q let another page link straight to a filtered trace.
+  const [filter, setFilter] = useState<TraceFilter>(() => searchParams.get("tfilter") === "errors" ? "errors" : "all");
   const selectedId = location.span ?? roots[0]?.id ?? null;
   const [sourceEvent, setSourceEvent] = useState<Event | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => (searchParams.get("q") || "").slice(0, 200));
   const [copied, setCopied] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -81,10 +82,32 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
   const restoredSelection = useRef<string | null>(null);
 
   const spanRows = useMemo(() => {
-    const all = flattenVisible(roots, expanded, filter);
     const query = search.toLowerCase().trim();
-    return query ? all.filter(({ span }) => `${span.title} ${span.label || ""}`.toLowerCase().includes(query)) : all;
+    if (!query) return flattenVisible(roots, expanded, filter);
+    // A search looks through every span, collapsed or not, and also through a
+    // tool call's input, so a file name finds each call that touched it.
+    const out: Array<{ span: TraceSpan; depth: number }> = [];
+    const inputText = (span: TraceSpan): string => {
+      const input = span.content?.input;
+      if (input == null) return "";
+      if (typeof input === "string") return input.slice(0, 4000);
+      try { return JSON.stringify(input).slice(0, 4000); } catch { return ""; }
+    };
+    const walk = (span: TraceSpan, depth: number) => {
+      if (matchesFilter(span, filter) && `${span.title} ${span.label || ""} ${inputText(span)}`.toLowerCase().includes(query)) out.push({ span, depth: 0 });
+      for (const c of span.children) walk(c, depth + 1);
+    };
+    roots.forEach((r) => walk(r, 0));
+    return out;
   }, [roots, expanded, filter, search]);
+
+  // Arriving from a link that preset the search or filter: start at the span list.
+  const linkedIn = useRef(!!(searchParams.get("q") || searchParams.get("tfilter")));
+  useEffect(() => {
+    if (!linkedIn.current || !roots.length) return;
+    linkedIn.current = false;
+    document.querySelector('[aria-label="Filter spans"]')?.scrollIntoView({ block: "center" });
+  }, [roots.length]);
   const rows = useMemo<TableRow[]>(() => {
     const out: TableRow[] = [];
     for (const r of spanRows) {
@@ -371,7 +394,7 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
             colorOf={colorOf}
             scrollRef={scrollRef}
             onToggle={toggle}
-            onSelect={onSelectReveal}
+            onSelect={(id) => (search.trim() ? select(id, "keyboard") : onSelectReveal(id))}
             onRetry={(id) => {
               const s = index.byId.get(id);
               if (s) startLoad(s);

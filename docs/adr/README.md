@@ -37,3 +37,4 @@ sync with the code because it ships in the same commit.
 | [0002](0002-durable-history-rollup.md) | Durable SQLite rollup for analytics history | Accepted |
 | [0003](0003-docs-site-fumadocs.md) | Docs + resources site with Fumadocs in the marketing app | Proposed |
 | [0005](0005-omp-reported-cost-as-native-unit.md) | Report OMP session cost verbatim, not recomputed | Proposed |
+| [0006](0006-waste-signals-from-transcript-extraction.md) | Compute waste signals from a cached transcript extraction pass | Proposed |
