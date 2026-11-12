@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useSyncExternalStore } from "react";
 import {
   LayoutDashboard, Folder, BarChart3, Activity, Settings2,
-  PanelLeftOpen, PanelLeftClose, Zap, ChevronDown,
+  PanelLeftOpen, PanelLeftClose, Zap, ChevronDown, ShieldAlert,
 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import { ALL_AGENT_KEYS, getAgent } from "@/lib/agents";
@@ -26,6 +26,7 @@ const LINKS = [
   { name: "Dashboard", href: "/",         icon: LayoutDashboard },
   { name: "Projects",  href: "/projects", icon: Folder },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Waste", href: "/waste", icon: ShieldAlert },
   { name: "Local Models", href: "/local-models", icon: Zap },
 ];
 
