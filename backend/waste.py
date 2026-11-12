@@ -940,3 +940,14 @@ def explain(events: Iterable[Any], session: Dict[str, Any]) -> Dict[str, Any]:
                                      key=lambda x: -x["count"])[:20],
                    "turns": sorted({e["turn"] for e in detail["errors"] if e.get("turn") is not None})[:100]},
     }
+
+
+IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+
+
+def read_paths(events: Iterable[Any], session: Dict[str, Any]) -> Set[str]:
+    """Every path a read tool was pointed at in this session, verbatim."""
+    detail: Dict[str, Any] = {"reads": {}, "edits": {}, "retries": [], "errors": []}
+    extract_signals(events, session, detail)
+    return set(detail["reads"])

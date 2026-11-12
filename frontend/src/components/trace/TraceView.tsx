@@ -394,7 +394,7 @@ export default function TraceView({ roots, timing, notice, sessionStart, onLoadC
             colorOf={colorOf}
             scrollRef={scrollRef}
             onToggle={toggle}
-            onSelect={onSelectReveal}
+            onSelect={(id) => (search.trim() ? select(id, "keyboard") : onSelectReveal(id))}
             onRetry={(id) => {
               const s = index.byId.get(id);
               if (s) startLoad(s);

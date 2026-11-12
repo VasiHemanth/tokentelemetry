@@ -11,6 +11,8 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+from pathlib import Path
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -511,3 +513,52 @@ def test_eligible_includes_tool_only_sessions():
     assert waste.eligible(sess(total=0, tool_counts={"Read": 3}))
     assert not waste.eligible(sess(total=0))
     assert not waste.eligible(sess(stub=True))
+
+
+# --------------------------------------------------------------------------- #
+# Read-image endpoint: the session's own transcript is the allow-list.
+# --------------------------------------------------------------------------- #
+def _image_env(tmp_path, monkeypatch, read_path):
+    s = {"id": "s-img", "agent": "opencode", "project": str(tmp_path), "timestamp": None,
+         "tokens": {"total": 10}, "cost": 0.0}
+
+    async def fake_sessions(fresh=False):
+        return [s]
+
+    monkeypatch.setattr(main, "get_sessions_cached", fake_sessions)
+    monkeypatch.setattr(main, "_waste_path_index", lambda batch: {})
+    monkeypatch.setattr(main, "_waste_events", lambda sess, idx: [
+        {"type": "tool_call", "payload": {"tool": "Read", "args": {"file_path": read_path}, "callID": "c1"}}])
+    main._WASTE_READ_PATHS.clear()
+
+
+def _img(path):
+    return asyncio.run(main.get_session_read_image("s-img", agent="opencode", path=path))
+
+
+def test_read_image_serves_only_what_the_session_read(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    other = tmp_path / "other.png"
+    other.write_bytes(b"\x89PNG\r\n")
+    secret = tmp_path / "notes.txt"
+    secret.write_text("x")
+    _image_env(tmp_path, monkeypatch, str(shot))
+
+    assert Path(_img(str(shot)).path) == shot.resolve()
+    for denied in (str(other), str(secret), str(tmp_path / "sub" / ".." / "shot.png"), str(tmp_path / "gone.png")):
+        with pytest.raises(main.HTTPException) as e:
+            _img(denied)
+        assert e.value.status_code == 404
+
+
+def test_read_image_rejects_symlink_to_non_image(tmp_path, monkeypatch):
+    secret = tmp_path / "notes.txt"
+    secret.write_text("x")
+    link = tmp_path / "link.png"
+    link.symlink_to(secret)
+    _image_env(tmp_path, monkeypatch, str(link))
+    with pytest.raises(main.HTTPException) as e:
+        _img(str(link))
+    assert e.value.status_code == 404
+

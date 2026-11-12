@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { useResource } from "@/lib/api";
 import type { WasteExplain, WasteOccurrence } from "@/lib/waste";
+import ReadImage, { isImagePath } from "@/components/trace/ReadImage";
 
 type Mark = { call: number | null; turn: number | null; hot: boolean };
 
@@ -65,7 +66,9 @@ export function WasteWhy({ id, agent, toolCalls, sessionHref }: { id: string; ag
           <div className="space-y-2">
             {rereads.slice(0, 12).map(r => (
               <div key={r.path} className="grid grid-cols-[minmax(140px,240px)_1fr] items-center gap-3">
-                <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  {isImagePath(r.path) && <ReadImage path={r.path} sessionId={id} agent={agent} variant="thumb" />}
+                  <div className="min-w-0">
                   <div className="truncate font-mono text-[var(--tt-fg)]" title={r.path}>{r.name}</div>
                   <div className="truncate text-[11px] text-[var(--tt-fg-muted)]">
                     read {r.reads} times, {r.repeats} repeat{r.repeats === 1 ? "" : "s"}{r.edits ? `, edited ${r.edits} times` : ", never edited"}
@@ -73,6 +76,7 @@ export function WasteWhy({ id, agent, toolCalls, sessionHref }: { id: string; ag
                   <Link href={`${sessionHref}&view=execution&q=${encodeURIComponent(r.name)}`} className="text-[11px] text-[var(--tt-accent)] hover:underline">
                     Show these reads in the trace
                   </Link>
+                  </div>
                 </div>
                 <div className="min-w-0">
                   <Track total={toolCalls} marks={r.occurrences.map(o => ({ call: o.call, turn: o.turn, hot: o.repeat }))} />

@@ -14,6 +14,7 @@ import {
 } from "@/lib/traceTree/tree";
 import { fmtClock, fmtCost, fmtDur, fmtHm, fmtTokens } from "@/lib/traceTree/timeScale";
 import ContentSection from "./ContentSection";
+import ReadImage, { imagePathOf, embeddedImages, EmbeddedImages } from "./ReadImage";
 import TokenUsage from "./TokenUsage";
 import { KindChip, Tag, type ColorOf } from "./shared";
 
@@ -113,9 +114,14 @@ export default function SpanDetail(p: Props) {
     );
   } else if (span.kind === "tool") {
     const resumed = span.resumes ? index.agentByChild.get(span.resumes) : undefined;
+    const imagePath = imagePathOf(span.content?.input);
+    const embedded = embeddedImages(span.content?.output);
     body = (
       <>
         {span.label && <p className="text-xs leading-relaxed text-[var(--tt-fg-muted)]">{span.label}</p>}
+        {embedded.length > 0
+          ? <EmbeddedImages key={`${span.id}-emb`} images={embedded} name={imagePath?.replace(/\\/g, "/").split("/").pop()} />
+          : imagePath && <ReadImage key={`${span.id}-img`} path={imagePath} />}
         <Kv rows={[...when, ...(span.error ? ([["Result", <span key="e" className="text-[var(--tt-danger-fg)]">error</span>]] as Array<[string, ReactNode]>) : [])]} />
         <ContentSection key={`${span.id}-in`} label="Input" value={span.content?.input} accent="input" autoFormat />
         <ContentSection key={`${span.id}-out`} label="Output" value={span.content?.output} accent="output" error={span.error} autoFormat />

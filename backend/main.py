@@ -14437,6 +14437,65 @@ async def get_waste_session(session_id: str, agent: str):
         raise HTTPException(status_code=404, detail="transcript not found")
 
 
+_WASTE_READ_PATHS: Dict[Tuple[str, str, str], Set[str]] = {}
+_WASTE_IMAGE_MAX_BYTES = 15 * 1024 * 1024
+
+
+@app.get("/sessions/{session_id}/read-image")
+async def get_session_read_image(session_id: str, agent: str, path: str):
+    """Serve an image the session itself read, so the trace can show it.
+
+    The allow-list is the session's own transcript: `path` must be exactly a
+    path a read tool was given there, must be an image type, and must still
+    exist. Nothing else on disk is reachable through this endpoint."""
+    from fastapi.responses import FileResponse
+    suffix = Path(path).suffix.lower()
+    media = _waste.IMAGE_SUFFIXES.get(suffix)
+    if media is None:
+        raise HTTPException(status_code=404, detail="not an image")
+    sessions = await get_sessions_cached()
+    s = next((x for x in sessions if x.get("id") == session_id and x.get("agent") == agent), None)
+    if s is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    def _check() -> Optional[Path]:
+        key = (agent, session_id, json.dumps(_waste.cache_key(s), default=str))
+        known = _WASTE_READ_PATHS.get(key)
+        if known is None:
+            try:
+                known = _waste.read_paths(_waste_events(s, _waste_path_index([s])), s)
+            except Exception:
+                known = set()
+            if len(_WASTE_READ_PATHS) >= 8:  # a handful of open sessions is enough
+                _WASTE_READ_PATHS.pop(next(iter(_WASTE_READ_PATHS)))
+            _WASTE_READ_PATHS[key] = known
+        if path not in known:
+            return None
+        cand = Path(path).expanduser()
+        if not cand.is_absolute():
+            proj = s.get("project")
+            if not isinstance(proj, str) or not proj:
+                return None
+            cand = Path(proj) / cand
+        try:
+            resolved = cand.resolve()
+            # Re-check after resolving: a symlink must not turn an image name
+            # into some other kind of file.
+            if resolved.suffix.lower() not in _waste.IMAGE_SUFFIXES or not resolved.is_file():
+                return None
+            if resolved.stat().st_size > _WASTE_IMAGE_MAX_BYTES:
+                return None
+        except OSError:
+            return None
+        return resolved
+
+    resolved = await _asyncio.to_thread(_check)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="image not available")
+    return FileResponse(str(resolved), media_type=media,
+                        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
 if __name__ == "__main__":
     import uvicorn
     import logging
