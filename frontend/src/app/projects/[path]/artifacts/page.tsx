@@ -8,7 +8,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Globe, ArrowUpRight, ExternalLink, FileText,
-  LayoutGrid, List as ListIcon, ChevronDown, ChevronRight,
+  LayoutGrid, List as ListIcon, ChevronDown, ChevronRight, GitBranch,
 } from "lucide-react";
 
 import { Card, CardTitle, AgentBadge, EmptyState } from "@/components/ui";
@@ -157,7 +157,36 @@ function DocumentPreview({ path }: { path: string }) {
   );
 }
 
-function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: string | null }) {
+/* Which checkout an artifact was created in. Only present for projects in a
+   git-worktree group, where every card shows the repo's full set. Links to that
+   checkout's project page unless it is the one being viewed. */
+function CreatedIn({ a, currentPath }: { a: PublishedArtifact; currentPath: string }) {
+  const origin = a.created_in;
+  if (!origin) return null;
+  const here = origin.path === currentPath;
+  const label = origin.is_worktree ? origin.name : `${origin.name} (main checkout)`;
+  const cls =
+    "inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-mono text-[var(--tt-fg-muted)]";
+  const body = (
+    <>
+      <GitBranch size={11} className="shrink-0" />
+      <span className="truncate">{here ? `${label} · this worktree` : label}</span>
+    </>
+  );
+  return here ? (
+    <span className={cls} title={`Created in ${origin.path}`}>{body}</span>
+  ) : (
+    <Link
+      href={`/projects/${encodeURIComponent(origin.path)}/artifacts`}
+      className={cn(cls, "hover:text-[var(--tt-brand)] transition-colors")}
+      title={`Created in ${origin.path}`}
+    >
+      {body}
+    </Link>
+  );
+}
+
+function ArtifactCard({ a, sessionHref, currentPath }: { a: PublishedArtifact; sessionHref: string | null; currentPath: string }) {
   const isPage = !!a.url;
   const isSite = a.kind === "site";
   return (
@@ -183,6 +212,7 @@ function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: s
       </div>
 
       <div className="px-5 py-4 space-y-2">
+        <CreatedIn a={a} currentPath={currentPath} />
         {a.description && (
           <p className="text-[12px] text-[var(--tt-fg-muted)] leading-relaxed">{a.description}</p>
         )}
@@ -223,7 +253,7 @@ function ArtifactCard({ a, sessionHref }: { a: PublishedArtifact; sessionHref: s
   );
 }
 
-function ArtifactRow({ a, sessionHref }: { a: PublishedArtifact; sessionHref: string | null }) {
+function ArtifactRow({ a, sessionHref, currentPath }: { a: PublishedArtifact; sessionHref: string | null; currentPath: string }) {
   const isPage = !!a.url;
   const isSite = a.kind === "site";
   const openHref = a.url || (a.path ? rawFileUrl(a.path) : null);
@@ -231,12 +261,15 @@ function ArtifactRow({ a, sessionHref }: { a: PublishedArtifact; sessionHref: st
     <div className="flex items-center gap-3 px-5 py-2.5">
       {!isPage && <FileText size={13} className="shrink-0 text-[var(--tt-fg-muted)]" />}
       <AgentBadge agent={a.agent || "claude"} />
-      <span
-        className="flex-1 min-w-0 truncate text-[12px] font-medium text-[var(--tt-fg)]"
-        title={a.title || a.url || a.file_name || undefined}
-      >
-        {a.title || a.file_name || "Untitled artifact"}
-      </span>
+      <div className="flex-1 min-w-0">
+        <span
+          className="block truncate text-[12px] font-medium text-[var(--tt-fg)]"
+          title={a.title || a.url || a.file_name || undefined}
+        >
+          {a.title || a.file_name || "Untitled artifact"}
+        </span>
+        <CreatedIn a={a} currentPath={currentPath} />
+      </div>
       {isSite && (
         <span className="shrink-0 rounded bg-[var(--tt-brand-bg)] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-[var(--tt-brand)]">
           Site
@@ -273,8 +306,9 @@ function ArtifactRow({ a, sessionHref }: { a: PublishedArtifact; sessionHref: st
   );
 }
 
-/* Deliverable artifacts from sessions in this project (worktree publishes
-   roll up to the repo-root card on the backend). Two kinds: "page" — hosted
+/* Deliverable artifacts from sessions in this project. For a repo with git
+   worktrees, the backend gives the root and every worktree the same full set
+   and tags each artifact with the checkout it was created in. Kinds: "page" — hosted
    claude.ai pages from Claude Code's Artifact tool, linked externally with an
    inline preview of the local html source when it still exists; "document" —
    local docs like Antigravity's task/plan/walkthrough, linked into the session
@@ -283,6 +317,7 @@ export default function ArtifactsTab() {
   const pathname = usePathname();
   const { project } = useProject();
   const artifacts = project?.artifacts ?? [];
+  const currentPath = project?.path ?? "";
 
   // Default "cards"; read the persisted choice post-mount (SSR-safe, and the
   // effect-read avoids a hydration mismatch a lazy initializer would cause).
@@ -346,14 +381,14 @@ export default function ArtifactsTab() {
       {view === "cards" ? (
         <div className="space-y-5">
           {artifacts.map((a, i) => (
-            <ArtifactCard key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} />
+            <ArtifactCard key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} currentPath={currentPath} />
           ))}
         </div>
       ) : (
         <Card padding="none">
           <div className="divide-y divide-[var(--tt-border)]">
             {artifacts.map((a, i) => (
-              <ArtifactRow key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} />
+              <ArtifactRow key={artifactKey(a, i)} a={a} sessionHref={sessionHrefFor(a)} currentPath={currentPath} />
             ))}
           </div>
         </Card>

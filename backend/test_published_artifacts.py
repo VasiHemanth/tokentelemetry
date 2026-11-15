@@ -144,6 +144,39 @@ def test_list_action_and_failed_publish_ignored(scan_env):
     assert "published_artifacts" not in s
 
 
+SHORT_URL = "https://claude.ai/artifact/G5feNV5Zt5cJQsrvUSrJWj"
+
+
+def test_short_artifact_url_extracted_with_html_title(scan_env):
+    """The Artifact tool now returns https://claude.ai/artifact/<id> links, and
+    takes the page title from the HTML <title> rather than a `title` input.
+    Both used to be missed: the publish never reached the Artifacts tab."""
+    page = scan_env / "review.html"
+    page.write_text("<title>Backlog &amp; Triage</title>\n<main>hi</main>", encoding="utf-8")
+    _write_session(scan_env / ".claude", [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path=str(page),
+                       icon="checklist", description="Review page"),
+        _artifact_result("t1", "2026-07-20T10:01:05Z",
+                         f"Published {page} at {SHORT_URL} (Version 1, version id 1-abc) "
+                         "Icon: \"checklist\"."),
+    ])
+    arts = _claude_session(scan_env)["published_artifacts"]
+    assert [a["url"] for a in arts] == [SHORT_URL]
+    assert arts[0]["title"] == "Backlog & Triage"
+    assert arts[0]["description"] == "Review page"
+
+
+def test_asset_upload_is_not_an_artifact(scan_env):
+    """`asset: true` uploads a file into an existing artifact; its result can
+    carry the artifact's link, but no new page was published."""
+    _write_session(scan_env / ".claude", [
+        _artifact_call("t1", "2026-07-20T10:01:00Z", file_path="/tmp/logo.png",
+                       url=SHORT_URL, asset=True),
+        _artifact_result("t1", "2026-07-20T10:01:05Z", f"Uploaded logo.png to {SHORT_URL}"),
+    ])
+    assert "published_artifacts" not in _claude_session(scan_env)
+
+
 def test_list_content_blocks_result(scan_env):
     """tool_result content as a list of text blocks (not a plain string)."""
     _write_session(scan_env / ".claude", [
@@ -330,6 +363,97 @@ def test_project_artifact_keys_are_unique(scan_env, monkeypatch):
         keys = [a.get("url") or a.get("path") for a in proj.get("artifacts", [])]
         assert len(keys) == len(set(keys)), (
             "duplicate React key in %s: %s" % (proj.get("name"), keys))
+
+
+# --- artifacts are shared across a repo's worktrees -------------------------
+
+def _git_worktree_layout(root):
+    """<root>/repo with two linked worktrees under .claude/worktrees, wired the
+    way git does it: the worktree's `.git` is a file pointing at the repo-side
+    registry entry, and that entry's `gitdir` points back."""
+    repo = root / "repo"
+    (repo / ".git" / "worktrees").mkdir(parents=True)
+    wts = {}
+    for name in ("wt-one", "wt-two"):
+        wt = repo / ".claude" / "worktrees" / name
+        wt.mkdir(parents=True)
+        reg = repo / ".git" / "worktrees" / name
+        reg.mkdir()
+        (wt / ".git").write_text(f"gitdir: {reg}\n", encoding="utf-8")
+        (reg / "gitdir").write_text(f"{wt / '.git'}\n", encoding="utf-8")
+        wts[name] = str(wt)
+    return str(repo), wts
+
+
+def _session_with(sid, project, artifacts):
+    return {"id": sid, "agent": "claude", "project": project,
+            "model": "claude-sonnet-4-6", "timestamp": "2026-07-20T10:00:00+00:00",
+            "cost": 0.0, "tokens": {"input": 1, "output": 1, "cached": 0, "total": 2},
+            "has_plan": False, "plans": [], "mcp_tools": [], "subagents": [],
+            "published_artifacts": artifacts}
+
+
+def test_worktree_artifacts_show_on_every_card_with_origin(tmp_path, monkeypatch):
+    """An artifact published from any checkout of a repo belongs to the repo:
+    the root card and every worktree card list the same set, and each artifact
+    says which worktree created it."""
+    repo, wts = _git_worktree_layout(tmp_path.resolve())
+    url3 = "https://claude.ai/code/artifact/00000000-0000-4000-8000-000000000003"
+    sessions = [
+        _session_with("s-root", repo, [
+            {"kind": "page", "url": URL1, "title": "Root page",
+             "timestamp": "2026-07-20T10:01:00Z", "session_id": "s-root", "agent": "claude"}]),
+        _session_with("s-one", wts["wt-one"], [
+            {"kind": "site", "url": URL2, "title": "Codex site",
+             "timestamp": "2026-07-21T10:01:00Z", "session_id": "s-one", "agent": "codex"}]),
+        _session_with("s-two", wts["wt-two"], [
+            {"kind": "page", "url": url3, "title": "Two page",
+             "timestamp": "2026-07-22T10:01:00Z", "session_id": "s-two", "agent": "claude"}]),
+    ]
+
+    async def fake_cached(fresh=False):
+        return sessions
+    monkeypatch.setattr(main, "get_sessions_cached", fake_cached)
+    monkeypatch.setattr(main, "load_hidden", lambda: set())
+    cards = {c["path"]: c for c in asyncio.run(main.get_projects())}
+
+    expected_origin = {
+        url3: (".claude/worktrees/wt-two", True),
+        URL2: (".claude/worktrees/wt-one", True),
+        URL1: ("repo", False),
+    }
+    for path in (repo, wts["wt-one"], wts["wt-two"]):
+        arts = cards[path]["artifacts"]
+        # Same set on every card, newest first.
+        assert [a["url"] for a in arts] == [url3, URL2, URL1], path
+        for a in arts:
+            name, is_wt = expected_origin[a["url"]]
+            assert a["created_in"]["name"] == name
+            assert a["created_in"]["is_worktree"] is is_wt
+            assert "_origin_path" not in a
+    assert cards[wts["wt-one"]]["artifacts"][1]["created_in"]["path"] == wts["wt-one"]
+    # The cached session records are not mutated by the rollup.
+    assert all("created_in" not in a and "_origin_path" not in a
+               for s in sessions for a in s["published_artifacts"])
+
+
+def test_standalone_project_artifacts_carry_no_origin(tmp_path, monkeypatch):
+    """A project with no worktrees keeps its artifacts as-is: there is no other
+    checkout to attribute them to, so no `created_in` label."""
+    proj = str(tmp_path.resolve() / "solo")
+    sessions = [_session_with("s1", proj, [
+        {"kind": "page", "url": URL1, "timestamp": "2026-07-20T10:01:00Z"}])]
+
+    async def fake_cached(fresh=False):
+        return sessions
+    monkeypatch.setattr(main, "get_sessions_cached", fake_cached)
+    monkeypatch.setattr(main, "load_hidden", lambda: set())
+    card = next(c for c in asyncio.run(main.get_projects()) if c["path"] == proj)
+    assert [a["url"] for a in card["artifacts"]] == [URL1]
+    assert "created_in" not in card["artifacts"][0]
+    assert "_origin_path" not in card["artifacts"][0]
+
+
 # --- a split assistant message must not swallow its tool_use ----------------
 
 def _assistant_split(msg_id, ts, blocks, usage=True):

@@ -25,6 +25,10 @@ export interface PublishedArtifact {
   session_id?: string;
   agent?: string;
   timestamp?: string | null;
+  // Set when the project is part of a git-worktree group: artifacts are shared
+  // across the repo root and all its worktrees, and this names the checkout
+  // the artifact was created in.
+  created_in?: { path: string; name: string; is_worktree: boolean };
 }
 
 export interface SessionRow {
