@@ -1,0 +1,10 @@
+{
+  "title": "Second Brain plugin",
+  "pages": [
+    "index",
+    "commands",
+    "evidence",
+    "exploration-loop"
+  ],
+  "defaultOpen": false
+}
