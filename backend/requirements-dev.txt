@@ -13,4 +13,4 @@
 #       backend/requirements-dev.txt -c backend/requirements.lock \
 #       -o backend/requirements-dev.lock
 pytest>=8.0,<9.0
-packaging>=24.0
+packaging>=26.3
