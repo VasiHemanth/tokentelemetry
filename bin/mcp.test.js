@@ -195,3 +195,22 @@ test('discoverPort skips a non-TokenTelemetry listener and never sends it the to
   assert.ok(seen.every((r) => !r.auth), 'probe requests carry no token');
   mcp.resetPortCache();
 });
+
+test('a slow backend reports "still scanning" and keeps the discovered port', async () => {
+  mcp.resetPortCache();
+  const fetchImpl = async (url) => {
+    if (url.endsWith('/version')) return { ok: true, json: async () => ({ current: 'x' }) };
+    const err = new Error('timed out');
+    err.name = 'TimeoutError';
+    throw err;
+  };
+  const ctx = { fetchImpl, env: { TT_API_PORT: '9555' } };
+  const res = await mcp.handleMessage({ jsonrpc: '2.0', id: 9, method: 'tools/call',
+    params: { name: 'list_projects', arguments: {} } }, ctx);
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /still scanning/);
+  let probed = false;
+  assert.equal(await mcp.discoverPort({ fetchImpl: async () => { probed = true; return { ok: false }; }, env: {} }), 9555);
+  assert.equal(probed, false, 'port stays cached after a timeout');
+  mcp.resetPortCache();
+});

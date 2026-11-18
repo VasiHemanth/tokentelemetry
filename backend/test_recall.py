@@ -7,6 +7,13 @@ import recall
 GH = "gh" + "p_" + "a" * 36
 
 
+@pytest.fixture(autouse=True)
+def _no_repo_resolver(monkeypatch):
+    # Importing main (another test may) installs canonical_repo, which walks
+    # the real filesystem. These tests cover the pure path fold.
+    monkeypatch.setattr(recall, "repo_resolver", None)
+
+
 def dt(day, hour=0):
     return datetime(2026, 11, day, hour, tzinfo=timezone.utc)
 
