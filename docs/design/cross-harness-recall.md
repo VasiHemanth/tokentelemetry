@@ -52,6 +52,21 @@ For each candidate session the loader tries, in order:
 
 Every hit carries `source: "live" | "archive"`.
 
+Chunking differs from summaries in two ways:
+
+- **Codex records are adapted first.** Codex rollouts store turns as
+  `response_item` records (`message`, `function_call`, `*_output`,
+  `reasoning`), which `build_chunks` does not read; without
+  `recall.codex_to_message_events` a Codex trace yields zero chunks.
+  `developer` messages and injected context (AGENTS.md, environment context)
+  are skipped.
+- **Tool results keep up to 8,000 characters** (`recall.RESULT_CHARS`)
+  instead of their first line, so file paths in `ls`/`grep` output are
+  searchable. Summaries keep the one-line default.
+
+A session that loads but yields no chunks (an empty Antigravity session, for
+example) counts as `unreadable`, never as scanned.
+
 Limits, all reported back in `coverage`:
 
 - Candidates are sorted newest first (by last timestamp). At most

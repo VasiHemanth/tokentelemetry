@@ -9,7 +9,7 @@
  *   - shuts both down cleanly on Ctrl+C
  *
  * The first argument is a verb when it matches one of: dashboard, menubar,
- * desktop, status, stop. Anything else falls through to flag parsing, so
+ * desktop, status, stop, mcp. Anything else falls through to flag parsing, so
  * `tokentelemetry --port 4000` behaves exactly as it always has. The bare
  * command (no verb) starts the dashboard.
  *
@@ -51,7 +51,7 @@ class UsageError extends Error {}
 // The first CLI argument is a verb only when it matches one of these; anything
 // else (including the empty case) means "dashboard", so `--port 4000` and a
 // stray argument can never silently change what the command does.
-const VERBS = ['dashboard', 'menubar', 'desktop', 'status', 'stop'];
+const VERBS = ['dashboard', 'menubar', 'desktop', 'status', 'stop', 'mcp'];
 
 function parseInvocation(argv) {
   if (argv.length > 0 && VERBS.includes(argv[0])) {
@@ -152,6 +152,7 @@ function printHelp() {
     '  desktop                    Desktop app.',
     '  status                     Dashboard status (not available yet).',
     '  stop                       Stop the dashboard (not available yet).',
+    '  mcp [--api-port <N>]       MCP server on stdio: search past sessions from any agent.',
     '',
     'Options:',
     '  -p, --port <N>            Frontend (Next.js) port. Default 13000.',
@@ -969,6 +970,7 @@ async function main(argv = process.argv.slice(2)) {
     case 'desktop': return cmdDesktop(parsed.options);
     case 'status': return cmdStatus();
     case 'stop': return cmdStop();
+    case 'mcp': return require('./mcp').run(args);
     case 'dashboard':
     default:
       // The bare command and `dashboard` are the same path. start() never
