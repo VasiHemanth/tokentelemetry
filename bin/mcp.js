@@ -72,8 +72,17 @@ async function backendGet(route, params, ctx) {
   const fetchImpl = (ctx && ctx.fetchImpl) || fetch;
   let res;
   try {
-    res = await fetchImpl(url, { headers: authHeaders(ctx && ctx.env), signal: AbortSignal.timeout(60000) });
+    // 120 s: on a cold backend the first call waits for a full session scan
+    // before the search's own 20 s budget starts.
+    res = await fetchImpl(url, { headers: authHeaders(ctx && ctx.env), signal: AbortSignal.timeout(120000) });
   } catch (err) {
+    const name = err && err.name;
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      // The backend answered discovery, so it is up but busy: keep the port.
+      throw new BackendError(
+        'TokenTelemetry is still scanning session history and did not answer in time. ' +
+        'Retry in a minute, or narrow the search with `project`.');
+    }
     cachedPort = null;
     throw new BackendError(`${DOWN_MESSAGE} (${err && err.message ? err.message : err})`);
   }
