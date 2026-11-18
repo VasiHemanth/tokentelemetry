@@ -576,10 +576,15 @@ def _result_text(content: Any) -> str:
     return _text_blocks(content)
 
 
-def build_chunks(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_chunks(events: List[Dict[str, Any]], result_chars: Optional[int] = None) -> List[Dict[str, Any]]:
     """Split a trace into chunks ``{idx, turn, kind, text}`` in order. User and
-    assistant text is cut into pieces of about 600 characters. Tool calls and
-    tool results become one-line entries."""
+    assistant text is cut into pieces of about 600 characters. Tool calls
+    become one-line entries.
+
+    By default a tool result keeps only its first line (200 chars), which is
+    enough for a summary. Recall passes ``result_chars`` to keep that many
+    characters of each result instead, split like message text, so a file
+    path deep in an ``ls`` or ``grep`` output is still searchable."""
     chunks: List[Dict[str, Any]] = []
     turn = 0
 
@@ -587,6 +592,12 @@ def build_chunks(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         text = text.strip()
         if text:
             chunks.append({"idx": len(chunks), "turn": max(turn, 1), "kind": kind, "text": text})
+
+    def add_result(body: str) -> None:
+        if result_chars:
+            add_text("result", "result: " + body[:result_chars])
+        else:
+            add("result", "result: " + body.splitlines()[0][:_TOOL_RESULT_CHARS])
 
     def add_text(kind: str, text: str) -> None:
         text = text.strip()
@@ -615,7 +626,7 @@ def build_chunks(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     if isinstance(b, dict) and b.get("type") == "tool_result":
                         body = _result_text(b.get("content")).strip()
                         if body:
-                            add("result", "result: " + body.splitlines()[0][:_TOOL_RESULT_CHARS])
+                            add_result(body)
         elif role == "assistant":
             txt = _text_blocks(content).strip()
             if txt:
@@ -631,7 +642,7 @@ def build_chunks(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             payload = ev.get("payload") or {}
             body = (_text_blocks(content) or str(payload.get("content") or "")).strip()
             if body:
-                add("result", "result: " + body.splitlines()[0][:_TOOL_RESULT_CHARS])
+                add_result(body)
     return chunks
 
 

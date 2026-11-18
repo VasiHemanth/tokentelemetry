@@ -12097,6 +12097,151 @@ def _dedupe_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Cross-harness recall (docs/design/cross-harness-recall.md)
+# Thin wrappers: scoring, limits and redaction live in recall.py / redact.py.
+# ---------------------------------------------------------------------------
+import asyncio as _recall_asyncio
+import recall as _recall
+import summaries as _recall_summaries
+
+# Group recall projects with the same worktree fold the /projects cards use.
+_recall.repo_resolver = canonical_repo
+
+
+def _recall_events_from_archive(agent: str, text: str) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            events.append(ev)
+    if not events:
+        try:
+            events = _recall_summaries.normalize_detail(json.loads(text))
+        except ValueError:
+            events = []
+    if agent == "codex" and events:
+        try:
+            events = _canonicalize_codex_trace(events)
+        except Exception:
+            pass
+    return events
+
+
+def _recall_chunks(agent: str, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if agent == "codex":
+        events = _recall.codex_to_message_events(events)
+    return _recall_summaries.build_chunks(events, result_chars=_recall.RESULT_CHARS)
+
+
+def _recall_load_chunks(agent: str, session_id: str):
+    """Blocking loader (run in a worker thread). Live parse first, then the
+    history archive. Returns (chunks, "live" | "archive") or None."""
+    try:
+        # get_session_detail is declared async but never awaits, so a private
+        # event loop in this worker thread drives it to completion.
+        detail = _recall_asyncio.run(get_session_detail(session_id, agent))
+        if not (isinstance(detail, dict) and detail.get("error")):
+            events = _recall_summaries.normalize_detail(detail)
+            chunks = _recall_chunks(agent, events) if events else []
+            if chunks:
+                return chunks, "live"
+    except Exception:
+        pass
+    try:
+        import history_store
+        text = history_store.get_transcript(agent, session_id)
+        if text:
+            events = _recall_events_from_archive(agent, text)
+            chunks = _recall_chunks(agent, events) if events else []
+            if not chunks:
+                # A blob stored as one JSON document (e.g. {"messages": [...]})
+                # parses as a single "event" that carries no chunks; read it
+                # as a whole detail payload instead.
+                try:
+                    chunks = _recall_summaries.build_chunks(
+                        _recall_summaries.normalize_detail(json.loads(text)))
+                except ValueError:
+                    chunks = []
+            if chunks:
+                return chunks, "archive"
+    except Exception:
+        pass
+    # Loaded but nothing readable (or not found anywhere): report it as
+    # unreadable so coverage never counts an empty parse as "scanned".
+    return None
+
+
+def _recall_int(value: Optional[str], name: str, default: int, lo: int, hi: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        n = int(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+    if n < lo or n > hi:
+        raise HTTPException(status_code=400, detail=f"{name} must be between {lo} and {hi}")
+    return n
+
+
+@app.get("/recall/projects")
+async def recall_projects():
+    sessions = await get_sessions_cached()
+    return _recall.list_projects(sessions, unassigned=ANTIGRAVITY_UNASSIGNED)
+
+
+@app.get("/recall/sessions")
+async def recall_sessions(project: Optional[str] = None, agent: Optional[str] = None,
+                          since: Optional[str] = None, limit: Optional[str] = None):
+    n = _recall_int(limit, "limit", 50, 1, 500)
+    sessions = await get_sessions_cached()
+    try:
+        return _recall.list_sessions(sessions, project, agent, since, n, unassigned=ANTIGRAVITY_UNASSIGNED)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/recall/search")
+async def recall_search(q: Optional[str] = None, project: Optional[str] = None,
+                        agent: Optional[str] = None, since: Optional[str] = None,
+                        limit: Optional[str] = None, max_sessions: Optional[str] = None):
+    if q is None or not (1 <= len(q.strip()) <= 300):
+        raise HTTPException(status_code=400, detail="q is required (1 to 300 characters)")
+    n = _recall_int(limit, "limit", 20, 1, 100)
+    cap = _recall_int(max_sessions, "max_sessions", 60, 1, 300)
+    sessions = await get_sessions_cached()
+    try:
+        return await _recall_asyncio.to_thread(
+            _recall.search, sessions, _recall_load_chunks, q.strip(), project, agent, since, n, cap,
+            unassigned=ANTIGRAVITY_UNASSIGNED)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/recall/session/{agent}/{session_id}")
+async def recall_session(agent: str, session_id: str, offset: Optional[str] = None,
+                         limit: Optional[str] = None, kinds: Optional[str] = None):
+    off = _recall_int(offset, "offset", 0, 0, 10**9)
+    n = _recall_int(limit, "limit", 80, 1, 400)
+    sessions = await get_sessions_cached()
+    meta = next((s for s in sessions if s.get("id") == session_id and s.get("agent") == agent), None)
+    loaded = await _recall_asyncio.to_thread(_recall_load_chunks, agent, session_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    chunks, source = loaded
+    try:
+        return _recall.read_session(meta, chunks, source, agent, session_id, off, n, kinds,
+                                    unassigned=ANTIGRAVITY_UNASSIGNED)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
 # TokenTelemetry config endpoints (aliases + hidden projects)
 # ---------------------------------------------------------------------------
 class PathPayload(BaseModel):
