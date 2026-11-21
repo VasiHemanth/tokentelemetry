@@ -12422,7 +12422,9 @@ async def recall_ask(request: Request, body: dict = Body(...)):
             gen = _recall_agent.run(
                 question, proj or project, agent,
                 llm=lambda p: _recall_summaries.ask_untrusted(sm, p),
-                search=a_search, read_session=a_read, cancelled=cancel.is_set)
+                search=a_search, read_session=a_read, cancelled=cancel.is_set,
+                modes=("keyword", "semantic", "hybrid")
+                if _recall_index.load_settings()["semantic"]["enabled"] else ("keyword",))
             for ev in gen:
                 if not put(ev):
                     break

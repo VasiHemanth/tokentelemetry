@@ -188,3 +188,33 @@ def test_tool_error_is_an_observation():
                          search=search, read_session=lambda *a: {}))
     assert events[1]["summary"] == "search failed"
     assert events[-1]["type"] == "answer"
+
+
+
+def test_unavailable_mode_is_dropped_not_failed():
+    seen = []
+
+    def search(query, agent=None, mode=None):
+        seen.append(mode)
+        return {"hits": [], "coverage": {}}
+
+    replies = iter([
+        '{"thought": "t", "action": "search", "args": {"query": "x", "mode": "hybrid"}}',
+        '{"thought": "t", "action": "answer", "args": {"answer": "nothing found", "citations": []}}',
+    ])
+    events = list(ra.run("q", None, None, llm=lambda p: next(replies),
+                                   search=search, read_session=lambda *a, **k: {}))
+    assert seen == [None, None]  # step 0, then the model's hybrid request ran in the default mode
+    assert events[-1]["type"] == "answer"
+
+
+def test_prompt_lists_available_modes():
+    prompts = []
+
+    def llm(p):
+        prompts.append(p)
+        return '{"thought": "t", "action": "answer", "args": {"answer": "a", "citations": []}}'
+
+    list(ra.run("q", None, None, llm=llm, search=lambda *a, **k: {"hits": []},
+                          read_session=lambda *a, **k: {}, modes=("keyword", "hybrid")))
+    assert "SEARCH MODES AVAILABLE: keyword, hybrid" in prompts[0]
