@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "tag": "2026-11-21",
+      "title": "Ask questions about your agents' history",
+      "highlights": [
+        {
+          "title": "Ask a question across all your agents",
+          "description": "Type a question in the Ask tab on the Recall page and get a written answer with links to the sessions it came from. It uses the summarizer you already set up in Settings, and it searches every agent's history on your computer.",
+          "href": "/recall"
+        },
+        {
+          "title": "Find sessions by meaning, not just keywords",
+          "description": "Turn on semantic search to find past sessions that discuss an idea even when you use different words. It is off by default. The index is built per project and stays on your computer, using a local Ollama model."
+        }
+      ]
+    },
+    {
       "tag": "2026-11-19",
       "title": "Search every agent's sessions in one place",
       "highlights": [

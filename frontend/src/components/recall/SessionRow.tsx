@@ -43,7 +43,7 @@ export interface HitGroup {
   cost: number | null;
   last_ts: string | null;
   project: string | null;
-  hits: { turn: number; kind: string; snippet: string; source: "live" | "archive" }[];
+  hits: { turn: number; kind: string; snippet: string; source: "live" | "archive"; match?: "keyword" | "semantic" | "both" }[];
 }
 
 export function HitGroupCard({ g, needles, showProject }: { g: HitGroup; needles: string[]; showProject: boolean }) {
@@ -63,6 +63,9 @@ export function HitGroupCard({ g, needles, showProject }: { g: HitGroup; needles
               <span className="font-mono text-[11px] text-[var(--tt-fg-dim)]">[turn {h.turn}]</span>
               <Badge variant="outline">{h.kind}</Badge>
               {h.source === "archive" && <Badge variant="neutral">archived</Badge>}
+              {(h.match === "semantic" || h.match === "both") && (
+                <Badge variant="brand" title={h.match === "both" ? "Matched by keyword and meaning" : "Matched by meaning"}>{h.match}</Badge>
+              )}
             </div>
             <p className="text-[12.5px] leading-relaxed text-[var(--tt-fg-muted)] whitespace-pre-wrap break-words">
               <Highlight text={h.snippet} needles={needles} />

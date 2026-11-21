@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { History, Search, AlertTriangle, RotateCw } from "lucide-react";
+import { History, Search, AlertTriangle, RotateCw, MessageSquare } from "lucide-react";
 
 import { useResource } from "@/lib/api";
 import { getAgent } from "@/lib/agents";
@@ -9,12 +9,14 @@ import { cn } from "@/lib/cn";
 import {
   PageHeader, Card, Button, EmptyState, Skeleton, AgentBadge,
 } from "@/components/ui";
+import { AskPanel } from "@/components/recall/AskPanel";
+import { SemanticControl, useRecallSemantic, type RecallSemantic } from "@/components/recall/SemanticControl";
 import { HitGroupCard, SessionHeadLine, type HitGroup } from "@/components/recall/SessionRow";
 import {
   RECALL_DEFAULT_MAX_SESSIONS, RECALL_WIDE_MAX_SESSIONS,
   fetchRecallSearch, queryNeedles, recallSessionsPath, localDayKey, localDayLabel,
   type RecallProjectsResponse, type RecallSessionsResponse, type RecallSearchResponse,
-  type RecallSession,
+  type RecallSession, type RecallMode,
 } from "@/lib/recall";
 
 const STORAGE_KEY = "tt-recall-project";
@@ -28,6 +30,7 @@ function storeProject(v: string) {
 }
 
 interface Submitted { q: string; maxSessions: number; nonce: number }
+type Tab = "search" | "ask";
 
 export default function RecallPage() {
   const { data: projectsData, loading: projectsLoading, error: projectsError, refetch } =
@@ -39,6 +42,13 @@ export default function RecallPage() {
   const [agents, setAgents] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [submitted, setSubmitted] = useState<Submitted | null>(null);
+  const [tab, setTab] = useState<Tab>("search");
+  // Empty means "server default".
+  const [mode, setMode] = useState<RecallMode | "">("");
+  const sem = useRecallSemantic();
+  const semEnabled = !!sem.settings?.semantic.enabled;
+  const defaultMode: RecallMode = sem.settings?.semantic.default_mode ?? "keyword";
+  const effectiveMode: RecallMode | null = semEnabled ? (mode || defaultMode) : null;
 
   useEffect(() => {
     // Restore after mount so server and client markup match.
@@ -85,6 +95,26 @@ export default function RecallPage() {
         icon={<History size={20} strokeWidth={2.25} />}
       />
 
+      <div role="tablist" aria-label="Recall mode" className="flex gap-1 border-b border-[var(--tt-border)]">
+        {([["search", "Search", Search], ["ask", "Ask", MessageSquare]] as const).map(([id, label, Icon]) => (
+          <button
+            key={id}
+            role="tab"
+            type="button"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={cn(
+              "inline-flex items-center gap-1.5 h-9 px-3 -mb-px border-b-2 text-[13px] font-medium transition-colors",
+              tab === id
+                ? "border-[var(--tt-brand)] text-[var(--tt-fg)]"
+                : "border-transparent text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)]",
+            )}
+          >
+            <Icon size={13} /> {label}
+          </button>
+        ))}
+      </div>
+
       {projectsError ? (
         <Card>
           <EmptyState
@@ -111,7 +141,7 @@ export default function RecallPage() {
                 </option>
               ))}
             </select>
-            <div className="relative flex-1">
+            {tab === "search" && (<div className="relative flex-1">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--tt-fg-dim)] pointer-events-none" />
               <input
                 type="text"
@@ -122,11 +152,11 @@ export default function RecallPage() {
                 onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
                 className="w-full h-9 pl-9 pr-3 rounded-[var(--tt-radius)] bg-[var(--tt-panel)] border border-[var(--tt-border)] text-[13px] text-[var(--tt-fg)] placeholder:text-[var(--tt-fg-faint)] hover:border-[var(--tt-border-strong)] focus:border-[color:var(--tt-brand)]/40 focus:outline-none focus:ring-1 focus:ring-[color:var(--tt-brand)]/30 transition-colors"
               />
-            </div>
+            </div>)}
           </div>
-          <p className="text-[11px] text-[var(--tt-fg-dim)] -mt-3">
+          {tab === "search" && (<p className="text-[11px] text-[var(--tt-fg-dim)] -mt-3">
             Press Enter to search. Put a phrase in double quotes to require it verbatim. Secrets are redacted in results.
-          </p>
+          </p>)}
 
           {selected && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--tt-fg-dim)]">
@@ -160,13 +190,48 @@ export default function RecallPage() {
             </div>
           )}
 
-          {submitted ? (
+          <SemanticControl sem={sem} project={effectiveProject} projectName={selected?.name ?? null} />
+
+          {tab === "search" && semEnabled && (
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Search mode">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Mode</span>
+              {(["keyword", "hybrid", "semantic"] as const).map((m) => {
+                const on = effectiveMode === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      setMode(m);
+                      setSubmitted((s) => (s ? { ...s, nonce: s.nonce + 1 } : s));
+                    }}
+                    className={cn(
+                      "h-7 px-2.5 rounded-full border text-[12px] font-medium capitalize transition-colors",
+                      on
+                        ? "border-[color:var(--tt-brand)]/40 text-[var(--tt-brand)] bg-[color:var(--tt-brand-glow)]"
+                        : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1",
+                    )}
+                  >
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {tab === "ask" ? (
+            <AskPanel project={effectiveProject} agents={activeAgents} />
+          ) : submitted ? (
             <SearchResults
               submitted={submitted}
               project={effectiveProject}
               agents={activeAgents}
               showProject={!selected}
               onSearchMore={searchMore}
+              mode={effectiveMode}
+              sem={sem}
+              projectName={selected?.name ?? null}
             />
           ) : (
             <Timeline
@@ -257,8 +322,9 @@ function Timeline({ ready, project, agents, showProject, hasProjects }: {
   );
 }
 
-function SearchResults({ submitted, project, agents, showProject, onSearchMore }: {
+function SearchResults({ submitted, project, agents, showProject, onSearchMore, mode, sem, projectName }: {
   submitted: Submitted; project: string; agents: string[]; showProject: boolean; onSearchMore: () => void;
+  mode: RecallMode | null; sem: RecallSemantic; projectName: string | null;
 }) {
   const [state, setState] = useState<{
     loading: boolean; error: string | null; data: RecallSearchResponse | null;
@@ -277,6 +343,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore }
         project: project || null,
         agents: agentsKey ? agentsKey.split(",") : [],
         maxSessions: submitted.maxSessions,
+        mode,
       },
       ctl.signal,
     )
@@ -286,7 +353,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore }
         setState({ loading: false, error: e instanceof Error ? e.message : String(e), data: null });
       });
     return () => ctl.abort();
-  }, [submitted.q, submitted.maxSessions, submitted.nonce, project, agentsKey]);
+  }, [submitted.q, submitted.maxSessions, submitted.nonce, project, agentsKey, mode]);
 
   const needles = useMemo(() => queryNeedles(submitted.q), [submitted.q]);
   const { loading, error, data } = state;
@@ -304,7 +371,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore }
         };
         map.set(k, g);
       }
-      g.hits.push({ turn: h.turn, kind: h.kind, snippet: h.snippet, source: h.source });
+      g.hits.push({ turn: h.turn, kind: h.kind, snippet: h.snippet, source: h.source, match: h.match });
     }
     return Array.from(map.values());
   }, [data]);
@@ -322,6 +389,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore }
   const cov = data.coverage;
   const incomplete = cov.sessions_skipped > 0 || cov.timed_out || cov.truncated > 0;
   const byAgent = Object.entries(data.by_agent).sort((a, b) => b[1] - a[1]);
+  const unindexed = cov.semantic && cov.semantic.mode !== "keyword" ? cov.semantic.unindexed_sessions : 0;
   const canWiden = submitted.maxSessions < RECALL_WIDE_MAX_SESSIONS && cov.skipped_reason === "max_sessions";
 
   return (
@@ -363,6 +431,22 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore }
             <Button size="sm" onClick={onSearchMore} disabled={loading}>
               Search more ({RECALL_WIDE_MAX_SESSIONS} sessions)
             </Button>
+          )}
+        </div>
+      )}
+
+      {unindexed > 0 && (
+        <div role="status" className="flex flex-wrap items-center gap-3 rounded-[var(--tt-radius)] border border-[var(--tt-border)] bg-[var(--tt-sunken)] px-3 py-2 text-[12px] text-[var(--tt-fg-muted)]">
+          <span className="flex-1 min-w-[220px] tabular">
+            {unindexed} of {cov.semantic!.indexed_sessions + unindexed} searched {unindexed === 1 ? "session is" : "sessions are"} not indexed and matched by keyword only.
+          </span>
+          {sem.settings?.ollama.reachable && sem.settings.ollama.model_installed && sem.index?.state !== "running" && (
+            <Button size="sm" disabled={sem.busy} onClick={() => void sem.build(project || null)}>
+              {project ? `Build index for ${projectName ?? "this project"}` : "Build index"}
+            </Button>
+          )}
+          {sem.index?.state === "running" && (
+            <span className="tabular text-[var(--tt-fg-dim)]">Indexing {sem.index.sessions_done + sem.index.sessions_skipped}/{sem.index.sessions_total}</span>
           )}
         </div>
       )}
