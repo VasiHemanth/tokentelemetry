@@ -12206,10 +12206,59 @@ async def recall_sessions(project: Optional[str] = None, agent: Optional[str] = 
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- v2: semantic index and the Ask agent (docs/design/cross-harness-recall-v2.md)
+import queue as _recall_queue
+from fastapi.responses import StreamingResponse
+import threading as _recall_threading
+import recall_agent as _recall_agent
+import recall_index as _recall_index
+
+_recall_store: Optional[Any] = None
+_recall_job: Optional[Any] = None
+_recall_lock = _recall_threading.RLock()
+
+
+def _recall_get_store():
+    global _recall_store
+    with _recall_lock:
+        if _recall_store is None:
+            _recall_store = _recall_index.VectorStore(_recall_index.index_path())
+        return _recall_store
+
+
+def _recall_embedder(sem: Dict[str, Any]):
+    return _recall_index.OllamaEmbedder(sem["ollama_url"], sem["model"], sem["dims"])
+
+
+def _recall_mode(mode: Optional[str]):
+    """Resolve the requested mode against settings. Returns (mode, semantic
+    bundle or None). Raises ValueError for a bad or unavailable mode."""
+    sem = _recall_index.load_settings()["semantic"]
+    if mode is not None and mode not in _recall.MODES:
+        raise ValueError("mode must be keyword, semantic or hybrid")
+    if not sem["enabled"]:
+        if mode in ("semantic", "hybrid"):
+            raise ValueError("semantic search is off; enable it on the Recall page first")
+        return "keyword", None
+    mode = mode or sem["default_mode"]
+    if mode == "keyword":
+        return mode, None
+    return mode, _recall_index.make_semantic(_recall_get_store(), _recall_embedder(sem))
+
+
+def _recall_search_core(sessions, q, project, agent, since, limit, cap, mode):
+    """Blocking search shared by /recall/search and the Ask agent."""
+    mode, semantic = _recall_mode(mode)
+    return _recall.search(
+        sessions, _recall_load_chunks, q, project, agent, since, limit, cap,
+        unassigned=ANTIGRAVITY_UNASSIGNED, mode=mode, semantic=semantic)
+
+
 @app.get("/recall/search")
 async def recall_search(q: Optional[str] = None, project: Optional[str] = None,
                         agent: Optional[str] = None, since: Optional[str] = None,
-                        limit: Optional[str] = None, max_sessions: Optional[str] = None):
+                        limit: Optional[str] = None, max_sessions: Optional[str] = None,
+                        mode: Optional[str] = None):
     if q is None or not (1 <= len(q.strip()) <= 300):
         raise HTTPException(status_code=400, detail="q is required (1 to 300 characters)")
     n = _recall_int(limit, "limit", 20, 1, 100)
@@ -12217,10 +12266,197 @@ async def recall_search(q: Optional[str] = None, project: Optional[str] = None,
     sessions = await get_sessions_cached()
     try:
         return await _recall_asyncio.to_thread(
-            _recall.search, sessions, _recall_load_chunks, q.strip(), project, agent, since, n, cap,
-            unassigned=ANTIGRAVITY_UNASSIGNED)
+            _recall_search_core, sessions, q.strip(), project, agent, since, n, cap, mode or None)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except _recall_index.EmbedError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+def _recall_settings_view() -> Dict[str, Any]:
+    """Blocking: settings plus a live Ollama probe and index stats."""
+    sem = _recall_index.load_settings()["semantic"]
+    probe = _recall_embedder(sem).probe()
+    stats = _recall_get_store().stats(sem["model"])
+    return {"semantic": sem, "ollama": probe, "index": stats}
+
+
+@app.get("/recall/settings")
+async def recall_get_settings():
+    return await _recall_asyncio.to_thread(_recall_settings_view)
+
+
+@app.put("/recall/settings")
+async def recall_put_settings(body: dict = Body(...)):
+    try:
+        _recall_index.update_settings(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _recall_asyncio.to_thread(_recall_settings_view)
+
+
+@app.get("/recall/index/status")
+async def recall_index_status():
+    job = _recall_job
+    return job.status() if job is not None else _recall_index._blank_status()
+
+
+@app.post("/recall/index")
+async def recall_index_start(body: Optional[dict] = Body(default=None)):
+    global _recall_job
+    project = (body or {}).get("project")
+    if project is not None and not isinstance(project, str):
+        raise HTTPException(status_code=400, detail="project must be a string or null")
+    project = (project or "").strip() or None
+    sem = _recall_index.load_settings()["semantic"]
+    if not sem["enabled"]:
+        raise HTTPException(status_code=400, detail="semantic search is off; enable it first")
+    sessions = await get_sessions_cached()
+    if project:
+        proj, _metas = _recall._select(sessions, project, None, None, ANTIGRAVITY_UNASSIGNED)
+        if proj is None:
+            raise HTTPException(status_code=400, detail=f"no project matches {project!r}")
+
+    def select(ss, pr):
+        return _recall._select(ss, pr, None, None, ANTIGRAVITY_UNASSIGNED)
+
+    with _recall_lock:
+        if _recall_job is not None and _recall_job.status()["state"] == "running":
+            return JSONResponse(status_code=409, content=_recall_job.status())
+        job = _recall_index.IndexJob(
+            _recall_get_store(), _recall_embedder(sem), _recall_load_chunks, select)
+        try:
+            status = job.start(sessions, project)
+        except _recall_index.JobBusy as e:
+            return JSONResponse(status_code=409, content=e.status)
+        _recall_job = job
+    return status
+
+
+_RECALL_ASK_DONE = object()
+
+
+def _recall_ndjson(event: Dict[str, Any]) -> bytes:
+    return (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+@app.post("/recall/ask")
+async def recall_ask(request: Request, body: dict = Body(...)):
+    question = body.get("question")
+    if not isinstance(question, str) or not (1 <= len(question.strip()) <= 1000):
+        raise HTTPException(status_code=400, detail="question is required (1 to 1000 characters)")
+    question = question.strip()
+    project = body.get("project")
+    agent = body.get("agent")
+    if project is not None and not isinstance(project, str):
+        raise HTTPException(status_code=400, detail="project must be a string")
+    if agent is not None and not isinstance(agent, str):
+        raise HTTPException(status_code=400, detail="agent must be a string")
+    project = (project or "").strip() or None
+    agent = (agent or "").strip() or None
+
+    cfg = _recall_summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    sessions = await get_sessions_cached()
+    try:
+        proj, _metas = _recall._select(sessions, project, agent, None, ANTIGRAVITY_UNASSIGNED)
+        mode, _sem = _recall_mode(None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if project and proj is None:
+        raise HTTPException(status_code=400, detail=f"no project matches {project!r}")
+
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    cancel = _recall_threading.Event()
+    # Capacity 1: the worker stays at most one event ahead of the client, so
+    # a disconnect stops it before it spends another LLM call.
+    q: "_recall_queue.Queue" = _recall_queue.Queue(maxsize=1)
+
+    def put(item) -> bool:
+        while not cancel.is_set():
+            try:
+                q.put(item, timeout=0.2)
+                return True
+            except _recall_queue.Full:
+                continue
+        return False
+
+    # The model chooses tool arguments, and session text can try to steer it,
+    # so both tools stay inside the project and agent scope the user picked.
+    in_scope = {(m["agent"], m["id"]) for m in _metas}
+    user_agents = _recall.parse_agents(agent)
+
+    def a_search(query, agent=None, mode=None):
+        wanted = _recall.parse_agents(agent)
+        if user_agents:
+            wanted = (wanted & user_agents) if wanted else user_agents
+            if not wanted:
+                wanted = user_agents
+        eff = ",".join(sorted(wanted)) if wanted else None
+        return _recall_search_core(sessions, query, project, eff, None, 15, 60, mode or None)
+
+    def a_read(agent_name, sid, offset=0):
+        if (agent_name, sid) not in in_scope:
+            raise ValueError("that session is outside the project and agents this question is limited to")
+        meta = next((x for x in sessions if x.get("id") == sid and x.get("agent") == agent_name), None)
+        loaded = _recall_load_chunks(agent_name, sid)
+        if loaded is None:
+            raise ValueError("session not found")
+        chunks, source = loaded
+        return _recall.read_session(meta, chunks, source, agent_name, sid, offset, 40, None,
+                                    unassigned=ANTIGRAVITY_UNASSIGNED)
+
+    def worker():
+        from summarizers.errors import classify as _classify_err
+
+        def fail(msg: str):
+            put({"type": "error", "error_info": _classify_err(msg, backend_name=backend_name or "")})
+
+        try:
+            if not (sm and sm.is_available()):
+                fail(f"summarizer '{backend_name}' is not available")
+                return
+            gen = _recall_agent.run(
+                question, proj or project, agent,
+                llm=lambda p: _recall_summaries.ask_untrusted(sm, p),
+                search=a_search, read_session=a_read, cancelled=cancel.is_set)
+            for ev in gen:
+                if not put(ev):
+                    break
+        except SummarizerError as e:
+            fail(str(e))
+        except Exception as e:  # noqa: BLE001 - never surface a raw trace
+            fail(f"{type(e).__name__}: {e}")
+        finally:
+            put(_RECALL_ASK_DONE)
+
+    async def stream():
+        t = _recall_threading.Thread(target=worker, daemon=True, name="recall-ask")
+        try:
+            yield _recall_ndjson({"type": "status", "summarizer": backend_name, "mode": mode,
+                                  "project": proj})
+            t.start()
+            while True:
+                try:
+                    item = await _recall_asyncio.to_thread(q.get, True, 0.5)
+                except _recall_queue.Empty:
+                    if await request.is_disconnected():
+                        break
+                    continue
+                if item is _RECALL_ASK_DONE:
+                    break
+                yield _recall_ndjson(item)
+                if await request.is_disconnected():
+                    break
+        finally:
+            cancel.set()
+
+    return StreamingResponse(
+        stream(), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/recall/session/{agent}/{session_id}")

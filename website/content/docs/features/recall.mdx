@@ -10,8 +10,8 @@ Recall puts the sessions from all your coding agents into one searchable corpus.
 Three properties hold for the whole feature:
 
 - **Secrets are redacted.** API keys, tokens, JWTs, private keys, passwords in URLs and key/value secrets are replaced with `[REDACTED:<kind>]` before any snippet, title or turn is returned. The dashboard and the MCP server get the same redacted text.
-- **Nothing leaves the machine.** Recall reads local files and answers over localhost. It adds no network calls and no telemetry events.
-- **TokenTelemetry runs no model.** Search is lexical and runs when you ask. When an agent uses Recall through MCP, that agent does the reasoning with its own model.
+- **Nothing leaves the machine by default.** Recall reads local files and answers over localhost. It adds no network calls and no telemetry events. Semantic search talks only to Ollama on loopback. The Ask agent sends redacted excerpts to the summarizer you configured, which is a network call if that summarizer is hosted.
+- **Keyword search runs no model.** It is lexical and runs when you ask. Ask and semantic search use models you configured: a summarizer and a local embedding model. When an agent uses Recall through MCP, that agent does the reasoning with its own model.
 
 ## The Recall page
 
@@ -23,6 +23,45 @@ Open **Recall** in the dashboard (`/recall`).
 4. Open a hit to go to its session trace.
 
 Each hit shows the agent, the session title (the first prompt, redacted and trimmed), the model, the cost and a snippet of the matching text. The results also report how many sessions were searched, so a short list is not mistaken for a short history.
+
+## Ask a question
+
+The **Ask** tab on the Recall page answers a question in prose, with citations, instead of returning a list of hits. Type the question, scope it with the project and agent filters, and press Enter. Shift+Enter starts a new line.
+
+While it runs, each step appears on its own line: the search it ran, the session it opened. When the answer arrives, it names the summarizer that wrote it and how long it took. Citations such as `[S1]` link to the session they came from.
+
+- **Which model answers.** The summarizer set in Settings. Claude CLI, Codex CLI, Ollama and OpenAI-compatible backends all work. CLI agents run without tools, so the model sees only the evidence Recall passes in.
+- **Steps.** The loop runs at most six steps and stops after about three minutes. The model can search again with different words, read a session in full, or answer. At the limit it answers from the evidence it has.
+- **Citations.** Every citation points to a session that Recall searched or read. If the answer says the history does not cover a topic, the searched sessions did not contain it.
+- **Every agent.** Ask searches the same sessions as the Recall page, from every agent TokenTelemetry parses.
+- **Cost and cancellation.** Each question uses your summarizer's quota, up to six calls. Closing the tab stops further calls.
+
+Ask needs AI summaries turned on in Settings. Without them, the page shows a message that points there.
+
+## Semantic search
+
+Keyword search finds a session when your query uses the words in the transcript. Semantic search also finds sessions that discuss the same idea in other words. It is off by default.
+
+To turn it on:
+
+1. Install a recent [Ollama](https://ollama.com) and keep it running on this machine.
+2. Pull the embedding model:
+
+```bash
+ollama pull embeddinggemma-2:740m
+```
+
+3. Open **Recall**, pick a project, and choose **Build index for &lt;project name&gt;** (or **Build index for all projects** with no project selected). The status shows sessions done out of the total. Sessions that have not changed since the last build are skipped.
+
+Notes:
+
+- The index is per project and lives in `~/.tokentelemetry/recall_index.db`. Embeddings are computed from redacted text and nothing is sent to a remote service.
+- The Ollama URL must be a loopback address (`127.0.0.1`, `localhost` or `::1`). Other addresses are rejected.
+- Keyword stays the default. Searches use keyword until you pick **Hybrid**, which combines both rankings. To make Hybrid the default, set `"default_mode": "hybrid"` in `~/.tokentelemetry/recall.json`.
+- Hybrid also searches sessions that have no index yet, through keyword only. The results report how many searched sessions are unindexed, and the page offers to build the index.
+- Hits found by vector matching carry a `semantic` or `both` tag.
+- If the model is missing or Ollama is not running, the status shows the error and the command that fixes it.
+- Changing the model leaves the old index on disk. It is ignored until you rebuild.
 
 ## MCP server
 
@@ -153,8 +192,10 @@ The MCP server exposes four tools. Each one maps to a Recall endpoint.
 | --- | --- | --- |
 | `list_projects` | Projects with session counts, agents and last activity | none |
 | `list_sessions` | Sessions in a project, newest first. Optional `project`, `agent`, `since`, `limit` | none |
-| `search_sessions` | Lexical search across sessions. Optional `project`, `agent`, `since`, `limit`, `max_sessions` | `query` |
+| `search_sessions` | Search across sessions in `keyword`, `semantic` or `hybrid` mode. Optional `project`, `agent`, `since`, `limit`, `max_sessions`, `mode` | `query` |
 | `read_session` | One session's text in order, paged with `offset` | `agent`, `session_id` |
+
+`search_sessions` takes an optional `mode`. Without it, the server uses the default mode from `recall.json`, which is `keyword` unless you changed it. `semantic` and `hybrid` need semantic search turned on and an index built for the project. Otherwise the call returns the server's error, which names the fix. The output header shows the mode used and how many searched sessions are indexed.
 
 Transcript text (snippets, chunks, titles) comes back inside `<untrusted_session_data>` tags. The tool descriptions tell the agent that this is data from past sessions, not instructions. The `search_sessions` description also tells the agent to narrow by `project` first and to read the `coverage` block before concluding that something was never discussed.
 
@@ -169,7 +210,7 @@ Ask in plain language. The agent calls the tools itself and narrows the search.
 
 ## Limits and coverage
 
-- **On demand.** Each search parses transcripts when you ask. Recall builds no index and stores no full text, so latency grows with the size of your history. A full-text index is the planned follow-up if on-demand search gets slow.
+- **On demand.** Keyword search parses transcripts when you ask and stores no index. Semantic search reads the vector index you build and still parses the candidate sessions to check that the index is current. Recall stores no transcript text. Latency grows with the size of your history. A full-text index is the planned follow-up if on-demand search gets slow.
 - **Newest 60 sessions by default.** A search opens at most `max_sessions` sessions (default 60, maximum 300), newest first. The `coverage` block reports how many candidates were skipped and why.
 - **20 second budget.** A search stops opening new sessions after 20 seconds and sets `timed_out` in `coverage`.
 - **Long transcripts are cut.** A transcript with more than 20,000 chunks keeps its last 20,000. `coverage.truncated` counts these.

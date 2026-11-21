@@ -1,4 +1,5 @@
-import { api } from "@/lib/api";
+import { api, apiFetch } from "@/lib/api";
+import type { SummaryErrorInfo } from "@/lib/summarizer";
 
 // Types mirror docs/design/cross-harness-recall.md. Keep them in step with it.
 
@@ -53,6 +54,17 @@ export interface RecallHit {
   snippet: string;
   score: number;
   source: "live" | "archive";
+  match?: RecallMatch;
+}
+
+export type RecallMode = "keyword" | "semantic" | "hybrid";
+export type RecallMatch = "keyword" | "semantic" | "both";
+
+export interface RecallSemanticCoverage {
+  mode: RecallMode;
+  model: string;
+  indexed_sessions: number;
+  unindexed_sessions: number;
 }
 
 export interface RecallCoverage {
@@ -64,6 +76,7 @@ export interface RecallCoverage {
   truncated: number;
   timed_out: boolean;
   agents_scanned: string[];
+  semantic?: RecallSemanticCoverage;
 }
 
 export interface RecallSearchResponse {
@@ -80,6 +93,7 @@ export interface RecallSearchParams {
   agents?: string[];
   limit?: number;
   maxSessions?: number;
+  mode?: RecallMode | null;
 }
 
 export const RECALL_DEFAULT_MAX_SESSIONS = 60;
@@ -114,6 +128,7 @@ export function fetchRecallSearch(p: RecallSearchParams, signal?: AbortSignal): 
       agent: p.agents && p.agents.length ? p.agents.join(",") : undefined,
       limit: p.limit,
       max_sessions: p.maxSessions,
+      mode: p.mode,
     })}`,
     { signal },
   );
@@ -182,4 +197,179 @@ export function localDayLabel(ts: string | null | undefined): string {
 
 export function recallSessionHref(agent: string, id: string): string {
   return `/sessions/${encodeURIComponent(id)}?agent=${encodeURIComponent(agent)}&from=${encodeURIComponent("/recall")}`;
+}
+
+// ---- v2: semantic settings, index, Ask agent (docs/design/cross-harness-recall-v2.md) ----
+
+export interface RecallSettings {
+  semantic: { enabled: boolean; model: string; ollama_url: string; default_mode?: RecallMode; dims?: number };
+  ollama: { reachable: boolean; version: string | null; model_installed: boolean; error: string | null };
+  index: { chunks: number; sessions: number; model: string | null; bytes: number; updated_at: string | null };
+}
+
+export interface RecallIndexStatus {
+  state: "idle" | "running" | "done" | "error";
+  project: RecallProjectRef | null;
+  sessions_total: number;
+  sessions_done: number;
+  sessions_skipped: number;
+  chunks_embedded: number;
+  chunks_per_sec: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+export function fetchRecallSettings(signal?: AbortSignal): Promise<RecallSettings> {
+  return api<RecallSettings>("/recall/settings", { signal });
+}
+
+export async function putRecallSettings(semantic: Partial<RecallSettings["semantic"]>): Promise<RecallSettings> {
+  const res = await apiFetch("/recall/settings", {
+    method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ semantic }),
+  });
+  if (!res.ok) throw new Error(await errorDetail(res));
+  return res.json() as Promise<RecallSettings>;
+}
+
+export function fetchRecallIndexStatus(signal?: AbortSignal): Promise<RecallIndexStatus> {
+  return api<RecallIndexStatus>("/recall/index/status", { signal });
+}
+
+/** Start an index build. A 409 means one is already running; its status comes back as the body. */
+export async function startRecallIndex(project: string | null): Promise<RecallIndexStatus> {
+  const res = await apiFetch("/recall/index", {
+    method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ project }),
+  });
+  if (res.ok || res.status === 409) {
+    try { return (await res.json()) as RecallIndexStatus; } catch { /* fall through */ }
+  }
+  throw new Error(await errorDetail(res));
+}
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    const d = body?.detail ?? body?.message;
+    if (typeof d === "string") return d;
+    if (d && typeof d.message === "string") return d.message;
+  } catch { /* not json */ }
+  return `${res.status} ${res.statusText}`;
+}
+
+export type RecallSemanticState =
+  | { kind: "off" }
+  | { kind: "unreachable"; message: string }
+  | { kind: "model_missing"; message: string; command: string | null }
+  | { kind: "indexing"; done: number; total: number }
+  | { kind: "not_indexed" }
+  | { kind: "ready"; chunks: number };
+
+/** Collapse settings plus index status into the single chip the UI shows. */
+export function semanticState(s: RecallSettings, idx: RecallIndexStatus | null): RecallSemanticState {
+  if (!s.semantic.enabled) return { kind: "off" };
+  if (!s.ollama.reachable) {
+    return { kind: "unreachable", message: s.ollama.error || "Ollama is not reachable." };
+  }
+  if (!s.ollama.model_installed) {
+    const m = (s.ollama.error ?? "").match(/Run:\s*(.+)$/);
+    return {
+      kind: "model_missing",
+      message: s.ollama.error || `Model ${s.semantic.model} is not installed.`,
+      command: m ? m[1].trim() : `ollama pull ${s.semantic.model}`,
+    };
+  }
+  if (idx && idx.state === "running") {
+    return { kind: "indexing", done: idx.sessions_done + idx.sessions_skipped, total: idx.sessions_total };
+  }
+  if (s.index.chunks === 0) return { kind: "not_indexed" };
+  return { kind: "ready", chunks: s.index.chunks };
+}
+
+export type AskEvent =
+  | { type: "status"; summarizer: string; mode: RecallMode; project: RecallProjectRef | null }
+  | { type: "step"; n: number; thought?: string; action: string; args: Record<string, unknown> }
+  | { type: "observation"; n: number; summary: string; sessions?: string[] }
+  | {
+      type: "answer"; text: string; citations: AskCitation[]; steps: number; elapsed_s: number;
+    }
+  | { type: "error"; error_info: SummaryErrorInfo };
+
+export interface AskCitation {
+  label: string;
+  agent: string;
+  id: string;
+  title: string;
+  last_ts: string | null;
+  turn?: number;
+}
+
+export class AskHttpError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+/** POST /recall/ask and yield NDJSON events as they arrive. Partial lines are buffered. */
+export async function* streamRecallAsk(
+  body: { question: string; project: string | null; agent: string | null },
+  signal: AbortSignal,
+): AsyncGenerator<AskEvent> {
+  const res = await apiFetch("/recall/ask", {
+    method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body), signal,
+  });
+  if (!res.ok) throw new AskHttpError(res.status, await errorDetail(res));
+  if (!res.body) throw new Error("The server returned no body.");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const parse = (line: string): AskEvent | null => {
+    const t = line.trim();
+    if (!t) return null;
+    try { return JSON.parse(t) as AskEvent; } catch { return null; }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const ev = parse(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (ev) yield ev;
+      }
+    }
+    buf += dec.decode();
+    const last = parse(buf);
+    if (last) yield last;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+const MONTH_DAY = { month: "short", day: "numeric" } as const;
+
+/** One compact line per agent step, e.g. Searching "x" or Reading Codex session "t" · Mar 17. */
+export function describeStep(
+  ev: Extract<AskEvent, { type: "step" }>,
+  titleFor?: (agent: string, id: string) => { title: string; ts: string | null } | null,
+  agentLabel: (a: string) => string = (a) => a,
+): string {
+  const a = ev.args ?? {};
+  if (ev.action === "search") {
+    const q = typeof a.query === "string" ? a.query : "";
+    return `Searching "${q}"`;
+  }
+  if (ev.action === "read_session") {
+    const agent = typeof a.agent === "string" ? a.agent : "";
+    const sid = typeof a.session_id === "string" ? a.session_id : "";
+    const info = titleFor?.(agent, sid) ?? null;
+    const who = agent ? `${agentLabel(agent)} session` : "session";
+    const title = info?.title ? ` "${info.title}"` : sid ? ` ${sid.slice(0, 8)}` : "";
+    const when = info?.ts ? new Date(info.ts) : null;
+    const date = when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString(undefined, MONTH_DAY)}` : "";
+    return `Reading ${who}${title}${date}`;
+  }
+  return ev.action === "answer" ? "Writing the answer" : ev.action;
 }

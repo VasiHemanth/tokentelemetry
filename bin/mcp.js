@@ -133,6 +133,14 @@ function describeCoverage(c) {
   if (c.truncated) parts.push(`${c.truncated} truncated`);
   if (c.timed_out) parts.push('timed out');
   if (Array.isArray(c.agents_scanned) && c.agents_scanned.length) parts.push(`agents: ${c.agents_scanned.join(', ')}`);
+  const sem = c.semantic;
+  if (sem && typeof sem === 'object') {
+    parts.push(
+      sem.indexed_sessions === undefined
+        ? `mode: ${meta(sem.mode)}`
+        : `mode: ${meta(sem.mode)}, semantic index: ${sem.indexed_sessions} indexed, ${sem.unindexed_sessions ?? 'n/a'} keyword-only`,
+    );
+  }
   return 'coverage: ' + parts.join('; ');
 }
 
@@ -168,13 +176,14 @@ function formatSearch(data) {
   const byAgent = Object.entries(data.by_agent || {}).map(([a, n]) => `${a}=${n}`).join(', ');
   const lines = [
     `query: ${JSON.stringify(data.query)} | project: ${projectLabel(data.project)} | ${hits.length} hits` +
+      (data.coverage && data.coverage.semantic && data.coverage.semantic.mode ? ` | mode: ${meta(data.coverage.semantic.mode)}` : '') +
       (byAgent ? ` (before limit: ${byAgent})` : ''),
     describeCoverage(data.coverage),
   ];
   hits.forEach((h, i) => {
     lines.push('');
     lines.push(
-      `#${i + 1} agent: ${meta(h.agent)} | session_id: ${meta(h.id)} | project: ${meta(h.project)} | model: ${meta(h.model)} | cost: ${money(h.cost)} | turn: ${h.turn} | kind: ${h.kind} | score: ${h.score} | source: ${h.source} | last: ${h.last_ts || 'n/a'}`,
+      `#${i + 1} agent: ${meta(h.agent)} | session_id: ${meta(h.id)} | project: ${meta(h.project)} | model: ${meta(h.model)} | cost: ${money(h.cost)} | turn: ${h.turn} | kind: ${h.kind} | score: ${h.score}${h.match ? ` | match: ${meta(h.match)}` : ''} | source: ${h.source} | last: ${h.last_ts || 'n/a'}`,
     );
     lines.push(`title: ${fence(h.title)}`);
     lines.push(`snippet: ${fence(h.snippet)}`);
@@ -259,12 +268,17 @@ const TOOLS = [
         since: { type: 'string', description: 'ISO date or datetime.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max hits. Default 20.' },
         max_sessions: { type: 'integer', minimum: 1, maximum: 300, description: 'Newest sessions to open. Default 60.' },
+        mode: {
+          type: 'string',
+          enum: ['keyword', 'semantic', 'hybrid'],
+          description: 'Ranking. Omit to use the configured default. semantic and hybrid need semantic search enabled in TokenTelemetry.',
+        },
       },
       required: ['query'],
       additionalProperties: false,
     },
     route: (a) => ['/recall/search', {
-      q: a.query, project: a.project, agent: listArg(a.agent), since: a.since, limit: a.limit, max_sessions: a.max_sessions,
+      q: a.query, project: a.project, agent: listArg(a.agent), since: a.since, limit: a.limit, max_sessions: a.max_sessions, mode: a.mode,
     }],
     format: formatSearch,
   },
