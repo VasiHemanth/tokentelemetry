@@ -275,3 +275,27 @@ On the Recall page, beside search:
   stripping of injected tags, prompt cap.
 - Settings: loopback validation.
 - MCP: `mode` passthrough.
+
+## Next phase: topic drift and carried-context cost
+
+Not built in v2; the index is designed so it can be.
+
+A long session often wanders: the user starts on the render pipeline, then
+asks about thumbnails, then a deploy error. Every turn after a switch still
+re-sends the earlier, unrelated context, so tokens are spent re-reading
+material that no longer matters.
+
+- **Detect diversions** from the same embeddings: embed each user turn and
+  compare it with the running centroid of the current topic segment. A
+  similarity drop below a threshold starts a new segment.
+- **Estimate the carried cost** from the per-turn usage TokenTelemetry
+  already records: for each turn after a switch, the input (and cache-read)
+  tokens attributable to earlier segments, priced with the session's model
+  rates.
+- **Report** per session: number of diversions, tokens and cost re-read from
+  earlier topics, and the turn where starting a fresh session would have
+  saved the most. Roll up per project and per agent.
+
+Open questions for that phase: threshold calibration against hand-labelled
+sessions, and how to attribute context when an agent compacts or summarizes
+its history mid-session.
