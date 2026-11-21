@@ -449,7 +449,13 @@ def run(
             yield {"type": "step", "n": n, "thought": action["thought"], "action": "search", "args": shown}
             yield from do_search(n, args["query"], agent, mode)
         else:
-            sid = str(args["session_id"])
+            sid = str(args["session_id"]).strip()
+            # Models often pass the evidence label ("S10", "[S10]") instead of
+            # the session id shown beside it; resolve it to that session.
+            lab = sid.strip("[]").upper()
+            if lab in ev.info:
+                args = dict(args, agent=ev.info[lab]["agent"])
+                sid = ev.info[lab]["id"]
             try:
                 offset = max(0, int(args.get("offset") or 0))
             except (TypeError, ValueError):
