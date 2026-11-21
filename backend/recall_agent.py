@@ -42,10 +42,13 @@ Rules:
   technical terms (names of files, functions, libraries, error messages)
   instead of repeating the question.
 - If a hit looks relevant but its snippet is thin, call read_session on it.
+- If the question could refer to more than one distinct feature, decision or
+  event, look for each candidate with its own specific terms and report all of
+  them, saying which fits the question best. Do not stop at the first match.
 
 Tools (the "action" field):
 - search: args {"query": "words to look for", "agent": "optional agent name",
-  "mode": "optional keyword|semantic|hybrid"}
+  "mode": "optional, one of SEARCH MODES AVAILABLE below"}
 - read_session: args {"agent": "codex", "session_id": "the session id", "offset": 0}
   Reads the chunks of one session starting at chunk index offset. Use the agent
   and id shown on the evidence line for the label you want.
@@ -251,8 +254,10 @@ def _build_prompt(
     must_answer: bool,
     step_note: str,
     retry: bool,
+    modes: Sequence[str] = ("keyword",),
 ) -> str:
-    head_parts = [_PREAMBLE, "", "PROJECT: %s" % _project_name(project)]
+    head_parts = [_PREAMBLE, "", "PROJECT: %s" % _project_name(project),
+                  "SEARCH MODES AVAILABLE: %s" % ", ".join(modes)]
     if scope:
         head_parts.append("AGENT FILTER: %s" % scope)
     head_parts += ["", "QUESTION:", question]
@@ -371,7 +376,12 @@ def run(
     budget_s: float = 180,
     clock: Callable[[], float] = time.monotonic,
     cancelled: Callable[[], bool] = lambda: False,
+    modes: Sequence[str] = ("keyword",),
 ) -> Iterator[Dict[str, Any]]:
+    """``modes`` lists the search modes that work right now; a mode the model
+    asks for outside it is dropped so the search runs in the default mode
+    instead of failing."""
+    modes = tuple(m for m in modes if m in VALID_MODES) or ("keyword",)
     start = clock()
     ev = _Evidence()
     scope = _norm_agents(agents)
@@ -412,7 +422,7 @@ def run(
                 return
             must = n == max_steps or (clock() - start) >= budget_s
             note = "Step %d of %d." % (n, max_steps)
-            prompt = _build_prompt(question, project, scope, ev, must, note, retry=attempt == 1)
+            prompt = _build_prompt(question, project, scope, ev, must, note, retry=attempt == 1, modes=modes)
             raw = llm(prompt)
             action = parse_action(raw)
             if action:
@@ -429,7 +439,7 @@ def run(
             action = None
             break
         if action["action"] == "search":
-            mode = args.get("mode") if args.get("mode") in VALID_MODES else None
+            mode = args.get("mode") if args.get("mode") in modes else None
             agent = args.get("agent") if isinstance(args.get("agent"), str) and args.get("agent") else scope
             shown = {"query": args["query"]}
             if args.get("agent"):
@@ -459,7 +469,7 @@ def run(
     if cancelled():
         yield {"type": "cancelled"}
         return
-    prompt = _build_prompt(question, project, scope, ev, True, "Final step.", retry=False)
+    prompt = _build_prompt(question, project, scope, ev, True, "Final step.", retry=False, modes=modes)
     raw = llm(prompt)
     parsed = parse_action(raw)
     if parsed and parsed["action"] == "answer":
