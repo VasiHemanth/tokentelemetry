@@ -40,10 +40,22 @@ File: `data_dir()/recall.json`.
   "semantic": {
     "enabled": false,
     "model": "embeddinggemma-2:740m",
-    "ollama_url": "http://127.0.0.1:11434"
+    "ollama_url": "http://127.0.0.1:11434",
+    "dims": 256,
+    "default_mode": "keyword"
   }
 }
 ```
+
+- `dims`: one of 128, 256, 512, 768. EmbeddingGemma is trained with
+  Matryoshka representation learning, so the first `dims` values of a vector
+  are a valid smaller embedding: truncate client-side, then re-normalize.
+  256 keeps the index ~3x smaller and faster than 768; the benchmark decides
+  whether quality allows it.
+- `default_mode`: the mode `/recall/search` and the Ask agent use when the
+  caller does not pass one. Ships as `keyword`; it moves to `hybrid` only
+  after the benchmark shows paraphrase recall improves while keyword recall
+  holds.
 
 ### `GET /recall/settings`
 
@@ -87,7 +99,21 @@ CREATE TABLE vectors (
 - `fingerprint` = sha256 of the session's redacted chunk texts joined, plus
   `recall.RESULT_CHARS` and an index schema version. A session is re-embedded
   only when its fingerprint or the model changes.
-- Vectors are L2-normalized before storage, so similarity is a dot product.
+- Vectors are truncated to `dims`, L2-normalized, then stored as float32
+  blobs (`array('f').tobytes()`), so similarity is a dot product. `dim` is
+  stored per row; rows whose `dim` or `model` differ from the current
+  settings are ignored at query time.
+- **Memory bound.** A query never loads all vectors at once. It streams
+  `SELECT agent, id, idx, vec FROM vectors WHERE model = ? AND dim = ?` rows
+  for the candidate sessions (cursor iteration), decodes one `array('f')` at
+  a time, and keeps a `heapq` of the best 200. Peak memory stays near one
+  vector plus the heap regardless of index size.
+- **Staleness check at query time.** Search already loads each candidate
+  session's chunks, so it recomputes the session fingerprint there. A session
+  whose stored fingerprint differs (appended, re-parsed, truncated
+  differently) is treated as unindexed for that query: no semantic hits from
+  it, counted in `coverage.semantic.unindexed_sessions`, keyword still works.
+  Stored `idx` values are only trusted when the fingerprint matches.
 - Documents are embedded with the prefix `title: none | text: ` and queries
   with `task: search result | query: ` (EmbeddingGemma's convention), text
   capped at 6,000 chars, batches of 32 via `POST {ollama_url}/api/embed`
@@ -119,8 +145,8 @@ vectors are kept.
 ## Hybrid search
 
 `GET /recall/search` gains `mode`: `keyword` | `semantic` | `hybrid`.
-Default `hybrid` when semantic is enabled and the scoped sessions have
-vectors, else `keyword`. Requesting `semantic`/`hybrid` while disabled
+Without `mode`, it uses `semantic.default_mode` when semantic search is
+enabled, else `keyword`. Requesting `semantic`/`hybrid` while disabled
 returns 400.
 
 - **Semantic ranking:** embed the query, score every indexed chunk of the
@@ -210,6 +236,15 @@ Response: `application/x-ndjson` stream of the events above.
 - 409 when AI summaries are off (same check as `/sessions/{id}/chat`), with
   a message pointing to Settings.
 - 400 on an empty or too-long question.
+- **Real streaming.** Each event is flushed as it happens
+  (`StreamingResponse` over an async generator fed from the worker thread
+  through a queue). Headers `Cache-Control: no-cache` and
+  `X-Accel-Buffering: no`. Verify no middleware (auth, CORS, any gzip)
+  buffers the body: the browser must show step lines one at a time.
+- **Cancellation.** Between steps, the endpoint checks
+  `await request.is_disconnected()`; on disconnect it sets a cancel flag the
+  loop checks before every LLM call, so a closed tab stops spending the
+  user's model quota.
 
 ## UI
 
