@@ -218,3 +218,23 @@ def test_prompt_lists_available_modes():
     list(ra.run("q", None, None, llm=llm, search=lambda *a, **k: {"hits": []},
                           read_session=lambda *a, **k: {}, modes=("keyword", "hybrid")))
     assert "SEARCH MODES AVAILABLE: keyword, hybrid" in prompts[0]
+
+
+
+def test_read_session_accepts_an_evidence_label():
+    reads = []
+
+    def search(query, agent=None, mode=None):
+        return {"hits": [{"agent": "antigravity", "id": "ag-123", "title": "t", "last_ts": None,
+                          "turn": 1, "kind": "assistant", "snippet": "x"}], "coverage": {}}
+
+    def read(agent, sid, offset=0):
+        reads.append((agent, sid))
+        return {"chunks": [], "next_offset": None, "total_chunks": 0}
+
+    replies = iter([
+        '{"thought": "t", "action": "read_session", "args": {"agent": "Antigravity", "session_id": "[S1]"}}',
+        '{"thought": "t", "action": "answer", "args": {"answer": "a", "citations": []}}',
+    ])
+    list(ra.run("q", None, None, llm=lambda p: next(replies), search=search, read_session=read))
+    assert reads == [("antigravity", "ag-123")]
