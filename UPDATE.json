@@ -1,6 +1,30 @@
 {
   "releases": [
     {
+      "tag": "2026-11-22",
+      "title": "Project knowledge index for Recall",
+      "highlights": [
+        {
+          "title": "Search a project's skills, plans and notes",
+          "description": "Recall can index a project's skills, commands, agent definitions, plans, Markdown files and MCP setup, not only chat sessions. Source code is never indexed, and nothing is indexed for a project you have not turned on.",
+          "href": "/recall"
+        },
+        {
+          "title": "Re-index only what changed",
+          "description": "Opening a project shows whether its index is current. A re-index embeds only new or changed items, so routine updates are quick.",
+          "href": "/recall"
+        },
+        {
+          "title": "Cloud embedding APIs for Recall",
+          "description": "Use an OpenAI, Gemini or Voyage embedding API when your machine cannot run the local model. Text is redacted first but does leave your computer, and images stay off unless you turn them on."
+        },
+        {
+          "title": "One embedding model per project index",
+          "description": "Each project's index records the model it was built with. If the model changes, Recall says so and offers one re-index instead of mixing old and new vectors."
+        }
+      ]
+    },
+    {
       "tag": "2026-11-21",
       "title": "Ask questions about your agents' history",
       "highlights": [

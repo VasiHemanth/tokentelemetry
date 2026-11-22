@@ -1,6 +1,16 @@
 import * as React from "react";
 import Link from "next/link";
 import { recallSessionHref, type AskCitation } from "@/lib/recall";
+import type { OpenDoc } from "./DocumentDrawer";
+
+/** True for citations that point at a file or image document rather than a session. */
+export function isDocCitation(c: AskCitation): boolean {
+  return c.label.startsWith("D") || (!!c.doc_type && c.doc_type !== "session");
+}
+
+export function citationDoc(c: AskCitation): OpenDoc {
+  return { docId: c.doc_id ?? c.id, title: c.title, type: c.doc_type ?? "markdown", path: c.path };
+}
 
 // Renders model output as React nodes only: paragraphs, lists, code, bold.
 // Nothing is parsed as HTML. [S1] markers link to the session when resolved.
@@ -48,9 +58,11 @@ export function parseBlocks(src: string): Block[] {
   return out;
 }
 
-const INLINE_SRC = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|\[(S\d+(?:\s*,\s*S\d+)*)\]/;
+const INLINE_SRC = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|\[([SD]\d+(?:\s*,\s*[SD]\d+)*)\]/;
 
-function Inline({ text, cites }: { text: string; cites: Map<string, AskCitation> }) {
+function Inline({ text, cites, onOpenDoc }: {
+  text: string; cites: Map<string, AskCitation>; onOpenDoc?: (d: OpenDoc) => void;
+}) {
   const nodes: React.ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -76,7 +88,16 @@ function Inline({ text, cites }: { text: string; cites: Map<string, AskCitation>
             return (
               <React.Fragment key={l + j}>
                 {j > 0 && ", "}
-                {c ? (
+                {c && isDocCitation(c) ? (
+                  <button
+                    type="button"
+                    title={c.title}
+                    onClick={() => onOpenDoc?.(citationDoc(c))}
+                    className="font-mono text-[11px] text-[var(--tt-brand)] hover:underline"
+                  >
+                    {l}
+                  </button>
+                ) : c ? (
                   <Link
                     href={recallSessionHref(c.agent, c.id)}
                     title={c.title}
@@ -98,14 +119,16 @@ function Inline({ text, cites }: { text: string; cites: Map<string, AskCitation>
   return <>{nodes}</>;
 }
 
-export function AnswerText({ text, citations }: { text: string; citations: AskCitation[] }) {
+export function AnswerText({ text, citations, onOpenDoc }: {
+  text: string; citations: AskCitation[]; onOpenDoc?: (d: OpenDoc) => void;
+}) {
   const cites = React.useMemo(() => new Map(citations.map((c) => [c.label, c])), [citations]);
   const blocks = React.useMemo(() => parseBlocks(text), [text]);
   return (
     <div className="space-y-3 text-[13px] leading-relaxed text-[var(--tt-fg)] break-words">
       {blocks.map((b, i) => {
-        if (b.t === "p") return <p key={i}><Inline text={b.text} cites={cites} /></p>;
-        if (b.t === "h") return <p key={i} className="font-semibold"><Inline text={b.text} cites={cites} /></p>;
+        if (b.t === "p") return <p key={i}><Inline text={b.text} cites={cites} onOpenDoc={onOpenDoc} /></p>;
+        if (b.t === "h") return <p key={i} className="font-semibold"><Inline text={b.text} cites={cites} onOpenDoc={onOpenDoc} /></p>;
         if (b.t === "code") {
           return (
             <pre key={i} className="font-mono text-[11.5px] bg-[var(--tt-sunken)] border border-[var(--tt-border)] rounded-[var(--tt-radius)] px-3 py-2 overflow-x-auto whitespace-pre">
@@ -116,7 +139,7 @@ export function AnswerText({ text, citations }: { text: string; citations: AskCi
         const L = b.t === "ul" ? "ul" : "ol";
         return (
           <L key={i} className={b.t === "ul" ? "list-disc pl-5 space-y-1" : "list-decimal pl-5 space-y-1"}>
-            {b.items.map((it, j) => <li key={j}><Inline text={it} cites={cites} /></li>)}
+            {b.items.map((it, j) => <li key={j}><Inline text={it} cites={cites} onOpenDoc={onOpenDoc} /></li>)}
           </L>
         );
       })}

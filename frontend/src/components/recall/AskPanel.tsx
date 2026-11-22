@@ -10,10 +10,12 @@ import { Button } from "@/components/ui";
 import { SummaryErrorCard } from "@/components/summarizer/SummaryPanel";
 import type { SummaryErrorInfo } from "@/lib/summarizer";
 import {
-  AskHttpError, describeStep, recallSessionsPath, streamRecallAsk,
+  AskHttpError, describeStep, recallSessionHref, recallSessionsPath, streamRecallAsk,
   type AskEvent, type RecallSessionsResponse,
 } from "@/lib/recall";
-import { AnswerText } from "./AnswerText";
+import { AnswerText, citationDoc, isDocCitation } from "./AnswerText";
+import { DocumentDrawer, RecallImage, type OpenDoc } from "./DocumentDrawer";
+import { DocTypeIcon } from "./docTypes";
 
 type StepEv = Extract<AskEvent, { type: "step" }>;
 type AnswerEv = Extract<AskEvent, { type: "answer" }>;
@@ -42,6 +44,7 @@ export function AskPanel({ project, agents }: { project: string; agents: string[
   const [input, setInput] = useState("");
   const [run, setRun] = useState<RunState>(IDLE);
   const ctlRef = useRef<AbortController | null>(null);
+  const [openDoc, setOpenDoc] = useState<OpenDoc | null>(null);
 
   // Titles for "Reading <agent> session "title"" lines, from the same scope as the question.
   const sessionsPath = recallSessionsPath(project || null, agents, 200);
@@ -197,15 +200,35 @@ export function AskPanel({ project, agents }: { project: string; agents: string[
 
           {run.answer && (
             <div className="border-t border-[var(--tt-border)] pt-3 space-y-3">
-              <AnswerText text={run.answer.text} citations={run.answer.citations} />
+              <AnswerText text={run.answer.text} citations={run.answer.citations} onOpenDoc={setOpenDoc} />
               {run.answer.citations.length > 0 && (
-                <ul className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--tt-fg-dim)]">
-                  {run.answer.citations.map((c) => (
-                    <li key={c.label} className="min-w-0">
-                      <span className="font-mono">{c.label}</span>{" "}
-                      <span className="truncate">{getAgent(c.agent).label}: {c.title || "(untitled)"}</span>
-                    </li>
-                  ))}
+                <ul className="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-[var(--tt-fg-dim)]">
+                  {run.answer.citations.map((c) => {
+                    const doc = isDocCitation(c);
+                    const d = doc ? citationDoc(c) : null;
+                    return (
+                      <li key={c.label} className="min-w-0 flex items-start gap-1.5">
+                        <DocTypeIcon type={doc ? c.doc_type ?? "markdown" : "session"} size={12} className="mt-0.5 shrink-0" />
+                        <span className="min-w-0 space-y-1">
+                          <span>
+                            <span className="font-mono">{c.label}</span>{" "}
+                            {d ? (
+                              <button type="button" onClick={() => setOpenDoc(d)} className="truncate text-left hover:underline text-[var(--tt-brand)]">
+                                {getAgent(c.agent).label}: {c.title || "(untitled)"}
+                              </button>
+                            ) : (
+                              <Link href={recallSessionHref(c.agent, c.id)} className="truncate hover:underline text-[var(--tt-brand)]">
+                                {getAgent(c.agent).label}: {c.title || "(untitled)"}
+                              </Link>
+                            )}
+                          </span>
+                          {d && d.type === "image" && (
+                            <span className="block"><RecallImage docId={d.docId} project={project} alt={c.title || "Cited image"} className="max-h-24 rounded border border-[var(--tt-border)]" /></span>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
               <p className="text-[11px] text-[var(--tt-fg-dim)] tabular">
@@ -221,6 +244,7 @@ export function AskPanel({ project, agents }: { project: string; agents: string[
           )}
         </div>
       )}
+      <DocumentDrawer doc={openDoc} project={project} onClose={() => setOpenDoc(null)} />
     </div>
   );
 }

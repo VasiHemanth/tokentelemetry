@@ -11,12 +11,16 @@ import {
 } from "@/components/ui";
 import { AskPanel } from "@/components/recall/AskPanel";
 import { SemanticControl, useRecallSemantic, type RecallSemantic } from "@/components/recall/SemanticControl";
+import { ProjectKnowledge } from "@/components/recall/ProjectKnowledge";
+import { DocHitCard } from "@/components/recall/DocHit";
+import { DocumentDrawer, type OpenDoc } from "@/components/recall/DocumentDrawer";
+import { DocTypeIcon, docTypeMeta } from "@/components/recall/docTypes";
 import { HitGroupCard, SessionHeadLine, type HitGroup } from "@/components/recall/SessionRow";
 import {
-  RECALL_DEFAULT_MAX_SESSIONS, RECALL_WIDE_MAX_SESSIONS,
+  RECALL_DEFAULT_MAX_SESSIONS, RECALL_WIDE_MAX_SESSIONS, RECALL_DOC_TYPES,
   fetchRecallSearch, queryNeedles, recallSessionsPath, localDayKey, localDayLabel,
   type RecallProjectsResponse, type RecallSessionsResponse, type RecallSearchResponse,
-  type RecallSession, type RecallMode,
+  type RecallSession, type RecallMode, type RecallDocType,
 } from "@/lib/recall";
 
 const STORAGE_KEY = "tt-recall-project";
@@ -45,17 +49,42 @@ export default function RecallPage() {
   const [tab, setTab] = useState<Tab>("search");
   // Empty means "server default".
   const [mode, setMode] = useState<RecallMode | "">("");
+  const [types, setTypes] = useState<RecallDocType[]>([]);
+  // Project asked for in the URL (?project=), resolved once the project list has loaded.
+  const [wanted, setWanted] = useState<string | null>(null);
   const sem = useRecallSemantic();
   const semEnabled = !!sem.settings?.semantic.enabled;
   const defaultMode: RecallMode = sem.settings?.semantic.default_mode ?? "keyword";
-  const effectiveMode: RecallMode | null = semEnabled ? (mode || defaultMode) : null;
+  const defaultForTypes = types.some((type) => type !== "session") ? "hybrid" : defaultMode;
+  const effectiveMode: RecallMode | null = semEnabled ? (mode || defaultForTypes) : null;
 
   useEffect(() => {
     // Restore after mount so server and client markup match.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setProject(readStoredProject());
+    try {
+      const q = new URLSearchParams(window.location.search).get("project");
+      if (q) setWanted(q);
+    } catch { /* no location */ }
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!wanted || projectsLoading) return;
+    const norm = (v: string) => v.replace(/\\/g, "/").replace(/\/+$/, "");
+    const w = norm(wanted);
+    const exact = projects.find((p) => norm(p.key) === w);
+    // A worktree path resolves to the repo that contains it.
+    const parent = exact ?? projects
+      .filter((p) => w.startsWith(norm(p.key) + "/"))
+      .sort((a, b) => b.key.length - a.key.length)[0];
+    if (parent) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setProject(parent.key);
+      storeProject(parent.key);
+    }
+    setWanted(null);
+  }, [wanted, projects, projectsLoading]);
 
   // A stored project that no longer exists falls back to All projects.
   const selected = projects.find((p) => p.key === project) ?? null;
@@ -73,6 +102,10 @@ export default function RecallPage() {
     storeProject(key);
     setAgents([]);
     setSubmitted((s) => (s ? { ...s, nonce: s.nonce + 1, maxSessions: RECALL_DEFAULT_MAX_SESSIONS } : s));
+  };
+  const toggleType = (t: RecallDocType) => {
+    setTypes((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+    setSubmitted((s) => (s ? { ...s, nonce: s.nonce + 1 } : s));
   };
   const toggleAgent = (a: string) => {
     setAgents((cur) => (cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]));
@@ -190,7 +223,37 @@ export default function RecallPage() {
             </div>
           )}
 
-          <SemanticControl sem={sem} project={effectiveProject} projectName={selected?.name ?? null} />
+          <SemanticControl sem={sem} project={effectiveProject} projectName={selected?.name ?? null} showBuild={!selected} />
+
+          {selected && (
+            <ProjectKnowledge key={selected.key} project={selected.key} projectName={selected.name} sem={sem} />
+          )}
+
+          {tab === "search" && semEnabled && (
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by type">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Types</span>
+              {RECALL_DOC_TYPES.map((t) => {
+                const on = types.includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleType(t)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border text-[12px] font-medium transition-colors",
+                      on
+                        ? "border-[color:var(--tt-brand)]/40 text-[var(--tt-brand)] bg-[color:var(--tt-brand-glow)]"
+                        : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1",
+                    )}
+                  >
+                    <DocTypeIcon type={t} size={12} />
+                    {docTypeMeta(t).label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {tab === "search" && semEnabled && (
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Search mode">
@@ -230,6 +293,7 @@ export default function RecallPage() {
               showProject={!selected}
               onSearchMore={searchMore}
               mode={effectiveMode}
+              types={semEnabled ? types : []}
               sem={sem}
               projectName={selected?.name ?? null}
             />
@@ -322,10 +386,12 @@ function Timeline({ ready, project, agents, showProject, hasProjects }: {
   );
 }
 
-function SearchResults({ submitted, project, agents, showProject, onSearchMore, mode, sem, projectName }: {
+function SearchResults({ submitted, project, agents, showProject, onSearchMore, mode, types, sem, projectName }: {
   submitted: Submitted; project: string; agents: string[]; showProject: boolean; onSearchMore: () => void;
-  mode: RecallMode | null; sem: RecallSemantic; projectName: string | null;
+  mode: RecallMode | null; types: RecallDocType[]; sem: RecallSemantic; projectName: string | null;
 }) {
+  const [openDoc, setOpenDoc] = useState<OpenDoc | null>(null);
+  const typesKey = types.join(",");
   const [state, setState] = useState<{
     loading: boolean; error: string | null; data: RecallSearchResponse | null;
   }>({ loading: true, error: null, data: null });
@@ -344,6 +410,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore, 
         agents: agentsKey ? agentsKey.split(",") : [],
         maxSessions: submitted.maxSessions,
         mode,
+        types: typesKey ? (typesKey.split(",") as RecallDocType[]) : undefined,
       },
       ctl.signal,
     )
@@ -353,15 +420,20 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore, 
         setState({ loading: false, error: e instanceof Error ? e.message : String(e), data: null });
       });
     return () => ctl.abort();
-  }, [submitted.q, submitted.maxSessions, submitted.nonce, project, agentsKey, mode]);
+  }, [submitted.q, submitted.maxSessions, submitted.nonce, project, agentsKey, mode, typesKey]);
 
   const needles = useMemo(() => queryNeedles(submitted.q), [submitted.q]);
   const { loading, error, data } = state;
+  const docHits = useMemo(
+    () => (data?.hits ?? []).filter((h) => h.doc_type && h.doc_type !== "session"),
+    [data],
+  );
 
   const groups = useMemo<HitGroup[]>(() => {
     if (!data) return [];
     const map = new Map<string, HitGroup>();
     for (const h of data.hits) {
+      if (h.doc_type && h.doc_type !== "session") continue;
       const k = `${h.agent}:${h.id}`;
       let g = map.get(k);
       if (!g) {
@@ -451,7 +523,7 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore, 
         </div>
       )}
 
-      {groups.length === 0 ? (
+      {groups.length === 0 && docHits.length === 0 ? (
         <Card>
           <EmptyState
             icon={<Search size={20} />}
@@ -466,8 +538,18 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore, 
           {groups.map((g) => (
             <HitGroupCard key={`${g.agent}:${g.id}`} g={g} needles={needles} showProject={showProject} />
           ))}
+          {docHits.map((h, i) => (
+            <DocHitCard
+              key={`${h.doc_id ?? h.title}-${i}`}
+              hit={h}
+              needles={needles}
+              project={project}
+              onOpen={setOpenDoc}
+            />
+          ))}
         </div>
       )}
+      <DocumentDrawer doc={openDoc} project={project} onClose={() => setOpenDoc(null)} />
     </div>
   );
 }

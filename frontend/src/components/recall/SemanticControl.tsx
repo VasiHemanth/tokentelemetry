@@ -64,7 +64,13 @@ export function useRecallSemantic() {
     finally { if (alive.current) setBusy(false); }
   }, []);
 
-  return { settings, index, error, busy, setEnabled, build };
+  const refresh = useCallback(() => {
+    fetchRecallSettings()
+      .then((s) => { if (alive.current) setSettings(s); })
+      .catch(() => { /* keep the last known settings */ });
+  }, []);
+
+  return { settings, setSettings, refresh, index, error, busy, setEnabled, build };
 }
 
 export type RecallSemantic = ReturnType<typeof useRecallSemantic>;
@@ -94,8 +100,10 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-export function SemanticControl({ sem, project, projectName }: {
+export function SemanticControl({ sem, project, projectName, showBuild = true }: {
   sem: RecallSemantic; project: string; projectName: string | null;
+  /** The per-project index card owns building once a project is selected. */
+  showBuild?: boolean;
 }) {
   const { settings, index, error, busy, setEnabled, build } = sem;
 
@@ -146,7 +154,7 @@ export function SemanticControl({ sem, project, projectName }: {
           />
           Enable
         </label>
-        {canBuild && (
+        {showBuild && canBuild && (
           <Button size="sm" disabled={busy} onClick={() => void build(project || null)}>
             {project ? `Build index for ${projectName ?? "this project"}` : "Build index for all projects"}
           </Button>
