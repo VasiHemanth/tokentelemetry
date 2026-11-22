@@ -40,6 +40,8 @@ evidence they return, and then answering.
 
 Rules:
 - Answer only from the evidence. Do not use outside knowledge about the project.
+- When asked to brainstorm, offer proposals grounded in the retrieved work.
+  Identify them as proposals and cite the sources behind factual claims.
 - If the evidence does not contain the answer, say so plainly and say what you
   did find. Do not guess.
 - Cite evidence by its label, for example [S1] or [S2][D1]. S labels stand for
@@ -328,11 +330,24 @@ def _build_prompt(
     step_note: str,
     retry: bool,
     modes: Sequence[str] = ("keyword",),
+    history: Sequence[Dict[str, Any]] = (),
 ) -> str:
     head_parts = [_PREAMBLE, "", "PROJECT: %s" % _project_name(project),
                   "SEARCH MODES AVAILABLE: %s" % ", ".join(modes)]
     if scope:
         head_parts.append("AGENT FILTER: %s" % scope)
+    if history:
+        turns = []
+        for turn in history[-4:]:
+            answer = (turn.get("answer") or {}).get("text", "")
+            turns.append("Earlier question: " + _clip(turn["question"], 500))
+            if answer:
+                turns.append("Earlier answer: " + _clip(_LABEL_RE.sub("", answer), 800))
+        head_parts += [
+            "", "Use this conversation history to understand references in the current question.",
+            "Use evidence from this run for factual claims and citations.",
+            "<untrusted_session_data>", summaries._fence_safe("\n".join(turns)), "</untrusted_session_data>",
+        ]
     head_parts += ["", "QUESTION:", question]
     head = "\n".join(head_parts) + "\n\nEVIDENCE:\n"
 
@@ -472,6 +487,7 @@ def run(
     cancelled: Callable[[], bool] = lambda: False,
     modes: Sequence[str] = ("keyword",),
     read_document: Optional[Callable[..., Dict[str, Any]]] = None,
+    history: Sequence[Dict[str, Any]] = (),
 ) -> Iterator[Dict[str, Any]]:
     """``read_document(doc_id, offset)`` reads a non-session document; without
     it the tool answers with a refusal observation. ``modes`` lists the search modes that work right now; a mode the model
@@ -521,7 +537,7 @@ def run(
                 return
             must = n == max_steps or (clock() - start) >= budget_s
             note = "Step %d of %d." % (n, max_steps)
-            prompt = _build_prompt(question, project, scope, ev, must, note, retry=attempt == 1, modes=modes)
+            prompt = _build_prompt(question, project, scope, ev, must, note, retry=attempt == 1, modes=modes, history=history)
             raw = llm(prompt)
             action = parse_action(raw)
             if action:
@@ -599,7 +615,7 @@ def run(
     if cancelled():
         yield {"type": "cancelled"}
         return
-    prompt = _build_prompt(question, project, scope, ev, True, "Final step.", retry=False, modes=modes)
+    prompt = _build_prompt(question, project, scope, ev, True, "Final step.", retry=False, modes=modes, history=history)
     raw = llm(prompt)
     parsed = parse_action(raw)
     if parsed and parsed["action"] == "answer":

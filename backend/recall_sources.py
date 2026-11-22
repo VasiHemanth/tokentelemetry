@@ -129,6 +129,15 @@ def _strip_args(args: Iterable[Any]) -> List[str]:
                 if not eq:
                     drop_next = True      # value is the next arg
                 continue                  # --token=value dropped whole
+            if eq:
+                vlow = val.lower()
+                if "://" in val:
+                    out.append(flag + "=" + (_safe_url(val) or "<url>"))
+                    continue
+                if "bearer " in vlow or "authorization:" in vlow:
+                    continue
+                if _OPAQUE_ARG_RE.match(val) and not val.startswith(("/", ".", "@")) and os.path.sep not in val:
+                    continue
             out.append(a)
             continue
         if "://" in a:
@@ -226,6 +235,7 @@ class _Ctx:
 
     def __init__(self, project_root: str, sessions: List[dict], home: Path, env: Any, images: bool):
         self.root = Path(os.path.realpath(project_root)) if project_root else Path("/nonexistent-project")
+        self.root_raw = Path(os.path.abspath(project_root)) if project_root else self.root
         self.home = Path(home)
         self.env = env
         self.images = images
@@ -234,8 +244,10 @@ class _Ctx:
         self.docs: Dict[str, dict] = {}
         self.seen_real: Set[str] = set()
         self.session_ids = {str(s.get("id")) for s in self.sessions if s.get("id")}
-        self.used_names: Set[str] = set()      # skills, slash commands, subagent types
-        self.used_servers: Dict[str, Set[str]] = {}
+        # Usage is recorded per session agent. Sessions with no 'agent' field land in
+        # the "" bucket, which counts for every agent (the only agent-agnostic fallback).
+        self.used_names_by: Dict[str, Set[str]] = {}      # skills, slash commands, subagent types
+        self.used_servers_by: Dict[str, Dict[str, Set[str]]] = {}
         self.plan_names: Set[str] = set()
         self._collect_usage()
 
@@ -244,16 +256,21 @@ class _Ctx:
 
     # --- usage from existing session fields
     def _collect_usage(self) -> None:
+        cur = ""
+
         def add_name(v: Any) -> None:
+            names = self.used_names_by.setdefault(cur, set())
             if isinstance(v, dict):
                 v = v.get("name") or v.get("agent_type") or v.get("subagent_type") or v.get("skill")
             if isinstance(v, str) and v.strip():
                 n = v.strip().lstrip("/").lower()
-                self.used_names.add(n)
+                names.add(n)
                 if ":" in n:
-                    self.used_names.add(n.rsplit(":", 1)[1])
+                    names.add(n.rsplit(":", 1)[1])
 
         for s in self.sessions:
+            a = s.get("agent")
+            cur = a.strip().lower() if isinstance(a, str) else ""
             for v in s.get("skills_used") or []:
                 add_name(v)
             for v in s.get("commands_used") or s.get("slash_commands") or []:
@@ -269,13 +286,13 @@ class _Ctx:
             tc = s.get("tool_counts")
             if isinstance(tc, dict):
                 for t in tc:
-                    self._add_mcp_tool(t)
+                    self._add_mcp_tool(t, cur)
             for t in s.get("mcp_tools") or []:
-                self._add_mcp_tool(t)
+                self._add_mcp_tool(t, cur)
             mu = s.get("mcp_usage")
             if isinstance(mu, dict):
                 for server, tools in mu.items():
-                    bucket = self.used_servers.setdefault(str(server), set())
+                    bucket = self.used_servers_by.setdefault(cur, {}).setdefault(str(server), set())
                     if isinstance(tools, dict):
                         bucket.update(str(t) for t in tools)
             for p in s.get("plans") or []:
@@ -283,7 +300,7 @@ class _Ctx:
                 if isinstance(n, str) and n:
                     self.plan_names.add(os.path.basename(n))
 
-    def _add_mcp_tool(self, name: Any) -> None:
+    def _add_mcp_tool(self, name: Any, agent: str = "") -> None:
         if not isinstance(name, str):
             return
         raw = name[len("default_api:"):] if name.startswith("default_api:") else name
@@ -295,20 +312,38 @@ class _Ctx:
         elif raw.startswith("mcp_") and "_" in raw[4:]:
             server, tool = raw[4:].split("_", 1)
         if server:
-            self.used_servers.setdefault(server, set()).add(tool or "")
+            self.used_servers_by.setdefault(agent, {}).setdefault(server, set()).add(tool or "")
 
-    def name_used(self, name: str) -> bool:
+    def _names_for(self, agent: Optional[str]) -> Set[str]:
+        if agent is None:
+            return set().union(*self.used_names_by.values()) if self.used_names_by else set()
+        return self.used_names_by.get(agent, set()) | self.used_names_by.get("", set())
+
+    def _servers_for(self, agent: Optional[str]) -> Dict[str, Set[str]]:
+        if agent is None:
+            groups = list(self.used_servers_by.values())
+        else:
+            groups = [self.used_servers_by.get(agent, {}), self.used_servers_by.get("", {})]
+        merged: Dict[str, Set[str]] = {}
+        for g in groups:
+            for k, v in g.items():
+                merged.setdefault(k, set()).update(v)
+        return merged
+
+    def name_used(self, name: str, agent: Optional[str] = None) -> bool:
+        used = self._names_for(agent)
         n = name.lower()
-        return n in self.used_names or (":" in n and n.rsplit(":", 1)[1] in self.used_names)
+        return n in used or (":" in n and n.rsplit(":", 1)[1] in used)
 
-    def server_used(self, name: str) -> bool:
-        if name in self.used_servers:
+    def server_used(self, name: str, agent: Optional[str] = None) -> bool:
+        servers = self._servers_for(agent)
+        if name in servers:
             return True
         norm = name.replace("-", "_")
-        return any(k.replace("-", "_") == norm for k in self.used_servers)
+        return any(k.replace("-", "_") == norm for k in servers)
 
-    def server_tools(self, name: str) -> List[str]:
-        for k, v in self.used_servers.items():
+    def server_tools(self, name: str, agent: Optional[str] = None) -> List[str]:
+        for k, v in self._servers_for(agent).items():
             if k == name or k.replace("-", "_") == name.replace("-", "_"):
                 return sorted(t for t in v if t)
         return []
@@ -668,10 +703,11 @@ def _add_skills(ctx: _Ctx, agent: str, scope: str, base: Path) -> None:
         return
     for d in dirs:
         name = d.name
-        if scope == "user" and not ctx.name_used(name):
+        if scope == "user" and not ctx.name_used(name, agent):
             ctx.skip("unused_user_item")
             continue
-        ctx.add_file("skill", agent, scope, name, d / "SKILL.md", key=name if scope == "user" else None)
+        # doc_id keys on the home-relative path so same-named skills in different dirs stay distinct
+        ctx.add_file("skill", agent, scope, name, d / "SKILL.md")
 
 
 def _def_title(base: Path, f: Path) -> str:
@@ -685,10 +721,11 @@ def _add_defs(ctx: _Ctx, typ: str, agent: str, scope: str, base: Path, exts: Tup
         return
     for f in _walk_files(base, exts, recursive):
         title = _def_title(base, f)
-        if scope == "user" and not ctx.name_used(title):
+        if scope == "user" and not ctx.name_used(title, agent):
             ctx.skip("unused_user_item")
             continue
-        ctx.add_file(typ, agent, scope, title, f, key=title)
+        # user scope keys on the home-relative path so same-named defs stay distinct
+        ctx.add_file(typ, agent, scope, title, f, key=None if scope == "user" else title)
 
 
 def _add_text_entry(ctx: _Ctx, typ: str, agent: str, scope: str, base: Path, entry: Any,
@@ -904,10 +941,10 @@ def _mcp_from_file(ctx: _Ctx, agent: str, scope: str, path: Path, kind: str) -> 
     for hint, servers in maps:
         eff_scope = "project" if hint == "local" else scope
         for name, s in sorted(servers.items()):
-            if eff_scope == "user" and not ctx.server_used(name):
+            if eff_scope == "user" and not ctx.server_used(name, agent):
                 ctx.skip("unused_user_item")
                 continue
-            tools = ctx.server_tools(name) if eff_scope == "user" or ctx.server_used(name) else []
+            tools = ctx.server_tools(name, agent) if eff_scope == "user" or ctx.server_used(name, agent) else []
             text = render_mcp(name, agent, eff_scope, s, tools)
             key = f"{name}@{ctx.rel_key(path, 'project' if scope == 'project' else 'user')}"
             doc_id = f"mcp:{agent}:{eff_scope}:{key}"
@@ -940,7 +977,7 @@ def _discover_claude_json(ctx: _Ctx) -> None:
 # --------------------------------------------------- memory, artifacts, images
 
 def _claude_slug(path: str) -> str:
-    return re.sub(r"[/\\.]", "-", path)
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
 
 
 def _discover_slug_memory(ctx: _Ctx, agent: str, base: Path) -> None:
@@ -949,9 +986,9 @@ def _discover_slug_memory(ctx: _Ctx, agent: str, base: Path) -> None:
     if not pdir.is_dir():
         ctx.skip("missing")
         return
-    slugs = {_claude_slug(str(ctx.root)), _claude_slug(str(ctx.home / os.path.relpath(ctx.root, ctx.home)))
-             if str(ctx.root).startswith(str(ctx.home)) else ""}
-    slugs.discard("")
+    slugs = {_claude_slug(str(ctx.root)), _claude_slug(str(ctx.root_raw))}
+    if str(ctx.root).startswith(str(ctx.home)):
+        slugs.add(_claude_slug(str(ctx.home / os.path.relpath(ctx.root, ctx.home))))
     for name in _listdir(pdir):
         if not any(name == s or name.startswith(s + "--claude-worktrees-") for s in slugs):
             continue
@@ -1087,7 +1124,7 @@ def _discover_vscode_prompts(ctx: _Ctx) -> None:
         if d.is_dir():
             for f in _walk_files(d, (".prompt.md", ".md"), False):
                 title = f.name[:-len(".prompt.md")] if f.name.endswith(".prompt.md") else f.stem
-                if ctx.name_used(title):
+                if ctx.name_used(title, "copilot"):
                     ctx.add_file("command", "copilot", "user", title, f, key=title)
                 else:
                     ctx.skip("unused_user_item")

@@ -103,9 +103,11 @@ def world(tmp_path, monkeypatch):
 
     sessions = [
         {"agent": "codex", "id": "c1", "project": str(proj), "timestamp": dt(3), "display": "wire planner",
-         "model": "m", "tokens": {"total": 5}, "cost": 1.0, "skills_used": ["bug-audit"]},
-        {"agent": "claude", "id": "a1", "project": str(proj), "timestamp": dt(2), "display": "thumbnails",
          "model": "m", "tokens": {"total": 5}, "cost": 1.0},
+        # The skill lives in Claude's folder, so a Claude session must be the
+        # one that used it (user-scope items are gated per agent).
+        {"agent": "claude", "id": "a1", "project": str(proj), "timestamp": dt(2), "display": "thumbnails",
+         "model": "m", "tokens": {"total": 5}, "cost": 1.0, "skills_used": ["bug-audit"]},
         {"agent": "codex", "id": "o1", "project": str(other), "timestamp": dt(1), "display": "billing",
          "model": "m", "tokens": {"total": 5}, "cost": 1.0},
     ]
@@ -744,7 +746,7 @@ def test_ask_read_document_refuses_other_projects_and_other_agents(world, ask_en
     calls, script = ask_env
     script += [
         reply("read_document", {"doc_id": other_doc}),
-        reply("read_document", {"doc_id": _id(world, "skill:claude:user:bug-audit")}),
+        reply("read_document", {"doc_id": _id(world, "skill:claude:user:.claude/skills/bug-audit")}),
         reply("answer", {"answer": "done", "citations": []}),
     ]
     events_ = ask({"question": "What does the other README say?", "project": "app", "agent": "codex"})
@@ -768,3 +770,64 @@ def test_ask_without_project_cannot_read_documents(world, ask_env):
 def _other_id(world):
     key = main._recall._select(world.sessions, "other", None, None, main.ANTIGRAVITY_UNASSIGNED)[0]["key"]
     return next(d for d in main._recall_get_store().documents(key) if d.startswith("markdown:"))
+
+
+def test_ask_conversation_saves_turns_and_reuses_context(world, ask_env, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(world.tmp))
+    calls, script = ask_env
+    chat_id = "4edb8337-d699-400a-b841-7d587c080622"
+    script += [
+        reply("answer", {"answer": "The render queue used a worker [S1].", "citations": ["S1"]}),
+        reply("answer", {"answer": "Add a dashboard for the existing queue.", "citations": []}),
+    ]
+    first = ask({"question": "How does the classifier route work?", "project": "app",
+                 "agent": "codex", "conversation_id": chat_id})
+    assert first[-1]["type"] == "answer"
+    assert first[-1]["citations"][0]["id"] == "c1"
+    assert json.loads(run(main.recall_conversations()).body)["conversations"][0]["id"] == chat_id
+
+    second = ask({"question": "What should we build next for it?", "project": world.pkey,
+                  "agent": "codex", "conversation_id": chat_id})
+    assert second[-1]["type"] == "answer"
+    assert "Earlier question: How does the classifier route work?" in calls[-1]
+    assert "Earlier answer: The render queue used a worker" in calls[-1]
+    saved = json.loads(run(main.recall_get_conversation(chat_id)).body)
+    assert saved["project"] == world.pkey and saved["agents"] == ["codex"]
+    assert [turn["answer"] for turn in saved["turns"]] == [first[-1], second[-1]]
+
+    with pytest.raises(HTTPException) as exc:
+        ask({"question": "Use another project?", "project": "other", "conversation_id": chat_id})
+    assert exc.value.status_code == 422
+    assert run(main.recall_delete_conversation(chat_id)).status_code == 204
+    with pytest.raises(HTTPException) as exc:
+        run(main.recall_get_conversation(chat_id))
+    assert exc.value.status_code == 404
+
+
+def test_ask_without_conversation_id_does_not_save_history(world, ask_env, monkeypatch):
+    monkeypatch.setenv("TOKENTELEMETRY_DATA_DIR", str(world.tmp))
+    _, script = ask_env
+    script.append(reply("answer", {"answer": "Answer for a legacy caller.", "citations": []}))
+    assert ask({"question": "How does the planner work?", "project": "app"})[-1]["type"] == "answer"
+    assert not (world.tmp / "recall_conversations.db").exists()
+
+
+def test_api_key_with_control_chars_is_rejected_and_not_saved(world):
+    secret = "sk-" + "SECRET" + "\nfoo"
+    with pytest.raises(HTTPException) as e:
+        run(main.recall_put_settings({"semantic": {"api_key": secret}}))
+    assert e.value.status_code == 400 and e.value.detail == "api_key contains invalid characters"
+    assert not (world.tmp / "recall_secrets.json").exists()
+
+
+def test_index_stats_split_unreadable_sessions(world):
+    store = main._recall_get_store()
+    sem = {"provider": "ollama", "ollama": {"model": "m"}, "api": {"model": "m"}}
+    for sid, n in (("ok", 2), ("bad", 0)):
+        doc = {"doc_id": "session:claude:" + sid, "type": "session", "agent": "claude", "scope": "project",
+               "title": sid, "source": {}, "mtime": 1.0, "size": 1, "cheap_fp": sid}
+        store.put_document("/r/app", doc, "lock1", 4, "fp" + sid, list(range(n)),
+                           ["h%s%d" % (sid, i) for i in range(n)],
+                           {"h%s%d" % (sid, i): [0.1, 0.2, 0.3, 0.4] for i in range(n)})
+    out = main._recall_index_stats(store, sem)
+    assert out["sessions"] == 1 and out["sessions_unreadable"] == 1 and out["documents"] == 2

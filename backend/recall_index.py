@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set,
 from urllib.parse import parse_qsl, urlsplit
 
 import recall
-from recall_embed import ImageDecodeError, EmbedError as ProviderEmbedError
+from recall_embed import BadVectorError, ImageDecodeError, EmbedError as ProviderEmbedError
 from tt_paths import data_dir
 
 try:  # optional speed-up only
@@ -719,6 +719,23 @@ class VectorStore:
         finally:
             conn.close()
 
+    def reset_project(self, project_key: str, lock: Dict[str, Any], state: str = "building") -> None:
+        """Drop the project's rows and install a new lock in one transaction,
+        so a failed full re-index never leaves the project without an index."""
+        if state not in LOCK_STATES:
+            raise ValueError("unknown lock state")
+        conn = self._conn()
+        try:
+            with conn:
+                pairs = self._collect(conn, "project_key=?", (project_key,))
+                conn.execute("DELETE FROM doc_chunks WHERE project_key=?", (project_key,))
+                conn.execute("DELETE FROM documents WHERE project_key=?", (project_key,))
+                conn.execute("INSERT OR REPLACE INTO locks VALUES (?,?,?,?)",
+                             (project_key, json.dumps(lock), state, _now()))
+                self._gc(conn, pairs)
+        finally:
+            conn.close()
+
     def counts(self) -> Dict[str, int]:
         conn = self._conn()
         try:
@@ -1086,7 +1103,7 @@ def prefix_document(embedder: Any, text: str, title: str) -> str:
     if callable(fn):
         return str(fn(text, title))
     model = str((getattr(embedder, "identity", {}) or {}).get("model") or "").lower()
-    if model.startswith("embeddinggemma"):
+    if "embeddinggemma" in model:
         return f"title: {title or 'none'} | text: {text}"
     return text
 
@@ -1416,6 +1433,19 @@ class IndexRun:
             return bool(self.images and getattr(self.embedder, "supports_images", False))
         return True
 
+    def _mark_unreadable(self, project_key: str, doc: Dict[str, Any], lock_id: str, dim: int) -> None:
+        """Record a document that could not be embedded as a zero-chunk row.
+
+        Its cheap fingerprint is stored, so delta stops offering it as "new" on
+        every visit (empty sessions, deleted transcripts, content the model
+        rejects). If the document changes, the fingerprint changes and the
+        next run tries it again.
+        """
+        try:
+            self.store.put_document(project_key, doc, lock_id, dim, "unreadable", [], [], {})
+        except Exception:  # noqa: BLE001 - bookkeeping must not stop the run
+            pass
+
     def _prepare(self, doc: Dict[str, Any]) -> Optional[_Prepared]:
         t = doc.get("type")
         if t == "session":
@@ -1482,10 +1512,15 @@ class IndexRun:
 
         try:
             if full:
-                self.store.drop_project(key)
+                # Build (and probe) the new lock before touching the old index.
+                new_lock = self.lock_factory(self.embedder)
+                self.store.reset_project(key, new_lock, "building")
                 self.guard.forget(key)
-            stored = self.store.documents(key)
-            lock_id, lock = self._ensure_lock(key)
+                lock_id, lock = lock_id_of(new_lock), new_lock
+                stored = self.store.documents(key)
+            else:
+                stored = self.store.documents(key)
+                lock_id, lock = self._ensure_lock(key)
             locked = True
             if self.inline_discover and self.images and self.embedder.supports_images:
                 # Index images before their parent so a failed image is retried.
@@ -1517,6 +1552,7 @@ class IndexRun:
                     prep = None
                 if prep is None:
                     c["unreadable"] += 1
+                    self._mark_unreadable(key, doc, lock_id, dim)
                     continue
                 title = _title(doc.get("title"))
                 if prep.image is not None:
@@ -1553,8 +1589,11 @@ class IndexRun:
                         # exposing a partially written document to readers.
                         if offset + len(batch) < len(entries):
                             progress()
-                except ImageDecodeError:
+                except (ImageDecodeError, BadVectorError):
+                    # One document's content the model could not embed: skip
+                    # it and keep indexing. Provider outages still stop the run.
                     c["unreadable"] += 1
+                    self._mark_unreadable(key, doc, lock_id, dim)
                     continue
                 first = next(iter(new_vecs.values()), None)
                 self.store.put_document(key, doc, lock_id, dim or len(first or []),

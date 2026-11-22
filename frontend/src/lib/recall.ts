@@ -341,13 +341,39 @@ export interface AskCitation {
   turn?: number;
 }
 
+export interface RecallConversationSummary {
+  id: string;
+  title: string;
+  project: string | null;
+  project_name: string | null;
+  agents: string[];
+  updated_at: string;
+}
+
+export interface RecallConversation extends RecallConversationSummary {
+  turns: {
+    id: number;
+    question: string;
+    answer: Extract<AskEvent, { type: "answer" }> | null;
+  }[];
+}
+
+export function fetchRecallConversation(id: string, signal?: AbortSignal): Promise<RecallConversation> {
+  return api(`/recall/conversations/${encodeURIComponent(id)}`, { signal });
+}
+
+export async function deleteRecallConversation(id: string): Promise<void> {
+  const res = await apiFetch(`/recall/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorDetail(res));
+}
+
 export class AskHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
 /** POST /recall/ask and yield NDJSON events as they arrive. Partial lines are buffered. */
 export async function* streamRecallAsk(
-  body: { question: string; project: string | null; agent: string | null },
+  body: { question: string; project: string | null; agent: string | null; conversation_id?: string },
   signal: AbortSignal,
 ): AsyncGenerator<AskEvent> {
   const res = await apiFetch("/recall/ask", {
@@ -405,6 +431,15 @@ export function describeStep(
     const when = info?.ts ? new Date(info.ts) : null;
     const date = when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString(undefined, MONTH_DAY)}` : "";
     return `Reading ${who}${title}${date}`;
+  }
+  if (ev.action === "read_document") {
+    // doc_id is "<type>:<agent>:<scope>:<key>", e.g. "skill:claude:user:bug-audit".
+    const id = typeof a.doc_id === "string" ? a.doc_id : "";
+    const [type = "", agent = "", , ...rest] = id.split(":");
+    const key = rest.join(":");
+    const name = key.split("/").filter(Boolean).pop() || key || id;
+    const kind = type === "markdown" ? "file" : type === "mcp" ? "MCP server" : type || "document";
+    return `Reading ${agent ? `${agentLabel(agent)} ` : ""}${kind} "${name}"`;
   }
   return ev.action === "answer" ? "Writing the answer" : ev.action;
 }
