@@ -41,8 +41,10 @@ Runtime facts this relies on: [recall-embedding-runtime.md](recall-embedding-run
   Mistral, OpenRouter, LiteLLM, vLLM, LM Studio) | `gemini` (Gemini
   `embedContent`, supports images) | `voyage` (Voyage multimodal).
 - `api.endpoint` must be `https://`, or `http://` on loopback.
-- The API key lives in `data_dir()/recall_secrets.json`, file mode 0600,
-  written only by `PUT /recall/settings` and never returned by any route.
+- The API key lives in `data_dir()/recall_secrets.json`, file mode 0600 on
+  macOS/Linux (on Windows chmod does not restrict access; the file relies on
+  the user profile's permissions and the docs say so), written only by
+  `PUT /recall/settings` and never returned by any route.
   GET returns `"api_key_set": true|false` only.
 - `images`: embed images. Default `true` for `ollama`, forced `false` for
   `api` unless the user turns it on (images cannot be redacted and would leave
@@ -136,10 +138,13 @@ task lists, walkthroughs, reports, published artifacts), `markdown`
   only when a session in this project used them, using what the scan already
   records per session (`skills_used`, `mcp_tools`, `subagents`, slash commands
   in transcripts).
-- **Project `*.md`:** walk the project root for `*.md`/`*.mdx`, skipping
-  `.git`, `node_modules`, `vendor`, `dist`, `build`, `.next`, `target`,
-  `.venv`/`venv`, and any directory in `.gitignore` when cheap to read; max
-  2,000 files and 1 MB per file, counted when skipped.
+- **Project `*.md`:** walk the project root for `*.md`/`*.mdx` with
+  `followlinks=False` (never follow symlinks, never leave the root),
+  skipping `.git`, `node_modules`, `vendor`, `dist`, `build`, `.next`,
+  `target`, `.venv`/`venv`, nested agent worktrees (`.claude/worktrees`,
+  `.codex/worktrees`, `.grok/worktrees`, `.worktrees`) and any directory in
+  `.gitignore` when cheap to read; max 2,000 files and 1 MB per file, counted
+  when skipped.
 - **Never index:** the inventory's never-index list (credentials, paste
   caches, file history, shell history, backup settings, `.env*`), and any
   source code file.
@@ -162,13 +167,24 @@ migration that keeps v2 session vectors only if their lock matches):
 - `locks(project_key PRIMARY KEY, lock_json, state, updated_at)`;
   `state` in `ready`, `model_changed`, `building`.
 - `documents(project_key, doc_id, type, agent, scope, title, source_json,
-  mtime, size, fingerprint, chunks, indexed_at, PRIMARY KEY(project_key, doc_id))`.
+  mtime, size, cheap_fp, content_fp, chunks, indexed_at, PRIMARY KEY(project_key, doc_id))`.
+  Two fingerprints with different jobs, never compared with each other:
+  `cheap_fp` is what delta can compute without reading content (files:
+  mtime + size; sessions: the scan's `last_ts` + token totals + message
+  count); `content_fp` is the sha256 of the redacted chunk texts, used by the
+  query-time staleness check. Index runs write both. Index then delta must
+  report `up_to_date`.
 - `chunk_vectors(lock_id, chunk_hash, dim, vec, PRIMARY KEY(lock_id, chunk_hash))`:
   vectors keyed by the sha256 of the redacted, prefixed chunk text, so an
   unchanged chunk is never embedded twice (sessions only grow; a re-index
   embeds only the new tail). `lock_id` is a hash of the lock identity.
-- `doc_chunks(project_key, doc_id, idx, chunk_hash)` maps document chunk
-  positions to vectors.
+- `doc_chunks(project_key, doc_id, idx, lock_id, chunk_hash)` maps document
+  chunk positions to vectors.
+- **Shared vectors, counted deletion.** Projects on the same model share
+  `chunk_vectors` rows. Removing a document, or a project's `full` re-index,
+  deletes only that project's `doc_chunks`/`documents` rows, then
+  garbage-collects `chunk_vectors` rows no `doc_chunks` row references
+  (same transaction). Never delete `chunk_vectors` by project.
 - Query-time staleness check from v2 stays: a document whose current
   fingerprint differs from `documents.fingerprint` serves keyword only.
 
@@ -231,7 +247,9 @@ current run (and replays from `since` so a reloaded page catches up):
 - `GET /recall/document/{doc_id}?project=…` returns the redacted text chunks
   of a non-session document (paged like `/recall/session`), or for an image
   `{"type": "image", "url": "/recall/document/<id>/image"}` (served
-  token-gated, only for documents in the index).
+  token-gated). The image route serves bytes only when the document is in
+  the index AND belongs to the requested project; images cannot be
+  redacted, so this check is the only protection.
 - Ask agent: `search` gains an optional `types` argument; new tool
   `read_document {"doc_id"}`; evidence labels cover documents (`D1…`) as well
   as sessions (`S1…`); citations link to sessions, files and images. Scope
