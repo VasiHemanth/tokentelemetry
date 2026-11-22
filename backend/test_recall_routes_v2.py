@@ -30,20 +30,19 @@ def _hash_vec(text, dims=64):
 
 
 class FakeEmbedder:
-    dims = 64
-    model = "fake-embed"
-    gate = None  # optional threading.Event that blocks embed_documents
+    """Shaped like recall_embed's embedders (v3): identity and embed_texts."""
+    supports_images = False
+    gate = None  # optional threading.Event that blocks embed_texts
+    identity = {"provider": "ollama", "model": "fake-embed", "endpoint_host": "127.0.0.1:11434",
+                "dims": 64, "format": "ollama"}
 
-    def embed_documents(self, texts):
+    def embed_texts(self, texts, kind="document", titles=None):
         if self.gate is not None:
             self.gate.wait(5)
         return [_hash_vec(t) for t in texts]
 
-    def embed_query(self, text):
-        return _hash_vec(text)
-
-    def probe(self):
-        return {"reachable": True, "version": "0.0.0", "model_installed": True, "error": None}
+    def lock_evidence(self):
+        return {"ollama_digest": "sha256:fake", "returned_model": None}
 
 
 def dt(day):
@@ -83,6 +82,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(recall, "repo_resolver", None)
     monkeypatch.setattr(ri, "settings_path", lambda: tmp_path / "recall.json")
     monkeypatch.setattr(ri, "index_path", lambda: tmp_path / "recall_index.db")
+    monkeypatch.setattr(ri, "secrets_path", lambda: tmp_path / "recall_secrets.json")
+    monkeypatch.setattr(main, "_recall_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(main, "_recall_disc_cache", {})
+    monkeypatch.setattr(main, "_recall_guards", {})
+    monkeypatch.setattr(main, "_recall_probe",
+                        lambda sem: {"reachable": True, "version": "0.0.0", "model_installed": True, "error": None})
     monkeypatch.setattr(main, "_recall_store", None)
     monkeypatch.setattr(main, "_recall_job", None)
 
@@ -105,7 +110,7 @@ def enable():
     run(main.recall_put_settings({"semantic": {"enabled": True, "default_mode": "keyword", "model": "fake-embed"}}))
 
 
-def build_index(project=None):
+def build_index(project="app"):
     status = run(main.recall_index_start({"project": project}))
     main._recall_job.wait(10)
     return status
@@ -117,6 +122,7 @@ def test_settings_get_defaults_and_put_roundtrip():
     got = run(main.recall_get_settings())
     assert got["semantic"]["enabled"] is False
     assert got["semantic"]["model"] == ri.DEFAULT_MODEL
+    assert got["semantic"]["api_key_set"] is False
     assert got["ollama"]["reachable"] is True
     assert got["index"]["chunks"] == 0
 
@@ -203,9 +209,9 @@ def test_index_409_while_running_and_unknown_project_400(env):
     enable()
     env.gate = threading.Event()
     try:
-        first = run(main.recall_index_start({}))
+        first = run(main.recall_index_start({"project": "app"}))
         assert first["state"] == "running"
-        busy = run(main.recall_index_start({}))
+        busy = run(main.recall_index_start({"project": "app"}))
         assert busy.status_code == 409
         assert json.loads(busy.body)["state"] == "running"
     finally:
