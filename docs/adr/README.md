@@ -39,3 +39,4 @@ sync with the code because it ships in the same commit.
 | [0005](0005-omp-reported-cost-as-native-unit.md) | Report OMP session cost verbatim, not recomputed | Proposed |
 | [0006](0006-cross-harness-recall-on-demand.md) | Answer cross-agent questions with on-demand lexical search and MCP tools | Superseded by ADR-0007 |
 | [0007](0007-semantic-recall-and-ask-agent.md) | Add opt-in local semantic search and an Ask agent to Recall | Proposed |
+| [0008](0008-project-knowledge-index.md) | Index each project's non-code knowledge for semantic recall, with a model lock | Proposed |

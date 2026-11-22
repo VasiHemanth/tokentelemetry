@@ -1,4 +1,4 @@
-import { api, apiFetch } from "@/lib/api";
+import { api, apiFetch, artifactUrl } from "@/lib/api";
 import type { SummaryErrorInfo } from "@/lib/summarizer";
 
 // Types mirror docs/design/cross-harness-recall.md. Keep them in step with it.
@@ -55,6 +55,13 @@ export interface RecallHit {
   score: number;
   source: "live" | "archive";
   match?: RecallMatch;
+  /** v3: absent or "session" for chat hits. */
+  doc_type?: RecallDocType;
+  doc_id?: string;
+  /** Display path with `~`, for file documents. */
+  path?: string;
+  /** Images that came from a session link back to it. */
+  session_id?: string;
 }
 
 export type RecallMode = "keyword" | "semantic" | "hybrid";
@@ -94,6 +101,7 @@ export interface RecallSearchParams {
   limit?: number;
   maxSessions?: number;
   mode?: RecallMode | null;
+  types?: RecallDocType[];
 }
 
 export const RECALL_DEFAULT_MAX_SESSIONS = 60;
@@ -129,6 +137,7 @@ export function fetchRecallSearch(p: RecallSearchParams, signal?: AbortSignal): 
       limit: p.limit,
       max_sessions: p.maxSessions,
       mode: p.mode,
+      types: p.types && p.types.length ? p.types.join(",") : undefined,
     })}`,
     { signal },
   );
@@ -202,12 +211,21 @@ export function recallSessionHref(agent: string, id: string): string {
 // ---- v2: semantic settings, index, Ask agent (docs/design/cross-harness-recall-v2.md) ----
 
 export interface RecallSettings {
-  semantic: { enabled: boolean; model: string; ollama_url: string; default_mode?: RecallMode; dims?: number };
+  semantic: {
+    enabled: boolean; model: string; ollama_url: string; default_mode?: RecallMode; dims?: number;
+    // v3 (docs/design/cross-harness-recall-v3.md section 1). Optional so v2 backends still type-check.
+    provider?: "ollama" | "api";
+    ollama?: { url: string; model: string };
+    api?: { format: ApiFormat; endpoint: string; model: string; api_key_set?: boolean };
+    api_key_set?: boolean;
+    images?: boolean;
+  };
   ollama: { reachable: boolean; version: string | null; model_installed: boolean; error: string | null };
   index: { chunks: number; sessions: number; model: string | null; bytes: number; updated_at: string | null };
 }
 
 export interface RecallIndexStatus {
+  run: string | null;
   state: "idle" | "running" | "done" | "error";
   project: RecallProjectRef | null;
   sessions_total: number;
@@ -226,7 +244,7 @@ export function fetchRecallSettings(signal?: AbortSignal): Promise<RecallSetting
   return api<RecallSettings>("/recall/settings", { signal });
 }
 
-export async function putRecallSettings(semantic: Partial<RecallSettings["semantic"]>): Promise<RecallSettings> {
+export async function putRecallSettings(semantic: RecallSettingsPatch): Promise<RecallSettings> {
   const res = await apiFetch("/recall/settings", {
     method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ semantic }),
   });
@@ -257,6 +275,19 @@ async function errorDetail(res: Response): Promise<string> {
     if (d && typeof d.message === "string") return d.message;
   } catch { /* not json */ }
   return `${res.status} ${res.statusText}`;
+}
+
+/** PUT body for `semantic`. `api.api_key` is write-only: the backend never returns it. */
+export interface RecallSettingsPatch {
+  enabled?: boolean;
+  model?: string;
+  ollama_url?: string;
+  default_mode?: RecallMode;
+  provider?: "ollama" | "api";
+  ollama?: { url?: string; model?: string };
+  api?: { format?: ApiFormat; endpoint?: string; model?: string; api_key?: string };
+  dims?: number;
+  images?: boolean;
 }
 
 export type RecallSemanticState =
@@ -300,7 +331,11 @@ export type AskEvent =
 export interface AskCitation {
   label: string;
   agent: string;
+  /** Session id, or the document id for D labels when `doc_id` is absent. */
   id: string;
+  doc_id?: string;
+  doc_type?: RecallDocType;
+  path?: string;
   title: string;
   last_ts: string | null;
   turn?: number;
@@ -372,4 +407,189 @@ export function describeStep(
     return `Reading ${who}${title}${date}`;
   }
   return ev.action === "answer" ? "Writing the answer" : ev.action;
+}
+
+// ---- v3: project knowledge index (docs/design/cross-harness-recall-v3.md) ----
+
+export type RecallDocType = "session" | "image" | "skill" | "command" | "agent" | "artifact" | "markdown" | "mcp";
+export const RECALL_DOC_TYPES: RecallDocType[] =
+  ["session", "image", "skill", "command", "agent", "artifact", "markdown", "mcp"];
+export type ApiFormat = "openai" | "gemini" | "voyage";
+export type TypeCounts = Partial<Record<RecallDocType, number>>;
+
+export type DeltaState = "never_indexed" | "up_to_date" | "stale" | "model_changed" | "unavailable";
+
+export interface RecallDelta {
+  state: DeltaState;
+  last_indexed_at?: string | null;
+  lock?: { model: string; provider: string } | null;
+  new?: TypeCounts;
+  changed?: TypeCounts;
+  removed?: TypeCounts;
+  new_chunks_estimate?: number;
+  estimate_seconds?: number | null;
+}
+
+export interface CapabilityReason { code: string; text: string; fix: string }
+export interface RecallCapability {
+  provider: "ollama" | "api";
+  status: "ready" | "slow" | "blocked" | "unknown";
+  platform?: { host?: string; [k: string]: unknown };
+  memory?: { total: number | null; available: number | null; needed: number };
+  disk?: { free: number | null; needed: number };
+  ollama?: { reachable?: boolean; version?: string | null; too_old?: boolean; model_installed?: boolean };
+  estimate: { seconds: number; label: string; chunks: number } | null;
+  reasons: CapabilityReason[];
+}
+
+export function fetchRecallDelta(project: string, signal?: AbortSignal): Promise<RecallDelta> {
+  return api<RecallDelta>(`/recall/index/delta${qs({ project })}`, { signal });
+}
+
+export function fetchRecallCapability(project: string | null, signal?: AbortSignal, sampleProject = false): Promise<RecallCapability> {
+  return api<RecallCapability>(`/recall/capability${qs({ project, sample_project: sampleProject ? "true" : undefined })}`, { signal });
+}
+
+/** POST /recall/index. A 409 means a run is already going; that is not an error for the caller. */
+export async function startRecallIndexRun(
+  project: string, full: boolean,
+): Promise<{ started: boolean; project: string | null; run: string | null }> {
+  const res = await apiFetch("/recall/index", {
+    method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ project, full }),
+  });
+  if (res.ok || res.status === 409) {
+    const status: RecallIndexStatus = await res.json();
+    return { started: res.ok, project: status.project?.key ?? null, run: status.run };
+  }
+  throw new Error(await errorDetail(res));
+}
+
+/** Read an NDJSON response body, yielding one parsed object per line. Partial lines are buffered. */
+export async function* readNdjson<T>(res: Response): AsyncGenerator<T> {
+  if (!res.body) throw new Error("The server returned no body.");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const parse = (line: string): T | null => {
+    const t = line.trim();
+    if (!t) return null;
+    try { return JSON.parse(t) as T; } catch { return null; }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const ev = parse(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (ev) yield ev;
+      }
+    }
+    buf += dec.decode();
+    const last = parse(buf);
+    if (last) yield last;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+export type PullEvent =
+  | { status: string; completed?: number; total?: number; percent?: number; type?: undefined }
+  | { type: "error"; message?: string; fix?: string };
+
+/** POST /recall/setup/pull. Only call from an explicit user click. */
+export async function* streamModelPull(signal: AbortSignal): AsyncGenerator<PullEvent> {
+  const res = await apiFetch("/recall/setup/pull", { method: "POST", headers: JSON_HEADERS, body: "{}", signal });
+  if (!res.ok) throw new Error(await errorDetail(res));
+  yield* readNdjson<PullEvent>(res);
+}
+
+export interface IndexStartEvent {
+  seq: number; type: "start";
+  project: RecallProjectRef | null;
+  totals: { documents: number; by_type?: TypeCounts };
+}
+export interface RecallMapPoint {
+  doc_id: string; doc_type: RecallDocType; agent: string; title: string; xy: [number, number];
+}
+
+export function fetchRecallMap(project: string, signal?: AbortSignal): Promise<{ points: RecallMapPoint[] }> {
+  return api(`/recall/index/map${qs({ project })}`, { signal });
+}
+
+export interface IndexDocEvent extends Omit<RecallMapPoint, "xy"> {
+  seq: number; type: "doc"; chunks: number; reused: number; xy: [number, number] | null;
+}
+export interface IndexVectorEvent {
+  seq: number; type: "vector"; doc_id: string; doc_type: RecallDocType;
+  preview: number[]; xy: [number, number];
+}
+export interface IndexProgress {
+  documents_done: number; chunks_embedded: number; chunks_reused: number; tokens: number; per_sec: number;
+  by_type: Record<string, number>; by_agent: Record<string, number>;
+}
+export type IndexProgressEvent = { seq: number; type: "progress" } & IndexProgress;
+export interface IndexDoneEvent { seq: number; type: "done"; elapsed_s: number; summary?: Record<string, unknown> }
+export interface IndexErrorEvent { seq: number; type: "error"; message: string; fix?: string }
+export type IndexEvent =
+  | IndexStartEvent | IndexDocEvent | IndexVectorEvent | IndexProgressEvent | IndexDoneEvent | IndexErrorEvent;
+
+/** One connection to /recall/index/events. The caller reconnects with the last seq on a drop. */
+export async function* streamIndexEvents(runId: string, since: number, signal: AbortSignal): AsyncGenerator<IndexEvent> {
+  const res = await apiFetch(`/recall/index/events${qs({ run_id: runId, since })}`, { signal });
+  if (!res.ok) throw new Error(await errorDetail(res));
+  yield* readNdjson<IndexEvent>(res);
+}
+
+export interface RecallDocumentText {
+  type?: "text";
+  doc_id?: string;
+  title?: string;
+  path?: string;
+  chunks?: string[];
+  text?: string;
+  next?: number | null;
+  total?: number;
+}
+export interface RecallDocumentImage { type: "image"; url: string }
+export type RecallDocumentResponse = RecallDocumentText | RecallDocumentImage;
+
+export function recallDocumentPath(docId: string, project: string): string {
+  return `/recall/document/${encodeURIComponent(docId)}${qs({ project })}`;
+}
+
+export function fetchRecallDocument(docId: string, project: string, signal?: AbortSignal): Promise<RecallDocumentResponse> {
+  return api<RecallDocumentResponse>(recallDocumentPath(docId, project), { signal });
+}
+
+/** Image bytes URL carrying the access token, for <img src>. The project is required server side. */
+export function recallImageUrl(docId: string, project: string): string {
+  return artifactUrl(`/recall/document/${encodeURIComponent(docId)}/image${qs({ project })}`);
+}
+
+/** Preselect target: the Recall page for a project (key or path). */
+export function recallProjectHref(project: string): string {
+  return `/recall${qs({ project })}`;
+}
+
+export function effectiveModelName(s: RecallSettings | null): string {
+  if (!s) return "the new model";
+  const sem = s.semantic;
+  if (sem.provider === "api" && sem.api?.model) return sem.api.model;
+  return sem.ollama?.model ?? sem.model ?? "the new model";
+}
+
+export function formatEstimate(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "";
+  if (seconds < 90) return `~${Math.max(1, Math.round(seconds))} s`;
+  return `~${Math.round(seconds / 60)} min`;
+}
+
+export function formatShortDate(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

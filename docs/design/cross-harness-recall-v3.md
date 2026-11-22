@@ -103,8 +103,8 @@ Each project index has a lock record:
 - `probe` is the embedding of the fixed text
   `TokenTelemetry recall probe: the quick brown fox checks the index model.`
   (document kind) taken when the index is created.
-- **Check** (before any index run and before semantic search, result cached
-  10 minutes per project): same provider, model, endpoint host, dims; Ollama
+- **Check** (fresh before any index run, cached for up to 10 minutes for
+  semantic search): same provider, model, endpoint, API format, dims; Ollama
   digest equal (from `/api/tags`); API `returned_model` equal when the
   provider returns one; and the fresh probe vector has cosine >= 0.999 with
   the stored one.
@@ -112,6 +112,8 @@ Each project index has a lock record:
   and hybrid search fall back to keyword (coverage says why), indexing refuses
   incremental updates, and the UI offers "Re-index everything with <new
   model>", which deletes that project's vectors and lock first.
+- When Ollama gives no digest, the probe is part of the shared-vector key so a
+  provider alias that changes models cannot reuse vectors from another project.
 - Changing provider/model/dims in settings never mixes vectors: every
   project whose lock differs becomes `model_changed`.
 
@@ -209,8 +211,9 @@ totals, not chunk text; exact chunk diffing happens during the run).
 ## 6. Capability
 
 `backend/recall_capability.py` (exists). `GET /recall/capability?project=…`
-returns its `assess()` verdict. The speed test runs only when the Ollama model
-is installed, on 32 real chunks from the project; for `api` providers there is
+returns its `assess()` verdict. The speed test runs only after the user asks
+for it (`sample_project=true`) and the Ollama model is installed. It uses up to
+32 redacted chunks from the project; for `api` providers there is
 no local check beyond reachability (`status` from a 1-item test call) and the
 estimate uses the API's measured latency.
 
@@ -223,7 +226,7 @@ current run (and replays from `since` so a reloaded page catches up):
 
 ```json
 {"seq": 1, "type": "start", "project": {…}, "totals": {"documents": 380, "by_type": {…}}}
-{"seq": 2, "type": "doc", "doc_id": "…", "doc_type": "skill", "agent": "claude", "title": "bug-audit", "chunks": 6, "reused": 4}
+{"seq": 2, "type": "doc", "doc_id": "…", "doc_type": "skill", "agent": "claude", "title": "bug-audit", "chunks": 6, "reused": 4, "xy": [0.41, -0.77]}
 {"seq": 3, "type": "vector", "doc_id": "…", "doc_type": "skill", "preview": [0.12, -0.03, …24 values], "xy": [0.41, -0.77]}
 {"seq": 4, "type": "progress", "documents_done": 12, "chunks_embedded": 140, "chunks_reused": 610, "tokens": 18210, "per_sec": 46.2, "by_type": {…}, "by_agent": {…}}
 {"seq": 99, "type": "done", "elapsed_s": 41.2, "summary": {…}}
@@ -234,8 +237,9 @@ current run (and replays from `since` so a reloaded page catches up):
   to 2D with a fixed seeded random projection (deterministic per lock, so the
   same document lands in the same place across runs and similar documents
   cluster), scaled to [-1, 1].
-- Rate: at most ~40 `vector` events per second (sampled when faster);
-  `progress` every 250 ms; counters are always exact.
+- Rate: at most ~40 `vector` previews per second, with a map coordinate on
+  every document event. Progress events report exact counters up to four times
+  a second. `GET /recall/index/map?project=…` restores the map from the index.
 - Text in `doc` events is the redacted title only, never content.
 
 ## 8. Search and Ask
@@ -256,7 +260,7 @@ current run (and replays from `since` so a reloaded page catches up):
   rules from v2 apply (only documents of the user's project and agents).
 - MCP `search_sessions` gains `types`; new MCP tool `read_document`.
 
-## 9. UI (Recall page, and an entry on the Project page)
+## 9. UI (Recall and project activity pages)
 
 - **On project select:** call delta. Show a banner:
   - `never_indexed`: "Index this project" with what will be embedded and the
@@ -266,7 +270,8 @@ current run (and replays from `since` so a reloaded page catches up):
   - `model_changed`: "This project was indexed with <old model>. Re-index
     everything with <new model>".
   - `up_to_date`: a quiet "Indexed Nov 21 with embeddinggemma-2:740m".
-- **Setup card** (first time, or from a settings link): Local (Ollama, the
+- **Setup card** (first time, from Embedding setup, or under Manage index on
+  the project Activity page): Local (Ollama, the
   default) with capability verdict and "Download model (1.3 GB)" button
   streaming pull progress; or API (format, endpoint, model, key, dims, the
   plain warning that text leaves this machine, image toggle off by default).
@@ -300,3 +305,36 @@ trees built in `tmp_path` (including never-index files and MCP secret
 stripping), chunk-hash reuse (second run embeds only new chunks), delta
 speed and counts, event stream order/sampling/exact counters, search
 `types`, Ask `read_document` and document citations, scope enforcement.
+
+## Live retrieval benchmark
+
+A local video-production project was indexed with EmbeddingGemma 2 740M,
+256 dimensions, and Ollama 0.40.16. The final index held 189 sessions,
+62 artifacts, 68 images, 67 Markdown documents, and 16 skills. Of 208
+candidate sessions, 19 were unreadable. Eight images were also unreadable.
+
+The benchmark scored the first expected result in the top ten returned
+hits from `/recall/search`. It used the same queries and type filters for
+each mode and deduplicated repeated hits for a session or document.
+
+| Queries with a correct top-ten hit | Keyword | Semantic | Hybrid |
+| --- | ---: | ---: | ---: |
+| Exact session phrases | 3/3 | 3/3 | 3/3 |
+| Session paraphrases | 2/3 | 2/3 | 3/3 |
+| Skills | 0/2 | 2/2 | 2/2 |
+| Artifacts and plans | 0/2 | 2/2 | 2/2 |
+| Images described by their role in the video | 0/2 | 0/2 | 0/2 |
+| Images described by visible content | 0/2 | 2/2 | 2/2 |
+
+Keyword ranked all three exact session targets first. Hybrid recovered one
+more paraphrase in the top ten, with the same mean reciprocal rank as
+keyword on the three paraphrases. With this small benchmark, keep keyword
+as the general default and select hybrid when the user picks a non-session
+type and has enabled semantic search. Keyword searches sessions, so the
+document rows measure additional retrieval coverage. Image search worked
+with visual descriptions, while both generic descriptions missed.
+
+A separate smoke test embedded two text queries and two generated color
+squares. All four vectors were unit length at 256 dimensions. Each query
+scored its matching square above the other, and the real provider also
+indexed, retrieved, and rendered an inline image in a browser fixture.

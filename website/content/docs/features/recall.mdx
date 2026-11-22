@@ -10,7 +10,7 @@ Recall puts the sessions from all your coding agents into one searchable corpus.
 Three properties hold for the whole feature:
 
 - **Secrets are redacted.** API keys, tokens, JWTs, private keys, passwords in URLs and key/value secrets are replaced with `[REDACTED:<kind>]` before any snippet, title or turn is returned. The dashboard and the MCP server get the same redacted text.
-- **Nothing leaves the machine by default.** Recall reads local files and answers over localhost. It adds no network calls and no telemetry events. Semantic search talks only to Ollama on loopback. The Ask agent sends redacted excerpts to the summarizer you configured, which is a network call if that summarizer is hosted.
+- **Nothing leaves the machine by default.** Recall reads local files and answers over localhost. It adds no network calls and no telemetry events. Semantic search with Ollama talks only to localhost. A cloud embedding API, if you set one up, receives redacted text from the indexed content. The Ask agent sends redacted excerpts to the summarizer you configured, which is a network call if that summarizer is hosted.
 - **Keyword search runs no model.** It is lexical and runs when you ask. Ask and semantic search use models you configured: a summarizer and a local embedding model. When an agent uses Recall through MCP, that agent does the reasoning with its own model.
 
 ## The Recall page
@@ -40,28 +40,165 @@ Ask needs AI summaries turned on in Settings. Without them, the page shows a mes
 
 ## Semantic search
 
-Keyword search finds a session when your query uses the words in the transcript. Semantic search also finds sessions that discuss the same idea in other words. It is off by default.
+Keyword search finds a session when your query uses the words in the transcript. Semantic search also finds sessions and project files that discuss the same idea in other words. It is off by default, and it stays off for every project until you turn it on for that project.
 
-To turn it on:
+Semantic search needs an embedding model. Two providers are available:
 
-1. Install a recent [Ollama](https://ollama.com) and keep it running on this machine.
-2. Pull the embedding model:
+- **Ollama** (the default). The model runs on the machine where TokenTelemetry's backend runs. Nothing leaves that machine.
+- **A cloud embedding API** that you configure. Redacted text is sent to that provider. See [Using a cloud embedding API](#using-a-cloud-embedding-api).
+
+### Search modes and the index
+
+- Keyword stays the default. Searches use keyword until you pick **Hybrid**, which combines both rankings. To make Hybrid the default, set `"default_mode": "hybrid"` in `~/.tokentelemetry/recall.json`.
+- The index is per project and lives in `~/.tokentelemetry/recall_index.db`. Nothing is sent to a remote service when the provider is Ollama.
+- Hybrid also searches sessions that have no index yet, through keyword only. The results report how many searched sessions are unindexed, and the page offers to build the index.
+- Hits found by vector matching carry a `semantic` or `both` tag.
+- If the model is missing or Ollama is not running, the status shows the error and the command or step that fixes it.
+
+### Setting up semantic search
+
+The default model is `embeddinggemma-2:740m`. It is 1.3 GB, reads text and images, and needs a recent Ollama release. Ollama must run on the machine that runs the TokenTelemetry backend, and it listens on that machine's loopback address (`127.0.0.1:11434`).
+
+#### macOS
+
+1. Install Ollama from [ollama.com/download](https://ollama.com/download) and open it. Keep it running while you index.
+2. In Terminal, pull the model:
 
 ```bash
 ollama pull embeddinggemma-2:740m
 ```
 
-3. Open **Recall**, pick a project, and choose **Build index for &lt;project name&gt;** (or **Build index for all projects** with no project selected). The status shows sessions done out of the total. Sessions that have not changed since the last build are skipped.
+#### Windows
 
-Notes:
+1. Run the Ollama installer from [ollama.com/download](https://ollama.com/download). It runs Ollama in the background.
+2. In PowerShell or Command Prompt, pull the model:
 
-- The index is per project and lives in `~/.tokentelemetry/recall_index.db`. Embeddings are computed from redacted text and nothing is sent to a remote service.
-- The Ollama URL must be a loopback address (`127.0.0.1`, `localhost` or `::1`). Other addresses are rejected.
-- Keyword stays the default. Searches use keyword until you pick **Hybrid**, which combines both rankings. To make Hybrid the default, set `"default_mode": "hybrid"` in `~/.tokentelemetry/recall.json`.
-- Hybrid also searches sessions that have no index yet, through keyword only. The results report how many searched sessions are unindexed, and the page offers to build the index.
-- Hits found by vector matching carry a `semantic` or `both` tag.
-- If the model is missing or Ollama is not running, the status shows the error and the command that fixes it.
-- Changing the model leaves the old index on disk. It is ignored until you rebuild.
+```powershell
+ollama pull embeddinggemma-2:740m
+```
+
+#### Linux desktop
+
+1. Install Ollama with the install script from [ollama.com/download](https://ollama.com/download):
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+2. Make sure the server is running. If it is not, start it with `ollama serve`. Then pull the model:
+
+```bash
+ollama pull embeddinggemma-2:740m
+```
+
+#### Self-hosted server
+
+If TokenTelemetry runs on a server and you open the dashboard from another machine, the model lives on the server. Install Ollama on the server, pull the model there, and keep the default Ollama URL (`http://127.0.0.1:11434`). Your browser does not need Ollama. The capability check describes the server, and the Recall page names the host it checked.
+
+The Ollama URL must be a loopback address, so an Ollama running on a different machine is rejected. To use a model that runs elsewhere, use a cloud embedding API instead.
+
+#### First index and later re-index
+
+1. Open **Recall** and pick a project. The banner says **Index this project** and shows what will be embedded and an estimate.
+2. Confirm. The page shows the run live: documents, chunks embedded, progress and a summary at the end.
+3. Each project is indexed on its own. Only one index run runs at a time. A second run is refused until the first one ends, and the page says which run is busy.
+
+In the setup card you can also choose **Download model (1.3 GB)** instead of running `ollama pull`. The page streams the download's progress. Ollama must be running for this to work.
+
+Later visits use the banner to show whether the index is current. See [Re-indexing](#re-indexing).
+
+## Project knowledge index
+
+The index covers more than chat. Each project's index holds the things its agents produced or were given. Two rules hold for every project:
+
+- Only projects you turn on. Nothing is embedded for projects you never enable.
+- Only these content types: sessions, images, skills, commands, agents, artifacts/plans, .md files, MCP config. Never source code.
+
+What each type covers:
+
+- **Sessions.** The same transcripts Recall searches by keyword, chunked and redacted.
+- **Images.** Images inline in transcripts, and image files the agents keep (screenshots, generated media), up to 8 MB each. Images are embedded only when the setting is on and the provider supports images. Ollama does by default. Invalid or unsupported images are skipped and counted as unreadable.
+- **Skills, commands and agents.** Definitions in the project, plus user-level ones (in your home directory) only when a session in this project used them. Other user-level items stay out of this project's index.
+- **MCP servers at user level** follow the same rule. A user-level server is indexed for a project only when a session in that project used it.
+- **Artifacts and plans.** Plans, task lists, walkthroughs, reports and published artifacts that the agents wrote for the project.
+- **Markdown files.** Instruction files, memory files and the project's own `.md` and `.mdx` files. The walk stays inside the project root, does not follow symlinks, and skips dependency, build and agent worktree folders. It reads at most 2,000 files and 1 MB per file.
+- **MCP config.** One entry per MCP server per config file. The entry holds the server name, agent, scope, transport, command and tool names. Environment values, headers, tokens in arguments and URL query strings are never indexed, so an MCP secret does not reach the index or the embedding model.
+
+Recall never indexes credentials, paste caches, file history, shell history, backup settings or `.env` files. Text is redacted with the same rules as keyword search before it is embedded. Redaction is pattern-based, so it is not a guarantee.
+
+## Using a cloud embedding API
+
+Use a cloud API when your machine cannot run the local model, or when you want a hosted model. Open **Recall**, choose the **API** provider in the setup card, and fill in:
+
+- **Format.** `openai` covers OpenAI and every OpenAI-compatible endpoint, such as Jina, Mistral, OpenRouter, LiteLLM, vLLM and LM Studio. `gemini` uses Gemini's `embedContent` API. `voyage` uses Voyage's multimodal embeddings API.
+- **Endpoint.** Must start with `https://`. Plain `http://` is allowed only for loopback addresses.
+- **Model** and **dimensions** (128, 256, 512 or 768). The dimension is sent when the provider accepts it. Otherwise the model's native size must match.
+- **API key.** Saved to `~/.tokentelemetry/recall_secrets.json`. The file is written only when you save settings. No route returns the key, and the page shows only whether a key is set.
+
+Know what this sends and stores:
+
+- **Text leaves your machine.** Every indexed text document is redacted first, then sent to the provider in batches. The provider's own retention and training terms apply.
+- **Key file permissions differ by OS.** On macOS and Linux the file is readable only by your user (mode 0600). Windows does not enforce that mode, so on Windows the key is protected only by your Windows user profile.
+- **Images are off by default for APIs.** Images cannot be redacted, so turning them on sends the image bytes to the provider unchanged. The `openai` format never receives images. `gemini` and `voyage` do.
+- **Rate limits and errors.** Rate limit and server errors (429 and 5xx) retry up to three times with backoff. A bad key (401) stops at once, and the page shows the fix.
+
+Changing provider, model or dimensions never mixes vectors. See [Same model, always](#same-model-always).
+
+## Same model, always
+
+A project's index holds vectors from one model only. Each index stores a lock record with the provider, model, endpoint host, dimensions, the Ollama digest (or the model name the API returns) and the vector of a fixed test sentence, the probe.
+
+Before a project is indexed, and before semantic search runs (the result is cached for 10 minutes), TokenTelemetry checks that:
+
+- the provider, model, endpoint host and dimensions match the lock,
+- the Ollama digest for the tag is unchanged, or the API returns the same model name,
+- a fresh probe vector matches the stored one (cosine similarity of at least 0.999).
+
+A digest change under the same tag counts as a change, so an updated Ollama model is detected too.
+
+If any check fails, the project's index state becomes `model_changed`:
+
+- Semantic and hybrid search fall back to keyword. The results say why.
+- Incremental indexing is refused.
+- The banner offers **Re-index everything with &lt;new model&gt;**. This deletes that project's vectors and its lock, then embeds every document again.
+
+Changing the provider, model or dimensions in settings marks every project whose lock differs as `model_changed`. Nothing is mixed in place. The old vectors stay in the index until that project is re-indexed.
+
+## When your machine cannot run it
+
+When you open a project, TokenTelemetry checks whether this machine can run local semantic search. The check is quick. Its speed test embeds a small sample of the project's real chunks, and it reports one of four states:
+
+- **Ready.** Local indexing should run at a reasonable speed.
+- **Slow.** Indexing is possible but would take a long time. The page shows the estimate, which comes from a speed test on 32 chunks of the project.
+- **Blocked.** Something prevents local indexing now. The page lists each reason with its fix.
+- **Unknown.** A check could not run. You can still try indexing.
+
+The reasons and fixes:
+
+- **Ollama not running or not installed.** Start Ollama, or install it from [ollama.com/download](https://ollama.com/download). Or use a cloud API.
+- **Ollama too old.** Update Ollama, then run the check again.
+- **Not enough disk.** The model needs about 1.5 GB, plus about 1.2 KB per chunk for the index. Free up space, or use a cloud API.
+- **Not enough memory.** The model needs about 2 GB of free memory. Close other apps or local models and run the check again, or use a cloud API.
+- **Slow.** An estimate above 30 minutes is marked slow. You can choose **Index anyway**, use a cloud API, or run TokenTelemetry on a faster machine.
+
+On a server, the memory and disk figures describe the server, and the page names the host it checked.
+
+## Re-indexing
+
+Select a project in Recall or choose **Manage index** on the project’s **Activity** page. Both show setup controls, the capability check, and the index state. The index-state check does not call the embedding model:
+
+- **Index this project.** The project has never been indexed. The banner lists what will be embedded and an estimate.
+- **Re-index.** New or changed items are waiting. The banner counts them, for example "142 new chunks, 3 new skills, 2 images since Nov 18", with an estimate.
+- **Model changed.** The index was built with another model. See [Same model, always](#same-model-always).
+- **Up to date.** The banner shows the date of the last index and the model used.
+
+A re-index embeds only what is new or changed:
+
+- Chunks whose redacted text has not changed reuse their stored vectors, so an unchanged file or session is never embedded twice.
+- A session that grew embeds only its new messages.
+- Items that were removed lose their rows. Vectors that no remaining item uses are cleaned up with them. Vectors shared with other projects that use the same model stay.
+
+The index-state check does not read transcript text. To estimate local indexing speed, choose **Check indexing speed** to embed a sample of up to 32 redacted chunks on this machine. During indexing, the progress view shows document and chunk counts, sampled vector previews, and one map point per indexed document with a vector. The map is available when you reopen the project.
 
 ## MCP server
 
