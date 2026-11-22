@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 # corrected from the real pull (size) and a loaded model (memory); kept as
 # constants so the check and the UI copy stay in one place.
 MODEL_RAM_BYTES = 2 * 1024 ** 3
-MODEL_DISK_BYTES = 2 * 1024 ** 3
+MODEL_DISK_BYTES = int(1.5 * 1024 ** 3)   # embeddinggemma-2:740m is a 1.3 GB pull
 INDEX_BYTES_PER_CHUNK = 256 * 4 + 200   # 256-dim float32 vector + row overhead
 SPEED_SAMPLE = 32
 SLOW_SECONDS = 30 * 60                   # above this, "slow but possible"
