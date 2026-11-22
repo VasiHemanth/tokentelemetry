@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 
 import pytest
 
@@ -105,7 +106,7 @@ def test_claude_skills_commands_agents_plans(tree):
     w(home / ".claude" / "CLAUDE.md", "global rules")
     w(proj / "CLAUDE.md", "project rules")
     w(proj / ".claude" / "rules" / "style.md", "style")
-    slug = str(proj).replace("/", "-").replace(".", "-")
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(proj))
     w(home / ".claude" / "projects" / slug / "memory" / "MEMORY.md", "mem")
     w(home / ".claude" / "projects" / (slug + "x") / "memory" / "MEMORY.md", "other project")
     sessions = [{"id": "s1", "agent": "claude", "skills_used": [{"name": "used-skill", "count": 2}, {"name": "git:ship", "count": 1}],
@@ -113,13 +114,13 @@ def test_claude_skills_commands_agents_plans(tree):
     res = run(tree, sessions)
     ids = by_id(res)
     assert "skill:claude:project:.claude/skills/local-skill/SKILL.md" in ids
-    assert "skill:claude:user:used-skill" in ids
+    assert "skill:claude:user:.claude/skills/used-skill/SKILL.md" in ids
     assert not any("unused-skill" in i for i in ids)
-    assert "command:claude:user:git:ship" in ids
+    assert "command:claude:user:.claude/commands/git/ship.md" in ids
     assert not any(i.endswith(":other") for i in ids)
     assert "command:claude:project:deploy" in ids
-    assert "agent:claude:project:reviewer" in ids and "agent:claude:user:explorer" in ids
-    assert "agent:claude:user:idle" not in ids
+    assert "agent:claude:project:reviewer" in ids and "agent:claude:user:.claude/agents/explorer.md" in ids
+    assert "agent:claude:user:.claude/agents/idle.md" not in ids
     assert "artifact:claude:user:.claude/plans/wobbly-plan.md" in ids
     assert not any("other-plan" in i for i in ids)
     assert "markdown:claude:user:.claude/CLAUDE.md" in ids
@@ -127,7 +128,7 @@ def test_claude_skills_commands_agents_plans(tree):
     assert any(i.startswith("markdown:claude:user:.claude/projects/") and i.endswith("MEMORY.md") for i in ids)
     assert not any(slug + "x" in d["source"]["path"] for d in res["documents"])
     assert res["skipped"]["unused_user_item"] >= 3
-    sk = ids["skill:claude:user:used-skill"]
+    sk = ids["skill:claude:user:.claude/skills/used-skill/SKILL.md"]
     assert sk["source"]["path"] == "~/.claude/skills/used-skill/SKILL.md"
     assert sk["cheap_fp"] and sk["agent"] == "claude" and sk["scope"] == "user" and sk["type"] == "skill"
     # stable ids across runs
@@ -211,7 +212,7 @@ def test_codex_toml_mcp_skills_and_images(tree):
     sessions = [{"id": "sess-1", "agent": "codex", "mcp_tools": ["mcp__gh__list_prs"], "skills_used": [{"name": "tdd"}]}]
     res = run(tree, sessions)
     ids = by_id(res)
-    assert "skill:codex:user:tdd" in ids and "skill:codex:project:.agents/skills/pskill/SKILL.md" in ids
+    assert "skill:codex:user:.codex/skills/tdd/SKILL.md" in ids and "skill:codex:project:.agents/skills/pskill/SKILL.md" in ids
     assert "markdown:codex:user:.codex/AGENTS.md" in ids and "markdown:codex:project:AGENTS.md" in ids
     assert "markdown:codex:user:.codex/memories/m.md" in ids
     mcp = {d["title"]: d for d in res["documents"] if d["type"] == "mcp"}
@@ -252,7 +253,7 @@ def test_antigravity_brain_images_and_mcp(tree):
     assert not any(d["title"] == "bak" for d in res["documents"])
     fs = [d for d in res["documents"] if d["type"] == "mcp" and d["title"] == "fs"][0]
     assert KEY not in fs["text"] and "s.example.com" in fs["text"]
-    assert "skill:antigravity:user:agy-skill" in ids
+    assert "skill:antigravity:user:" + [i for i in ids if i.endswith("skills/agy-skill/SKILL.md") and i.startswith("skill:antigravity:user:")][0].split(":user:")[1] in ids
     assert any(i.startswith("markdown:") and i.endswith(".agents/rules/r.md") for i in ids)
     assert res["skipped"]["unlinked_artifact"] >= 1
 
@@ -272,7 +273,7 @@ def test_cursor_rules_skills_mcp(tree):
     assert "markdown:cursor:project:.cursor/rules/style.mdc" in ids
     assert "markdown:cursor:project:.cursorrules" in ids
     assert "skill:cursor:project:.cursor/skills/cs/SKILL.md" in ids
-    assert "agent:cursor:user:ca" in ids
+    assert "agent:cursor:user:.cursor/agents/ca.md" in ids
     titles = {d["title"] for d in res["documents"] if d["type"] == "mcp"}
     assert titles == {"p", "g"}
     assert KEY not in texts(res) and BEARER not in texts(res)
@@ -294,7 +295,7 @@ def test_opencode_jsonc_mcp_and_xdg(tree):
               env={"XDG_CONFIG_HOME": str(home / "xdg")})
     ids = by_id(res)
     assert {d["title"] for d in res["documents"] if d["type"] == "mcp"} == {"ctx", "rem"}
-    assert "skill:opencode:user:oc" in ids and "agent:opencode:project:oa" in ids
+    assert "skill:opencode:user:xdg/opencode/skills/oc/SKILL.md" in ids and "agent:opencode:project:oa" in ids
     assert "artifact:opencode:project:.opencode/plans/p.md" in ids
     blob = texts(res)
     assert TOK not in blob and KEY not in blob and BEARER not in blob
@@ -410,7 +411,7 @@ def test_assorted_agents(tree):
                  "mcp_tools": ["mcp__k__a", "mcp__vm__b", "mcp__hm__c"], "subagents": ["va"]}]
     res = run(tree, sessions)
     ids = by_id(res)
-    for want in ["skill:kimi:user:ks", "agent:vibe:user:va", "skill:hermes:user:hs", "markdown:hermes:user:.hermes/memories/MEMORY.md",
+    for want in ["skill:kimi:user:.kimi-code/skills/ks/SKILL.md", "agent:vibe:user:.vibe/agents/va.toml", "skill:hermes:user:.hermes/skills/cat/hs/SKILL.md", "markdown:hermes:user:.hermes/memories/MEMORY.md",
                  "markdown:qoder:user:.qoder/AGENTS.md", "markdown:cline:project:.clinerules", "markdown:cline:project:memory-bank/ctx.md",
                  "skill:smallcode:project:.smallcode/skills/sc/SKILL.md", "markdown:copilot:project:.github/copilot-instructions.md",
                  "command:qwen:project:q"]:
@@ -441,3 +442,59 @@ def test_extract_inline_images():
     assert out == [(raw, "image/png", 1), (b"jpg", "image/jpeg", 3)]
     assert rs.extract_inline_images(bad) == []
     assert rs.extract_inline_images(None) == []
+
+
+# ------------------------------------------------------------ review fixes
+
+def test_strip_args_flag_equals_values():
+    tail = "Zk93jd8sk29" + "dKSLw0pQmz7"
+    sig = "Abcdef123xyz"
+    opaque = "a1B2c3D4" * 5
+    out = rs._strip_args(["-y", "mcp-remote", "--url=https://mcp.example.com/api/mcp/s/" + tail + "/sse",
+                          "--endpoint=https://h.example/v1?sig=" + sig, "--name=" + opaque, "--port=8080",
+                          "--path=/opt/some/long/dir/name/that/is/long/enough/abc"])
+    blob = " ".join(out)
+    for bad in (tail, sig, opaque):
+        assert bad not in blob
+    assert "--url=https://mcp.example.com" in out and "--endpoint=https://h.example" in out
+    assert "--port=8080" in out and "--path=/opt/some/long/dir/name/that/is/long/enough/abc" in out
+    text = rs.render_mcp("r", "claude", "user", {"command": "npx", "args": ["--hdr=" + BEARER]})
+    assert BEARER not in text and "tok" + "en1234567890abcdef" not in text
+
+
+def test_claude_slug_underscore_and_space(tree, tmp_path):
+    home = tmp_path / "home"
+    proj = tmp_path / "work" / "education_video app"
+    proj.mkdir(parents=True)
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(os.path.realpath(proj)))
+    assert "_" not in slug and " " not in slug
+    w(home / ".claude" / "projects" / slug / "memory" / "MEMORY.md", "mem")
+    res = rs.discover(str(proj), [], home=home, env={}, images=False)
+    assert any(d["doc_id"].startswith("markdown:claude:user:.claude/projects/") for d in res["documents"])
+    assert rs._claude_slug("/Users/dev/code/education_video") == "-Users-dev-code-education-video"
+
+
+def test_same_named_user_skills_stay_distinct(tree):
+    home, _ = tree
+    w(home / ".claude" / "skills" / "x" / "SKILL.md", "one")
+    w(home / ".claude" / "plugins" / "cache" / "mk" / "pl" / "1.0" / "skills" / "x" / "SKILL.md", "two")
+    res = run(tree, [{"id": "s", "agent": "claude", "skills_used": [{"name": "x"}]}])
+    docs = [d for d in res["documents"] if d["type"] == "skill" and d["title"] == "x"]
+    assert len(docs) == 2 and len({d["doc_id"] for d in docs}) == 2
+
+
+def test_user_scope_gating_is_per_agent(tree):
+    home, _ = tree
+    w(home / ".claude" / "skills" / "deploy" / "SKILL.md", "c")
+    w(home / ".codex" / "skills" / "deploy" / "SKILL.md", "x")
+    w(home / ".claude.json", json.dumps({"mcpServers": {"gh": {"command": "a"}}}))
+    w(home / ".codex" / "config.toml", '[mcp_servers.gh]\ncommand = "a"\n')
+    res = run(tree, [{"id": "s", "agent": "claude", "skills_used": [{"name": "deploy"}], "mcp_tools": ["mcp__gh__list"]}])
+    ids = by_id(res)
+    assert "skill:claude:user:.claude/skills/deploy/SKILL.md" in ids
+    assert not any(i.startswith("skill:codex:") for i in ids)
+    assert any(i.startswith("mcp:claude:") for i in ids)
+    assert not any(i.startswith("mcp:codex:") for i in ids)
+    # sessions without an agent field cannot be attributed, so they count for every agent
+    res2 = run(tree, [{"id": "s", "skills_used": [{"name": "deploy"}]}])
+    assert any(i.startswith("skill:codex:") for i in by_id(res2))

@@ -21,6 +21,11 @@
         {
           "title": "One embedding model per project index",
           "description": "Each project's index records the model it was built with. If the model changes, Recall says so and offers one re-index instead of mixing old and new vectors."
+        },
+        {
+          "title": "Continue an Ask conversation later",
+          "description": "Ask keeps a history of your questions and answers on this machine. Reopen a chat to ask follow-ups with the same project and agents, or start a new one.",
+          "href": "/recall"
         }
       ]
     },

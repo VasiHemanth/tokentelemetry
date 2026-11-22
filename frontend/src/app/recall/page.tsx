@@ -12,6 +12,7 @@ import {
 import { AskPanel } from "@/components/recall/AskPanel";
 import { SemanticControl, useRecallSemantic, type RecallSemantic } from "@/components/recall/SemanticControl";
 import { ProjectKnowledge } from "@/components/recall/ProjectKnowledge";
+import { resolveRecallProject } from "@/lib/recallPure";
 import { DocHitCard } from "@/components/recall/DocHit";
 import { DocumentDrawer, type OpenDoc } from "@/components/recall/DocumentDrawer";
 import { DocTypeIcon, docTypeMeta } from "@/components/recall/docTypes";
@@ -63,21 +64,18 @@ export default function RecallPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setProject(readStoredProject());
     try {
-      const q = new URLSearchParams(window.location.search).get("project");
+      const params = new URLSearchParams(window.location.search);
+      const q = params.get("project");
       if (q) setWanted(q);
+      if (params.get("tab") === "ask") setTab("ask");
     } catch { /* no location */ }
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!wanted || projectsLoading) return;
-    const norm = (v: string) => v.replace(/\\/g, "/").replace(/\/+$/, "");
-    const w = norm(wanted);
-    const exact = projects.find((p) => norm(p.key) === w);
     // A worktree path resolves to the repo that contains it.
-    const parent = exact ?? projects
-      .filter((p) => w.startsWith(norm(p.key) + "/"))
-      .sort((a, b) => b.key.length - a.key.length)[0];
+    const parent = resolveRecallProject(projects, wanted);
     if (parent) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setProject(parent.key);
@@ -119,8 +117,26 @@ export default function RecallPage() {
   const searchMore = () =>
     setSubmitted((s) => (s ? { ...s, maxSessions: RECALL_WIDE_MAX_SESSIONS, nonce: s.nonce + 1 } : s));
 
+  const knowledgeRef = useRef<HTMLDivElement>(null);
+  const showIndexPanel = () => {
+    const el = knowledgeRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.focus({ preventScroll: true });
+  };
+
+  const retrievalSettings = (
+    <div ref={knowledgeRef} tabIndex={-1} className="space-y-3 outline-none">
+      <SemanticControl sem={sem} project={effectiveProject} projectName={selected?.name ?? null} showBuild={!selected} />
+      {selected && <ProjectKnowledge key={selected.key} project={selected.key} projectName={selected.name} sem={sem} />}
+    </div>
+  );
+
   return (
-    <div className="px-4 sm:px-8 py-8 max-w-[1100px] mx-auto space-y-6 pb-20">
+    <div className={cn(
+      "mx-auto w-full min-w-0 space-y-6 px-4 pt-8 pb-20 sm:px-8",
+      tab === "search" && "max-w-[1100px]",
+    )}>
       <PageHeader
         eyebrow="Cross-harness"
         title="Recall"
@@ -223,11 +239,12 @@ export default function RecallPage() {
             </div>
           )}
 
-          <SemanticControl sem={sem} project={effectiveProject} projectName={selected?.name ?? null} showBuild={!selected} />
-
-          {selected && (
-            <ProjectKnowledge key={selected.key} project={selected.key} projectName={selected.name} sem={sem} />
-          )}
+          {tab === "ask" ? (
+            <details className="rounded-[var(--tt-radius)] border border-[var(--tt-border)] p-3">
+              <summary className="cursor-pointer text-[12px] font-medium text-[var(--tt-fg-muted)]">Search and indexing settings</summary>
+              <div className="mt-3 space-y-3">{retrievalSettings}</div>
+            </details>
+          ) : retrievalSettings}
 
           {tab === "search" && semEnabled && (
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by type">
@@ -284,7 +301,7 @@ export default function RecallPage() {
           )}
 
           {tab === "ask" ? (
-            <AskPanel project={effectiveProject} agents={activeAgents} />
+            <AskPanel project={effectiveProject} projectName={selected?.name ?? null} agents={activeAgents} />
           ) : submitted ? (
             <SearchResults
               submitted={submitted}
@@ -296,6 +313,7 @@ export default function RecallPage() {
               types={semEnabled ? types : []}
               sem={sem}
               projectName={selected?.name ?? null}
+              onShowIndex={showIndexPanel}
             />
           ) : (
             <Timeline
@@ -386,8 +404,9 @@ function Timeline({ ready, project, agents, showProject, hasProjects }: {
   );
 }
 
-function SearchResults({ submitted, project, agents, showProject, onSearchMore, mode, types, sem, projectName }: {
+function SearchResults({ submitted, project, agents, showProject, onSearchMore, mode, types, sem, projectName, onShowIndex }: {
   submitted: Submitted; project: string; agents: string[]; showProject: boolean; onSearchMore: () => void;
+  onShowIndex: () => void;
   mode: RecallMode | null; types: RecallDocType[]; sem: RecallSemantic; projectName: string | null;
 }) {
   const [openDoc, setOpenDoc] = useState<OpenDoc | null>(null);
@@ -512,11 +531,14 @@ function SearchResults({ submitted, project, agents, showProject, onSearchMore, 
           <span className="flex-1 min-w-[220px] tabular">
             {unindexed} of {cov.semantic!.indexed_sessions + unindexed} searched {unindexed === 1 ? "session is" : "sessions are"} not indexed and matched by keyword only.
           </span>
-          {sem.settings?.ollama.reachable && sem.settings.ollama.model_installed && sem.index?.state !== "running" && (
-            <Button size="sm" disabled={sem.busy} onClick={() => void sem.build(project || null)}>
-              {project ? `Build index for ${projectName ?? "this project"}` : "Build index"}
+          {sem.index?.state !== "running" && (project ? (
+            <Button size="sm" onClick={onShowIndex}>
+              {`Build index for ${projectName ?? "this project"}`}
             </Button>
-          )}
+          ) : (
+            // Indexes are per project; the backend has no all-projects build.
+            <span className="text-[var(--tt-fg-dim)]">Select a project to index it</span>
+          ))}
           {sem.index?.state === "running" && (
             <span className="tabular text-[var(--tt-fg-dim)]">Indexing {sem.index.sessions_done + sem.index.sessions_skipped}/{sem.index.sessions_total}</span>
           )}

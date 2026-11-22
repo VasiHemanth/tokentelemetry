@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hashlib
+import http.client
 import json
 import math
 import os
@@ -56,6 +56,14 @@ class EmbedError(Exception):
 
 class ImageDecodeError(EmbedError):
     """The provider rejected one document's image bytes."""
+
+
+class BadVectorError(EmbedError):
+    """The provider answered, but a vector is unusable (all zero, NaN).
+
+    A content problem with one input, not a provider outage: callers skip the
+    input and keep going instead of failing a whole index run.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +181,11 @@ def _finish(vec: Any, dims: int, strict: bool = False) -> List[float]:
             "Set the dimensions to %d in recall settings." % n)
     v = v[:dims]
     if any(not math.isfinite(x) for x in v):
-        raise EmbedError("The model returned invalid numbers (NaN).",
-                         "This can happen with half-precision builds; use a different model build.")
+        raise BadVectorError("The model returned invalid numbers (NaN).",
+                             "This can happen with half-precision builds; use a different model build.")
     norm = math.sqrt(sum(x * x for x in v))
     if norm == 0.0:
-        raise EmbedError("The model returned an all-zero vector.", "Try a different model.")
+        raise BadVectorError("The model returned an all-zero vector.", "Try a different model.")
     return [x / norm for x in v]
 
 
@@ -246,6 +254,11 @@ class Embedder:
                     titles: Optional[List[Optional[str]]] = None) -> List[List[float]]:
         raise NotImplementedError
 
+    def format_document(self, text: str, title: Optional[str]) -> str:
+        """The exact string embedded for a document chunk. The index hashes
+        this, so it must match what embed_texts sends."""
+        return text
+
     def embed_images(self, images: List[bytes]) -> List[List[float]]:
         raise EmbedError("This provider does not embed images.",
                          "Turn off image indexing or pick a multimodal model.")
@@ -269,12 +282,17 @@ class OllamaEmbedder(Embedder):
     def uses_gemma_prefix(self) -> bool:
         return "embeddinggemma" in self.model.lower()
 
+    def format_document(self, text: str, title: Optional[str]) -> str:
+        if not self.uses_gemma_prefix:
+            return text
+        return "title: %s | text: %s" % (title or "none", text)
+
     def _prefix(self, text: str, kind: str, title: Optional[str]) -> str:
         if not self.uses_gemma_prefix:
             return text
         if kind == "query":
             return "task: search result | query: %s" % text
-        return "title: %s | text: %s" % (title or "none", text)
+        return self.format_document(text, title)
 
     def _embed(self, inputs: List[Any]) -> List[List[float]]:
         out: List[List[float]] = []
@@ -346,6 +364,10 @@ class ApiEmbedder(Embedder):
         except (urllib.error.URLError, OSError, TimeoutError):
             raise EmbedError("Could not reach the embedding API at %s." % self.endpoint_host,
                              "Check the endpoint URL and your network connection.")
+        except (ValueError, http.client.HTTPException):
+            # http.client errors can quote header values; never pass them on.
+            raise EmbedError("The embedding API request could not be sent.",
+                             "Check the API key and endpoint URL in recall settings.") from None
 
     def _http_error(self, e: _HttpError) -> EmbedError:
         detail = self._scrub(_body_msg(e.body))

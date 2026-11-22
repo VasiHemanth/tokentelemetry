@@ -995,7 +995,26 @@ def test_bad_image_does_not_stop_other_documents(store):
     docs = [image_doc("bad.webp", b"bad"), file_doc("ok", "useful text")]
     st = do_run(make_run(store, RejectImage(), images={"bad.webp": b"bad"}), PROJ, docs)
     assert st["state"] == "done" and st["documents_unreadable"] == 1
-    assert set(store.documents(PROJ["key"])) == {docs[1]["doc_id"]}
+    stored = store.documents(PROJ["key"])
+    # The bad image is recorded with no chunks so delta does not re-offer it.
+    assert stored[docs[0]["doc_id"]]["chunks"] == 0 and stored[docs[1]["doc_id"]]["chunks"] > 0
+
+
+def test_bad_vector_skips_the_document_not_the_run(store):
+    from recall_embed import BadVectorError
+
+    class ZeroOnSymbols(FakeEmbedder3):
+        def embed_texts(self, texts, kind="document", titles=None):
+            if any("%%%" in t for t in texts):
+                raise BadVectorError("The model returned an all-zero vector.", "Try a different model.")
+            return super().embed_texts(texts, kind, titles)
+
+    docs = [file_doc("bad", "%%% ### %%%"), file_doc("ok", "useful text")]
+    st = do_run(make_run(store, ZeroOnSymbols()), PROJ, docs)
+    assert st["state"] == "done" and st["documents_unreadable"] == 1
+    stored = store.documents(PROJ["key"])
+    assert stored[docs[0]["doc_id"]]["chunks"] == 0  # recorded, so delta stops offering it
+    assert stored[docs[1]["doc_id"]]["chunks"] > 0
 
 
 def test_embed_error_is_reported_and_written_docs_kept(store):
@@ -1075,3 +1094,46 @@ def test_default_text_reader_reads_files_and_caps_size(tmp_path):
     assert ri.default_text_reader({"source": {"path": str(big)}}) is None
     assert ri.default_text_reader({"source": {"path": str(tmp_path / "missing.md")}}) is None
     assert ri.default_text_reader({"source": {"kind": "text", "text": "rendered"}}) == "rendered"
+
+
+# ------------------------------------------------------------ review fixes
+
+def test_full_reindex_with_failing_probe_keeps_the_old_index(store):
+    emb = FakeEmbedder3()
+    docs = [file_doc("a", "keep this text")]
+    assert do_run(make_run(store, emb), PROJ, docs)["state"] == "done"
+    old_lock = store.get_lock(PROJ["key"])
+    before = store.counts()
+    assert before["documents"] == 1 and before["chunk_vectors"] >= 1
+
+    class ProbeFails(FakeEmbedder3):
+        def embed_texts(self, texts, kind, titles=None):
+            if ri.PROBE_TEXT in texts:
+                raise ri.EmbedError("Ollama is not reachable at http://127.0.0.1:11434. Start it with: ollama serve")
+            return super().embed_texts(texts, kind, titles)
+
+    st = do_run(make_run(store, ProbeFails()), PROJ, docs, full=True)
+    assert st["state"] == "error" and "ollama serve" in st["error"]["message"]
+    assert store.counts() == before
+    assert store.get_lock(PROJ["key"])["lock"] == old_lock["lock"]
+    assert set(store.documents(PROJ["key"])) == {docs[0]["doc_id"]}
+
+
+def test_embeddinggemma_in_a_hub_name_hashes_the_title_and_embedder_gets_the_hashed_string(store, monkeypatch):
+    import recall_embed as re_
+    sent = []
+    emb = re_.OllamaEmbedder("http://127.0.0.1:11434", "hf.co/x/embeddinggemma-300m-GGUF", 8, images=False)
+    monkeypatch.setattr(emb, "lock_evidence", lambda: {"ollama_digest": "sha256:x", "returned_model": None})
+
+    def fake_embed(inputs):
+        sent.extend(inputs)
+        return [_hash_vec(i, 8) for i in inputs]
+
+    monkeypatch.setattr(emb, "_embed", fake_embed)
+    one = file_doc("alpha", "same body text")
+    two = file_doc("beta", "same body text")
+    assert do_run(make_run(store, emb), PROJ, [one, two])["state"] == "done"
+    expect = sorted(ri.prefix_document(emb, "same body text", t) for t in ("alpha", "beta"))
+    assert expect[0] != expect[1]
+    assert ri.chunk_hash(expect[0]) != ri.chunk_hash(expect[1])
+    assert sorted(s for s in sent if ri.PROBE_TEXT not in s) == expect

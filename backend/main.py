@@ -12215,6 +12215,7 @@ from fastapi.responses import Response, StreamingResponse
 import threading as _recall_threading
 import recall_agent as _recall_agent
 import recall_capability as _recall_capability
+import recall_conversations as _recall_conversations
 import recall_embed as _recall_embed
 import recall_index as _recall_index
 import recall_sources as _recall_sources
@@ -12369,7 +12370,8 @@ def _recall_inline_discover(documents, stored):
             seen.add(fp)
             yield {
                 "doc_id": f"image:inline:{agent}:{sid}:{fp}", "type": "image",
-                "agent": agent, "scope": "project", "title": doc["title"],
+                "agent": agent, "scope": "project",
+                "title": doc["title"] or f"Image from {agent} session {sid[:8]}",
                 "source": {"kind": "inline_image", "session_id": sid, "mime": mime,
                            "turn": turn, "content_fp": fp},
                 "mtime": doc["mtime"], "size": len(data), "cheap_fp": fp,
@@ -12682,14 +12684,16 @@ def _recall_probe(sem: Dict[str, Any]) -> Dict[str, Any]:
 def _recall_index_stats(store, sem: Dict[str, Any]) -> Dict[str, Any]:
     conn = store._conn()
     try:
-        sessions = conn.execute("SELECT COUNT(*) FROM documents WHERE type='session'").fetchone()[0]
+        sessions = conn.execute("SELECT COUNT(*) FROM documents WHERE type='session' AND chunks>0").fetchone()[0]
+        unreadable = conn.execute("SELECT COUNT(*) FROM documents WHERE type='session' AND chunks=0").fetchone()[0]
         docs = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
         chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
         updated = conn.execute("SELECT MAX(indexed_at) FROM documents").fetchone()[0]
     finally:
         conn.close()
     model = sem["api"]["model"] if sem["provider"] == "api" else sem["ollama"]["model"]
-    return {"chunks": int(chunks), "sessions": int(sessions), "documents": int(docs), "model": model,
+    return {"chunks": int(chunks), "sessions": int(sessions), "sessions_unreadable": int(unreadable),
+            "documents": int(docs), "model": model,
             "bytes": store.stats(None)["bytes"], "updated_at": updated}
 
 
@@ -12729,6 +12733,8 @@ async def recall_put_settings(body: dict = Body(...)):
     patch, key = _recall_split_key(body)
     if key is not None and (not isinstance(key, str) or len(key) > 4096):
         raise HTTPException(status_code=400, detail="api_key must be text")
+    if key is not None and any(not 33 <= ord(ch) <= 126 for ch in key.strip()):
+        raise HTTPException(status_code=400, detail="api_key contains invalid characters")
     try:
         _recall_index.update_settings(patch)
     except ValueError as e:
@@ -12856,6 +12862,10 @@ def _recall_capability_core(sessions, project: Optional[str], speed: bool) -> Di
                 def embed(batch):
                     try:
                         return emb.embed_texts(list(batch), "document")
+                    except _recall_embed.BadVectorError:
+                        # The call completed; one input embedded badly. The
+                        # timing is still a valid speed sample.
+                        return None
                     except _RECALL_EMBED_ERRORS as e:
                         failure.append(e)
                         raise
@@ -13206,12 +13216,55 @@ async def recall_document(doc_id: str, project: Optional[str] = None,
 
 # ---------------------------------------------------------------- ask
 
+_recall_running_chats: set = set()
+
+
+def _recall_chat_id(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+    return value
+
+
+@app.get("/recall/conversations")
+async def recall_conversations():
+    items = await _recall_asyncio.to_thread(_recall_conversations.list_conversations)
+    return JSONResponse({"conversations": items}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/recall/conversations/{conversation_id}")
+async def recall_get_conversation(conversation_id: str):
+    item = await _recall_asyncio.to_thread(
+        _recall_conversations.get_conversation, _recall_chat_id(conversation_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return JSONResponse(item, headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/recall/conversations/{conversation_id}")
+async def recall_delete_conversation(conversation_id: str):
+    conversation_id = _recall_chat_id(conversation_id)
+    def delete():
+        # Serialize the delete with the start of an Ask run.
+        with _recall_lock:
+            if conversation_id in _recall_running_chats:
+                raise HTTPException(status_code=423, detail="Stop the current answer before deleting this chat.")
+            _recall_conversations.delete_conversation(conversation_id)
+
+    await _recall_asyncio.to_thread(delete)
+    return Response(status_code=204)
+
+
 @app.post("/recall/ask")
 async def recall_ask(request: Request, body: dict = Body(...)):
     question = body.get("question")
     if not isinstance(question, str) or not (1 <= len(question.strip()) <= 1000):
         raise HTTPException(status_code=400, detail="question is required (1 to 1000 characters)")
     question = question.strip()
+    chat_id = body.get("conversation_id")
+    if chat_id is not None:
+        chat_id = _recall_chat_id(chat_id)
+        question = _recall.redact(question)
     project = body.get("project")
     agent = body.get("agent")
     if project is not None and not isinstance(project, str):
@@ -13255,6 +13308,27 @@ async def recall_ask(request: Request, body: dict = Body(...)):
     # steer it, so every tool stays inside the project and agent scope the user picked.
     in_scope = {(m["agent"], m["id"]) for m in _metas}
     user_agents = _recall.parse_agents(agent)
+    history = []
+    turn_id = None
+    if chat_id:
+        with _recall_lock:
+            if chat_id in _recall_running_chats:
+                raise HTTPException(status_code=423, detail="This conversation already has an answer in progress.")
+            _recall_running_chats.add(chat_id)
+        try:
+            existing = await _recall_asyncio.to_thread(
+                _recall_conversations.get_conversation, chat_id, recent=4)
+            history = existing["turns"] if existing else []
+            turn_id = await _recall_asyncio.to_thread(
+                _recall_conversations.add_question, chat_id, question,
+                proj["key"] if proj else None, proj["name"] if proj else None,
+                sorted(user_agents or ()))
+        except BaseException as e:
+            with _recall_lock:
+                _recall_running_chats.discard(chat_id)
+            if isinstance(e, ValueError):
+                raise HTTPException(status_code=422, detail=str(e)) from e
+            raise
 
     def a_search(query, agent=None, mode=None, types=None):
         wanted = _recall.parse_agents(agent)
@@ -13299,7 +13373,7 @@ async def recall_ask(request: Request, body: dict = Body(...)):
             gen = _recall_agent.run(
                 question, proj or project, agent,
                 llm=lambda p: _recall_summaries.ask_untrusted(sm, p),
-                search=a_search, read_session=a_read, read_document=a_read_doc, cancelled=cancel.is_set,
+                search=a_search, read_session=a_read, read_document=a_read_doc, cancelled=cancel.is_set, history=history,
                 modes=("keyword", "semantic", "hybrid")
                 if _recall_index.load_settings()["semantic"]["enabled"] else ("keyword",))
             for ev in gen:
@@ -13327,11 +13401,17 @@ async def recall_ask(request: Request, body: dict = Body(...)):
                     continue
                 if item is _RECALL_STREAM_DONE:
                     break
+                if chat_id and item["type"] == "answer":
+                    item = {**item, "text": _recall.redact(item["text"])}
+                    await _recall_asyncio.to_thread(_recall_conversations.save_answer, chat_id, turn_id, item)
                 yield _recall_ndjson(item)
                 if await request.is_disconnected():
                     break
         finally:
             cancel.set()
+            if chat_id:
+                with _recall_lock:
+                    _recall_running_chats.discard(chat_id)
 
     return StreamingResponse(
         stream(), media_type="application/x-ndjson",

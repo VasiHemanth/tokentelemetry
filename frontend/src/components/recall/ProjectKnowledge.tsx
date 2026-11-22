@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui";
 import {
-  effectiveModelName, fetchRecallCapability, fetchRecallDelta, fetchRecallIndexStatus, startRecallIndexRun,
+  effectiveModelName, fetchRecallCapability, fetchRecallProjects, fetchRecallDelta, fetchRecallIndexStatus, startRecallIndexRun,
   type RecallCapability, type RecallDelta,
 } from "@/lib/recall";
+import { resolveRecallProject, sameRecallProject } from "@/lib/recallPure";
 import type { RecallSemantic } from "./SemanticControl";
 import { CapabilityNote } from "./CapabilityNote";
 import { DeltaBanner } from "./DeltaBanner";
@@ -30,8 +31,20 @@ export function ProjectKnowledge({ project, projectName, sem }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slowOk, setSlowOk] = useState(false);
+  // The backend keys runs by canonical project key; `project` may be a path. null until resolved.
+  const [canon, setCanon] = useState<string | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCanon(null);
+    fetchRecallProjects()
+      .then((r) => { if (!cancelled) setCanon(resolveRecallProject(r.projects, project)?.key ?? project); })
+      .catch(() => { if (!cancelled) setCanon(project); });
+    return () => { cancelled = true; };
+  }, [project]);
 
   const loadDelta = useCallback((signal?: AbortSignal) => {
     setDeltaLoading(true);
@@ -60,15 +73,16 @@ export function ProjectKnowledge({ project, projectName, sem }: {
     /* eslint-enable react-hooks/set-state-in-effect */
     void loadDelta(ctl.signal);
     void loadCap(ctl.signal);
+    if (canon === null) return () => ctl.abort();
     fetchRecallIndexStatus(ctl.signal)
       .then((s) => {
-        if (!ctl.signal.aborted && s.project?.key === project && ["running", "done"].includes(s.state)) {
+        if (!ctl.signal.aborted && sameRecallProject(s.project?.key, canon, project) &&["running", "done"].includes(s.state)) {
           setRunning(s.state === "running"); setRun(s.run);
         }
       })
       .catch(() => { /* no run to reattach to */ });
     return () => ctl.abort();
-  }, [project, loadDelta, loadCap]);
+  }, [project, canon, loadDelta, loadCap]);
 
   const sset = settings?.semantic;
   const isApi = sset?.provider === "api";
@@ -89,7 +103,7 @@ export function ProjectKnowledge({ project, projectName, sem }: {
     try {
       const r = await startRecallIndexRun(project, full);
       if (!alive.current) return;
-      if (r.started || r.project === project) {
+      if (r.started || sameRecallProject(r.project, canon ?? project, project)) {
         setRunning(true); setRun(r.run);
       } else {
         setError("Another project is indexing. Try again once that run finishes.");

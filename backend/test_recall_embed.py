@@ -578,3 +578,12 @@ def test_make_embedder_validation(tmp_path):
     with pytest.raises(EmbedError):
         re_.make_embedder({"provider": "api", "api": {"format": "weird", "endpoint": "https://x.example.com"}},
                           tmp_path)
+
+
+def test_api_key_with_control_chars_raises_embed_error_without_the_key():
+    secret = "sk-" + "SECRET" + "\nfoo"
+    e = re_.ApiEmbedder("openai", "http://127.0.0.1:9/v1/embeddings", "text-embedding-3-small", 8, secret)
+    with pytest.raises(EmbedError) as ei:
+        e.embed_texts(["hello"])
+    assert "SECRET" not in str(ei.value) and "foo" not in str(ei.value)
+    assert "SECRET" not in str(getattr(ei.value, "fix", ""))

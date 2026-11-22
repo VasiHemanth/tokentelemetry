@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Sparkles, Copy, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { embeddedWithText } from "@/lib/recallPure";
 import {
   fetchRecallIndexStatus, fetchRecallSettings, putRecallSettings, semanticState, startRecallIndex,
   type RecallIndexStatus, type RecallSettings,
@@ -58,6 +59,8 @@ export function useRecallSemantic() {
   }, []);
 
   const build = useCallback(async (project: string | null) => {
+    // The backend has no all-projects build (POST /recall/index 400s).
+    if (!project) { setError("Select a project to index it."); return; }
     setBusy(true); setError(null);
     try { const i = await startRecallIndex(project); if (alive.current) setIndex(i); }
     catch (e) { if (alive.current) setError(e instanceof Error ? e.message : String(e)); }
@@ -154,11 +157,14 @@ export function SemanticControl({ sem, project, projectName, showBuild = true }:
           />
           Enable
         </label>
-        {showBuild && canBuild && (
-          <Button size="sm" disabled={busy} onClick={() => void build(project || null)}>
-            {project ? `Build index for ${projectName ?? "this project"}` : "Build index for all projects"}
+        {showBuild && canBuild && (project ? (
+          <Button size="sm" disabled={busy} onClick={() => void build(project)}>
+            {`Build index for ${projectName ?? "this project"}`}
           </Button>
-        )}
+        ) : (
+          // Indexes are per project; the backend has no all-projects build.
+          <span className="text-[12px] text-[var(--tt-fg-muted)]">Select a project to index it</span>
+        ))}
       </div>
 
       {st.kind === "indexing" && (
@@ -181,7 +187,7 @@ export function SemanticControl({ sem, project, projectName, showBuild = true }:
       {st.kind === "ready" && (
         <p className="text-[11px] text-[var(--tt-fg-dim)] tabular">
           {settings.index.chunks.toLocaleString()} chunks from {settings.index.sessions.toLocaleString()} sessions.
-          Embedded locally with {settings.semantic.model}.
+          {embeddedWithText(settings.semantic)}.
         </p>
       )}
       {index?.state === "error" && index.error && (
