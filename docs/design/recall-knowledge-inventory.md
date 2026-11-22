@@ -385,4 +385,3 @@ Notes: Ambiguous product name (Zireael, giveen, Doorman11991 repos). Project tie
 Not supported by this agent: slash commands as a user dir (not found; skills double as commands is unverified), project-level skills dir (none found; skills are user/profile-level).
 
 Notes: Project tie: sessions in ~/.hermes/state.db carry cwd (cli-only per memory note on the grouping gap), ~/.hermes/projects.db exists (unopened, likely project registry), profiles each have own state.db. Kanban tasks tie via kanban.db. HERMES_HOME env overrides home (TT HERMES_DIR).
-

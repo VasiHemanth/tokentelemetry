@@ -33,7 +33,7 @@ export function docTypeMeta(t: string | undefined | null): DocTypeMeta {
 export function DocTypeIcon({ type, size = 13, className }: { type: string | undefined | null; size?: number; className?: string }) {
   const m = docTypeMeta(type);
   const I = m.icon;
-  return <I size={size} className={className} style={{ color: `var(${m.color})` }} aria-label={m.label} />;
+  return <I size={size} className={className} style={{ color: `var(${m.color})` }} aria-hidden="true" />;
 }
 
 /** Read a theme token off an element so canvas drawing follows light and dark themes. */
