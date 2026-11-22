@@ -91,7 +91,7 @@ def test_defaults_when_file_missing(tmp_path):
     assert s["ollama"] == {"url": "http://127.0.0.1:11434", "model": "embeddinggemma-2:740m"}
     assert s["api"] == {"format": "openai", "endpoint": "https://api.openai.com/v1/embeddings",
                         "model": "text-embedding-3-small"}
-    assert s["dims"] == 256 and s["default_mode"] == "keyword"
+    assert s["dims"] == 256 and s["default_mode"] == "hybrid"
     assert s["model"] == "embeddinggemma-2:740m" and s["ollama_url"] == "http://127.0.0.1:11434"
 
 

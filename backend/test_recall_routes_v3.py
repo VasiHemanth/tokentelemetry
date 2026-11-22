@@ -500,6 +500,26 @@ def test_search_types_validation_keyword_and_projectless(world):
     assert res["hits"] == [] and "pick a project" in res["coverage"]["documents"]["reason"]
 
 
+def test_newly_enabled_semantic_search_defaults_to_hybrid(world):
+    enable()
+    index("app")
+    result = run(main.recall_search(q="planner classifier", project="app"))
+    assert result["coverage"]["semantic"]["mode"] == "hybrid"
+    enable(default_mode="keyword")
+    result = run(main.recall_search(q="planner classifier", project="app"))
+    assert result["coverage"]["semantic"]["mode"] == "keyword"
+
+
+def test_default_hybrid_falls_back_when_provider_is_unconfigured(world, monkeypatch):
+    enable()
+    def unavailable(sem):
+        raise re_.EmbedError("No embedding API key is configured.")
+    monkeypatch.setattr(main, "_recall_embedder", unavailable)
+    result = run(main.recall_search(q="planner classifier", project="app"))
+    assert result["coverage"]["semantic"] == {"mode": "keyword", "error": "No embedding API key is configured."}
+    assert result["hits"] and result["hits"][0]["match"] == "keyword"
+
+
 def test_semantic_off_keeps_keyword_default(world):
     res = run(main.recall_search(q="planner", project="app"))
     assert res["coverage"]["semantic"] == {"mode": "keyword"}
@@ -665,7 +685,8 @@ def ask_env(monkeypatch):
 
     def fake_llm(sm, prompt):
         calls.append(prompt)
-        return script[min(len(calls) - 1, len(script) - 1)]
+        step = script[min(len(calls) - 1, len(script) - 1)]
+        return step(prompt) if callable(step) else step
 
     monkeypatch.setattr(main._recall_summaries, "load_config",
                         lambda: {"enabled": True, "backend": "fake", "model": None})
@@ -685,16 +706,25 @@ def test_ask_reads_a_document_and_cites_it(world, ask_env):
     enable()
     index("app")
     calls, script = ask_env
+    def readme_label(prompt):
+        return re.search(r"\b(D\d+) markdown[^\n]*README\.md", prompt).group(1)
+
+    def answer_readme(prompt):
+        label = readme_label(prompt)
+        return reply("answer", {"answer": f"The README says the planner routes with a classifier [{label}].",
+                                "citations": [label]})
+
     script += [
         reply("search", {"query": "classifier planner routing", "mode": "semantic", "types": ["markdown"]}),
-        reply("read_document", {"doc_id": "D1"}),
-        reply("answer", {"answer": "The README says the planner routes with a classifier [D1].", "citations": ["D1"]}),
+        lambda prompt: reply("read_document", {"doc_id": readme_label(prompt)}),
+        answer_readme,
     ]
     events_ = ask({"question": "How does the planner route?", "project": "app"})
     ans = events_[-1]
     assert ans["type"] == "answer"
     cit = ans["citations"][0]
-    assert cit["label"] == "D1" and cit["doc_type"] == "markdown" and cit["path"].endswith("README.md")
+    assert cit["label"] == readme_label(calls[-1])
+    assert cit["doc_type"] == "markdown" and cit["path"].endswith("README.md")
     assert cit["doc_id"].startswith("markdown:") and cit["title"]
     steps = [e for e in events_ if e["type"] == "step"]
     assert [s["action"] for s in steps] == ["search", "search", "read_document"]

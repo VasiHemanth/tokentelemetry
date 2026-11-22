@@ -12566,9 +12566,17 @@ def _recall_search_core(sessions, q, project, agent, since, limit, cap, mode, ty
     want_sessions = types is None or "session" in types
     doc_types = [t for t in (types or _recall_index.DOC_TYPES) if t != "session"]
     embedder = store = None
+    embed_error = None
     if sem is not None:
-        embedder = _recall_embedder(sem)
-        store = _recall_get_store()
+        try:
+            embedder = _recall_embedder(sem)
+        except _RECALL_EMBED_ERRORS as e:
+            if mode != "hybrid":
+                raise
+            embed_error = _recall_err_text(e)
+            mode, sem = "keyword", None
+        else:
+            store = _recall_get_store()
     if want_sessions:
         semantic = _recall_semantic(embedder, store, sessions, project) if sem is not None else None
         res = _recall.search(
@@ -12585,6 +12593,8 @@ def _recall_search_core(sessions, q, project, agent, since, limit, cap, mode, ty
                "coverage": {"candidates": 0, "sessions_scanned": 0, "sessions_skipped": 0,
                             "skipped_reason": None, "unreadable": 0, "truncated": 0, "timed_out": False,
                             "agents_scanned": [], "semantic": {"mode": mode}}}
+    if embed_error:
+        res["coverage"]["semantic"]["error"] = embed_error
     if not doc_types:
         return res
     if sem is None or mode == "keyword":
