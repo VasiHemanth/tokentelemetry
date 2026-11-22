@@ -165,7 +165,7 @@ def validate_settings(sem: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("images must be true or false")
     else:
         images = provider == "ollama"  # an API provider only gets images on request
-    mode = sem.get("default_mode", "keyword")
+    mode = sem.get("default_mode", "hybrid")
     if mode not in MODES:
         raise ValueError("default_mode must be keyword, semantic or hybrid")
     return {"enabled": enabled, "provider": provider, "ollama": {"url": url, "model": model},

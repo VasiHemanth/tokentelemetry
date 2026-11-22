@@ -31,7 +31,7 @@ Runtime facts this relies on: [recall-embedding-runtime.md](recall-embedding-run
     "api": {"format": "openai", "endpoint": "https://api.openai.com/v1/embeddings", "model": "text-embedding-3-small"},
     "dims": 256,
     "images": true,
-    "default_mode": "keyword"
+    "default_mode": "hybrid"
   }
 }
 ```
@@ -313,7 +313,22 @@ A local video-production project was indexed with EmbeddingGemma 2 740M,
 62 artifacts, 68 images, 67 Markdown documents, and 16 skills. Of 208
 candidate sessions, 19 were unreadable. Eight images were also unreadable.
 
-The benchmark scored the first expected result in the top ten returned
+The original benchmark supplied 34 exact-word queries and 34 paraphrases
+across 23 target sessions. Twenty-eight of the 34 labelled targets were
+present in the new index. All modes used the same warmed project snapshot
+and all requests scanned the 189 readable sessions within the time budget.
+
+| Mode | Exact first | Exact top ten | Paraphrase first | Paraphrase top ten |
+| --- | ---: | ---: | ---: | ---: |
+| Keyword | 22/34 | 25/34 | 9/34 | 20/34 |
+| Semantic | 20/34 | 27/34 | 11/34 | 25/34 |
+| Hybrid | 22/34 | 25/34 | 13/34 | 26/34 |
+
+Hybrid preserved first-place exact retrieval and improved paraphrase
+retrieval. It is the default when semantic search is enabled and no mode
+preference was saved. Keyword stays the default with semantic search off.
+
+The supplementary benchmark scored the first expected result in the top ten returned
 hits from `/recall/search`. It used the same queries and type filters for
 each mode and deduplicated repeated hits for a session or document.
 
@@ -326,13 +341,10 @@ each mode and deduplicated repeated hits for a session or document.
 | Images described by their role in the video | 0/2 | 0/2 | 0/2 |
 | Images described by visible content | 0/2 | 2/2 | 2/2 |
 
-Keyword ranked all three exact session targets first. Hybrid recovered one
-more paraphrase in the top ten, with the same mean reciprocal rank as
-keyword on the three paraphrases. With this small benchmark, keep keyword
-as the general default and select hybrid when the user picks a non-session
-type and has enabled semantic search. Keyword searches sessions, so the
-document rows measure additional retrieval coverage. Image search worked
-with visual descriptions, while both generic descriptions missed.
+Keyword searches session text, so the document rows measure additional
+retrieval coverage. Image search found both visually described targets
+and missed both generic descriptions. An explicit non-session type filter
+uses hybrid if the request leaves the mode unspecified.
 
 A separate smoke test embedded two text queries and two generated color
 squares. All four vectors were unit length at 256 dimensions. Each query

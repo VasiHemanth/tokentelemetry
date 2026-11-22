@@ -49,7 +49,7 @@ Semantic search needs an embedding model. Two providers are available:
 
 ### Search modes and the index
 
-- Keyword stays the default. Searches use keyword until you pick **Hybrid**, which combines both rankings. To make Hybrid the default, set `"default_mode": "hybrid"` in `~/.tokentelemetry/recall.json`.
+- With semantic search off, Recall uses keyword search. Enabling semantic search defaults to **Hybrid**, which combines keyword and vector rankings. A mode already saved in `~/.tokentelemetry/recall.json` stays in effect.
 - The index is per project and lives in `~/.tokentelemetry/recall_index.db`. Nothing is sent to a remote service when the provider is Ollama.
 - Hybrid also searches sessions that have no index yet, through keyword only. The results report how many searched sessions are unindexed, and the page offers to build the index.
 - Hits found by vector matching carry a `semantic` or `both` tag.
@@ -329,10 +329,11 @@ The MCP server exposes four tools. Each one maps to a Recall endpoint.
 | --- | --- | --- |
 | `list_projects` | Projects with session counts, agents and last activity | none |
 | `list_sessions` | Sessions in a project, newest first. Optional `project`, `agent`, `since`, `limit` | none |
-| `search_sessions` | Search across sessions in `keyword`, `semantic` or `hybrid` mode. Optional `project`, `agent`, `since`, `limit`, `max_sessions`, `mode` | `query` |
+| `search_sessions` | Search across sessions in `keyword`, `semantic` or `hybrid` mode. Optional `project`, `agent`, `since`, `limit`, `max_sessions`, `mode`, `types` | `query` |
 | `read_session` | One session's text in order, paged with `offset` | `agent`, `session_id` |
+| `read_document` | An indexed document or image from the selected project | `project`, `doc_id` |
 
-`search_sessions` takes an optional `mode`. Without it, the server uses the default mode from `recall.json`, which is `keyword` unless you changed it. `semantic` and `hybrid` need semantic search turned on and an index built for the project. Otherwise the call returns the server's error, which names the fix. The output header shows the mode used and how many searched sessions are indexed.
+`search_sessions` takes an optional `mode`. Without it, the server uses the saved preference. Its defaults are `keyword` when semantic search is off and `hybrid` when semantic search is on. An explicit document-type filter uses hybrid when semantic search is enabled and the request omits the mode. With semantic search disabled, explicitly asking for `semantic` or `hybrid` returns an error. When a project index is unavailable, Recall can still search sessions by keyword. The output header shows the mode used and how many searched sessions are indexed.
 
 Transcript text (snippets, chunks, titles) comes back inside `<untrusted_session_data>` tags. The tool descriptions tell the agent that this is data from past sessions, not instructions. The `search_sessions` description also tells the agent to narrow by `project` first and to read the `coverage` block before concluding that something was never discussed.
 
