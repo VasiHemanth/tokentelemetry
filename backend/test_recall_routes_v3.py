@@ -143,7 +143,9 @@ def world(tmp_path, monkeypatch):
 
     w = W()
     w.tmp, w.home, w.proj, w.other, w.emb, w.sessions = tmp_path, home, proj, other, emb, sessions
-    w.pkey = str(proj)
+    # The key the store uses for this project: canonical, so forward slashes
+    # on Windows too ("C:/Users/..."), never the raw str(path) backslashes.
+    w.pkey = main._recall.project_key(str(proj))
     return w
 
 
