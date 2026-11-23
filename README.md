@@ -472,6 +472,16 @@ Want to add support for a new agent? [Open an issue](https://github.com/VasiHema
 🐦 [@VasiHemanth on X](https://twitter.com/VasiHemanth)  
 💼 [LinkedIn](https://www.linkedin.com/in/vasi-hemanth/)
 
+### AI research
+
+I share AI research and what I learn building TokenTelemetry:
+
+- 📺 [Hemanth with AI on YouTube](https://www.youtube.com/@hemanth_with_ai/shorts): AI research explained in short videos
+- 📸 [@hemanth.with.ai on Instagram](https://www.instagram.com/hemanth.with.ai/): the same research, as reels
+- ⚡ [FasterFold AI on YouTube](https://www.youtube.com/@fasterfold-ai): AI news and new techniques
+
+More on the [Resources page](https://tokentelemetry.com/resources).
+
 ## Feedback
 
 Have an idea, found a bug, or just want to share how you're using TokenTelemetry? Two ways in:

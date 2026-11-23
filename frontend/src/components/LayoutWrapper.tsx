@@ -8,6 +8,7 @@ import { QuotaProvider } from "./QuotaProvider";
 import NotificationToaster from "./notifications/NotificationToaster";
 import TokenGate from "./TokenGate";
 import TelemetryNotice from "./TelemetryNotice";
+import ResearchChannelsCard from "./ResearchChannelsCard";
 import LocaleOverlay from "./LocaleOverlay";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -75,6 +76,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         <FeedbackFloatingButton />
         <TokenGate />
         <TelemetryNotice />
+        <ResearchChannelsCard />
         {/* Runtime locale overlay. The language itself is picked in
             Settings → Language; this mount is the only wiring here. */}
         <LocaleOverlay />
