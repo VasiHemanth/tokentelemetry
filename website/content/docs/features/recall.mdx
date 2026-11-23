@@ -1,185 +1,38 @@
 ---
 title: Recall
-description: Search and read past sessions from every agent as one corpus, grouped by project, with secrets redacted. Use it in the dashboard or from any MCP-capable agent.
+description: Search across your coding agents and ask questions about past project work, with citations you can open.
 ---
 
-import { Callout } from 'fumadocs-ui/components/callout';
+Recall helps you pick up where you left off. Search past sessions across your coding agents, or ask a question about a project and follow the citations back to the original work.
 
-Recall puts the sessions from all your coding agents into one searchable corpus. Sessions are grouped by project, so a question about `education-video` returns hits from Claude Code, Codex and Antigravity together. Recall reads the same traces TokenTelemetry already parses for the session view.
+![The Recall page with Search and Ask tabs, project and agent filters, semantic search status and project indexing](/screenshots/recall-overview.png)
 
-Three properties hold for the whole feature:
+## Search past work
 
-- **Secrets are redacted.** API keys, tokens, JWTs, private keys, passwords in URLs and key/value secrets are replaced with `[REDACTED:<kind>]` before any snippet, title or turn is returned. The dashboard and the MCP server get the same redacted text.
-- **Nothing leaves the machine.** Recall reads local files and answers over localhost. It adds no network calls and no telemetry events.
-- **TokenTelemetry runs no model.** Search is lexical and runs when you ask. When an agent uses Recall through MCP, that agent does the reasoning with its own model.
+Open **Recall**, pick a project, and use **Search**. Click an agent badge to show only that agent. Use quotes for an exact phrase, such as `"render pipeline"`. Select a result to open its source. Keyword search works as soon as you have recorded sessions.
 
-## The Recall page
+## Ask a question
 
-Open **Recall** in the dashboard (`/recall`).
+Switch to **Ask**, choose a project, and ask in plain language, for example "What did we decide about harness evaluations?" Recall shows each search and reading step, then answers with citations you can open.
 
-1. Pick a project. Agent worktrees fold into their parent repository, so a session from `education-video/.claude/worktrees/feature-x` appears under `education-video`.
-2. Type a query. Put a phrase in quotes to require it word for word, for example `"render pipeline"`.
-3. Narrow by agent. (The MCP tools also take a `since` date.)
-4. Open a hit to go to its session trace.
+![An Ask answer with its search and reading steps and session citations, below the project knowledge map](/screenshots/recall-ask.png)
 
-Each hit shows the agent, the session title (the first prompt, redacted and trimmed), the model, the cost and a snippet of the matching text. The results also report how many sessions were searched, so a short list is not mistaken for a short history.
+**Ask history** keeps your conversations on this machine. Reopen one to ask follow-up questions with the same project and agents. Ask uses the summarizer set in **Settings**; turn on **AI summaries** there if Ask asks you to.
 
-## MCP server
+## Set up semantic search
 
-`tokentelemetry mcp` runs a stdio MCP server. It exposes the same search to your agents, so an agent working in one tool can look up what happened in another. The server reads from the TokenTelemetry backend on localhost, so start the dashboard first (`npx tokentelemetry`). Your agent starts the MCP server itself through its config. You do not run it by hand.
+Semantic search is optional. It finds results by meaning and adds skills, plans, Markdown files and images to the results. Open **Recall → Embedding setup** and choose **Local (Ollama)** or **API**.
 
-Every MCP-capable agent runs the same command:
+**Local with Ollama.** Recall uses EmbeddingGemma 2 740M (`embeddinggemma-2:740m`), a 1.3 GB download that handles text and images. Install and open [Ollama](https://ollama.com/download), then click **Download model** in Embedding setup. If TokenTelemetry runs on a server or in a container, Ollama must run on that same machine; otherwise use the API option. Update Ollama if it says your version can't load the model.
 
-```bash
-npx -y tokentelemetry mcp
-```
+**API.** Choose **OpenAI-compatible**, **Gemini** or **Voyage**, enter the endpoint, model and API key, match the dimensions to the model, and save. Remote endpoints must use HTTPS.
 
-Only the config format changes between agents.
+## Index project knowledge
 
-### Claude Code
+Select a project and click **Index this project**. The knowledge map fills in as documents are embedded; hover a dot to see which document it is. When new work appears, click **Re-index**: only new or changed content is embedded. Changing the embedding model requires a full re-index.
 
-```bash
-claude mcp add tokentelemetry -- npx -y tokentelemetry mcp
-```
+Only projects you index are embedded, and only sessions, images, skills, commands, agent definitions, plans, Markdown files and MCP config. Source code is never indexed.
 
-### Codex
+## Where your data goes
 
-Add this to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.tokentelemetry]
-command = "npx"
-args = ["-y", "tokentelemetry", "mcp"]
-```
-
-### Antigravity
-
-Add a `tokentelemetry` entry to the `mcpServers` block in Antigravity's `mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": {
-      "command": "npx",
-      "args": ["-y", "tokentelemetry", "mcp"]
-    }
-  }
-}
-```
-
-### Gemini CLI
-
-Gemini CLI was discontinued on 2026-06-18 and replaced by Antigravity. If you still run it, add this to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": {
-      "command": "npx",
-      "args": ["-y", "tokentelemetry", "mcp"]
-    }
-  }
-}
-```
-
-### Cursor
-
-Add this to `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": {
-      "command": "npx",
-      "args": ["-y", "tokentelemetry", "mcp"]
-    }
-  }
-}
-```
-
-### OpenCode
-
-Add this to `opencode.json`. OpenCode takes the command as one array:
-
-```json
-{
-  "mcp": {
-    "tokentelemetry": {
-      "type": "local",
-      "command": ["npx", "-y", "tokentelemetry", "mcp"]
-    }
-  }
-}
-```
-
-### Qwen Code, Kimi and other agents
-
-Use the generic stdio block. Check your agent's MCP documentation for the file it reads and whether it uses the same `mcpServers` key:
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": {
-      "command": "npx",
-      "args": ["-y", "tokentelemetry", "mcp"]
-    }
-  }
-}
-```
-
-### Ports and remote setups
-
-The MCP server finds the backend on `127.0.0.1`. It tries `TT_API_PORT` first, then ports 18000 and 8000. If you run the dashboard on another port, set the variable in the MCP entry's environment:
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": {
-      "command": "npx",
-      "args": ["-y", "tokentelemetry", "mcp"],
-      "env": { "TT_API_PORT": "9000" }
-    }
-  }
-}
-```
-
-The same works with `--api-port 9000` in `args`. If the backend was started with an auth token (`TT_AUTH_TOKEN` or `--auth-token`, which is needed for a non-loopback `--host`), set the same value in `env` as `TT_AUTH_TOKEN`. The server then sends it as a bearer token.
-
-## Tools
-
-The MCP server exposes four tools. Each one maps to a Recall endpoint.
-
-| Tool | What it does | Required arguments |
-| --- | --- | --- |
-| `list_projects` | Projects with session counts, agents and last activity | none |
-| `list_sessions` | Sessions in a project, newest first. Optional `project`, `agent`, `since`, `limit` | none |
-| `search_sessions` | Lexical search across sessions. Optional `project`, `agent`, `since`, `limit`, `max_sessions` | `query` |
-| `read_session` | One session's text in order, paged with `offset` | `agent`, `session_id` |
-
-Transcript text (snippets, chunks, titles) comes back inside `<untrusted_session_data>` tags. The tool descriptions tell the agent that this is data from past sessions, not instructions. The `search_sessions` description also tells the agent to narrow by `project` first and to read the `coverage` block before concluding that something was never discussed.
-
-## Example questions
-
-Ask in plain language. The agent calls the tools itself and narrows the search.
-
-- "What did Codex decide about the render pipeline in education-video?"
-- "Which sessions in tokentelemetry from the last week touched the auth middleware?"
-- "Find where I debugged the Stripe webhook in billing-api and summarize the fix."
-- "List my Antigravity sessions in education-video since October 1."
-
-## Limits and coverage
-
-- **On demand.** Each search parses transcripts when you ask. Recall builds no index and stores no full text, so latency grows with the size of your history. A full-text index is the planned follow-up if on-demand search gets slow.
-- **Newest 60 sessions by default.** A search opens at most `max_sessions` sessions (default 60, maximum 300), newest first. The `coverage` block reports how many candidates were skipped and why.
-- **20 second budget.** A search stops opening new sessions after 20 seconds and sets `timed_out` in `coverage`.
-- **Long transcripts are cut.** A transcript with more than 20,000 chunks keeps its last 20,000. `coverage.truncated` counts these.
-- **Archive fallback.** If a live transcript is gone, for example a Claude Code session that was deleted, Recall reads the copy TokenTelemetry archived for Claude and Codex. Each hit carries `source: "live"` or `source: "archive"`.
-- **Redaction is pattern-based.** It catches the formats listed below. A secret in an unusual format can pass through, so do not treat it as a guarantee.
-
-Redacted kinds:
-
-- AWS access keys, GitHub tokens (`ghp_`, `github_pat_` and related prefixes), Anthropic, OpenAI and Slack tokens, Google API keys and Stripe live keys
-- JWTs and PEM private key blocks
-- `Authorization: Bearer` headers
-- Passwords in URLs (`scheme://user:pass@host`)
-- Key/value secrets such as `password=`, `secret:`, `api_key=` or `token=` with a value of 8 or more characters
+With local Ollama, embedding stays on the machine running TokenTelemetry. A hosted embedding or summarizer provider receives the text it needs, after secrets are removed. Hosted image embedding is off by default; turning it on sends the original images to the provider.
