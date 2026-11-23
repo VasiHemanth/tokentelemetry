@@ -1,6 +1,50 @@
 {
   "releases": [
     {
+      "tag": "2026-11-22",
+      "title": "Project knowledge index for Recall",
+      "highlights": [
+        {
+          "title": "Search a project's skills, plans and notes",
+          "description": "Recall can index a project's skills, commands, agent definitions, plans, Markdown files and MCP setup, not only chat sessions. Source code is never indexed, and nothing is indexed for a project you have not turned on.",
+          "href": "/recall"
+        },
+        {
+          "title": "Re-index only what changed",
+          "description": "Opening a project shows whether its index is current. A re-index embeds only new or changed items, so routine updates are quick.",
+          "href": "/recall"
+        },
+        {
+          "title": "Cloud embedding APIs for Recall",
+          "description": "Use an OpenAI, Gemini or Voyage embedding API when your machine cannot run the local model. Text is redacted first but does leave your computer, and images stay off unless you turn them on."
+        },
+        {
+          "title": "One embedding model per project index",
+          "description": "Each project's index records the model it was built with. If the model changes, Recall says so and offers one re-index instead of mixing old and new vectors."
+        },
+        {
+          "title": "Continue an Ask conversation later",
+          "description": "Ask keeps a history of your questions and answers on this machine. Reopen a chat to ask follow-ups with the same project and agents, or start a new one.",
+          "href": "/recall"
+        }
+      ]
+    },
+    {
+      "tag": "2026-11-21",
+      "title": "Ask questions about your agents' history",
+      "highlights": [
+        {
+          "title": "Ask a question across all your agents",
+          "description": "Type a question in the Ask tab on the Recall page and get a written answer with links to the sessions it came from. It uses the summarizer you already set up in Settings, and it searches every agent's history on your computer.",
+          "href": "/recall"
+        },
+        {
+          "title": "Find sessions by meaning, not just keywords",
+          "description": "Turn on semantic search to find past sessions that discuss an idea even when you use different words. It is off by default. The index is built per project and stays on your computer, using a local Ollama model."
+        }
+      ]
+    },
+    {
       "tag": "2026-11-19",
       "title": "Search every agent's sessions in one place",
       "highlights": [
@@ -8,10 +52,6 @@
           "title": "Recall page for past sessions",
           "description": "Search all your coding agents' past sessions in one box, grouped by project. Filter by agent, and open any hit to read its full session. API keys, tokens and passwords are hidden before anything appears on screen, and nothing leaves your computer.",
           "href": "/recall"
-        },
-        {
-          "title": "Let any agent search the others' history",
-          "description": "A new MCP server lets Claude Code, Codex, Antigravity, Cursor and other MCP-capable agents look up what happened in your other agents' sessions, such as what Codex decided about a feature in a given project. Each agent needs one config entry, and the search runs on your computer."
         }
       ]
     },

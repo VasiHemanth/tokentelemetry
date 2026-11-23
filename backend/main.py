@@ -12250,21 +12250,1216 @@ async def recall_sessions(project: Optional[str] = None, agent: Optional[str] = 
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- v2: semantic index and the Ask agent (docs/design/cross-harness-recall-v2.md)
+# --- v3: project knowledge index (docs/design/cross-harness-recall-v3.md)
+import itertools as _recall_itertools
+import queue as _recall_queue
+from urllib.parse import quote as _recall_quote
+from fastapi.responses import Response, StreamingResponse
+import threading as _recall_threading
+import recall_agent as _recall_agent
+import recall_capability as _recall_capability
+import recall_conversations as _recall_conversations
+import recall_embed as _recall_embed
+import recall_index as _recall_index
+import recall_sources as _recall_sources
+
+_recall_store: Optional[Any] = None
+_recall_job: Optional[Any] = None  # the latest IndexRun (running or finished)
+_recall_lock = _recall_threading.RLock()
+_recall_guards: Dict[Any, Any] = {}
+_recall_disc_cache: Dict[Any, Any] = {}
+_RECALL_DISC_TTL = 20.0
+_RECALL_EMBED_ERRORS = (_recall_index.EmbedError, _recall_embed.EmbedError)
+_RECALL_DOC_PAGE = 40
+
+
+def _recall_get_store():
+    global _recall_store
+    with _recall_lock:
+        if _recall_store is None:
+            _recall_store = _recall_index.VectorStore(_recall_index.index_path())
+        return _recall_store
+
+
+def _recall_data_dir():
+    """Directory holding recall_secrets.json (next to recall.json)."""
+    return _recall_index.secrets_path().parent
+
+
+def _recall_home():
+    """Home directory discovery reads (None means the real one). Tests override it."""
+    return None
+
+
+def _recall_embedder(sem: Dict[str, Any]):
+    """Embedder for the configured provider. Raises an EmbedError (with a fix)
+    when the settings cannot produce one, for example an API without a key."""
+    return _recall_embed.make_embedder(sem, _recall_data_dir())
+
+
+def _recall_err_text(e: Exception) -> str:
+    msg = getattr(e, "message", None) or str(e)
+    fix = getattr(e, "fix", "") or ""
+    return (msg + " " + fix).strip()
+
+
+def _recall_err_event(e: Exception) -> Dict[str, Any]:
+    return {"type": "error", "message": getattr(e, "message", None) or str(e), "fix": getattr(e, "fix", "") or ""}
+
+
+def _recall_guard(embedder, store):
+    """One LockGuard per embedder identity, so the 10 minute lock check cache
+    survives across requests but a settings change is never answered from it."""
+    ident = embedder.identity
+    key = (id(store), *(ident.get(k) for k in _recall_index.LOCK_IDENTITY_KEYS))
+    with _recall_lock:
+        g = _recall_guards.get(key)
+        if g is None:
+            g = _recall_index.LockGuard(store, embedder)
+            _recall_guards[key] = g
+        g.embedder = embedder
+        return g
+
+
+class _RecallQueryMemo:
+    """Embeds each distinct query once per request, however many projects rank."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self._seen: Dict[str, Any] = {}
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def embed_texts(self, texts, kind="document", titles=None):
+        if kind == "query" and len(texts) == 1:
+            if texts[0] not in self._seen:
+                self._seen[texts[0]] = self._inner.embed_texts(texts, kind, titles)
+            return self._seen[texts[0]]
+        return self._inner.embed_texts(texts, kind, titles)
+
+
+def _recall_project_sessions(sessions, project):
+    """(project dict or None, metas, raw session dicts) for a project filter."""
+    proj, metas = _recall._select(sessions, project, None, None, ANTIGRAVITY_UNASSIGNED)
+    if proj is None:
+        return None, [], []
+    ids = {(m["agent"], m["id"]) for m in metas}
+    raw = [s for s in sessions if (s.get("agent"), s.get("id")) in ids]
+    return proj, metas, raw
+
+
+def _recall_discover(key: str, raw_sessions, fresh: bool = False) -> Dict[str, Any]:
+    """Blocking. Documents of one project (files, MCP servers and its sessions),
+    cached briefly because delta, index start and document reads arrive together."""
+    now = _time.monotonic()
+    with _recall_lock:
+        hit = _recall_disc_cache.get(key)
+        if hit is not None and not fresh and now - hit[0] < _RECALL_DISC_TTL:
+            return hit[1]
+    found = _recall_sources.discover(key, raw_sessions, home=_recall_home(), images=True)
+    docs = list(found["documents"])
+    for s in raw_sessions:
+        try:
+            docs.append(_recall_index.session_document(s))
+        except Exception:  # noqa: BLE001 - one odd session record must not hide the rest
+            continue
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        by_id.setdefault(d["doc_id"], d)
+    out = {"documents": list(by_id.values()), "skipped": found.get("skipped", {}), "by_id": by_id}
+    with _recall_lock:
+        _recall_disc_cache[key] = (now, out)
+    return out
+
+
+def _recall_inline_events(agent: str, sid: str):
+    try:
+        events = _recall_summaries.normalize_detail(
+            _recall_asyncio.run(get_session_detail(sid, agent, raw=True)))
+        if events:
+            return events
+        import history_store
+        text = history_store.get_transcript(agent, sid)
+        return _recall_events_from_archive(agent, text) if text else []
+    except Exception:
+        return []
+
+
+def _recall_inline_discover(documents, stored):
+    """Read only new or changed session transcripts during an explicit run."""
+    by_parent = {}
+    for row in stored.values():
+        source = row["source"]
+        if source.get("kind") == "inline_image":
+            parent = _recall_index.session_doc_id(row["agent"], source["session_id"])
+            by_parent.setdefault(parent, []).append(row)
+    for doc in documents:
+        if doc["type"] != "session":
+            continue
+        parent, agent = doc["doc_id"], doc["agent"]
+        if agent not in _recall_sources.INLINE_IMAGE_AGENTS:
+            continue
+        previous = stored.get(parent)
+        if previous and previous["cheap_fp"] == doc["cheap_fp"]:
+            yield from by_parent.get(parent, ())
+            continue
+        sid = doc["source"]["id"]
+        seen = set()
+        for data, mime, turn in _recall_sources.extract_inline_images(_recall_inline_events(agent, sid)):
+            fp = _recall_index.image_content_fp(data)
+            if fp in seen:
+                continue
+            seen.add(fp)
+            yield {
+                "doc_id": f"image:inline:{agent}:{sid}:{fp}", "type": "image",
+                "agent": agent, "scope": "project",
+                "title": doc["title"] or f"Image from {agent} session {sid[:8]}",
+                "source": {"kind": "inline_image", "session_id": sid, "mime": mime,
+                           "turn": turn, "content_fp": fp},
+                "mtime": doc["mtime"], "size": len(data), "cheap_fp": fp,
+            }
+
+
+def _recall_index_documents(documents, images):
+    # Revisit existing sessions once when inline-image discovery is enabled.
+    return [
+        {**doc, "cheap_fp": doc["cheap_fp"] + ":inline-1"}
+        if images and doc["type"] == "session" and doc["agent"] in _recall_sources.INLINE_IMAGE_AGENTS else doc
+        for doc in documents
+    ]
+
+
+def _recall_file_path(doc):
+    path = doc.get("abs_path")
+    if not isinstance(path, str) or not path:
+        return None
+    real = os.path.realpath(path)
+    if real != doc.get("real_path", path) or _recall_sources.is_never_index(real):
+        return None
+    return real
+
+
+def _recall_read_text(doc: Dict[str, Any]) -> Optional[str]:
+    t = doc.get("text")
+    if isinstance(t, str):
+        return t
+    p = _recall_file_path(doc)
+    if p is None:
+        return None
+    try:
+        if os.path.getsize(p) > _recall_index.MAX_TEXT_BYTES:
+            return None
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _recall_read_image(doc: Dict[str, Any]) -> Optional[bytes]:
+    src = doc.get("source") or {}
+    if src.get("kind") == "inline_image":
+        events = _recall_inline_events(doc["agent"], src["session_id"])
+        turn = src["turn"]
+        for data, mime, _pos in _recall_sources.extract_inline_images(events[turn:turn + 1]):
+            if mime == src["mime"] and _recall_index.image_content_fp(data) == src["content_fp"]:
+                return data
+        return None
+    p = _recall_file_path(doc)
+    if p is None:
+        return None
+    try:
+        if os.path.getsize(p) > _recall_index.MAX_IMAGE_BYTES:
+            return None
+        with open(p, "rb") as f:
+            return f.read(_recall_index.MAX_IMAGE_BYTES + 1)
+    except OSError:
+        return None
+
+
+def _recall_mode(mode: Optional[str], types: Optional[List[str]] = None):
+    """Resolve the requested mode against settings. Returns (mode, semantic
+    settings or None when ranking stays keyword-only). Raises ValueError for a
+    bad or unavailable mode."""
+    sem = _recall_index.load_settings()["semantic"]
+    if mode is not None and mode not in _recall.MODES:
+        raise ValueError("mode must be keyword, semantic or hybrid")
+    if not sem["enabled"]:
+        if mode in ("semantic", "hybrid"):
+            raise ValueError("semantic search is off; enable it on the Recall page first")
+        return "keyword", None
+    mode = mode or ("hybrid" if types and any(t != "session" for t in types) else sem["default_mode"])
+    if mode == "keyword":
+        return mode, None
+    return mode, sem
+
+
+def _recall_semantic(embedder, store, sessions, project):
+    """recall.Semantic over every project the search can touch. Each project
+    ranks under its own lock; a project that is not ready reports its sessions
+    as not indexed, so they fall back to keyword."""
+    _p, metas = _recall._select(sessions, project, None, None, ANTIGRAVITY_UNASSIGNED)
+    key_of = {(m["agent"], m["id"]): m["project_key"] for m in metas if m["project_key"]}
+    memo = _RecallQueryMemo(embedder)
+    guard = _recall_guard(embedder, store)
+    bundles: Dict[str, Any] = {}
+
+    def bundle(key: str):
+        if key not in bundles:
+            bundles[key] = _recall_index.make_semantic_v3(store, memo, key, guard=guard)
+        return bundles[key]
+
+    def is_current(agent, sid, fp):
+        key = key_of.get((agent, sid))
+        return bool(key) and bundle(key).is_current(agent, sid, fp)
+
+    def rank(q, allowed):
+        groups: Dict[str, set] = {}
+        for a, i in allowed:
+            key = key_of.get((a, i))
+            if key:
+                groups.setdefault(key, set()).add((a, i))
+        out: List[Any] = []
+        for key, ids in groups.items():
+            out.extend(bundle(key).rank(_recall.redact(q), ids))
+        return out
+
+    return _recall.Semantic(model=str((embedder.identity or {}).get("model") or ""),
+                            is_current=is_current, rank=rank)
+
+
+def _recall_doc_is_current(by_id: Dict[str, Any]):
+    """Query-time staleness check for a non-session document row."""
+    def check(row: Dict[str, Any]) -> bool:
+        source = row["source"]
+        if source.get("kind") == "inline_image":
+            parent = _recall_index.session_doc_id(row["agent"], source["session_id"])
+            return parent in by_id and _recall_read_image(row) is not None
+        doc = by_id.get(row["doc_id"])
+        if doc is None:
+            return False
+        if doc.get("cheap_fp") and doc.get("cheap_fp") == row.get("cheap_fp"):
+            return True
+        if row["type"] == "image":
+            data = _recall_read_image(doc)
+            return data is not None and _recall_index.image_content_fp(data) == row.get("content_fp")
+        text = _recall_read_text(doc)
+        return text is not None and _recall_index.text_content_fp(text) == row.get("content_fp")
+    return check
+
+
+def _recall_search_documents(embedder, store, sessions, project, q, doc_types, agent, limit):
+    """Non-session hits of one project's index. Returns (hits, info)."""
+    if not project:
+        return [], {"searched": False, "reason": "documents are searched per project; pick a project"}
+    proj, _metas, raw = _recall_project_sessions(sessions, project)
+    if proj is None:
+        return [], {"searched": False, "reason": "no project matches"}
+    key = proj["key"]
+    try:
+        guard = _recall_guard(embedder, store)
+        disc = _recall_discover(key, raw)
+        res = _recall_index.semantic_search(
+            store, embedder, key, _recall.redact(q), types=doc_types, guard=guard,
+            is_current=_recall_doc_is_current(disc["by_id"]))
+    except _RECALL_EMBED_ERRORS as e:
+        return [], {"searched": False, "reason": _recall_err_text(e)}
+    if res["state"] != "ready":
+        return [], {"searched": False, "state": res["state"],
+                    "reason": "this project's index is not usable for search (%s)" % res["state"]}
+    wanted = _recall.parse_agents(agent)
+    hits: List[Dict[str, Any]] = []
+    seen: set = set()
+    for h in res["hits"]:
+        if h["doc_id"] in seen:
+            continue
+        if wanted and (h.get("agent") or "").lower() not in wanted:
+            continue
+        seen.add(h["doc_id"])
+        src = h.get("source") or {}
+        doc = disc["by_id"].get(h["doc_id"]) or {}
+        snippet = ""
+        if h["doc_type"] != "image":
+            text = _recall_read_text(doc)
+            if text is not None:
+                chunks = _recall_index.text_chunks(text)
+                if 0 <= h["idx"] < len(chunks):
+                    snippet = _recall._collapse(chunks[h["idx"]], _recall.SNIPPET_MAX)
+        hit = {
+            "doc_type": h["doc_type"], "doc_id": h["doc_id"], "agent": h["agent"], "id": h["doc_id"],
+            "project": proj.get("name"), "title": h["title"], "path": src.get("path"),
+            "model": None, "last_ts": None, "cost": None, "turn": h["idx"], "kind": "document",
+            "snippet": snippet, "score": h["score"], "match": "semantic", "source": "index",
+        }
+        if doc.get("mtime"):
+            hit["last_ts"] = _recall._iso(_recall._to_dt(doc["mtime"]))
+        if src.get("session_id") or doc.get("session_id"):
+            hit["session_id"] = src.get("session_id") or doc.get("session_id")
+        hits.append(hit)
+        if len(hits) >= limit:
+            break
+    return hits, {"searched": True, "state": "ready", "stale": len(res["stale"])}
+
+
+def _recall_search_core(sessions, q, project, agent, since, limit, cap, mode, types=None):
+    """Blocking search shared by /recall/search and the Ask agent.
+
+    Sessions rank as before (keyword, semantic or hybrid). Documents other than
+    sessions are searched through the project's vector index, so they appear
+    only in semantic and hybrid mode and only when a project is given."""
+    mode, sem = _recall_mode(mode, types)
+    want_sessions = types is None or "session" in types
+    doc_types = [t for t in (types or _recall_index.DOC_TYPES) if t != "session"]
+    embedder = store = None
+    embed_error = None
+    if sem is not None:
+        try:
+            embedder = _recall_embedder(sem)
+        except _RECALL_EMBED_ERRORS as e:
+            if mode != "hybrid":
+                raise
+            embed_error = _recall_err_text(e)
+            mode, sem = "keyword", None
+        else:
+            store = _recall_get_store()
+    if want_sessions:
+        semantic = _recall_semantic(embedder, store, sessions, project) if sem is not None else None
+        res = _recall.search(
+            sessions, _recall_load_chunks, q, project, agent, since, limit, cap,
+            unassigned=ANTIGRAVITY_UNASSIGNED, mode=mode, semantic=semantic)
+        for h in res["hits"]:
+            h.setdefault("doc_type", "session")
+    else:
+        terms, phrases = _recall.parse_query(q)
+        if not terms and not phrases:
+            raise ValueError("q has no searchable terms")
+        proj, metas = _recall._select(sessions, project, agent, since, ANTIGRAVITY_UNASSIGNED)
+        res = {"query": q, "project": proj, "hits": [], "by_agent": {},
+               "coverage": {"candidates": 0, "sessions_scanned": 0, "sessions_skipped": 0,
+                            "skipped_reason": None, "unreadable": 0, "truncated": 0, "timed_out": False,
+                            "agents_scanned": [], "semantic": {"mode": mode}}}
+    if embed_error:
+        res["coverage"]["semantic"]["error"] = embed_error
+    if not doc_types:
+        return res
+    if sem is None or mode == "keyword":
+        if types is not None:
+            res["coverage"]["documents"] = {
+                "searched": False,
+                "reason": "documents other than sessions are searched in semantic or hybrid mode"}
+        return res
+    if not getattr(embedder, "supports_images", False):
+        doc_types = [t for t in doc_types if t != "image"]
+    if not doc_types:
+        return res
+    doc_hits, info = _recall_search_documents(embedder, store, sessions, project, q, doc_types, agent, limit)
+    res["coverage"]["documents"] = info
+    if doc_hits:
+        merged: List[Dict[str, Any]] = []
+        for a, b in _recall_itertools.zip_longest(res["hits"], doc_hits):
+            if a is not None:
+                merged.append(a)
+            if b is not None:
+                merged.append(b)
+        res["hits"] = merged[:limit]
+        for h in doc_hits:
+            res["by_agent"][h["agent"]] = res["by_agent"].get(h["agent"], 0) + 1
+    return res
+
+
+def _recall_types(raw: Optional[str]) -> Optional[List[str]]:
+    if raw is None or not raw.strip():
+        return None
+    out: List[str] = []
+    for t in raw.split(","):
+        t = t.strip().lower()
+        if not t:
+            continue
+        if t not in _recall_index.DOC_TYPES:
+            raise HTTPException(status_code=400, detail="types must be a comma list of: " + ", ".join(_recall_index.DOC_TYPES))
+        if t not in out:
+            out.append(t)
+    return out or None
+
+
 @app.get("/recall/search")
 async def recall_search(q: Optional[str] = None, project: Optional[str] = None,
                         agent: Optional[str] = None, since: Optional[str] = None,
-                        limit: Optional[str] = None, max_sessions: Optional[str] = None):
+                        limit: Optional[str] = None, max_sessions: Optional[str] = None,
+                        mode: Optional[str] = None, types: Optional[str] = None):
     if q is None or not (1 <= len(q.strip()) <= 300):
         raise HTTPException(status_code=400, detail="q is required (1 to 300 characters)")
     n = _recall_int(limit, "limit", 20, 1, 100)
     cap = _recall_int(max_sessions, "max_sessions", 60, 1, 300)
+    kinds = _recall_types(types)
     sessions = await get_sessions_cached()
     try:
         return await _recall_asyncio.to_thread(
-            _recall.search, sessions, _recall_load_chunks, q.strip(), project, agent, since, n, cap,
-            unassigned=ANTIGRAVITY_UNASSIGNED)
+            _recall_search_core, sessions, q.strip(), project, agent, since, n, cap, mode or None, kinds)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except _RECALL_EMBED_ERRORS as e:
+        raise HTTPException(status_code=503, detail=_recall_err_text(e))
+
+
+# ---------------------------------------------------------------- settings
+
+def _recall_ollama_status(sem: Dict[str, Any]) -> Dict[str, Any]:
+    """Blocking local probe. Only the loopback Ollama is ever contacted here."""
+    if sem["provider"] != "ollama":
+        # Not applicable: the chip must not read "Ollama unreachable" for an API user.
+        return {"reachable": True, "version": None, "model_installed": True, "error": None, "applicable": False}
+    url, model = sem["ollama"]["url"], sem["ollama"]["model"]
+    try:
+        v = _recall_embed.version(url)
+        installed = _recall_embed.model_installed(url, model)
+    except _RECALL_EMBED_ERRORS as e:
+        return {"reachable": False, "version": None, "model_installed": False,
+                "error": _recall_err_text(e), "applicable": True}
+    return {"reachable": True, "version": v or None, "model_installed": installed, "applicable": True,
+            "error": None if installed else "Model %s is not installed. Run: ollama pull %s" % (model, model)}
+
+
+def _recall_probe(sem: Dict[str, Any]) -> Dict[str, Any]:
+    return _recall_ollama_status(sem)
+
+
+def _recall_index_stats(store, sem: Dict[str, Any]) -> Dict[str, Any]:
+    conn = store._conn()
+    try:
+        sessions = conn.execute("SELECT COUNT(*) FROM documents WHERE type='session' AND chunks>0").fetchone()[0]
+        unreadable = conn.execute("SELECT COUNT(*) FROM documents WHERE type='session' AND chunks=0").fetchone()[0]
+        docs = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+        updated = conn.execute("SELECT MAX(indexed_at) FROM documents").fetchone()[0]
+    finally:
+        conn.close()
+    model = sem["api"]["model"] if sem["provider"] == "api" else sem["ollama"]["model"]
+    return {"chunks": int(chunks), "sessions": int(sessions), "sessions_unreadable": int(unreadable),
+            "documents": int(docs), "model": model,
+            "bytes": store.stats(None)["bytes"], "updated_at": updated}
+
+
+def _recall_settings_view() -> Dict[str, Any]:
+    """Blocking: settings, a loopback Ollama probe and index stats. The API key
+    is never part of it, only whether one is saved."""
+    sem = dict(_recall_index.load_settings()["semantic"])
+    key_set = _recall_embed.has_api_key(_recall_data_dir())
+    sem["api"] = {**sem["api"], "api_key_set": key_set}
+    sem["api_key_set"] = key_set
+    return {"semantic": sem, "ollama": _recall_probe(sem), "index": _recall_index_stats(_recall_get_store(), sem)}
+
+
+@app.get("/recall/settings")
+async def recall_get_settings():
+    return await _recall_asyncio.to_thread(_recall_settings_view)
+
+
+def _recall_split_key(body: Any):
+    """Pull a write-only api_key out of a settings patch. Returns (patch, key or None)."""
+    if not isinstance(body, dict) or not isinstance(body.get("semantic"), dict):
+        return body, None
+    sem = dict(body["semantic"])
+    key = None
+    if "api_key" in sem:
+        key = sem.pop("api_key")
+    api = sem.get("api")
+    if isinstance(api, dict) and "api_key" in api:
+        api = dict(api)
+        key = api.pop("api_key")
+        sem["api"] = api
+    return {**body, "semantic": sem}, key
+
+
+@app.put("/recall/settings")
+async def recall_put_settings(body: dict = Body(...)):
+    patch, key = _recall_split_key(body)
+    if key is not None and (not isinstance(key, str) or len(key) > 4096):
+        raise HTTPException(status_code=400, detail="api_key must be text")
+    if key is not None and any(not 33 <= ord(ch) <= 126 for ch in key.strip()):
+        raise HTTPException(status_code=400, detail="api_key contains invalid characters")
+    try:
+        _recall_index.update_settings(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if key is not None:
+        _recall_embed.save_api_key(_recall_data_dir(), key.strip())
+    with _recall_lock:
+        _recall_guards.clear()
+    return await _recall_asyncio.to_thread(_recall_settings_view)
+
+
+# ---------------------------------------------------------------- delta and capability
+
+def _recall_rate() -> Optional[float]:
+    run = _recall_job
+    if run is None:
+        return None
+    s = run.status()
+    return s.get("per_sec") if s.get("state") == "done" and s.get("per_sec") else None
+
+
+def _recall_delta_core(sessions, project: str, sem: Dict[str, Any]):
+    """Blocking. (delta dict, discovered documents, project dict). No transcript
+    is parsed and nothing is embedded."""
+    proj, _metas, raw = _recall_project_sessions(sessions, project)
+    if proj is None:
+        raise LookupError("no project matches %r" % project)
+    disc = _recall_discover(proj["key"], raw)
+    identity = None
+    images = bool(sem["images"])
+    unavailable = False
+    reason = None
+    try:
+        emb = _recall_embedder(sem)
+        identity = emb.identity
+        images = images and bool(getattr(emb, "supports_images", False))
+    except _RECALL_EMBED_ERRORS as e:
+        unavailable = True
+        reason = _recall_err_text(e)
+    delta = _recall_get_store().delta(
+        proj["key"], _recall_index_documents(disc["documents"], images), identity=identity, images=images,
+        chunks_per_sec=_recall_rate(), unavailable=unavailable)
+    if reason:
+        delta["reason"] = reason
+    delta["skipped"] = disc["skipped"]
+    return delta, disc["documents"], proj
+
+
+@app.get("/recall/index/delta")
+async def recall_index_delta(project: Optional[str] = None):
+    if not project or not project.strip():
+        raise HTTPException(status_code=400, detail="project is required")
+    sessions = await get_sessions_cached()
+    sem = _recall_index.load_settings()["semantic"]
+    try:
+        delta, _docs, _proj = await _recall_asyncio.to_thread(_recall_delta_core, sessions, project.strip(), sem)
+    except LookupError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return delta
+
+
+def _recall_sample_texts(docs, n: int = _recall_capability.SPEED_SAMPLE) -> List[str]:
+    """Up to n real chunks from the project for the speed test: documents
+    first, then a few sessions."""
+    out: List[str] = []
+    for d in docs:
+        if len(out) >= n:
+            break
+        if d["type"] in ("session", "image"):
+            continue
+        text = _recall_read_text(d)
+        if text:
+            out.extend(_recall_index.text_chunks(text)[:4])
+    tried = 0
+    for d in docs:
+        if len(out) >= n or tried >= 6:
+            break
+        if d["type"] != "session":
+            continue
+        tried += 1
+        try:
+            loaded = _recall_load_chunks(d["agent"], (d.get("source") or {}).get("id"))
+        except Exception:  # noqa: BLE001
+            loaded = None
+        if loaded:
+            _chunks, texts = _recall.index_view(loaded[0])
+            out.extend(t for t in texts[:8] if t.strip())
+    return [t for t in out if t.strip()][:n]
+
+
+def _recall_capability_core(sessions, project: Optional[str], speed: bool) -> Dict[str, Any]:
+    """Blocking verdict. The speed test runs only when the Ollama model is
+    installed and a project supplies real chunks."""
+    sem = _recall_index.load_settings()["semantic"]
+    plat = _recall_capability.platform_info()
+    docs: List[Dict[str, Any]] = []
+    chunks = 0
+    if project:
+        try:
+            delta, docs, _proj = _recall_delta_core(sessions, project, sem)
+            chunks = int(delta.get("new_chunks_estimate") or 0)
+        except LookupError:
+            pass
+    if sem["provider"] == "api":
+        return _recall_capability_api(sem, plat, chunks)
+    url, model = sem["ollama"]["url"], sem["ollama"]["model"]
+    ollama = {"reachable": False, "version": None, "too_old": False, "model_installed": False, "error": None}
+    try:
+        ollama["version"] = _recall_embed.version(url) or None
+        ollama["reachable"] = True
+        ollama["model_installed"] = _recall_embed.model_installed(url, model)
+    except _RECALL_EMBED_ERRORS as e:
+        ollama["error"] = _recall_err_text(e)
+    spd = None
+    if speed and ollama["reachable"] and ollama["model_installed"] and docs:
+        texts = _recall_sample_texts(docs)
+        if texts:
+            try:
+                emb = _recall_embedder(sem)
+            except _RECALL_EMBED_ERRORS:
+                emb = None
+            if emb is not None:
+                failure: List[Exception] = []
+
+                def embed(batch):
+                    try:
+                        return emb.embed_texts(list(batch), "document")
+                    except _recall_embed.BadVectorError:
+                        # The call completed; one input embedded badly. The
+                        # timing is still a valid speed sample.
+                        return None
+                    except _RECALL_EMBED_ERRORS as e:
+                        failure.append(e)
+                        raise
+
+                spd = _recall_capability.speed_test(embed, texts)
+                if failure and "too old" in str(failure[0]).lower():
+                    ollama["too_old"] = True
+    out = _recall_capability.assess(
+        ollama=ollama, mem=_recall_capability.memory(),
+        free_disk=_recall_capability.disk_free(str(_recall_data_dir())),
+        chunks=chunks, speed=spd, plat=plat,
+        model_installed_bytes=_recall_capability.MODEL_DISK_BYTES if ollama["model_installed"] else 0)
+    out["provider"] = "ollama"
+    return out
+
+
+def _recall_capability_api(sem: Dict[str, Any], plat: Dict[str, str], chunks: int) -> Dict[str, Any]:
+    """API provider: no local limits apply. One tiny call checks the endpoint
+    and key and measures latency, which sets the estimate."""
+    base: Dict[str, Any] = {"provider": "api", "platform": plat, "estimate": None, "reasons": []}
+    try:
+        emb = _recall_embedder(sem)
+        t0 = _time.monotonic()
+        emb.embed_texts(["connection check"], "query")
+        latency = max(_time.monotonic() - t0, 1e-3)
+    except _RECALL_EMBED_ERRORS as e:
+        base["status"] = "blocked"
+        base["reasons"].append({"code": "api", "text": getattr(e, "message", None) or str(e),
+                                "fix": getattr(e, "fix", "") or "Check the endpoint, model and key in settings."})
+        return base
+    batches = -(-chunks // _recall_embed.API_BATCH) if chunks else 0
+    est = latency * batches
+    base["latency_s"] = round(latency, 3)
+    if batches:
+        base["estimate"] = {"seconds": round(est, 1), "label": _recall_capability._minutes(est), "chunks": chunks}
+    if est > _recall_capability.SLOW_SECONDS:
+        base["status"] = "slow"
+        base["reasons"].append({"code": "slow", "text": "Indexing this project would take %s through this API." % _recall_capability._minutes(est),
+                                "fix": "Index anyway, or pick a faster endpoint."})
+    else:
+        base["status"] = "ready"
+    return base
+
+
+@app.get("/recall/capability")
+async def recall_capability(project: Optional[str] = None, sample_project: bool = False):
+    sessions = await get_sessions_cached()
+    return await _recall_asyncio.to_thread(
+        _recall_capability_core, sessions, (project or "").strip() or None, sample_project)
+
+
+@app.get("/recall/setup")
+async def recall_setup(project: Optional[str] = None):
+    """Provider status plus the capability verdict. No speed test and no
+    download: the model is only pulled by POST /recall/setup/pull."""
+    sessions = await get_sessions_cached()
+
+    def core():
+        sem = _recall_index.load_settings()["semantic"]
+        cap = _recall_capability_core(sessions, (project or "").strip() or None, False)
+        view = {"provider": sem["provider"], "enabled": sem["enabled"],
+                "ollama": {**sem["ollama"], **_recall_ollama_status({**sem, "provider": "ollama"})},
+                "api": {"format": sem["api"]["format"], "endpoint": sem["api"]["endpoint"],
+                        "model": sem["api"]["model"], "api_key_set": _recall_embed.has_api_key(_recall_data_dir())},
+                "dims": sem["dims"], "images": sem["images"], "capability": cap}
+        return view
+
+    return await _recall_asyncio.to_thread(core)
+
+
+# ---------------------------------------------------------------- NDJSON plumbing
+
+_RECALL_STREAM_DONE = object()
+_RECALL_ASK_DONE = _RECALL_STREAM_DONE
+
+
+def _recall_ndjson(event: Dict[str, Any]) -> bytes:
+    return (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _recall_pump(request: Request, it, first: Any = None) -> StreamingResponse:
+    """Stream a blocking iterator of dicts as NDJSON. A worker thread stays at
+    most a few events ahead of the client and stops when it disconnects."""
+    cancel = _recall_threading.Event()
+    q: "_recall_queue.Queue" = _recall_queue.Queue(maxsize=8)
+
+    def put(item) -> bool:
+        while not cancel.is_set():
+            try:
+                q.put(item, timeout=0.2)
+                return True
+            except _recall_queue.Full:
+                continue
+        return False
+
+    def worker():
+        try:
+            if first is not None and not put(first):
+                return
+            for ev in it:
+                if not put(ev):
+                    break
+        except _RECALL_EMBED_ERRORS as e:
+            put(_recall_err_event(e))
+        except Exception as e:  # noqa: BLE001 - never surface a raw trace
+            put({"type": "error", "message": "The stream stopped unexpectedly (%s)." % type(e).__name__, "fix": ""})
+        finally:
+            close = getattr(it, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+            put(_RECALL_STREAM_DONE)
+
+    async def stream():
+        t = _recall_threading.Thread(target=worker, daemon=True, name="recall-stream")
+        try:
+            t.start()
+            while True:
+                try:
+                    item = await _recall_asyncio.to_thread(q.get, True, 0.5)
+                except _recall_queue.Empty:
+                    if await request.is_disconnected():
+                        break
+                    continue
+                if item is _RECALL_STREAM_DONE:
+                    break
+                yield _recall_ndjson(item)
+                if await request.is_disconnected():
+                    break
+        finally:
+            cancel.set()
+
+    return StreamingResponse(
+        stream(), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/recall/setup/pull")
+async def recall_setup_pull(request: Request, body: Optional[dict] = Body(default=None)):
+    """Download the configured Ollama model, streaming Ollama's progress.
+    Called only from an explicit click. A failure at the start (Ollama off,
+    registry 412 for an old Ollama) is refused with a status code; one in the
+    middle of the stream arrives as an error event."""
+    sem = _recall_index.load_settings()["semantic"]
+    url, model = sem["ollama"]["url"], sem["ollama"]["model"]
+
+    def open_pull():
+        gen = _recall_embed.pull(url, model)
+        try:
+            return gen, next(gen)
+        except StopIteration:
+            return gen, None
+
+    try:
+        gen, first = await _recall_asyncio.to_thread(open_pull)
+    except _RECALL_EMBED_ERRORS as e:
+        text = _recall_err_text(e)
+        status = 412 if "too old" in text.lower() else 502
+        return JSONResponse(status_code=status, content={"detail": text, **_recall_err_event(e)})
+    return _recall_pump(request, gen, first=first)
+
+
+# ---------------------------------------------------------------- index run
+
+def _recall_status_view(run) -> Dict[str, Any]:
+    """Run status plus the v2 field names the settings chip still reads."""
+    s = run.status() if run is not None else _recall_index._run_status_blank()
+    err = s.get("error")
+    return {**s, "sessions_total": s["documents_total"], "sessions_done": s["documents_done"],
+            "sessions_skipped": s["documents_skipped"], "chunks_per_sec": s["per_sec"],
+            "error_info": err, "error": (err.get("message") if isinstance(err, dict) else err)}
+
+
+@app.get("/recall/index/status")
+async def recall_index_status():
+    return _recall_status_view(_recall_job)
+
+
+@app.post("/recall/index")
+async def recall_index_start(body: Optional[dict] = Body(default=None)):
+    global _recall_job
+    b = body or {}
+    project = b.get("project")
+    if project is not None and not isinstance(project, str):
+        raise HTTPException(status_code=400, detail="project must be a string")
+    full = b.get("full", False)
+    if not isinstance(full, bool):
+        raise HTTPException(status_code=400, detail="full must be true or false")
+    sem = _recall_index.load_settings()["semantic"]
+    if not sem["enabled"]:
+        raise HTTPException(status_code=400, detail="semantic search is off; enable it first")
+    project = (project or "").strip()
+    if not project:
+        raise HTTPException(status_code=400, detail="project is required: open a project on the Recall page and index it there")
+    sessions = await get_sessions_cached()
+    proj, _metas, raw = _recall_project_sessions(sessions, project)
+    if proj is None:
+        raise HTTPException(status_code=400, detail=f"no project matches {project!r}")
+    with _recall_lock:
+        if _recall_job is not None and _recall_job.status()["state"] == "running":
+            return JSONResponse(status_code=409, content=_recall_status_view(_recall_job))
+    try:
+        embedder = _recall_embedder(sem)
+    except _RECALL_EMBED_ERRORS as e:
+        raise HTTPException(status_code=400, detail=_recall_err_text(e))
+    disc = await _recall_asyncio.to_thread(_recall_discover, proj["key"], raw, True)
+    store = _recall_get_store()
+    with _recall_lock:
+        if _recall_job is not None and _recall_job.status()["state"] == "running":
+            return JSONResponse(status_code=409, content=_recall_status_view(_recall_job))
+        run = _recall_index.IndexRun(
+            store, embedder, _recall_load_chunks, text_reader=_recall_read_text,
+            image_reader=_recall_read_image, images=bool(sem["images"]),
+            inline_discover=_recall_inline_discover,
+            guard=_recall_guard(embedder, store))
+        try:
+            images = bool(sem["images"] and embedder.supports_images)
+            run.start(proj, _recall_index_documents(disc["documents"], images), full)
+        except _recall_index.JobBusy as e:
+            return JSONResponse(status_code=409, content=e.status)
+        _recall_job = run
+    return _recall_status_view(run)
+
+
+@app.get("/recall/index/map")
+async def recall_index_map(project: Optional[str] = None):
+    if not project or not project.strip():
+        raise HTTPException(status_code=400, detail="project is required")
+    sessions = await get_sessions_cached()
+    proj, _metas, _raw = _recall_project_sessions(sessions, project.strip())
+    if proj is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    sem = _recall_index.load_settings()["semantic"]
+    points = []
+    if sem["enabled"]:
+        points = await _recall_asyncio.to_thread(_recall_get_store().project_map,
+                                                  proj["key"], bool(sem["images"]))
+    return {"points": points}
+
+
+@app.get("/recall/index/events")
+async def recall_index_events(request: Request, since: Optional[str] = None, run_id: Optional[str] = None):
+    """NDJSON events of the current (or last) run, replayed from `since` (a seq
+    already seen) and then live until the run ends."""
+    n = _recall_int(since, "since", 0, 0, 10**9)
+    run = _recall_job
+    if run_id and (run is None or run.log.run_id != run_id):
+        raise HTTPException(status_code=404, detail="that index run is no longer available")
+    return _recall_pump(request, iter(()) if run is None else iter(run.stream(n)))
+
+
+# ---------------------------------------------------------------- documents
+
+def _recall_doc_row(sessions, project: Optional[str], doc_id: str):
+    """(project dict, raw sessions, index row). The row exists only when the
+    document is in this project's index, which is the access rule for every
+    document and image read."""
+    if not project or not project.strip():
+        raise ValueError("project is required")
+    proj, _metas, raw = _recall_project_sessions(sessions, project.strip())
+    if proj is None:
+        raise LookupError("no project matches %r" % project)
+    row = _recall_get_store().documents(proj["key"]).get(doc_id)
+    if row is None:
+        raise LookupError("that document is not in this project's index")
+    return proj, raw, row
+
+
+def _recall_resolve_document(proj, raw, row):
+    by_id = _recall_discover(proj["key"], raw)["by_id"]
+    source = row["source"]
+    if source.get("kind") != "inline_image":
+        return by_id.get(row["doc_id"])
+    parent = _recall_index.session_doc_id(row["agent"], source["session_id"])
+    return {**row, "mime": source["mime"]} if parent in by_id else None
+
+
+def _recall_document_page(proj, raw, row, offset: int, limit: int) -> Dict[str, Any]:
+    if row["type"] == "session":
+        raise ValueError("sessions are read with read_session, not read_document")
+    doc = _recall_resolve_document(proj, raw, row)
+    if doc is None:
+        raise LookupError("the document is no longer there; re-index the project")
+    path = (row.get("source") or {}).get("path")
+    head = {"doc_id": row["doc_id"], "doc_type": row["type"], "agent": row["agent"], "title": row["title"],
+            "path": path}
+    if row["type"] == "image":
+        return {"type": "image", **head, "url": "/recall/document/%s/image?project=%s" % (
+            _recall_quote(row["doc_id"], safe=""), _recall_quote(proj["key"], safe=""))}
+    text = _recall_read_text(doc)
+    if text is None:
+        raise LookupError("the document cannot be read; re-index the project")
+    chunks = _recall_index.text_chunks(text)
+    page = chunks[offset:offset + limit]
+    nxt = offset + limit if offset + limit < len(chunks) else None
+    return {"type": "text", **head, "chunks": page, "next": nxt, "total": len(chunks), "offset": offset}
+
+
+# The image route is registered first: the document route's {doc_id:path}
+# would otherwise swallow the trailing "/image".
+@app.get("/recall/document/{doc_id:path}/image")
+async def recall_document_image(doc_id: str, project: Optional[str] = None):
+    sessions = await get_sessions_cached()
+    try:
+        proj, raw, row = await _recall_asyncio.to_thread(_recall_doc_row, sessions, project, doc_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if row["type"] != "image":
+        raise HTTPException(status_code=404, detail="that document is not an image")
+    if not _recall_index.load_settings()["semantic"]["images"]:
+        raise HTTPException(status_code=404, detail="image recall is off")
+    doc = await _recall_asyncio.to_thread(_recall_resolve_document, proj, raw, row)
+    mime = (doc or {}).get("mime")
+    if doc is None or mime not in _recall_sources.IMAGE_EXTS.values() or mime == "image/svg+xml":
+        raise HTTPException(status_code=404, detail="the image is no longer there")
+    data = await _recall_asyncio.to_thread(_recall_read_image, doc)
+    if data is None or _recall_index.image_content_fp(data) != row["content_fp"]:
+        raise HTTPException(status_code=404, detail="the image changed or cannot be read")
+    # Images cannot be redacted, so they are served only for an indexed document
+    # of the requested project, as an inert image type.
+    return Response(content=data, media_type=mime, headers={
+        "Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox"})
+
+
+@app.get("/recall/document/{doc_id:path}")
+async def recall_document(doc_id: str, project: Optional[str] = None,
+                          offset: Optional[str] = None, limit: Optional[str] = None):
+    off = _recall_int(offset, "offset", 0, 0, 10**9)
+    n = _recall_int(limit, "limit", _RECALL_DOC_PAGE, 1, 200)
+    sessions = await get_sessions_cached()
+
+    def core():
+        proj, raw, row = _recall_doc_row(sessions, project, doc_id)
+        return _recall_document_page(proj, raw, row, off, n)
+
+    try:
+        return await _recall_asyncio.to_thread(core)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ---------------------------------------------------------------- ask
+
+_recall_running_chats: set = set()
+
+
+def _recall_chat_id(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+    return value
+
+
+@app.get("/recall/conversations")
+async def recall_conversations():
+    items = await _recall_asyncio.to_thread(_recall_conversations.list_conversations)
+    return JSONResponse({"conversations": items}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/recall/conversations/{conversation_id}")
+async def recall_get_conversation(conversation_id: str):
+    item = await _recall_asyncio.to_thread(
+        _recall_conversations.get_conversation, _recall_chat_id(conversation_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return JSONResponse(item, headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/recall/conversations/{conversation_id}")
+async def recall_delete_conversation(conversation_id: str):
+    conversation_id = _recall_chat_id(conversation_id)
+    def delete():
+        # Serialize the delete with the start of an Ask run.
+        with _recall_lock:
+            if conversation_id in _recall_running_chats:
+                raise HTTPException(status_code=423, detail="Stop the current answer before deleting this chat.")
+            _recall_conversations.delete_conversation(conversation_id)
+
+    await _recall_asyncio.to_thread(delete)
+    return Response(status_code=204)
+
+
+@app.post("/recall/ask")
+async def recall_ask(request: Request, body: dict = Body(...)):
+    question = body.get("question")
+    if not isinstance(question, str) or not (1 <= len(question.strip()) <= 1000):
+        raise HTTPException(status_code=400, detail="question is required (1 to 1000 characters)")
+    question = question.strip()
+    chat_id = body.get("conversation_id")
+    if chat_id is not None:
+        chat_id = _recall_chat_id(chat_id)
+        question = _recall.redact(question)
+    project = body.get("project")
+    agent = body.get("agent")
+    if project is not None and not isinstance(project, str):
+        raise HTTPException(status_code=400, detail="project must be a string")
+    if agent is not None and not isinstance(agent, str):
+        raise HTTPException(status_code=400, detail="agent must be a string")
+    project = (project or "").strip() or None
+    agent = (agent or "").strip() or None
+
+    cfg = _recall_summaries.load_config()
+    backend_name = cfg.get("backend")
+    if not (cfg.get("enabled") and backend_name):
+        raise HTTPException(status_code=409, detail="AI summaries are off; enable a summarizer backend in settings")
+
+    sessions = await get_sessions_cached()
+    try:
+        proj, _metas = _recall._select(sessions, project, agent, None, ANTIGRAVITY_UNASSIGNED)
+        mode, _sem = _recall_mode(None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if project and proj is None:
+        raise HTTPException(status_code=400, detail=f"no project matches {project!r}")
+    doc_proj, _dm, doc_raw = _recall_project_sessions(sessions, project) if project else (None, [], [])
+
+    sm = get_summarizer(backend_name, cfg.get("model"), cfg.get("openai_compat"))
+    cancel = _recall_threading.Event()
+    # Capacity 1: the worker stays at most one event ahead of the client, so
+    # a disconnect stops it before it spends another LLM call.
+    q: "_recall_queue.Queue" = _recall_queue.Queue(maxsize=1)
+
+    def put(item) -> bool:
+        while not cancel.is_set():
+            try:
+                q.put(item, timeout=0.2)
+                return True
+            except _recall_queue.Full:
+                continue
+        return False
+
+    # The model chooses tool arguments, and session or document text can try to
+    # steer it, so every tool stays inside the project and agent scope the user picked.
+    in_scope = {(m["agent"], m["id"]) for m in _metas}
+    user_agents = _recall.parse_agents(agent)
+    history = []
+    turn_id = None
+    if chat_id:
+        with _recall_lock:
+            if chat_id in _recall_running_chats:
+                raise HTTPException(status_code=423, detail="This conversation already has an answer in progress.")
+            _recall_running_chats.add(chat_id)
+        try:
+            existing = await _recall_asyncio.to_thread(
+                _recall_conversations.get_conversation, chat_id, recent=4)
+            history = existing["turns"] if existing else []
+            turn_id = await _recall_asyncio.to_thread(
+                _recall_conversations.add_question, chat_id, question,
+                proj["key"] if proj else None, proj["name"] if proj else None,
+                sorted(user_agents or ()))
+        except BaseException as e:
+            with _recall_lock:
+                _recall_running_chats.discard(chat_id)
+            if isinstance(e, ValueError):
+                raise HTTPException(status_code=422, detail=str(e)) from e
+            raise
+
+    def a_search(query, agent=None, mode=None, types=None):
+        wanted = _recall.parse_agents(agent)
+        if user_agents:
+            wanted = (wanted & user_agents) if wanted else user_agents
+            if not wanted:
+                wanted = user_agents
+        eff = ",".join(sorted(wanted)) if wanted else None
+        return _recall_search_core(sessions, query, project, eff, None, 15, 60, mode or None, types or None)
+
+    def a_read(agent_name, sid, offset=0):
+        if (agent_name, sid) not in in_scope:
+            raise ValueError("that session is outside the project and agents this question is limited to")
+        meta = next((x for x in sessions if x.get("id") == sid and x.get("agent") == agent_name), None)
+        loaded = _recall_load_chunks(agent_name, sid)
+        if loaded is None:
+            raise ValueError("session not found")
+        chunks, source = loaded
+        return _recall.read_session(meta, chunks, source, agent_name, sid, offset, 40, None,
+                                    unassigned=ANTIGRAVITY_UNASSIGNED)
+
+    def a_read_doc(doc_id, offset=0):
+        if doc_proj is None:
+            raise ValueError("documents belong to a project; ask with a project selected")
+        row = _recall_get_store().documents(doc_proj["key"]).get(doc_id)
+        if row is None:
+            raise ValueError("that document is outside the project this question is limited to")
+        if user_agents and (row.get("agent") or "").lower() not in user_agents:
+            raise ValueError("that document is outside the agents this question is limited to")
+        return _recall_document_page(doc_proj, doc_raw, row, offset, _RECALL_DOC_PAGE)
+
+    def worker():
+        from summarizers.errors import classify as _classify_err
+
+        def fail(msg: str):
+            put({"type": "error", "error_info": _classify_err(msg, backend_name=backend_name or "")})
+
+        try:
+            if not (sm and sm.is_available()):
+                fail(f"summarizer '{backend_name}' is not available")
+                return
+            gen = _recall_agent.run(
+                question, proj or project, agent,
+                llm=lambda p: _recall_summaries.ask_untrusted(sm, p),
+                search=a_search, read_session=a_read, read_document=a_read_doc, cancelled=cancel.is_set, history=history,
+                modes=("keyword", "semantic", "hybrid")
+                if _recall_index.load_settings()["semantic"]["enabled"] else ("keyword",))
+            for ev in gen:
+                if not put(ev):
+                    break
+        except SummarizerError as e:
+            fail(str(e))
+        except Exception as e:  # noqa: BLE001 - never surface a raw trace
+            fail(f"{type(e).__name__}: {e}")
+        finally:
+            put(_RECALL_STREAM_DONE)
+
+    async def stream():
+        t = _recall_threading.Thread(target=worker, daemon=True, name="recall-ask")
+        try:
+            yield _recall_ndjson({"type": "status", "summarizer": backend_name, "mode": mode,
+                                  "project": proj})
+            t.start()
+            while True:
+                try:
+                    item = await _recall_asyncio.to_thread(q.get, True, 0.5)
+                except _recall_queue.Empty:
+                    if await request.is_disconnected():
+                        break
+                    continue
+                if item is _RECALL_STREAM_DONE:
+                    break
+                if chat_id and item["type"] == "answer":
+                    item = {**item, "text": _recall.redact(item["text"])}
+                    await _recall_asyncio.to_thread(_recall_conversations.save_answer, chat_id, turn_id, item)
+                yield _recall_ndjson(item)
+                if await request.is_disconnected():
+                    break
+        finally:
+            cancel.set()
+            if chat_id:
+                with _recall_lock:
+                    _recall_running_chats.discard(chat_id)
+
+    return StreamingResponse(
+        stream(), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/recall/session/{agent}/{session_id}")

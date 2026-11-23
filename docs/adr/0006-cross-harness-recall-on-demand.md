@@ -1,6 +1,6 @@
 # ADR-0006: Answer cross-agent questions with on-demand lexical search and MCP tools
 
-- **Status:** Proposed
+- **Status:** Superseded by ADR-0007
 - **Date:** 2026-11-19
 - **Deciders:** Maintainer
 - **Related:** [design doc](../design/cross-harness-recall.md)
