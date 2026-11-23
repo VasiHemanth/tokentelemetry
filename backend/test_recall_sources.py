@@ -353,7 +353,7 @@ def test_walk_excludes_worktrees_symlinks_source_and_large(tree, tmp_path):
     os.symlink(outside / "secret.md", proj / "linkfile.md")
     res = run(tree)
     paths = {d["source"]["path"] for d in res["documents"]}
-    rels = {os.path.relpath(d["abs_path"], proj) for d in res["documents"]}
+    rels = {os.path.relpath(d["abs_path"], proj).replace(os.sep, "/") for d in res["documents"]}
     assert rels == {"README.md", "docs/guide.mdx", "src/NOTES.md"}
     assert KEY not in texts(res)
     assert res["skipped"]["too_large"] == 1
