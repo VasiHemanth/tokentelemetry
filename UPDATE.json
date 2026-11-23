@@ -52,10 +52,6 @@
           "title": "Recall page for past sessions",
           "description": "Search all your coding agents' past sessions in one box, grouped by project. Filter by agent, and open any hit to read its full session. API keys, tokens and passwords are hidden before anything appears on screen, and nothing leaves your computer.",
           "href": "/recall"
-        },
-        {
-          "title": "Let any agent search the others' history",
-          "description": "A new MCP server lets Claude Code, Codex, Antigravity, Cursor and other MCP-capable agents look up what happened in your other agents' sessions, such as what Codex decided about a feature in a given project. Each agent needs one config entry, and the search runs on your computer."
         }
       ]
     },

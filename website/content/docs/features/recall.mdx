@@ -5,103 +5,34 @@ description: Search across your coding agents and ask questions about past proje
 
 Recall helps you pick up where you left off. Search past sessions across your coding agents, or ask a question about a project and follow the citations back to the original work.
 
-![The Recall dashboard with Search and Ask tabs, project and agent filters, and project indexing controls](/screenshots/recall-overview.png)
+![The Recall page with Search and Ask tabs, project and agent filters, semantic search status and project indexing](/screenshots/recall-overview.png)
 
 ## Search past work
 
-Open **Recall** in the dashboard, pick a project, and use **Search**. Filter by agent to narrow the results. Use quotes for an exact phrase, such as `"render pipeline"`. Select a result to open its source. Keyword search works as soon as you have recorded sessions.
+Open **Recall**, pick a project, and use **Search**. Click an agent badge to show only that agent. Use quotes for an exact phrase, such as `"render pipeline"`. Select a result to open its source. Keyword search works as soon as you have recorded sessions.
 
 ## Ask a question
 
-Switch to **Ask**, choose a project, and ask in plain language. For example, “What did we decide about harness evaluations?” Recall shows what it searched and cites the sources behind its answer. Open a citation to inspect the original session or document.
+Switch to **Ask**, choose a project, and ask in plain language, for example "What did we decide about harness evaluations?" Recall shows each search and reading step, then answers with citations you can open.
 
-Use **Ask history** to reopen a conversation and continue with follow-up questions. Its project and agent filters stay with the chat. Choose **New chat** to start with different filters. Conversations are saved on the machine running TokenTelemetry.
+![An Ask answer with its search and reading steps and session citations, below the project knowledge map](/screenshots/recall-ask.png)
 
-Ask uses the summarizer configured in Settings. Enable **AI summaries** there if Ask prompts you to set it up.
-
-![Recall’s Ask tab showing the question, search and reading steps, and an answer with session citations](/screenshots/recall-ask.png)
+**Ask history** keeps your conversations on this machine. Reopen one to ask follow-up questions with the same project and agents. Ask uses the summarizer set in **Settings**; turn on **AI summaries** there if Ask asks you to.
 
 ## Set up semantic search
 
-Semantic search finds results by meaning and includes indexed skills, plans, Markdown files, and images alongside sessions. Under **Recall → Embedding setup**, choose **Local (Ollama)** or **API**.
+Semantic search is optional. It finds results by meaning and adds skills, plans, Markdown files and images to the results. Open **Recall → Embedding setup** and choose **Local (Ollama)** or **API**.
 
-### Local with Ollama
+**Local with Ollama.** Recall uses EmbeddingGemma 2 740M (`embeddinggemma-2:740m`), a 1.3 GB download that handles text and images. Install and open [Ollama](https://ollama.com/download), then click **Download model** in Embedding setup. If TokenTelemetry runs on a server or in a container, Ollama must run on that same machine; otherwise use the API option. Update Ollama if it says your version can't load the model.
 
-Recall uses Google's **EmbeddingGemma 2 740M** (`embeddinggemma-2:740m`) by default. The model download is about 1.3 GB and supports text and image search. [Model details](https://ollama.com/library/embeddinggemma-2:740m)
-
-| Where TokenTelemetry runs | How to start Ollama |
-| --- | --- |
-| macOS | Install and open the Ollama app. |
-| Windows | Run the Ollama installer and open Ollama. It runs in the background. |
-| Linux | Follow the Linux install guide. Start the Ollama service, or run `ollama serve` if you installed it manually. |
-| Remote server or container | Run Ollama where the TokenTelemetry backend can reach it on loopback. If the backend runs in a container, its loopback is inside that container. Use the API option if Ollama runs at a separate network address. |
-
-[Ollama downloads](https://ollama.com/download) · [Linux installation guide](https://docs.ollama.com/linux)
-
-In **Embedding setup**, click **Download model** if prompted, then **Use local model**. Update Ollama if it reports that your version cannot load the model.
-
-### Without Ollama
-
-Choose **API** in **Embedding setup**. Select **OpenAI-compatible**, **Gemini**, or **Voyage**, then enter your provider's endpoint, embedding model, and API key when required. Match the dimensions to the provider's model and click **Save API settings**. Use HTTPS for a remote endpoint. HTTP is supported on loopback, for example when another local app serves an OpenAI-compatible embeddings API.
-
-If you skip semantic setup, you can still search recorded sessions by keyword. Ask uses its own summarizer configured in Settings.
+**API.** Choose **OpenAI-compatible**, **Gemini** or **Voyage**, enter the endpoint, model and API key, match the dimensions to the model, and save. Remote endpoints must use HTTPS.
 
 ## Index project knowledge
 
-Select a project and click **Index this project**. Follow the progress, then hover over a dot on the project knowledge map to identify its document. Click **Re-index** when new work appears to reuse existing embeddings. Changing the embedding model requires a full re-index.
+Select a project and click **Index this project**. The knowledge map fills in as documents are embedded; hover a dot to see which document it is. When new work appears, click **Re-index**: only new or changed content is embedded. Changing the embedding model requires a full re-index.
 
-## Use Recall from your agents
-
-`tokentelemetry mcp` is a stdio MCP server that gives your coding agents the same search. An agent working in one tool can look up what you did in another, for example "What did Codex decide about the render pipeline in education-video?" Start TokenTelemetry first (`npx tokentelemetry`). Your agent then starts the MCP server itself from its config.
-
-Every agent runs the same command, `npx -y tokentelemetry mcp`. Only the config format differs.
-
-**Claude Code**
-
-```bash
-claude mcp add tokentelemetry -- npx -y tokentelemetry mcp
-```
-
-**Codex**: add to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.tokentelemetry]
-command = "npx"
-args = ["-y", "tokentelemetry", "mcp"]
-```
-
-**OpenCode**: add to `opencode.json`. The command is one array:
-
-```json
-{
-  "mcp": {
-    "tokentelemetry": { "type": "local", "command": ["npx", "-y", "tokentelemetry", "mcp"] }
-  }
-}
-```
-
-**Antigravity, Cursor, Qwen Code, Kimi and other agents**: add an `mcpServers` entry to the agent's MCP config file (Antigravity's `mcp_config.json`, Cursor's `~/.cursor/mcp.json`, or the file your agent's MCP documentation names):
-
-```json
-{
-  "mcpServers": {
-    "tokentelemetry": { "command": "npx", "args": ["-y", "tokentelemetry", "mcp"] }
-  }
-}
-```
-
-The server looks for TokenTelemetry on `127.0.0.1`, trying ports 18000 and 8000. If you run it on another port, add `"env": { "TT_API_PORT": "9000" }` to the entry, or pass `--api-port 9000` in `args`. If TokenTelemetry was started with an auth token (required for a non-loopback `--host`), set the same value as `TT_AUTH_TOKEN` in `env`.
-
-| Tool | What it does |
-| --- | --- |
-| `list_projects` | Projects with their agents, session counts and last activity |
-| `list_sessions` | A project's sessions, newest first, filterable by agent and date |
-| `search_sessions` | Search by `query`, narrowed by `project`, `agent`, `since` and document `types`. `mode` picks exact words (`keyword`), meaning (`semantic`) or both (`hybrid`) |
-| `read_session` | One session's text in order, in pages |
-| `read_document` | A skill, plan, Markdown file or MCP entry that a search returned |
-
-Skills, plans, images and other documents appear in results only for indexed projects, in `semantic` or `hybrid` mode. Text from past sessions comes back marked as data, never as instructions for the agent.
+Only projects you index are embedded, and only sessions, images, skills, commands, agent definitions, plans, Markdown files and MCP config. Source code is never indexed.
 
 ## Where your data goes
 
-Local Ollama keeps embedding requests on the machine running TokenTelemetry. If you choose a hosted embedding or summarizer provider, it receives the text needed for that operation after redaction. Hosted image embedding is off by default. Turning it on sends the original images to the provider.
+With local Ollama, embedding stays on the machine running TokenTelemetry. A hosted embedding or summarizer provider receives the text it needs, after secrets are removed. Hosted image embedding is off by default; turning it on sends the original images to the provider.
