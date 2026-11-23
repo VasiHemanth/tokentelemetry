@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { History, Search, AlertTriangle, RotateCw, MessageSquare } from "lucide-react";
 
 import { useResource } from "@/lib/api";
-import { getAgent } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import {
   PageHeader, Card, Button, EmptyState, Skeleton, AgentBadge,
@@ -26,6 +25,12 @@ import {
 
 const STORAGE_KEY = "tt-recall-project";
 const ALL = "";
+// Search modes in the words people use; the API values stay keyword/hybrid/semantic.
+const MATCH_LABELS: Record<"keyword" | "hybrid" | "semantic", { label: string; hint: string }> = {
+  keyword: { label: "Exact words", hint: "Find the words you typed. Best for file names, errors and identifiers." },
+  hybrid: { label: "Words + meaning", hint: "Exact words and related meaning combined. The default." },
+  semantic: { label: "Meaning", hint: "Find related ideas even when the wording differs." },
+};
 
 function readStoredProject(): string {
   try { return window.localStorage.getItem(STORAGE_KEY) ?? ALL; } catch { return ALL; }
@@ -186,7 +191,7 @@ export default function RecallPage() {
               <option value={ALL}>All projects</option>
               {projects.map((p) => (
                 <option key={p.key} value={p.key}>
-                  {p.name} ({p.agents.join(", ")}) · {p.session_count}
+                  {p.name}
                 </option>
               ))}
             </select>
@@ -207,14 +212,9 @@ export default function RecallPage() {
             Press Enter to search. Put a phrase in double quotes to require it verbatim. Secrets are redacted in results.
           </p>)}
 
-          {selected && (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--tt-fg-dim)]">
-              {selected.agents.map((a) => <AgentBadge key={a} agent={a} />)}
-              <span className="tabular">{selected.session_count} sessions</span>
-            </div>
-          )}
-
-          {agentOptions.length > 1 && (
+          {/* One agent row: it shows which agents worked on the project and
+              filters by them. No agent selected means all agents. */}
+          {agentOptions.length > 0 && (
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by agent">
               <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Agents</span>
               {agentOptions.map((a) => {
@@ -224,18 +224,22 @@ export default function RecallPage() {
                     key={a}
                     type="button"
                     aria-pressed={on}
+                    disabled={agentOptions.length < 2}
+                    title={agentOptions.length < 2 ? undefined : on ? "Remove from filter" : "Only show this agent"}
                     onClick={() => toggleAgent(a)}
                     className={cn(
-                      "h-7 px-2.5 rounded-full border text-[12px] font-medium transition-colors",
-                      on
-                        ? "border-[color:var(--tt-brand)]/40 text-[var(--tt-brand)] bg-[color:var(--tt-brand-glow)]"
-                        : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1",
+                      "rounded-full transition-opacity disabled:cursor-default",
+                      activeAgents.length > 0 && !on && "opacity-45 hover:opacity-80",
+                      on && "ring-1 ring-[color:var(--tt-brand)]/50 ring-offset-1 ring-offset-[var(--tt-bg)]",
                     )}
                   >
-                    {getAgent(a).label}
+                    <AgentBadge agent={a} />
                   </button>
                 );
               })}
+              {selected && (
+                <span className="text-[11px] tabular text-[var(--tt-fg-dim)]">{selected.session_count} sessions</span>
+              )}
             </div>
           )}
 
@@ -273,8 +277,9 @@ export default function RecallPage() {
           )}
 
           {tab === "search" && semEnabled && (
-            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Search mode">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Mode</span>
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="How results are matched">
+              {/* Not a filter: this picks how the query is matched. Filters are project, agents and types. */}
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">Match</span>
               {(["keyword", "hybrid", "semantic"] as const).map((m) => {
                 const on = effectiveMode === m;
                 return (
@@ -282,6 +287,7 @@ export default function RecallPage() {
                     key={m}
                     type="button"
                     aria-pressed={on}
+                    title={MATCH_LABELS[m].hint}
                     onClick={() => {
                       setMode(m);
                       setSubmitted((s) => (s ? { ...s, nonce: s.nonce + 1 } : s));
@@ -293,7 +299,7 @@ export default function RecallPage() {
                         : "border-[var(--tt-border)] text-[var(--tt-fg-muted)] hover:text-[var(--tt-fg)] hover:tt-tint-1",
                     )}
                   >
-                    {m}
+                    {MATCH_LABELS[m].label}
                   </button>
                 );
               })}
