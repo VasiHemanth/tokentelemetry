@@ -354,7 +354,8 @@ def upsert_sessions(rows: Sequence[Dict[str, Any]],
 
 
 def mark_absent(seen_keys: Set[Tuple[str, str]],
-                scan_started_at: Optional[str] = None) -> None:
+                scan_started_at: Optional[str] = None,
+                skip_agents: Optional[Set[str]] = None) -> None:
     """Flag rows whose (agent, id) was NOT in the latest scan as no longer on
     disk (``source_present=0``). Never deletes — the rollup is what survives
     agent pruning, so those rows are exactly the ones we must keep.
@@ -363,7 +364,12 @@ def mark_absent(seen_keys: Set[Tuple[str, str]],
     When provided, only rows whose ``last_seen_at < scan_started_at`` are marked
     absent.  The check is pushed into the UPDATE WHERE clause so it remains
     correct even if a newer concurrent upsert lands between our SELECT and our
-    UPDATE — a purely Python-side filter would not be atomic."""
+    UPDATE — a purely Python-side filter would not be atomic.
+
+    ``skip_agents`` names agents whose source could not be fully read this
+    scan. Their rows are never flagged: a session missing from a failed read
+    is unknown, not gone, and the next clean scan settles it either way."""
+    skip_agents = skip_agents or set()
     try:
         con = _connect()
         try:
@@ -371,7 +377,8 @@ def mark_absent(seen_keys: Set[Tuple[str, str]],
                 "SELECT agent, id FROM sessions WHERE source_present=1"
             ).fetchall()
             gone = [(r["agent"], r["id"]) for r in present
-                    if (r["agent"], r["id"]) not in seen_keys]
+                    if r["agent"] not in skip_agents
+                    and (r["agent"], r["id"]) not in seen_keys]
             if gone:
                 if scan_started_at:
                     con.executemany(
