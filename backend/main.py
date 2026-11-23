@@ -9976,22 +9976,65 @@ def _get_sessions_lock() -> _asyncio.Lock:
     return _sessions_lock
 
 
+# Copy a transcript only when it changed since its last copy: once the session
+# has gone quiet, and at least daily while it stays active. Re-reading and
+# re-compressing every opted-in transcript on every scan (close to 1 GB on a
+# typical Claude Code history) is wasted work when almost nothing changed, and
+# agents only prune files after weeks without changes.
+ARCHIVE_IDLE_SEC = 10 * 60
+ARCHIVE_MAX_STALE_SEC = 24 * 60 * 60
+# A refresh never replaces a copy with one this much smaller (truncated or
+# rotated source); transcripts only grow.
+ARCHIVE_SHRINK_GUARD = 0.9
+
+
+def _archive_due(now: float, source_mtime: float, archived_at: Optional[float]) -> bool:
+    """Should this transcript be (re)copied into the archive now?"""
+    if archived_at is None:
+        return True                        # never archived
+    if source_mtime <= archived_at:
+        return False                       # unchanged since the copy
+    if now - source_mtime >= ARCHIVE_IDLE_SEC:
+        return True                        # changed, and the session went quiet
+    return now - archived_at >= ARCHIVE_MAX_STALE_SEC  # still active: refresh daily
+
+
+def _iso_epoch(value: Any) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def _archive_opted_in_transcripts(data: List[Dict[str, Any]]) -> None:
     """For agents the user opted into, copy each session's on-disk transcript
     into the durable store (tier 2) so it survives the agent's own pruning.
+    A copy is refreshed when the session grows (see ``_archive_due``).
     Best-effort and only for agents whose transcript is a single resolvable
     file; everything else stays rollup-only. Runs on the scan worker thread."""
     import history_store
     from agent_retention import archive_enabled
 
+    meta = None
+    now = _time.time()
     for s in data:
         agent, sid = s.get("agent"), s.get("id")
         if not agent or not sid or not archive_enabled(agent):
             continue
-        if s.get("transcript_archived"):
-            continue
         path = _resolve_transcript_path(agent, sid)
         if not path:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if meta is None:
+            meta = history_store.archive_meta()  # one query per scan, only if needed
+        prev = meta.get((agent, sid))
+        archived_at = _iso_epoch(prev["archived_at"]) if prev else None
+        if prev and archived_at is None:
+            archived_at = 0.0  # unreadable timestamp: treat the copy as old
+        if not _archive_due(now, mtime, archived_at):
             continue
         try:
             with _open_maybe_zst(path) as fh:
@@ -9999,7 +10042,8 @@ def _archive_opted_in_transcripts(data: List[Dict[str, Any]]) -> None:
         except Exception:
             continue
         if text:
-            history_store.put_transcript(agent, sid, text)
+            floor = int((prev or {}).get("bytes") or 0) * ARCHIVE_SHRINK_GUARD
+            history_store.put_transcript(agent, sid, text, min_bytes=int(floor))
 
 
 def _resolve_transcript_path(agent: str, session_id: str) -> Optional[Path]:

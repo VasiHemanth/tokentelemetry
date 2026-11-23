@@ -551,9 +551,16 @@ def storage_stats() -> Dict[str, Any]:
 
 # ── tier 2: transcript archive ───────────────────────────────────────────────
 
-def put_transcript(agent: str, id: str, text: str) -> int:
-    """Archive (or replace) a compressed transcript blob. Returns stored bytes."""
+def put_transcript(agent: str, id: str, text: str, min_bytes: int = 0) -> int:
+    """Archive (or replace) a compressed transcript blob. Returns stored bytes.
+
+    ``min_bytes`` protects a refresh: when the new blob is smaller than that,
+    nothing is written and 0 is returned. Transcripts only grow, so a much
+    smaller copy means the source was truncated or rotated, and the older,
+    fuller archive is the one worth keeping."""
     blob = zlib.compress(text.encode("utf-8", errors="replace"))
+    if min_bytes and len(blob) < min_bytes:
+        return 0
     now = datetime.now(timezone.utc).isoformat()
     try:
         con = _connect()
@@ -575,6 +582,21 @@ def put_transcript(agent: str, id: str, text: str) -> int:
     except Exception as e:  # noqa: BLE001
         _log.exception("history put_transcript failed: %s", e)
         return 0
+
+
+def archive_meta() -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """``{(agent, id): {"archived_at": ISO str, "bytes": compressed size}}`` for
+    every archived transcript, in one query. Blobs are not loaded. Never raises."""
+    try:
+        con = _connect()
+        try:
+            return {(r["agent"], r["id"]): {"archived_at": r["archived_at"], "bytes": r["bytes"]}
+                    for r in con.execute("SELECT agent, id, archived_at, bytes FROM transcripts")}
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        _log.exception("history archive_meta failed: %s", e)
+        return {}
 
 
 def get_transcript(agent: str, id: str) -> Optional[str]:
