@@ -43,6 +43,7 @@ export default function MenubarPanel() {
 
   const providers = Object.entries(data?.providers ?? {});
   const unavailable = Object.values(data?.capabilities ?? {}).filter((c) => c.state !== "available");
+  const failure = data?.errors?.find((e) => e.message)?.message;
 
   const doRefresh = async () => {
     setRefreshing(true);
@@ -81,7 +82,7 @@ export default function MenubarPanel() {
       </header>
 
       <div className="min-h-0 flex-1 divide-y divide-[var(--tt-border)] overflow-y-auto">
-        <PlanLimitsList providers={providers} />
+        <PlanLimitsList providers={providers} failure={failure} />
       </div>
 
       <div className="shrink-0">
