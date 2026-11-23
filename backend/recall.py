@@ -10,11 +10,13 @@ A loader is ``load_chunks(agent, session_id) -> (chunks, source) | None`` where
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -46,6 +48,25 @@ repo_resolver: Optional[Callable[[str], str]] = None
 _PHRASE_RE = re.compile(r'"([^"]+)"')
 
 Loader = Callable[[str, str], Optional[Tuple[List[Dict[str, Any]], str]]]
+
+MODES = ("keyword", "semantic", "hybrid")
+RRF_K = 60
+# Bump when the chunking or embedding input changes so old vectors go stale.
+INDEX_VERSION = 1
+
+
+@dataclass
+class Semantic:
+    """Callables search() uses for vector ranking. Built by the HTTP layer so
+    this module stays free of I/O.
+
+    ``is_current(agent, id, fingerprint)`` says whether the stored vectors for a
+    session match its current chunks. ``rank(query, allowed)`` returns
+    ``(agent, id, idx, cosine)`` for the best chunks among ``allowed`` sessions.
+    """
+    model: str
+    is_current: Callable[[str, str, str], bool]
+    rank: Callable[[str, set], List[Tuple[str, str, int, float]]]
 
 
 # ---------------------------------------------------------------- projects
@@ -244,6 +265,30 @@ def mask_key_continuations(chunks: Sequence[Dict[str, Any]]) -> Dict[int, str]:
     return out
 
 
+def _redacted_texts(chunks: Sequence[Dict[str, Any]], masked: Dict[int, str]) -> List[str]:
+    return [redact(masked.get(i, str(c.get("text") or ""))) for i, c in enumerate(chunks)]
+
+
+def index_view(chunks: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Chunks as recall sees them (newest MAX_CHUNKS_PER_SESSION) and their
+    redacted texts. The index builder and search both go through this so the
+    fingerprints agree."""
+    if len(chunks) > MAX_CHUNKS_PER_SESSION:
+        chunks = chunks[-MAX_CHUNKS_PER_SESSION:]
+    return chunks, _redacted_texts(chunks, mask_key_continuations(chunks))
+
+
+def fingerprint_texts(texts: Sequence[str]) -> str:
+    h = hashlib.sha256()
+    h.update("\x1e".join(texts).encode("utf-8", "replace"))
+    h.update(f"|{RESULT_CHARS}|{INDEX_VERSION}".encode())
+    return h.hexdigest()
+
+
+def session_fingerprint(chunks: List[Dict[str, Any]]) -> str:
+    return fingerprint_texts(index_view(chunks)[1])
+
+
 def _norm_ws(text: str) -> str:
     return " ".join(text.lower().split())
 
@@ -382,6 +427,15 @@ def _title_from(chunks: List[Dict[str, Any]], fallback: str) -> str:
     return fallback
 
 
+def _rrf(*rankings: Sequence[Tuple[Any, ...]]) -> Dict[Tuple[Any, ...], float]:
+    """Reciprocal rank fusion over ranked key lists (best first, 1-based)."""
+    out: Dict[Tuple[Any, ...], float] = {}
+    for ranking in rankings:
+        for rank, key in enumerate(ranking, 1):
+            out[key] = out.get(key, 0.0) + 1.0 / (RRF_K + rank)
+    return out
+
+
 def search(
     sessions: Sequence[Dict[str, Any]],
     load_chunks: Loader,
@@ -394,19 +448,30 @@ def search(
     budget_s: float = DEFAULT_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
     unassigned: str = UNASSIGNED,
+    mode: str = "keyword",
+    semantic: Optional[Semantic] = None,
 ) -> Dict[str, Any]:
+    if mode not in MODES:
+        raise ValueError("mode must be keyword, semantic or hybrid")
+    if mode != "keyword" and semantic is None:
+        raise ValueError("semantic search is not enabled")
     terms, phrases = parse_query(q)
     if not terms and not phrases:
         raise ValueError("q has no searchable terms")
     proj, metas = _select(sessions, project, agents, since, unassigned)
     candidates = len(metas)
     capped = metas[:max_sessions]
+    use_kw = mode != "semantic"
+    use_sem = mode != "keyword"
 
     started = clock()
     timed_out = False
     unreadable = 0
     truncated = 0
-    opened: List[Tuple[Dict[str, Any], str, str, List[Tuple[Dict[str, Any], set, str]]]] = []
+    # (meta, source, title, keyword candidates, {idx: (chunk, text)} when the
+    # session's vectors are current, else None)
+    opened: List[Tuple[Dict[str, Any], str, str, List[Tuple[Dict[str, Any], set, str]],
+                       Optional[Dict[Any, Tuple[Dict[str, Any], str]]]]] = []
     n_chunks = 0
     df: Counter = Counter()
     q_terms = set(terms)
@@ -428,8 +493,17 @@ def search(
             chunks = chunks[-MAX_CHUNKS_PER_SESSION:]
             truncated += 1
         masked = mask_key_continuations(chunks)
+        sem_view: Optional[Dict[Any, Tuple[Dict[str, Any], str]]] = None
+        if use_sem and semantic is not None:
+            texts = _redacted_texts(chunks, masked)
+            try:
+                current = bool(semantic.is_current(m["agent"], m["id"], fingerprint_texts(texts)))
+            except Exception:  # noqa: BLE001 - an unreadable index means keyword only
+                current = False
+            if current:
+                sem_view = {c.get("idx", 0): (c, texts[i]) for i, c in enumerate(chunks)}
         cands: List[Tuple[Dict[str, Any], set, str]] = []
-        for pos, c in enumerate(chunks):
+        for pos, c in enumerate(chunks if use_kw else ()):
             if pos and pos % _BUDGET_CHECK_EVERY == 0 and clock() - started > budget_s:
                 timed_out = True
                 break
@@ -445,49 +519,105 @@ def search(
                 for t in present:
                     df[t] += 1
                 cands.append((c, present, text))
-        opened.append((m, source, title, cands))
+        opened.append((m, source, title, cands, sem_view))
         if timed_out:
             break
 
-    hits: List[Dict[str, Any]] = []
-    by_agent: Counter = Counter()
-    for m, source, title, cands in opened:
+    def make_hit(m: Dict[str, Any], source: str, title: str, c: Dict[str, Any], text: str,
+                 score: float, match: str) -> Dict[str, Any]:
+        return {
+            "agent": m["agent"], "id": m["id"], "project": m["project"], "title": title,
+            "model": m["model"], "last_ts": m["last_ts"], "cost": m["cost"],
+            "turn": c.get("turn"), "kind": c.get("kind"),
+            "snippet": _collapse(text, SNIPPET_MAX),
+            "score": score, "match": match, "source": source,
+            "_last": m["_last"], "_idx": c.get("idx", 0),
+        }
+
+    # Keyword ranking, best first, as (hit, key).
+    kw: List[Tuple[Dict[str, Any], Tuple[Any, ...]]] = []
+    for m, source, title, cands, _ in opened:
         for c, present, text in cands:
             score = sum(math.log(1 + n_chunks / df[t]) for t in present)
             if score <= 0:
                 if not phrases:
                     continue
                 score = 0.5 * len(phrases)
-            by_agent[m["agent"]] += 1
-            hits.append({
-                "agent": m["agent"], "id": m["id"], "project": m["project"], "title": title,
-                "model": m["model"], "last_ts": m["last_ts"], "cost": m["cost"],
-                "turn": c.get("turn"), "kind": c.get("kind"),
-                "snippet": _collapse(text, SNIPPET_MAX),
-                "score": round(score, 2), "source": source,
-                "_last": m["_last"], "_idx": c.get("idx", 0),
-            })
-    hits.sort(key=lambda h: (-h["score"], -(h["_last"] or _EPOCH).timestamp(), h["_idx"]))
+            kw.append((make_hit(m, source, title, c, text, round(score, 2), "keyword"),
+                       (m["agent"], m["id"], c.get("idx", 0))))
+
+    def order(h: Dict[str, Any]) -> Tuple[Any, ...]:
+        return (-h["score"], -(h["_last"] or _EPOCH).timestamp(), h["_idx"])
+
+    kw.sort(key=lambda t: order(t[0]))
+
+    sem_hits: List[Tuple[Dict[str, Any], Tuple[Any, ...]]] = []
+    sem_error: Optional[str] = None
+    indexed = [o for o in opened if o[4] is not None]
+    if use_sem and semantic is not None and indexed:
+        views = {(o[0]["agent"], o[0]["id"]): o for o in indexed}
+        try:
+            ranked = semantic.rank(q, set(views))
+        except Exception as e:  # noqa: BLE001 - Ollama down must not take keyword search with it
+            ranked = []
+            sem_error = str(e) or e.__class__.__name__
+        for agent, sid, idx, cos in sorted(ranked, key=lambda r: -r[3]):
+            o = views.get((agent, sid))
+            if o is None or o[4] is None or idx not in o[4]:
+                continue
+            c, text = o[4][idx]
+            sem_hits.append((make_hit(o[0], o[1], o[2], c, text, round(float(cos), 4), "semantic"),
+                             (agent, sid, idx)))
+
+    if mode == "keyword":
+        hits = [h for h, _ in kw]
+    elif mode == "semantic":
+        hits = [h for h, _ in sem_hits]
+    else:
+        fused = _rrf([k for _, k in kw], [k for _, k in sem_hits])
+        pool: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        kw_keys = {k for _, k in kw}
+        sem_keys = {k for _, k in sem_hits}
+        for h, k in kw + sem_hits:
+            pool.setdefault(k, h)
+        hits = []
+        for k, h in pool.items():
+            h["score"] = round(fused[k], 4)
+            if k in kw_keys and k in sem_keys:
+                h["match"] = "both"
+            hits.append(h)
+    hits.sort(key=order)
+    by_agent: Counter = Counter(h["agent"] for h in hits)
     for h in hits:
         del h["_last"], h["_idx"]
 
     skipped = candidates - len(opened) - unreadable
     reason = "timeout" if timed_out else ("max_sessions" if candidates > len(capped) else None)
+    coverage: Dict[str, Any] = {
+        "candidates": candidates,
+        "sessions_scanned": len(opened),
+        "sessions_skipped": skipped,
+        "skipped_reason": reason if skipped else None,
+        "unreadable": unreadable,
+        "truncated": truncated,
+        "timed_out": timed_out,
+        "agents_scanned": sorted({o[0]["agent"] for o in opened if o[0]["agent"]}),
+    }
+    if use_sem and semantic is not None:
+        coverage["semantic"] = {"mode": mode, "model": semantic.model,
+                                "indexed_sessions": len(indexed),
+                                "unindexed_sessions": len(opened) - len(indexed)}
+        if sem_error:
+            # Hybrid already degraded to keyword-only hits; say why.
+            coverage["semantic"]["error"] = sem_error
+    else:
+        coverage["semantic"] = {"mode": "keyword"}
     return {
         "query": q,
         "project": proj,
         "hits": hits[:limit],
         "by_agent": dict(by_agent),
-        "coverage": {
-            "candidates": candidates,
-            "sessions_scanned": len(opened),
-            "sessions_skipped": skipped,
-            "skipped_reason": reason if skipped else None,
-            "unreadable": unreadable,
-            "truncated": truncated,
-            "timed_out": timed_out,
-            "agents_scanned": sorted({o[0]["agent"] for o in opened if o[0]["agent"]}),
-        },
+        "coverage": coverage,
     }
 
 

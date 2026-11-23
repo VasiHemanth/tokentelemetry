@@ -10,6 +10,7 @@ import {
   Table, THead, TBody, TR, TH, TD,
 } from "@/components/ui";
 import { useProject } from "../_lib/project-context";
+import { ProjectKnowledgeCard } from "@/components/recall/ProjectKnowledgeCard";
 import { useScrollState } from "@/lib/useScrollState";
 import { splitSubagents, subagentSummary } from "@/lib/subagents";
 import { useShowSubagents } from "@/lib/subagentPref";
@@ -19,7 +20,7 @@ import AntigravitySourceBadge from "@/components/AntigravitySourceBadge";
 
 export default function ActivityTab() {
   const pathname = usePathname();
-  const { sessions, loading } = useProject();
+  const { sessions, loading, decodedPath } = useProject();
   // Shared with the dashboard and Settings — one preference, several surfaces.
   const [showSubagents, setShowSubagents] = useShowSubagents();
 
@@ -41,6 +42,8 @@ export default function ActivityTab() {
   );
 
   return (
+    <>
+    <ProjectKnowledgeCard project={decodedPath} />
     <Card padding="none">
       <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--tt-border)]">
         <CardTitle><Activity size={14} className="text-[var(--tt-brand)]" /> Session history</CardTitle>
@@ -129,5 +132,6 @@ export default function ActivityTab() {
         </div>
       )}
     </Card>
+    </>
   );
 }
