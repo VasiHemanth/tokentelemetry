@@ -50,6 +50,58 @@ If you skip semantic setup, you can still search recorded sessions by keyword. A
 
 Select a project and click **Index this project**. Follow the progress, then hover over a dot on the project knowledge map to identify its document. Click **Re-index** when new work appears to reuse existing embeddings. Changing the embedding model requires a full re-index.
 
+## Use Recall from your agents
+
+`tokentelemetry mcp` is a stdio MCP server that gives your coding agents the same search. An agent working in one tool can look up what you did in another, for example "What did Codex decide about the render pipeline in education-video?" Start TokenTelemetry first (`npx tokentelemetry`). Your agent then starts the MCP server itself from its config.
+
+Every agent runs the same command, `npx -y tokentelemetry mcp`. Only the config format differs.
+
+**Claude Code**
+
+```bash
+claude mcp add tokentelemetry -- npx -y tokentelemetry mcp
+```
+
+**Codex**: add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.tokentelemetry]
+command = "npx"
+args = ["-y", "tokentelemetry", "mcp"]
+```
+
+**OpenCode**: add to `opencode.json`. The command is one array:
+
+```json
+{
+  "mcp": {
+    "tokentelemetry": { "type": "local", "command": ["npx", "-y", "tokentelemetry", "mcp"] }
+  }
+}
+```
+
+**Antigravity, Cursor, Qwen Code, Kimi and other agents**: add an `mcpServers` entry to the agent's MCP config file (Antigravity's `mcp_config.json`, Cursor's `~/.cursor/mcp.json`, or the file your agent's MCP documentation names):
+
+```json
+{
+  "mcpServers": {
+    "tokentelemetry": { "command": "npx", "args": ["-y", "tokentelemetry", "mcp"] }
+  }
+}
+```
+
+The server looks for TokenTelemetry on `127.0.0.1`, trying ports 18000 and 8000. If you run it on another port, add `"env": { "TT_API_PORT": "9000" }` to the entry, or pass `--api-port 9000` in `args`. If TokenTelemetry was started with an auth token (required for a non-loopback `--host`), set the same value as `TT_AUTH_TOKEN` in `env`.
+
+| Tool | What it does |
+| --- | --- |
+| `list_projects` | Projects with their agents, session counts and last activity |
+| `list_sessions` | A project's sessions, newest first, filterable by agent and date |
+| `search_sessions` | Search by `query`, narrowed by `project`, `agent`, `since` and document `types`. `mode` picks exact words (`keyword`), meaning (`semantic`) or both (`hybrid`) |
+| `read_session` | One session's text in order, in pages |
+| `read_document` | A skill, plan, Markdown file or MCP entry that a search returned |
+
+Skills, plans, images and other documents appear in results only for indexed projects, in `semantic` or `hybrid` mode. Text from past sessions comes back marked as data, never as instructions for the agent.
+
 ## Where your data goes
 
 Local Ollama keeps embedding requests on the machine running TokenTelemetry. If you choose a hosted embedding or summarizer provider, it receives the text needed for that operation after redaction. Hosted image embedding is off by default. Turning it on sends the original images to the provider.
