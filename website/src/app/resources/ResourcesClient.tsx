@@ -3,7 +3,30 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import rawResources from "../../../content/resources.json";
+import rawChannels from "../../../content/research-channels.json";
 import { track } from "@/lib/track";
+
+type Channel = { name: string; platform: string; url: string; summary: string };
+const CHANNELS: Channel[] = rawChannels as Channel[];
+
+function ChannelCard({ channel }: { channel: Channel }) {
+  return (
+    <a
+      href={channel.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => track("research_channel_click", { name: channel.name, platform: channel.platform })}
+      className="group flex flex-col gap-1 p-5 rounded-[var(--tt-radius-lg)] border border-[var(--tt-border)] bg-[var(--tt-panel)] hover:border-[var(--tt-border-strong)] hover:bg-[var(--tt-raised)] hover:-translate-y-0.5 transition-all"
+    >
+      <span className="text-[11px] font-mono uppercase tracking-[0.12em] text-[var(--tt-fg-dim)]">{channel.platform}</span>
+      <span className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--tt-fg)] group-hover:text-[var(--tt-brand)] transition-colors">
+        {channel.name}
+        <span className="ml-1.5 text-[11px] font-normal text-[var(--tt-fg-dim)] align-middle">↗</span>
+      </span>
+      <span className="text-[13.5px] text-[var(--tt-fg-muted)] leading-relaxed">{channel.summary}</span>
+    </a>
+  );
+}
 
 type Resource = {
   title: string;
@@ -133,6 +156,18 @@ export default function ResourcesClient() {
           with AI coding agents.
         </p>
       </div>
+
+      {/* The maker's own AI research channels, above the community list */}
+      <section aria-labelledby="research-heading" className="mt-10">
+        <h2 id="research-heading" className="text-[12px] font-mono uppercase tracking-[0.18em] text-[var(--tt-fg-dim)]">
+          AI research from the maker of TokenTelemetry
+        </h2>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          {CHANNELS.map((c) => (
+            <ChannelCard key={c.url} channel={c} />
+          ))}
+        </div>
+      </section>
 
       {/* Filters */}
       <div className="mt-10 flex flex-col sm:flex-row gap-3 sm:items-center">
