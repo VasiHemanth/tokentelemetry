@@ -11,12 +11,12 @@
   "dependencies": {
     "@lobehub/icons": "^5.18.0",
     "@types/mdx": "^2.0.14",
-    "framer-motion": "^14.9.1",
-    "fumadocs-core": "^16.17.10",
-    "fumadocs-mdx": "^15.4.10",
-    "fumadocs-ui": "^16.17.10",
+    "framer-motion": "^14.14.0",
+    "fumadocs-core": "^16.19.5",
+    "fumadocs-mdx": "^15.6.4",
+    "fumadocs-ui": "^16.19.5",
     "lucide-react": "^1.8.0",
-    "next": "16.4.5",
+    "next": "16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
